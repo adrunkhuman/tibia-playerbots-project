@@ -139,6 +139,11 @@ void ProtocolGame::login(const std::string& name, uint32_t accountId, OperatingS
 {
 	//dispatcher thread
 	Player* foundPlayer = g_game.getPlayerByName(name);
+	if (foundPlayer && foundPlayer->isPlayerBot()) {
+		disconnectClient("This character is controlled by the server.");
+		return;
+	}
+
 	if (!foundPlayer || g_config.getBoolean(ConfigManager::ALLOW_CLONES)) {
 		player = new Player(getThis());
 		player->setName(name);
@@ -699,28 +704,7 @@ bool ProtocolGame::canSee(int32_t x, int32_t y, int32_t z) const
 		return false;
 	}
 
-	const Position& myPos = player->getPosition();
-	if (myPos.z <= 7) {
-		//we are on ground level or above (7 -> 0)
-		//view is from 7 -> 0
-		if (z > 7) {
-			return false;
-		}
-	} else { // if (myPos.z >= 8) {
-		//we are underground (8 -> 15)
-		//view is +/- 2 from the floor we stand on
-		if (std::abs(myPos.getZ() - z) > 2) {
-			return false;
-		}
-	}
-
-	//negative offset means that the action taken place is on a lower floor than ourself
-	int32_t offsetz = myPos.getZ() - z;
-	if ((x >= myPos.getX() - Map::maxClientViewportX + offsetz) && (x <= myPos.getX() + (Map::maxClientViewportX + 1) + offsetz) &&
-		(y >= myPos.getY() - Map::maxClientViewportY + offsetz) && (y <= myPos.getY() + (Map::maxClientViewportY + 1) + offsetz)) {
-		return true;
-	}
-	return false;
+	return Map::canSee(player->getPosition(), Position(x, y, z));
 }
 
 // Parse methods

@@ -29,6 +29,7 @@
 #include "protocolold.h"
 #include "protocollogin.h"
 #include "protocolstatus.h"
+#include "playerbot.h"
 #include "databasemanager.h"
 #include "scheduler.h"
 #include "databasetasks.h"
@@ -310,6 +311,10 @@ void mainLoader(int, char*[], ServiceManager* services)
 
 	std::cout << ">> Initializing gamestate" << std::endl;
 	g_game.setGameState(GAME_STATE_INIT);
+	// Server-controlled players need the loaded map but do not wait for protocol services.
+	if (!g_playerBots.spawn("Bot One")) {
+		std::cout << "[Warning - mainLoader] Unable to log in playerbot Bot One; continuing without it." << std::endl;
+	}
 
 	// Game client protocols
 	services->add<ProtocolGame>(static_cast<uint16_t>(g_config.getNumber(ConfigManager::GAME_PORT)));

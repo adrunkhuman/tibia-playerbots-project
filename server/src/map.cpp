@@ -28,6 +28,20 @@
 
 extern Game g_game;
 
+bool Map::canSee(const Position& observer, const Position& target)
+{
+	// Standard 8.60 viewport rules shift bounds by floor and expose two underground floors.
+	if ((observer.z <= 7 && target.z > 7) || (observer.z >= 8 && std::abs(observer.getZ() - target.getZ()) > 2)) {
+		return false;
+	}
+
+	const int32_t offsetZ = observer.getZ() - target.getZ();
+	return target.x >= observer.getX() - Map::maxClientViewportX + offsetZ &&
+	       target.x <= observer.getX() + Map::maxClientViewportX + 1 + offsetZ &&
+	       target.y >= observer.getY() - Map::maxClientViewportY + offsetZ &&
+	       target.y <= observer.getY() + Map::maxClientViewportY + 1 + offsetZ;
+}
+
 bool Map::loadMap(const std::string& identifier, bool loadHouses)
 {
 	IOMap loader;

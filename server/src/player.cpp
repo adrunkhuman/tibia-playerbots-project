@@ -683,6 +683,11 @@ bool Player::getStorageValue(const uint32_t key, int32_t& value) const
 
 bool Player::canSee(const Position& pos) const
 {
+	if (playerBot) {
+		// Server-controlled players have no ProtocolGame viewport.
+		return Map::canSee(getPosition(), pos);
+	}
+
 	if (!client) {
 		return false;
 	}
@@ -829,6 +834,10 @@ void Player::sendStats()
 
 void Player::sendPing()
 {
+	if (playerBot) {
+		return;
+	}
+
 	int64_t timeNow = OTSYS_TIME();
 
 	bool hasLostConnection = false;
@@ -1428,7 +1437,7 @@ void Player::onThink(uint32_t interval)
 		addMessageBuffer();
 	}
 
-	if (!getTile()->hasFlag(TILESTATE_NOLOGOUT) && !isAccessPlayer()) {
+	if (!playerBot && !getTile()->hasFlag(TILESTATE_NOLOGOUT) && !isAccessPlayer()) {
 		idleTime += interval;
 		const int32_t kickAfterMinutes = g_config.getNumber(ConfigManager::KICK_AFTER_MINUTES);
 		if (idleTime > (kickAfterMinutes * 60000) + 60000) {
