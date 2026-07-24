@@ -1,0 +1,15 @@
+# Downloaded client runtime and proprietary Tibia assets
+/client/otclient*.exe
+/client/otclient*.exp
+/client/otclient*.lib
+/client/otclient*.pdb
+/client/data/things/860/
+
+# Runtime state
+*.log
+/client/minimap/
+/client/screenshots/
+
+# Local configuration and build output
+.env
+/server/build/
