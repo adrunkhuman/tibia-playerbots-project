@@ -14,7 +14,6 @@ $expectedExecutableHash = "3054ec603454cc71536851da979d11a02546f0348473b1f2a931a
 $expectedArchiveHash = "b1bc73c3b1fb8989fee17498d3189968374a97836278314c18f058935723e6be"
 $expectedDatHash = "38e4e23ee550503842388e3aa3119125692316facf5adf97f4c24385735ddaee"
 $expectedSprHash = "672351b1a3dd0f45da7c76bca35a1d8f7fbf1db3be65e080aeb1d8789c61a575"
-$executableUrl = "https://github.com/adrunkhuman/tibia-playerbots-project/releases/download/angelion-base-v1/otclient_gl_x64.exe"
 
 function Test-ExpectedHash {
     param(
@@ -34,8 +33,20 @@ New-Item -ItemType Directory -Path $tempRoot | Out-Null
 
 try {
     if ($Force -or -not (Test-ExpectedHash -Path $executable -Expected $expectedExecutableHash)) {
+        if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
+            throw "GitHub CLI is required to access the private client runtime release."
+        }
+
         $downloadedExecutable = Join-Path $tempRoot "otclient_gl_x64.exe"
-        Invoke-WebRequest -Uri $executableUrl -OutFile $downloadedExecutable
+        & gh release download angelion-base-v1.1 `
+            --repo adrunkhuman/tibia-playerbots-project `
+            --pattern "otclient_gl_x64.exe" `
+            --dir $tempRoot
+
+        if ($LASTEXITCODE -ne 0) {
+            throw "Failed to download the private Redemption release asset."
+        }
+
         if (-not (Test-ExpectedHash -Path $downloadedExecutable -Expected $expectedExecutableHash)) {
             throw "Redemption executable SHA-256 mismatch."
         }
