@@ -78,14 +78,44 @@ pwsh -File scripts/bootstrap-client.ps1
 - During the current development phase, do not preserve database or world state
   at the cost of a simpler reset, rebuild, or restart. Use a clean volume when
   useful unless the task explicitly requires persistence testing.
-- Preserve both seeded development characters after database resets:
-  `GOD Admin` and `Rook Tester`.
+- Preserve the seeded development characters after database resets:
+  `GOD Admin`, `Rook Tester`, and the server-controlled `Bot One`.
+- Keep `playerbot-setup` ahead of the server in the Compose dependency chain.
+  It owns idempotent bot provisioning and the `player_bots` registry, and must
+  fail rather than take over an unrelated same-named or deleted character.
 - Do not commit real credentials or production secrets. The tracked credentials
   are local development defaults only.
 - Preserve the CRLF normalization in `server/src/rsa.cpp`; Windows checkouts
   otherwise fail to load the PEM key.
 - Do not restore global `-Werror` in the legacy server build without first
   resolving and validating all compiler warnings on the supported toolchain.
+
+## Playerbots
+
+- `Bot One` is the current database-backed, server-controlled `Player`. It has
+  no client connection or external bot API, and a human client must not take
+  control while the server owns it.
+- Preserve normal player persistence for bots. A clean shutdown must save them
+  through the existing player save path rather than a parallel persistence
+  mechanism.
+- The hardcoded Rookgaard sewer route and combat behavior are a bounded
+  prototype, not the settled bot architecture or product goal. Discuss and
+  document broader goals before generalizing the prototype.
+- The intended scale is eventually hundreds of bots. Do not introduce one OS
+  thread, graphical client, renderer, UI, or blocking loop per bot.
+- Schedule bot decisions through the server dispatcher/scheduler, stagger work,
+  and use normal movement, combat, spell, and item APIs instead of directly
+  mutating world or inventory state.
+
+## Continuous Integration
+
+- Keep `.github/workflows/server-ci.yml` green for server and Compose changes.
+  It validates a fresh disposable stack, database health, playerbot
+  provisioning, server startup, and both local game ports.
+- The workflow intentionally runs only for `server/**` and workflow changes.
+  Documentation-only changes outside those paths do not require a server build.
+- The workflow depends on the stable Compose project and service names. Update
+  its container assertions together with any Compose rename.
 
 ## Verification
 
@@ -95,11 +125,13 @@ For server, infrastructure, or cross-stack changes, run at minimum:
 pwsh -File scripts/bootstrap-client.ps1
 docker compose -f server/compose.yaml config --quiet
 docker compose -f server/compose.yaml up --build --detach
-docker compose -f server/compose.yaml logs server
+docker compose -f server/compose.yaml logs playerbot-setup server
 ```
 
 Confirm that MariaDB is healthy, the map loads, the server reports online, and
-ports `7171` and `7172` accept local connections.
+ports `7171` and `7172` accept local connections. Confirm that
+`playerbot-setup` exits successfully, exactly one valid `Bot One` registration
+exists, and server logs report `Playerbot online`.
 
 For protocol or gameplay-facing client changes, also test:
 
