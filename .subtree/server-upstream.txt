@@ -1,0 +1,3 @@
+repository=https://github.com/Giorox/Angelion-TFS-1.5-Downgrade-8.6.git
+branch=8.60
+baseline=d792f80cdd84342a36c0a4dfb652a5fe96aadb84
