@@ -47,6 +47,13 @@ docker compose -f server/compose.yaml up --detach
 
 ## Upstream updates
 
+Configure the upstream remotes once after cloning:
+
+```powershell
+git remote add angelion-upstream https://github.com/Giorox/Angelion-TFS-1.5-Downgrade-8.6.git
+git remote add redemption-upstream https://github.com/opentibiabr/otclient.git
+```
+
 ```powershell
 git subtree pull --prefix=server angelion-upstream 8.60 --squash
 git subtree pull --prefix=client redemption-upstream main --squash
