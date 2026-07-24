@@ -130,6 +130,12 @@ class Player final : public Creature, public Cylinder
 		void setName(const std::string& name) {
 			this->name = name;
 		}
+		bool isPlayerBot() const {
+			return playerBot;
+		}
+		void setPlayerBot(bool value) {
+			playerBot = value;
+		}
 		const std::string& getNameDescription() const override {
 			return name;
 		}
@@ -373,6 +379,9 @@ class Player final : public Creature, public Cylinder
 
 		time_t getLastLoginSaved() const {
 			return lastLoginSaved;
+		}
+		void setLastLoginSaved(time_t value) {
+			lastLoginSaved = value;
 		}
 
 		time_t getLastLogout() const {
@@ -1151,6 +1160,7 @@ class Player final : public Creature, public Cylinder
 		int32_t bloodHitCount = 0;
 		int32_t shieldBlockCount = 0;
 		int32_t idleTime = 0;
+		bool playerBot = false;
 
 		uint16_t staminaMinutes = 2520;
 		uint16_t maxWriteLen = 0;

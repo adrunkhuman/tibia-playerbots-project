@@ -21,11 +21,37 @@ services:
       - ./schema/insertGOD.sql:/docker-entrypoint-initdb.d/02-god.sql:ro
       - ./schema/insertLocalCharacters.sql:/docker-entrypoint-initdb.d/03-local-characters.sql:ro
 
-  server:
-    build: .
+  playerbot-setup:
+    image: mariadb:10.6
     depends_on:
       database:
         condition: service_healthy
+    environment:
+      MYSQL_PWD: angelion
+    command:
+      - sh
+      - -c
+      - |
+        mariadb --host=database --user=angelion angelion < /schema/insertPlayerbots.sql
+        count="$$(mariadb --host=database --user=angelion --skip-column-names angelion -e "
+          SELECT COUNT(*) FROM player_bots
+          JOIN players ON players.id = player_bots.player_id
+          JOIN accounts ON accounts.id = players.account_id
+          WHERE players.name = 'Bot One' AND accounts.name = 'bot-one' AND players.deletion = 0;
+        ")"
+        if [ "$$count" != "1" ]; then
+          echo "Bot One identity collision or deletion prevents playerbot provisioning." >&2
+          exit 1
+        fi
+    restart: "no"
+    volumes:
+      - ./schema/insertPlayerbots.sql:/schema/insertPlayerbots.sql:ro
+
+  server:
+    build: .
+    depends_on:
+      playerbot-setup:
+        condition: service_completed_successfully
     ports:
       - "127.0.0.1:7171:7171"
       - "127.0.0.1:7172:7172"

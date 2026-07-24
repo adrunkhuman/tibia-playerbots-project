@@ -178,6 +178,8 @@ class Map
 		static constexpr int32_t maxClientViewportX = 8;
 		static constexpr int32_t maxClientViewportY = 6;
 
+		static bool canSee(const Position& observer, const Position& target);
+
 		uint32_t clean() const;
 
 		/**
