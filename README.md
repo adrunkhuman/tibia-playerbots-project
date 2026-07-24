@@ -12,7 +12,6 @@ changes can be committed atomically while retaining an upstream update path.
 
 - Docker Desktop with Docker Compose
 - PowerShell 7+
-- GitHub CLI authenticated with `gh auth login`
 
 ## Client bootstrap
 
