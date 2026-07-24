@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Monk" nameDescription="a monk" race="blood" experience="200" speed="240" manacost="600">
+	<health now="240" max="240" />
+	<look type="57" corpse="3058" />
+	<targetchange interval="4000" chance="10" />
+	<flags>
+		<flag summonable="1" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="1" />
+		<flag convinceable="0" />
+		<flag pushable="0" />
+		<flag canpushitems="1" />
+		<flag canpushcreatures="1" />
+		<flag targetdistance="1" />
+		<flag staticattack="90" />
+		<flag runonhealth="0" />
+		<flag canwalkonenergy="0" />
+		<flag canwalkonfire="0" />
+		<flag canwalkonpoison="0" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-130" />
+	</attacks>
+	<defenses armor="30" defense="30">
+		<defense name="healing" interval="2000" chance="15" min="30" max="50">
+			<attribute key="areaEffect" value="blueshimmer" />
+		</defense>
+		<defense name="speed" interval="2000" chance="15" speedchange="300" duration="5000">
+			<attribute key="areaEffect" value="redshimmer" />
+		</defense>
+	</defenses>
+	<elements>
+		<element physicalPercent="-5" />
+		<element deathPercent="50" />
+		<element holyPercent="50" />
+	</elements>
+	<immunities>
+		<immunity invisible="1" />
+		<immunity paralyze="0" />
+	</immunities>
+	<voices interval="5000" chance="10">
+		<voice sentence="A prayer to the almighty one!" yell="0" />
+		<voice sentence="Repent Heretic!" yell="0" />
+		<voice sentence="I will punish the sinners!" yell="0" />
+	</voices>
+	<loot>
+		<item name="Bread" chance="19980" />
+		<item name="Gold Coin" countmax="18" chance="15040" />
+		<item name="Book of Prayers" chance="5100" />
+		<item name="Rope Belt" chance="2960" />
+		<item name="Ankh" chance="2160" />
+		<item name="Scroll" chance="1890" />
+		<item name="Safety Pin" chance="1050" />
+		<item name="Life Crystal" chance="1010" />
+		<item name="Brown Flask" chance="890" />
+		<item name="Lamp" chance="880" />
+		<item name="Sandals" chance="770" />
+		<item name="Staff" chance="470" />
+		<item name="Power Ring" chance="100" />
+	</loot>
+</monster>

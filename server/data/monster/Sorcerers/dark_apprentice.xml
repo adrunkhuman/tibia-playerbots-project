@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Dark Apprentice" nameDescription="a dark apprentice" race="blood" experience="100" speed="190">
+	<health now="225" max="225" />
+	<look type="133" head="78" body="57" legs="95" feet="115" addons="1" corpse="3058" />
+	<targetchange interval="4000" chance="10" />
+	<flags>
+		<flag summonable="0" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="0" />
+		<flag convinceable="0" />
+		<flag pushable="0" />
+		<flag canpushitems="1" />
+		<flag canpushcreatures="1" />
+		<flag targetdistance="4" />
+		<flag staticattack="90" />
+		<flag runonhealth="0" />
+		<flag canwalkonenergy="0" />
+		<flag canwalkonfire="0" />
+		<flag canwalkonpoison="0" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-30" />
+		<attack name="fire" interval="2000" chance="10" range="7" min="-2" max="-26">
+			<attribute key="shootEffect" value="fire" />
+		</attack>
+		<attack name="energy" interval="2000" chance="10" range="7" min="-10" max="-20">
+			<attribute key="shootEffect" value="energy" />
+		</attack>
+		<attack name="physical" interval="2000" chance="10" range="7" min="0" max="-24">
+			<attribute key="shootEffect" value="smallstone" />
+		</attack>
+		<attack name="outfit" interval="2000" chance="1" target="1" range="3" monster="Cyclops" duration="2000">
+			<attribute key="shootEffect" value="energy" />
+			<attribute key="areaEffect" value="blueshimmer" />
+		</attack>
+		<attack name="outfit" interval="2000" chance="1" target="0" radius="4" item="2324" duration="2000">
+			<attribute key="areaEffect" value="blueshimmer" />
+		</attack>
+	</attacks>
+	<defenses armor="15" defense="15">
+		<defense name="healing" interval="2000" chance="15" min="10" max="40">
+			<attribute key="areaEffect" value="greenshimmer" />
+		</defense>
+		<defense name="outfit" interval="2000" chance="5" target="1" monster="Green Frog" duration="3000" />
+	</defenses>
+	<elements>
+		<element deathPercent="-5" />
+	</elements>
+	<immunities>
+		<immunity invisible="1" />
+		<immunity paralyze="0" />
+	</immunities>
+	<voices interval="5000" chance="10">
+		<voice sentence="From the spirits that I called Sir, deliver me!" yell="0" />
+		<voice sentence="Outch!" yell="0" />
+		<voice sentence="Oops, I did it again." yell="0" />
+		<voice sentence="I must dispose of my masters enemies!" yell="0" />
+	</voices>
+	<loot>
+		<item name="Gold Coin" countmax="45" chance="75040" />
+		<item name="Dead Frog" chance="11930" />
+		<item name="Blank Rune" countmax="3" chance="8040" />
+		<item name="Mana Potion" chance="3000" />
+		<item name="Health Potion" chance="2890" />
+		<item name="Wand of Dragonbreath" chance="2000" />
+		<item name="Wand of Decay" chance="110" />
+	</loot>
+</monster>

@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Troll Champion" nameDescription="a troll champion" race="blood" experience="40" speed="190" manacost="350">
+	<health now="75" max="75" />
+	<look type="281" corpse="7926" />
+	<targetchange interval="4000" chance="0" />
+	<flags>
+		<flag summonable="1" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="1" />
+		<flag convinceable="1" />
+		<flag pushable="1" />
+		<flag canpushitems="0" />
+		<flag canpushcreatures="0" />
+		<flag targetdistance="1" />
+		<flag runonhealth="15" />
+		<flag canwalkonenergy="0" />
+		<flag canwalkonfire="0" />
+		<flag canwalkonpoison="0" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-35" />
+	</attacks>
+	<defenses armor="10" defense="10" />
+	<elements>
+		<element deathPercent="-10" />
+		<element holyPercent="10" />
+		<element energyPercent="20" />
+		<element earthPercent="-10" />
+	</elements>
+	<voices interval="5000" chance="10">
+		<voice sentence="Groar" yell="0" />
+		<voice sentence="Whaaaz up!?" yell="0" />
+		<voice sentence="Grrrr" yell="0" />
+		<voice sentence="Gruntz!" yell="0" />
+		<voice sentence="Meee maity!" yell="0" />
+	</voices>
+	<loot>
+		<item name="Gold Coin" countmax="12" chance="64590" />
+		<item name="Spear" chance="25060" />
+		<item name="Meat" chance="9970" />
+		<item name="Leather Boots" chance="9950" />
+		<item name="Wooden Shield" chance="5310" />
+		<item name="Studded Club" chance="5060" />
+		<item name="Arrow" countmax="5" chance="5050" />
+		<item name="Bunch of Troll Hair" chance="3060" />
+		<item name="Trollroot" chance="920" />
+		<item name="Silver Amulet" chance="130" />
+	</loot>
+</monster>

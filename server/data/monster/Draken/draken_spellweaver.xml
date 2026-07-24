@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Draken Spellweaver" nameDescription="a draken spellweaver" race="blood" experience="3100" speed="210">
+	<health now="5000" max="5000" />
+	<look type="340" corpse="11316" />
+	<targetchange interval="4000" chance="10" />
+	<flags>
+		<flag summonable="0" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="0" />
+		<flag convinceable="0" />
+		<flag pushable="0" />
+		<flag canpushitems="1" />
+		<flag canpushcreatures="1" />
+		<flag targetdistance="1" />
+		<flag staticattack="70" />
+		<flag runonhealth="0" />
+		<flag canwalkonenergy="0" />
+		<flag canwalkonfire="1" />
+		<flag canwalkonpoison="1" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-350" />
+		<attack name="fire" interval="2000" chance="10" length="5" spread="0" min="0" max="-605">
+			<attribute key="areaEffect" value="explosion" />
+		</attack>
+		<attack name="firefield" interval="2000" chance="10" range="7" target="1" radius="3">
+			<attribute key="shootEffect" value="fire" />
+		</attack>
+		<attack name="monster soulfire" interval="2000" chance="10" />
+	</attacks>
+	<defenses armor="25" defense="25">
+		<defense name="invisible" interval="2000" chance="10" duration="5000">
+			<attribute key="areaEffect" value="redshimmer" />
+		</defense>
+	</defenses>
+	<elements>
+		<element physicalPercent="-10" />
+		<element deathPercent="80" />
+		<element holyPercent="-5" />
+		<element icePercent="-10" />
+		<element energyPercent="-10" />
+	</elements>
+	<immunities>
+		<immunity fire="1" />
+		<immunity earth="1" />
+		<immunity invisible="1" />
+		<immunity paralyze="0" />
+	</immunities>
+	<voices interval="5000" chance="10">
+		<voice sentence="Kazzzzzzuuum!" yell="0" />
+		<voice sentence="Fissziss!" yell="0" />
+		<voice sentence="Zzzzzooom!" yell="0" />
+	</voices>
+	<loot>
+		<item name="Gold Coin" countmax="100" chance="100000" />
+		<item name="Gold Coin" countmax="100" chance="100000" />
+		<item name="Meat" chance="29920" />
+		<item name="Platinum Coin" countmax="5" chance="25010" />
+		<item name="Weaver's Wandtip" chance="20000" />
+		<item name="Small Ruby" countmax="5" chance="7010" />
+		<item name="Great Mana Potion" chance="5030" />
+		<item name="Draken Sulphur" chance="3940" />
+		<item name="Luminous Orb" chance="2020" />
+		<item name="Zaoan Shoes" chance="2000" />
+		<item name="Wand of Inferno" chance="1590" />
+		<item name="Focus Cape" chance="1480" />
+		<item name="Green Gem" chance="1010" />
+		<item name="Zaoan Legs" chance="900" />
+		<item name="Zaoan Robe" chance="800" />
+		<item name="Spellweaver's Robe" chance="660" />
+		<item name="Ring of the Sky" chance="380" />
+		<item name="Draken Trophy" chance="10" />
+	</loot>
+</monster>

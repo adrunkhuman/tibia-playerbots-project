@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Warlord Ruzad" nameDescription="Warlord Ruzad" race="blood" experience="1700" speed="270">
+	<health now="1500" max="1500" />
+	<look type="2" corpse="6008" />
+	<targetchange interval="2000" chance="10" />
+	<flags>
+		<flag summonable="0" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="0" />
+		<flag convinceable="0" />
+		<flag pushable="0" />
+		<flag canpushitems="1" />
+		<flag canpushcreatures="1" />
+		<flag targetdistance="1" />
+		<flag staticattack="90" />
+		<flag runonhealth="0" />
+		<flag canwalkonpoison="0" />
+		<flag isboss="1" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-300" />
+	</attacks>
+	<defenses armor="32" defense="35" >
+		<defense name="healing" interval="2000" chance="60" min="27" max="75">
+			<attribute key="areaEffect" value="blueshimmer" />
+		</defense>
+	</defenses>
+	<elements>
+		<element deathPercent="-10" />
+		<element holyPercent="10" />
+		<element firePercent="80" />
+		<element energyPercent="1" />
+		<element earthPercent="-10" />
+	</elements>
+	<immunities>
+		<immunity invisible="1" />
+		<immunity paralyze="1" />
+	</immunities>
+	<summons maxSummons="2">
+		<summon name="Orc Berserker" interval="2000" chance="30" />
+	</summons>
+	<voices interval="2000" chance="9">
+		<voice sentence="Gadarat Ulderek!" yell="0" />
+		<voice sentence="Ikem rambo zambo!" yell="0" />
+		<voice sentence="Ruzad buta bana!" yell="0" />
+		<voice sentence="Rahi Gosh!" yell="0" />
+	</voices>
+	<loot>
+		<item name="Gold Coin" countmax="63" chance="36840" />
+		<item name="Brass Legs" chance="31580" />
+		<item name="Throwing Star" countmax="17" chance="21050" />
+		<item name="Orcish Axe" chance="15790" />
+		<item name="Scimitar" chance="15790" />
+		<item name="Dark Helmet" chance="10530" />
+		<item name="Hunting Spear" chance="10530" />
+		<item name="Meat" chance="10530" />
+		<item name="Plate Armor" chance="10530" />
+		<item name="Plate Legs" chance="10530" />
+		<item name="Protection Amulet" chance="10530" />
+		<item name="Two Handed Sword" chance="10530" />
+		<item name="Butcher's Axe" chance="5260" />
+	</loot>
+</monster>

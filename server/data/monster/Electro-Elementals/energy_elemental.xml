@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Energy Elemental" nameDescription="an energy elemental" race="energy" experience="550" speed="200">
+	<health now="500" max="500" />
+	<look type="293" corpse="8966" />
+	<targetchange interval="4000" chance="10" />
+	<flags>
+		<flag summonable="0" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="1" />
+		<flag convinceable="0" />
+		<flag pushable="0" />
+		<flag canpushitems="0" />
+		<flag staticattack="85" />
+		<flag targetdistance="1" />
+		<flag runonhealth="0" />
+		<flag canwalkonenergy="1" />
+		<flag canwalkonfire="1" />
+		<flag canwalkonpoison="0" />
+		<flag lightlevel="4" />
+		<flag lightcolor="85" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-175" />
+		<attack name="energy" interval="2000" chance="10" range="7" radius="2" target="1" min="-125" max="-252">
+			<attribute key="shootEffect" value="energy" />
+			<attribute key="areaEffect" value="energy" />
+		</attack>
+		<attack name="energy" interval="2000" chance="15" range="7" target="1" min="-100" max="-130">
+			<attribute key="shootEffect" value="energyball" />
+			<attribute key="areaEffect" value="energy" />
+		</attack>
+		<attack name="energy elemental electrify" interval="2000" chance="20" />
+	</attacks>
+	<defenses armor="15" defense="15">
+		<defense name="healing" interval="2000" chance="10" min="90" max="150">
+			<attribute key="areaEffect" value="blueshimmer" />
+		</defense>
+	</defenses>
+	<elements>
+		<element physicalPercent="35" />
+		<element deathPercent="5" />
+		<element holyPercent="5" />
+		<element earthPercent="-15" />
+	</elements>
+	<immunities>
+		<immunity ice="1" />
+		<immunity fire="1" />
+		<immunity energy="1" />
+		<immunity invisible="1" />
+		<immunity paralyze="1" />
+	</immunities>
+	<loot>
+		<item name="Gold Coin" countmax="100" chance="98050" />
+		<item name="Gold Coin" countmax="70" chance="98050" />
+		<item name="Mana Potion" chance="11980" />
+		<item name="Flash Arrow" countmax="10" chance="10100" />
+		<item name="Throwing Star" countmax="5" chance="9980" />
+		<item name="Strong Mana Potion" chance="7920" />
+		<item name="Crystal Sword" chance="6030" />
+		<item name="Small Amethyst" countmax="2" chance="5020" />
+		<item name="Obsidian Lance" chance="3640" />
+		<item name="Crystal Ring" chance="2050" />
+		<item name="Silver Amulet" chance="1080" />
+		<item name="Energy Ring" chance="930" />
+		<item name="Wand of Cosmic Energy" chance="590" />
+		<item name="Guardian Shield" chance="280" />
+	</loot>
+</monster>

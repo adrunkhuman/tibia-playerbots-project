@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Green Djinn" nameDescription="a green djinn" race="blood" experience="215" speed="220">
+	<health now="330" max="330" />
+	<look type="51" corpse="6016" />
+	<targetchange interval="4000" chance="10" />
+	<flags>
+		<flag summonable="0" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="0" />
+		<flag convinceable="0" />
+		<flag pushable="0" />
+		<flag canpushitems="1" />
+		<flag canpushcreatures="0" />
+		<flag targetdistance="1" />
+		<flag staticattack="90" />
+		<flag runonhealth="0" />
+		<flag canwalkonenergy="0" />
+		<flag canwalkonfire="0" />
+		<flag canwalkonpoison="0" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-100" />
+		<attack name="fire" interval="2000" chance="15" range="7" min="-45" max="-75">
+			<attribute key="shootEffect" value="fire" />
+		</attack>
+		<attack name="lifedrain" interval="2000" chance="10" radius="1" target="1" range="7" min="-60" max="-105">
+			<attribute key="shootEffect" value="suddendeath" />
+			<attribute key="areaEffect" value="mortarea" />
+			<attribute key="areaEffect" value="smallclouds" />
+		</attack>
+		<attack name="drunk" interval="2000" chance="10" range="7" duration="5000">
+			<attribute key="shootEffect" value="energy" />
+		</attack>
+		<attack name="outfit" interval="2000" chance="1" range="7" monster="rat" duration="4000">
+			<attribute key="areaEffect" value="blueshimmer" />
+		</attack>
+		<attack name="djinn electrify" interval="2000" range="5" chance="15" />
+		<attack name="djinn cancel invisibility" interval="2000" chance="10" />
+	</attacks>
+	<defenses armor="20" defense="20" />
+	<elements>
+		<element physicalPercent="20" />
+		<element energyPercent="50" />
+		<element firePercent="80" />
+		<element icePercent="-10" />
+		<element holyPercent="-13" />
+		<element deathPercent="20" />
+	</elements>
+	<immunities>
+		<immunity invisible="1" />
+		<immunity paralyze="1" />
+	</immunities>
+	<voices interval="1000" chance="5">
+		<voice sentence="I grant you a deathwish!" yell="0" />
+		<voice sentence="Tell me your last wish!" yell="0" />
+		<voice sentence="Good wishes are for fairytales" yell="0" />
+		<voice sentence="Muhahahaha!" yell="0" />
+		<voice sentence="I wish you a merry trip to hell!" yell="0" />
+	</voices>
+	<loot>
+		<item name="Gold Coin" countmax="100" chance="88430" />
+		<item name="Gold Coin" countmax="15" chance="88430" />
+		<item name="Cheese" chance="24340" />
+		<item name="Royal Spear" countmax="2" chance="5100" />
+		<item name="Small Emerald" countmax="4" chance="2900" />
+		<item id="1980" chance="2350" />
+		<item name="Dirty Turban" chance="2130" />
+		<item name="Green Piece of Cloth" chance="2040" />
+		<item name="Grave Flower" chance="960" />
+		<item name="Small Oil Lamp" chance="840" />
+		<item name="Mana Potion" chance="490" />
+		<item name="Mystic Turban" chance="120" />
+	</loot>
+</monster>

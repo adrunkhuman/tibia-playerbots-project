@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Orc Berserker" nameDescription="an orc berserker" race="blood" experience="195" speed="250" manacost="590">
+	<health now="210" max="210" />
+	<look type="8" corpse="5980" />
+	<targetchange interval="4000" chance="10" />
+	<flags>
+		<flag summonable="1" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="1" />
+		<flag convinceable="1" />
+		<flag pushable="0" />
+		<flag canpushitems="1" />
+		<flag canpushcreatures="1" />
+		<flag targetdistance="1" />
+		<flag staticattack="90" />
+		<flag runonhealth="0" />
+		<flag canwalkonenergy="0" />
+		<flag canwalkonfire="0" />
+		<flag canwalkonpoison="0" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-200" />
+	</attacks>
+	<defenses armor="12" defense="12">
+		<defense name="speed" interval="2000" chance="15" speedchange="290" duration="6000">
+			<attribute key="areaEffect" value="redshimmer" />
+		</defense>
+	</defenses>
+	<elements>
+		<element deathPercent="-10" />
+		<element holyPercent="10" />
+		<element energyPercent="15" />
+		<element earthPercent="-10" />
+	</elements>
+	<voices interval="5000" chance="10">
+		<voice sentence="KRAK ORRRRRRK!" yell="1" />
+	</voices>
+	<loot>
+		<item name="Gold Coin" countmax="25" chance="54840" />
+		<item name="Orcish Gear" chance="10280" />
+		<item name="Ham" chance="9830" />
+		<item name="Halberd" chance="6970" />
+		<item name="Battle Axe" chance="5750" />
+		<item name="Hunting Spear" chance="4890" />
+		<item name="Orc Leather" chance="4200" />
+		<item name="Orc Tooth" chance="2800" />
+		<item name="Chain Armor" chance="980" />
+		<item name="Lamp" chance="840" />
+	</loot>
+</monster>

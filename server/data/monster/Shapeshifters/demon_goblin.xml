@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Demon" nameDescription="a demon" race="blood" experience="25" speed="120">
+	<health now="50" max="50" />
+	<look type="35" corpse="6002" />
+	<targetchange interval="4000" chance="10" />
+	<flags>
+		<flag summonable="0" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="0" />
+		<flag convinceable="0" />
+		<flag pushable="0" />
+		<flag canpushitems="0" />
+		<flag canpushcreatures="0" />
+		<flag targetdistance="1" />
+		<flag staticattack="90" />
+		<flag runonhealth="35" />
+		<flag canwalkonenergy="0" />
+		<flag canwalkonfire="0" />
+		<flag canwalkonpoison="0" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-10" />
+		<attack name="fire" interval="2000" chance="20" range="7" radius="7" target="1" min="0" max="0">
+			<attribute key="shootEffect" value="fire" />
+			<attribute key="areaEffect" value="firearea" />
+		</attack>
+		<attack name="energy" interval="2000" chance="10" range="1" min="0" max="0">
+			<attribute key="shootEffect" value="energy" />
+		</attack>
+	</attacks>
+	<defenses armor="6" defense="6" />
+	<immunities>
+		<immunity invisible="0" />
+		<immunity paralyze="0" />
+	</immunities>
+	<loot>
+		<item name="Gold Coin" countmax="9" chance="50240" />
+		<item name="Small Stone" chance="15270" />
+		<item name="Fish" chance="12990" />
+		<item name="Small Axe" chance="9860" />
+		<item name="Short Sword" chance="8810" />
+		<item name="Bone Club" chance="4950" />
+		<item name="Leather Armor" chance="2540" />
+		<item name="Leather Helmet" chance="1950" />
+		<item name="Dagger" chance="1790" />
+		<item name="Bone" chance="1080" />
+		<item name="Mouldy Cheese" chance="1000" />
+		<item name="Goblin Ear" chance="950" />
+	</loot>
+</monster>

@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Xenia" nameDescription="Xenia" race="blood" experience="255" speed="176">
+	<health now="200" max="200" />
+	<look type="137" head="95" body="115" legs="115" feet="95" corpse="3058" />
+	<targetchange interval="5000" chance="8" />
+	<flags>
+		<flag summonable="0" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="0" />
+		<flag convinceable="0" />
+		<flag pushable="0" />
+		<flag canpushitems="1" />
+		<flag canpushcreatures="0" />
+		<flag targetdistance="1" />
+		<flag staticattack="90" />
+		<flag runonhealth="10" />
+		<flag isboss="1" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-50" />
+		<attack name="drunk" interval="2000" chance="10" length="3" spread="2" duration="5000">
+			<attribute key="areaEffect" value="rednote" />
+		</attack>
+	</attacks>
+	<defenses armor="14" defense="14">
+		<defense name="healing" interval="1000" chance="15" min="10" max="60">
+			<attribute key="areaEffect" value="blueshimmer"/>
+		</defense>
+		<defense name="speed" interval="2000" chance="15" speedchange="90" duration="5000">
+			<attribute key="areaEffect" value="redshimmer" />
+		</defense>
+	</defenses>
+	<voices interval="5000" chance="10">
+		<voice sentence="Yeeyeeyeee!" yell="0" />
+        	<voice sentence="I challenge you!" yell="0" />
+        	<voice sentence="Fight me if you dare!" yell="0" />
+	</voices>
+	<loot>
+		<item name="Skull" countmax="2" chance="88890" />
+		<item name="Gold Coin" countmax="35" chance="66670" />
+		<item name="Sabre" chance="66670" />
+		<item name="Studded Shield" chance="11110" />
+	</loot>
+</monster>

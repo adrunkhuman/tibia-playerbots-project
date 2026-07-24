@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Countess Sorrow" nameDescription="Countess Sorrow" race="undead" experience="13000" speed="250">
+	<health now="6500" max="6500" />
+	<look type="241" head="20" corpse="6344" />
+	<targetchange interval="60000" chance="0" />
+	<flags>
+		<flag summonable="0" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="0" />
+		<flag convinceable="0" />
+		<flag pushable="0" />
+		<flag canpushitems="1" />
+		<flag canpushcreatures="1" />
+		<flag targetdistance="1" />
+		<flag staticattack="90" />
+		<flag runonhealth="0" />
+		<flag isboss="1" />
+		<flag lightlevel="3" />
+		<flag lightcolor="91" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-830" />
+		<attack name="drunk" interval="1000" chance="10" range="7" radius="4" target="1" duration="5000">
+			<attribute key="shootEffect" value="poison" />
+			<attribute key="areaEffect" value="poison" />
+		</attack>
+		<attack name="lifedrain" interval="1000" chance="17" range="7" target="1" min="-423" max="-980">
+			<attribute key="areaEffect" value="redshimmer" />
+		</attack>
+		<attack name="manadrain" interval="1000" chance="25" target="0" radius="3" min="-45" max="-90">
+			<attribute key="areaEffect" value="redshimmer" />
+		</attack>
+	</attacks>
+	<defenses armor="25" defense="20">
+		<defense name="healing" interval="1000" chance="50" min="416" max="625">
+			<attribute key="areaEffect" value="blueshimmer" />
+		</defense>
+		<defense name="invisible" interval="2000" chance="10" duration="5000">
+			<attribute key="areaEffect" value="redshimmer" />
+		</defense>
+		<defense name="speed" interval="2000" chance="15" speedchange="290" duration="5000">
+			<attribute key="areaEffect" value="redshimmer" />
+		</defense>
+	</defenses>
+	<elements>
+		<element icePercent="50" />
+		<element firePercent="-10" />
+		<element energyPercent="10" />
+	</elements>
+	<immunities>
+		<immunity physical="1" />
+		<immunity death="1" />
+		<immunity earth="1" />
+		<immunity invisible="1" />
+		<immunity paralyze="1" />
+	</immunities>
+	<voices interval="2000" chance="9">
+		<voice sentence="Dreams can come true. As my dream of killing you." yell="0" />
+		<voice sentence="You are lost pathetic mortal." yell="0" />
+		<voice sentence="Sleep ... for eternity!" yell="0" />
+		<voice sentence="You won't rest in peace! Never ever!" yell="0" />
+		<voice sentence="I'm so sorry ... for youuu!" yell="0" />
+	</voices>
+	<summons maxSummons="3">
+		<summon name="Phantasm" interval="2000" chance="20" />
+		<summon name="Phantasm Summon" interval="2000" chance="20" />
+	</summons>
+	<loot>
+		<item name="Countess Sorrow's Frozen Tear" chance="100000" />
+		<item name="Soul Orb" chance="89130" />
+		<item name="Gold Coin" countmax="100" chance="86960" />
+		<item name="Gold Coin" countmax="79" chance="86960" />
+		<item name="Platinum Coin" countmax="4" chance="60870" />
+		<item name="Worn Leather Boots" chance="45650" />
+		<item name="Demonic Essence" chance="41300" />
+		<item name="Protection Amulet" chance="30430" />
+		<item name="Blue Robe" chance="28260" />
+		<item name="Silver Mace" chance="19570" />
+		<item name="Plate Legs" chance="15220" />
+		<item name="Stealth Ring" chance="8700" />
+	</loot>
+</monster>

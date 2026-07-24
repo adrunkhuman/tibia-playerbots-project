@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Thief" nameDescription="a thief" race="blood" experience="5" speed="170">
+	<health now="60" max="60" />
+	<look type="134" head="114" body="97" legs="21" feet="41" corpse="3058" />
+	<targetchange interval="4000" chance="10" />
+	<flags>
+		<flag summonable="0" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="0" />
+		<flag convinceable="0" />
+		<flag pushable="0" />
+		<flag canpushitems="1" />
+		<flag canpushcreatures="0" />
+		<flag targetdistance="1" />
+		<flag staticattack="90" />
+		<flag runonhealth="0" />
+		<flag canwalkonenergy="0" />
+		<flag canwalkonfire="0" />
+		<flag canwalkonpoison="0" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-35" />
+	</attacks>
+	<defenses armor="15" defense="15" />
+	<immunities>
+		<immunity invisible="0" />
+		<immunity paralyze="0" />
+	</immunities>
+	<voices interval="5000" chance="10">
+		<voice sentence="Alarm!" yell="0" />
+		<voice sentence="You dare stealing from us?" yell="0" />
+		<voice sentence="Intruder! Get him!" yell="0" />
+		<voice sentence="Don't let him escape!" yell="0" />
+	</voices>
+</monster>

@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Man in the Cave" nameDescription="man in the cave" race="blood" experience="777" speed="210">
+	<health now="485" max="485" />
+	<look type="128" head="95" body="116" legs="95" feet="114" addons="1" corpse="3058" />
+	<targetchange interval="5000" chance="8" />
+	<flags>
+		<flag summonable="0" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="0" />
+		<flag convinceable="0" />
+		<flag pushable="0" />
+		<flag canpushitems="1" />
+		<flag canpushcreatures="0" />
+		<flag targetdistance="1" />
+		<flag staticattack="90" />
+		<flag runonhealth="0" />
+		<flag canwalkonenergy="0" />
+		<flag canwalkonfire="0" />
+		<flag canwalkonpoison="0" />
+		<flag isboss="1" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-65" />
+		<attack name="physical" interval="2000" chance="20" range="7" min="-10" max="-95">
+			<attribute key="shootEffect" value="smallstone" />
+		</attack>
+	</attacks>
+	<defenses armor="14" defense="10" >
+		<defense name="healing" interval="2000" chance="25" min="45" max="70">
+			<attribute key="areaEffect" value="blueshimmer" />
+		</defense>
+		<defense name="speed" interval="2000" chance="15" speedchange="290" duration="6000">
+			<attribute key="areaEffect" value="redshimmer" />
+		</defense>
+	</defenses>
+	<immunities>
+		<immunity invisible="1" />
+		<immunity paralyze="0" />
+	</immunities>
+	<summons maxSummons="2">
+		<summon name="Monk" interval="2000" chance="20" max="1" />
+	</summons>
+	<voices interval="2000" chance="5">
+		<voice sentence="Have you seen my old pal Frack?" yell="0" />
+		<voice sentence="I will rope you up! All of you!" yell="0" />
+		<voice sentence="THE MONKS ARE MINE!" yell="1" />
+		<voice sentence="A MIC to rule them all!" yell="0" />
+		<voice sentence="Let me put my rope around your neck!" yell="0" />
+	</voices>
+	<loot>
+		<item name="Rope" countmax="3" chance="100000" />
+		<item name="Mercenary Sword" chance="34480" />
+		<item name="Brown Piece of Cloth" chance="31030" />
+		<item name="Gold Coin" countmax="59" chance="24140" />
+		<item name="Fur Cap" chance="17240" />
+		<item name="Shard" chance="10340" />
+		<item name="Brown Bread" chance="3450" />
+		<item name="Mammoth Fur Cape" chance="6666" />
+	</loot>
+</monster>

@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Nomad" nameDescription="a nomad" race="blood" experience="60" speed="205" manacost="420">
+	<health now="160" max="160" />
+	<look type="146" head="97" body="39" legs="40" feet="3" addons="3" corpse="3058" />
+	<targetchange interval="4000" chance="10" />
+	<flags>
+		<flag summonable="1" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="0" />
+		<flag convinceable="1" />
+		<flag pushable="0" />
+		<flag canpushitems="1" />
+		<flag canpushcreatures="0" />
+		<flag targetdistance="1" />
+		<flag staticattack="90" />
+		<flag runonhealth="15" />
+		<flag canwalkonenergy="0" />
+		<flag canwalkonfire="0" />
+		<flag canwalkonpoison="0" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-80" />
+		<attack name="physical" interval="2000" chance="10" target="0" radius="1">
+			<attribute key="areaeffect" value="whitenote" />
+		</attack>
+	</attacks>
+	<defenses armor="15" defense="15" />
+	<elements>
+		<element physicalPercent="-10" />
+		<element deathPercent="-10" />
+		<element holyPercent="20" />
+		<element icePercent="-10" />
+		<element firePercent="20" />
+	</elements>
+	<voices interval="5000" chance="10">
+		<voice sentence="Your riches will be mine!" yell="0" />
+		<voice sentence="I will leave your remains to the vultures!" yell="0" />
+		<voice sentence="We are swift as the wind of the desert!" yell="0" />
+		<voice sentence="We are the true sons of the desert!" yell="0" />
+	</voices>
+	<loot>
+		<item name="Gold Coin" countmax="40" chance="56240" />
+		<item name="Rope Belt" chance="6440" />
+		<item name="Potato" countmax="3" chance="4730" />
+		<item name="Axe" chance="2820" />
+		<item name="Brass Armor" chance="2480" />
+		<item name="Dirty Turban" chance="2030" />
+		<item name="Mace" chance="2030" />
+		<item name="Steel Shield" chance="970" />
+		<item name="Iron Helmet" chance="590" />
+		<item name="Nomad Parchment" chance="210" />
+	</loot>
+</monster>

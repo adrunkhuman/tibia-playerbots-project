@@ -1,0 +1,122 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<raids>
+	<!--
+		<raid name="Testraid" file="testraid.xml" interval2="30" margin="0" />
+		executed on average once every 30 minutes
+	-->
+	<!-- Ab'Dendriel -->
+	<raid name="Badger Ab" file="abdendriel/badger.xml" interval2="500" margin="60" />
+	<raid name="WarWolf Ab" file="abdendriel/warwolf.xml" interval2="500" margin="30" />
+	<raid name="WaspBear Ab" file="abdendriel/wasp_bear.xml" interval2="500" margin="40" />
+	<raid name="Dragons Draconia" file="abdendriel/dragons.xml" interval2="500" margin="80" />
+
+	<!-- Ankrahmun -->
+	<raid name="Skeles Ank" file="ankrahmun/Skeleton.xml" interval2="500" margin="70"/>
+	<raid name="Terramite Ank" file="ankrahmun/Terramite.xml" interval2="500" margin="70" />
+	<raid name="AncientScarabCave Ank" file="ankrahmun/AncientScarabCave.xml" interval2="30" margin="70"/>
+	<raid name="Scarab Ank" file="ankrahmun/Scarab.xml" interval2="500" margin="60" />
+	<raid name="Nomad Ank" file="ankrahmun/Nomad.xml" interval2="500" margin="70" />
+	<raid name="Djinn Ank" file="ankrahmun/DjinnFortress.xml" interval2="500" margin="70"/>
+	<raid name="Gargoyle Ank" file="ankrahmun/GargoyleOasisTomb.xml" interval2="500" margin="70" />
+	<raid name="Slime Ank" file="ankrahmun/SlimeShadowTomb.xml" interval2="500" margin="70"/>
+	<raid name="Vampire Shadow Ank" file="ankrahmun/VampireShadowTomb.xml" interval2="500" margin="70"/>
+	<raid name="Bonebeast" file="ankrahmun/BonebeastMountainTomb.xml" interval2="500" margin="70" />
+	<raid name="Necromancer Ank" file="ankrahmun/NecromancerPeninsulaTomb.xml" interval2="500" margin="70"/>
+	<raid name="Cobra Ank" file="ankrahmun/CobraMountainTomb.xml" interval2="500" margin="70" />
+	<raid name="Vampire Tarpit Ank" file="ankrahmun/VampireTarpitTomb.xml" interval2="500" margin="70" />
+	<raid name="DragonLair Ank" file="ankrahmun/DragonLairAnk.xml" interval2="500" margin="70" />
+
+	<!-- Carlin -->
+	<raid name="LesserUndead Ghostland" file="carlin/LesserUndeadGhostland.xml" interval2="500" margin="30" />
+	<raid name="Undead Ghostland" file="carlin/UndeadGhostland.xml" interval2="500" margin="40" />
+	<raid name="Orcs Northport" file="carlin/OrcsWoodsNorthport.xml" interval2="500" margin="80"/>
+	<raid name="Orcs Femor" file="carlin/OrcsFemorHills.xml" interval2="500" margin="70"/>
+	<raid name="WildHunter Femor" file="carlin/WildHunterFemor.xml" interval2="500" margin="70"/>
+	<raid name="AmazonCamp Carlin" file="carlin/AmazonCampCarlin.xml" interval2="500" margin="70"/>	
+
+	<!-- Darashia -->
+	<raid name="Wasp Darashia" file="darashia/WaspDarashia.xml" interval2="500" margin="90"/>
+	<raid name="Pirate Darashia" file="darashia/PirateDarashia.xml" interval2="500" margin="90" />
+	<raid name="Undead Horde Darashia" file="darashia/UndeadHordeDarashia.xml" interval2="500" margin="90"/>
+	<raid name="Minos Darashia" file="darashia/MinotaurDarashia.xml" interval2="500" margin="100" />
+	<raid name="Priestess Darashia" file="darashia/priestesses.xml" interval2="500" margin="70" />
+	<raid name="NecroLich DeeperCatacombs" file="darashia/NecroLichDeeperCatacombs.xml" interval2="500" margin="70"/>
+	<raid name="Zombies Darashia" file="darashia/zombies.xml" interval2="500" margin="70" />
+
+	<!-- Edron -->
+	<raid name="Badger Edron" file="edron/BadgerEdron.xml" interval2="500" margin="90"/>
+	<raid name="Skunk Edron" file="edron/SkunkEdron.xml" interval2="500" margin="90"/>
+	<raid name="Badger Stonehome" file="edron/BadgerStonehome.xml" interval2="500" margin="70"/>
+	<raid name="Skunk Stonehome" file="edron/SkunkStonehome.xml" interval2="500" margin="70"/>
+	<raid name="Goblin Edron" file="edron/GoblinEdron.xml" interval2="500" margin="90" />	
+	<raid name="Hunter Edron" file="edron/HunterRaidEdron.xml" interval2="500" margin="70"/>
+	<raid name="Wyvern Edron" file="edron/WyvernEdron.xml" interval2="500" margin="70"/>
+	<raid name="Dwarf Cormaya" file="edron/DwarfCormaya.xml" interval2="500" margin="70"/>
+	<raid name="Ghoul Stonehome" file="edron/GhoulStonehome.xml" interval2="500" margin="70"/>
+	<raid name="OrcBerserker Edron" file="edron/OrcBerserkerEdron.xml" interval2="500" margin="100" />
+	<raid name="MonkWarlock Edron" file="edron/MonkWarlockEdron.xml" interval2="500" margin="100" />
+	<raid name="Orshabaal" file="edron/Orshabaal.xml" interval2="1440" margin="100" />
+		
+	<!-- Kazordoon -->
+	<raid name="Bat Kazz" file="kazordoon/BatKazz.xml" interval2="500" margin="70"/>
+	<raid name="Spider Kazz" file="kazordoon/SpiderKazz.xml" interval2="500" margin="70"/>
+	<raid name="Goblin Kazz" file="kazordoon/GoblinKazz.xml" interval2="500" margin="70" />
+	<raid name="Minotaur Kazz" file="kazordoon/MinotaurKazz.xml" interval2="500" margin="70"/>
+
+	<!-- Liberty Bay -->
+	<raid name="Pirates LBCity" file="libertybay/PiratesLBCity.xml" interval2="500" margin="100"/>
+	<raid name="Pirates LBPlantations" file="libertybay/PiratesLBPlantations.xml" interval2="500" margin="100"/> 
+	<raid name="Quaras LBCity" file="libertybay/Quaras.xml" interval2="500" margin="50" />
+    <raid name="Quaras LBPlantations" file="libertybay/QuarasPlantations.xml" interval2="500" margin="50" />
+    <raid name="Flamingos Laguna" file="libertybay/FlamingosLagunaIslands.xml" interval2="500" margin="80" />
+    <raid name="Morgaroth" file="libertybay/Morgaroth.xml" interval2="1440" margin="90" />
+    <raid name="PiratesBoss" file="libertybay/PiratesBoss.xml" interval2="500" margin="90"/>
+    <raid name="Ferumbras" file="libertybay/Ferumbras.xml" interval2="1440" margin="90" />
+    <raid name="TigerMeriana" file="libertybay/TigerMeriana.xml" interval2="500" margin="100"/> 
+	<raid name="TortoisesTreasureIsland" file="libertybay/Tortoises.xml" interval2="500" margin="80" />
+
+    <!-- Port Hope -->
+    <raid name="ApeRaidPortHope" file="porthope/ApeRaidPH.xml" interval2="500" margin="60"/>
+    <raid name="KongraRaidBanuta" file="porthope/KongraRaidBanuta.xml" interval2="500" margin="60"/>
+    <raid name="SnakeGodPH" file="porthope/SnakeGodPH.xml" interval2="500" margin="30"/> 
+	<raid name="LizardSentinelPH" file="porthope/LizardSentinelPH.xml" interval2="500" margin="95" />
+    <raid name="TerrorBirdTrapWood" file="porthope/terrorbirds.xml" interval2="500" margin="100" />
+	<raid name="SerpentSpawnDeeperBanuta" file="porthope/SerpentSpawnDeeperBanuta.xml" interval2="500" margin="60" />	
+
+	<!-- Svargrond -->
+	<raid name="BarbarianBittermor" file="svargrond/BarbarianBittermore.xml" interval2="500" margin="40" />
+	<raid name="BarbarianKrimhorn" file="svargrond/BarbarianKrimhorn.xml" interval2="500" margin="80" />
+	<raid name="BarbarianMountain" file="svargrond/BarbarianMountain.xml" interval2="500" margin="70" />
+	<raid name="WinterWolfKrimhorn" file="svargrond/WinterWolfKrimhorn.xml" interval2="500" margin="30"/>
+    <raid name="IceGolemFormorgar" file="svargrond/IceGolemFormorgar.xml" interval2="500" margin="70" />
+    <raid name="Ghazbaran" file="svargrond/ghazbaran.xml" interval2="1440" margin="100" />
+
+	<!-- Thais -->
+    <raid name="RatsThais" file="thais/RatThais.xml" interval2="500" margin="80" />
+    <raid name="OrcNorthThais" file="thais/OrcNorthThais.xml" interval2="500" margin="80" />
+    <raid name="WaspThais" file="thais/WaspThais.xml" interval2="500" margin="30"/>
+    <raid name="CyclopMountSternum" file="thais/CyclopMountSternum.xml" interval2="500" margin="30" />
+	<raid name="OrcsThais" file="thais/OrcsThais.xml" interval2="500" margin="70" />
+    <raid name="OrcsThaisLighthouse" file="thais/OrcsThaisLighthouse.xml" interval2="500" margin="30"/> 
+
+	<!-- Venore -->
+	<raid name="ElvesVenore" file="venore/ElvesVenore.xml" interval2="500" margin="80" />
+    <raid name="WitchGreenClawSwamp" file="venore/WitchesGreenClawSwamp.xml" interval2="500" margin="80"/>
+    <raid name="UndeadArmyPOH" file="venore/UndeadArmyPOH.xml" interval2="500" margin="100" />
+    <raid name="TheOldWidowPOH" file="venore/TheOldWidowPOH.xml" interval2="1440" margin="60" />
+
+    <!-- Yalahar -->
+    <raid name="YalaharVampire" file="yalahar/Vampire.xml" interval2="500" margin="40"/>	
+
+	<!-- Rookgaard -->
+	<raid name="RatRookgard" file="rookgaard/rats.xml" interval2="500" margin="70" />
+
+	<!-- Zao -->
+    <raid name="OrcSteppe" file="zao/OrcSteppe.xml" interval2="500" margin="30"/> 
+	<raid name="GnarlhoundSteppe" file="zao/GnarlhoundSteppe.xml" interval2="500" margin="20" />
+    <raid name="LancerBettleMuggyPlains" file="zao/LancerBettleMuggyPlains.xml" interval2="300" margin="20"/> 
+    <raid name="DragonsMuggyPlains" file="zao/DragonsMuggyPlains.xml" interval2="300" margin="20"/>
+
+	<!-- Wildlands/Other -->
+	<raid name="HunterFerngrims" file="wildlands/HunterFerngrimsGate.xml" interval2="500" margin="10"/>
+</raids>

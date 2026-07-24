@@ -1,0 +1,118 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Annihilon" nameDescription="Annihilon" race="fire" experience="15000" speed="380">
+	<health now="46500" max="46500" />
+	<look type="12" head="3" body="28" legs="115" feet="39" corpse="6068" />
+	<targetchange interval="5000" chance="8" />
+	<flags>
+		<flag summonable="0" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="0" />
+		<flag convinceable="0" />
+		<flag pushable="0" />
+		<flag canpushitems="1" />
+		<flag canpushcreatures="1" />
+		<flag targetdistance="1" />
+		<flag staticattack="85" />
+		<flag runonhealth="0" />
+		<flag canwalkonenergy="1" />
+		<flag canwalkonfire="1" />
+		<flag canwalkonpoison="1" />
+		<flag isboss="1" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-1707" />
+		<attack name="physical" interval="3000" chance="18" radius="4" target="1" min="-170" max="-315">
+			<attribute key="shootEffect" value="largerock" />
+			<attribute key="areaEffect" value="groundshaker" />
+		</attack>
+		<attack name="physical" interval="3000" chance="18" radius="4" target="0" min="0" max="0">
+			<attribute key="areaEffect" value="groundshaker" />
+		</attack>
+		<attack name="energy" interval="2000" chance="15" radius="3" target="1" min="-360" max="-500">
+			<attribute key="areaEffect" value="teleport" />
+			<attribute key="shootEffect" value="energy" />
+		</attack>
+		<attack name="poisoncondition" interval="2000" chance="15" radius="4" target="1" min="-600" max="-640">
+			<attribute key="areaEffect" value="poison" />
+			<attribute key="shootEffect" value="poison" />
+		</attack>
+		<attack name="manadrain" interval="2000" chance="15" radius="4" target="1" min="0" max="-200">
+			<attribute key="areaEffect" value="teleport" />
+		</attack>
+		<attack name="death" interval="1000" chance="11" length="8" spread="0" min="-450" max="-800">
+			<attribute key="areaEffect" value="smallclouds" />
+		</attack>
+		<attack name="speed" interval="2000" chance="15" target="1" radius="4" duration="10000" speedchange="-785">
+			<attribute key="shootEffect" value="snowball" />
+			<attribute key="areaEffect" value="icearea" />
+		</attack>
+		<attack name="speed" interval="4000" chance="15" radius="3" duration="10000" speedchange="-700">
+			<attribute key="areaEffect" value="redshimmer" />
+		</attack>
+		<attack name="annihilon skill reducer" range="5" target="1" interval="2000" chance="15" />
+	</attacks>
+	<defenses armor="60" defense="55">
+		<defense name="healing" interval="1000" chance="14" min="230" max="370">
+			<attribute key="areaEffect" value="greenshimmer" />
+		</defense>
+	</defenses>
+	<elements>
+		<element deathPercent="95" />
+		<element holyPercent="-5" />
+		<element icePercent="20" />
+		<element energyPercent="95" />
+	</elements>
+	<immunities>
+		<immunity invisible="1" />
+		<immunity paralyze="1" />
+	</immunities>
+	<voices interval="5000" chance="10">
+		<voice sentence="I am coming for you!" yell="0" />
+		<voice sentence="Flee as long as you can!" yell="0" />
+		<voice sentence="Annihilon's might will crush you all!" yell="0" />
+	</voices>
+	<loot>
+		<item name="Gold Coin" countmax="100" chance="100000" />
+		<item name="Gold Coin" countmax="59" chance="100000" />
+		<item name="Slightly Rusted Armor" chance="62600" />
+		<item name="Giant Shimmering Pearl" countmax="4" chance="37800" />
+		<item name="Heavy Mace" chance="27950" />
+		<item name="Assassin Star" countmax="50" chance="23230" />
+		<item name="Guardian Halberd" chance="22830" />
+		<item name="Blue Gem" chance="22440" />
+		<item name="Yellow Gem" chance="22440" />
+		<item name="Emerald Bangle" chance="21650" />
+		<item name="Gold Ingot" chance="20870" />
+		<item name="Infernal Bolt" countmax="50" chance="20870" />
+		<item name="Power Bolt" countmax="99" chance="20470" />
+		<item name="Red Gem" chance="20470" />
+		<item name="Berserk Potion" chance="20080" />
+		<item name="Halberd" chance="19690" />
+		<item name="Soul Orb" countmax="5" chance="19690" />
+		<item name="Platinum Coin" countmax="30" chance="19290" />
+		<item name="Flaming Arrow" countmax="96" chance="18900" />
+		<item name="Green Gem" chance="17320" />
+		<item name="Violet Gem" chance="17320" />
+		<item name="Viper Star" countmax="70" chance="16540" />
+		<item name="Mastermind Potion" chance="14960" />
+		<item name="Great Health Potion" chance="14570" />
+		<item name="Onyx Flail" chance="13780" />
+		<item name="Great Mana Potion" chance="13390" />
+		<item name="Ultimate Health Potion" chance="13390" />
+		<item name="Crown Shield" chance="12600" />
+		<item name="Great Spirit Potion" chance="12200" />
+		<item name="Demon Horn" countmax="2" chance="11810" />
+		<item name="Paladin Armor" chance="10240" />
+		<item name="Tower Shield" chance="10240" />
+		<item name="Guardian Shield" chance="8660" />
+		<item name="Diamond Sceptre" chance="7090" />
+		<item name="Demon Shield" chance="3940" />
+		<item name="Mastermind Shield" chance="3540" />
+		<item name="Demonbone" chance="1570" />
+		<item name="Lavos Armor" chance="1180" />
+		<item name="Obsidian Truncheon" chance="1180" />
+		<item name="The Stomper" chance="790" />
+		<item name="Skullcracker Armor" chance="310" />
+	</loot>
+</monster>

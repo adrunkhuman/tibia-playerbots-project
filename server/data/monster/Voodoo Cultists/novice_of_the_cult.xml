@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Novice of the Cult" nameDescription="a novice of the cult" race="blood" experience="100" speed="200">
+	<health now="285" max="285" />
+	<look type="133" head="114" body="114" legs="76" feet="114" corpse="3058" />
+	<targetchange interval="4000" chance="10" />
+	<flags>
+		<flag summonable="0" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="1" />
+		<flag convinceable="0" />
+		<flag pushable="0" />
+		<flag canpushitems="1" />
+		<flag canpushcreatures="0" />
+		<flag staticattack="90" />
+		<flag targetdistance="1" />
+		<flag runonhealth="40" />
+		<flag canwalkonenergy="0" />
+		<flag canwalkonfire="0" />
+		<flag canwalkonpoison="0" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-65" poison="20" />
+		<attack name="lifedrain" interval="2000" chance="15" range="7" radius="1" target="1" min="-20" max="-80">
+			<attribute key="shootEffect" value="poison" />
+			<attribute key="areaEffect" value="redshimmer" />
+		</attack>
+	</attacks>
+	<defenses armor="15" defense="15">
+		<defense name="healing" interval="2000" chance="15" min="20" max="40">
+			<attribute key="areaEffect" value="blueshimmer" />
+		</defense>
+	</defenses>
+	<elements>
+		<element physicalPercent="-10" />
+		<element deathPercent="-8" />
+		<element holyPercent="10" />
+		<element icePercent="10" />
+		<element firePercent="-5" />
+		<element energyPercent="-8" />
+		<element earthPercent="10" />
+	</elements>
+	<summons maxSummons="1">
+		<summon name="Chicken" interval="2000" chance="10" />
+	</summons>
+	<voices interval="5000" chance="10">
+		<voice sentence="Fear us!" yell="0" />
+		<voice sentence="You will not tell anyone what you have seen!" yell="0" />
+		<voice sentence="Your curiosity will be punished!" yell="0" />
+	</voices>
+	<loot>
+		<item name="Gold Coin" countmax="40" chance="43570" />
+		<item name="Rope Belt" chance="5940" />
+		<item name="Scarf" chance="2960" />
+		<item id="6087" chance="1060" />
+		<item name="Cultish Robe" chance="1010" />
+		<item id="1977" chance="700" />
+		<item name="Dwarven Ring" chance="500" />
+		<item name="Pirate Voodoo Doll" chance="490" />
+		<item name="Wand of Vortex" chance="450" />
+		<item name="Garlic Necklace" chance="420" />
+		<item name="Small Diamond" chance="190" />
+	</loot>
+</monster>

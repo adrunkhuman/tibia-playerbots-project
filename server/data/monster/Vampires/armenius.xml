@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Armenius" nameDescription="Armenius" race="venom" experience="500" speed="330">
+	<health now="550" max="550" />
+	<look type="79" corpse="6021" />
+	<targetchange interval="5000" chance="8" />
+	<flags>
+		<flag summonable="0" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="0" />
+		<flag convinceable="0" />
+		<flag pushable="0" />
+		<flag canpushitems="1" />
+		<flag canpushcreatures="1" />
+		<flag targetdistance="1" />
+		<flag staticattack="90" />
+		<flag runonhealth="0" />
+		<flag isboss="1" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-350" />
+		<attack name="lifedrain" interval="2000" chance="20" target="1" range="1" min="-50" max="-600">
+			<attribute key="areaEffect" value="smallclouds" />
+		</attack>
+		<attack name="speed" interval="2000" chance="15" range="1" target="1" speedchange="-400" duration="60000">
+			<attribute key="areaEffect" value="redshimmer" />
+		</attack>
+	</attacks>
+	<defenses armor="25" defense="20">
+		<defense name="outfit" interval="4000" chance="10" monster="bat" duration="5000">
+			<attribute key="areaEffect" value="groundshaker" />
+		</defense>
+		<defense name="speed" interval="2000" chance="15" speedchange="300" duration="3000">
+			<attribute key="areaEffect" value="redshimmer" />
+		</defense>
+		<defense name="healing" interval="2000" chance="15" min="40" max="105" />
+	</defenses>
+	<immunities>
+		<immunity paralyze="1" />
+		<immunity invisible="1" />
+	</immunities>
+	<summons maxSummons="3">
+		<summon name="Larva" interval="1000" chance="15" max="3" />
+	</summons>
+	<voices interval="2000" chance="9">
+		<voice sentence="BLOOD!" yell="1" />
+		<voice sentence="You little fool will see what you get for messing with us." yell="0" />
+		<voice sentence="Not even Julius will be able to stop us!" yell="0" />
+		<voice sentence="You know what, I changed my mind. BRING IT!" yell="0" />
+	</voices>
+	<loot>
+	</loot>
+</monster>

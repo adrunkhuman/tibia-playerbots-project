@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Elf Scout" nameDescription="an elf scout" race="blood" experience="75" speed="220" manacost="360">
+	<health now="160" max="160" />
+	<look type="64" corpse="6012" />
+	<targetchange interval="4000" chance="10" />
+	<flags>
+		<flag summonable="0" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="1" />
+		<flag convinceable="1" />
+		<flag pushable="0" />
+		<flag canpushitems="1" />
+		<flag canpushcreatures="0" />
+		<flag targetdistance="4" />
+		<flag staticattack="90" />
+		<flag runonhealth="0" />
+		<flag canwalkonenergy="0" />
+		<flag canwalkonfire="0" />
+		<flag canwalkonpoison="0" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-30" />
+		<attack name="physical" interval="2000" chance="15" range="7" min="0" max="-80">
+			<attribute key="shootEffect" value="arrow" />
+		</attack>
+	</attacks>
+	<defenses armor="7" defense="7" />
+	<elements>
+		<element deathPercent="-10" />
+		<element holyPercent="20" />
+	</elements>
+	<immunities>
+		<immunity invisible="1" />
+		<immunity paralyze="0" />
+	</immunities>
+	<voices interval="5000" chance="10">
+		<voice sentence="Tha'shi Ab'Dendriel!" yell="0" />
+		<voice sentence="Feel the sting of my arrows!" yell="0" />
+		<voice sentence="Your existence will end here!" yell="0" />
+		<voice sentence="Evicor guide my arrow!" yell="0" />
+		<voice sentence="Thy blood will quench the soil's thirst!" yell="0" />
+	</voices>
+	<loot>
+		<item name="Gold Coin" countmax="25" chance="75200" />
+		<item name="Arrow" countmax="12" chance="30330" />
+		<item name="Grapes" chance="17880" />
+		<item name="Poison Arrow" countmax="4" chance="15120" />
+		<item name="Elven Scouting Glass" chance="10110" />
+		<item name="Elvish Talisman" chance="5140" />
+		<item name="Bow" chance="4030" />
+		<item name="Waterskin" chance="1290" />
+		<item name="Sandals" chance="1170" />
+		<item name="Heaven Blossom" chance="1100" />
+		<item name="Elvish Bow" chance="130" />
+	</loot>
+</monster>

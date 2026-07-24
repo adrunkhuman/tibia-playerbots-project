@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Killer Caiman" nameDescription="a killer caiman" race="blood" experience="900" speed="186">
+	<health now="1500" max="1500" />
+	<look type="358" corpse="11430" />
+	<targetchange interval="4000" chance="10" />
+	<flags>
+		<flag summonable="0" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="1" />
+		<flag convinceable="0" />
+		<flag pushable="0" />
+		<flag canpushitems="1" />
+		<flag canpushcreatures="1" />
+		<flag targetdistance="1" />
+		<flag staticattack="90" />
+		<flag runonhealth="10" />
+		<flag canwalkonenergy="0" />
+		<flag canwalkonfire="0" />
+		<flag canwalkonpoison="0" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-180" />
+	</attacks>
+	<defenses armor="35" defense="35">
+		<defense name="speed" interval="2000" chance="15" speedchange="700" duration="5000">
+			<attribute key="areaEffect" value="redshimmer" />
+		</defense>
+	</defenses>
+	<elements>
+		<element physicalPercent="10" />
+		<element icePercent="10" />
+		<element energyPercent="-5" />
+		<element earthPercent="20" />
+	</elements>
+	<immunities>
+		<immunity invisible="1" />
+	</immunities>
+	<loot>
+		<item name="Gold Coin" countmax="100" chance="100000" />
+		<item name="Gold Coin" countmax="80" chance="100000" />
+		<item name="Ham" chance="39820" />
+		<item name="Piece of Crocodile Leather" countmax="2" chance="25050" />
+		<item name="Small Emerald" countmax="5" chance="9960" />
+		<item name="Obsidian Lance" chance="4980" />
+		<item name="Bunch of Ripe Rice" countmax="2" chance="4910" />
+		<item id="7632" chance="990" />
+		<item name="Crocodile Boots" chance="500" />
+	</loot>
+</monster>

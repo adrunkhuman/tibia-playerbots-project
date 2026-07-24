@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Merlkin" nameDescription="a merlkin" race="blood" experience="145" speed="194">
+	<health now="235" max="235" />
+	<look type="117" corpse="6044" />
+	<targetchange interval="4000" chance="10" />
+	<flags>
+		<flag summonable="0" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="1" />
+		<flag convinceable="0" />
+		<flag pushable="0" />
+		<flag canpushitems="1" />
+		<flag canpushcreatures="0" />
+		<flag targetdistance="4" />
+		<flag staticattack="70" />
+		<flag runonhealth="0" />
+		<flag canwalkonenergy="0" />
+		<flag canwalkonfire="0" />
+		<flag canwalkonpoison="0" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-30" />
+		<attack name="fire" interval="2000" chance="15" range="7" min="-30" max="-90">
+			<attribute key="shootEffect" value="fire" />
+			<attribute key="areaEffect" value="fire" />
+		</attack>
+		<attack name="energy" interval="2000" chance="20" range="7" min="-15" max="-45">
+			<attribute key="shootEffect" value="energy" />
+			<attribute key="areaEffect" value="energy" />
+		</attack>
+		<attack name="poisonfield" interval="2000" chance="15" range="7" radius="1" target="1">
+			<attribute key="shootEffect" value="poison" />
+		</attack>
+	</attacks>
+	<defenses armor="16" defense="16">
+		<defense name="healing" interval="2000" chance="25" min="10" max="40">
+			<attribute key="areaEffect" value="blueshimmer" />
+		</defense>
+	</defenses>
+	<elements>
+		<element deathPercent="-5" />
+		<element holyPercent="10" />
+		<element icePercent="-15" />
+		<element firePercent="20" />
+		<element energyPercent="10" />
+	</elements>
+	<immunities>
+		<immunity invisible="1" />
+	</immunities>
+	<voices interval="5000" chance="10">
+		<voice sentence="Ugh! Ugh! Ugh!" yell="0" />
+		<voice sentence="Chakka! Chakka!" yell="0" />
+		<voice sentence="Holy banana!" yell="0" />
+	</voices>
+	<loot>
+		<item name="Gold Coin" countmax="45" chance="82960" />
+		<item name="Banana" countmax="12" chance="30410" />
+		<item name="Magic Light Wand" chance="3020" />
+		<item name="Banana Sash" chance="1920" />
+		<item name="Ape Fur" chance="1010" />
+		<item name="Orange" countmax="5" chance="1010" />
+		<item name="Wand of Decay" chance="980" />
+		<item name="Mana Potion" chance="690" />
+		<item name="Small Amethyst" chance="310" />
+		<item name="Banana Staff" chance="100" />
+	</loot>
+</monster>

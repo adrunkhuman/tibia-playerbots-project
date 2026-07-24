@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Lizard Noble" nameDescription="a lizard noble" race="blood" experience="2000" speed="200">
+	<health now="7000" max="7000" />
+	<look type="115" corpse="6041" />
+	<targetchange interval="4000" chance="10" />
+	<flags>
+		<flag summonable="0" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="0" />
+		<flag convinceable="0" />
+		<flag pushable="1" />
+		<flag canpushitems="1" />
+		<flag canpushcreatures="0" />
+		<flag targetdistance="4" />
+		<flag staticattack="90" />
+		<flag runonhealth="80" />
+		<flag canwalkonenergy="0" />
+		<flag canwalkonfire="1" />
+		<flag canwalkonpoison="1" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-80" />
+		<attack name="earth" interval="2000" chance="25" range="7" min="-120" max="-250">
+			<attribute key="shootEffect" value="poison" />
+			<attribute key="areaEffect" value="poison" />
+		</attack>
+		<attack name="manadrain" interval="2000" chance="10" range="7" min="0" max="-100">
+			<attribute key="areaEffect" value="blueshimmer" />
+		</attack>
+	</attacks>
+	<defenses armor="15" defense="15">
+		<defense name="healing" interval="2000" chance="50" min="200" max="250">
+			<attribute key="areaEffect" value="blueshimmer" />
+		</defense>
+	</defenses>
+	<elements>
+		<element firePercent="85" />
+	</elements>
+	<immunities>
+		<immunity earth="1" />
+		<immunity invisible="1" />
+		<immunity paralyze="1" />
+	</immunities>
+	<voices interval="5000" chance="10">
+		<voice sentence="Where are zhe guardz when you need zhem!" yell="0" />
+	</voices>
+	<loot>
+		<item name="Gold Coin" countmax="100" chance="89340" />
+		<item name="Platinum Coin" countmax="20" chance="14150" />
+		<item name="Strong Health Potion" chance="10120" />
+		<item name="Small Ruby" countmax="5" chance="10010" />
+		<item name="Great Health Potion" chance="4680" />
+		<item name="Lizard Leather" chance="890" />
+		<item name="Lizard Scale" chance="830" />
+	</loot>
+</monster>

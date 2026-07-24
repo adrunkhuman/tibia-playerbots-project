@@ -1,0 +1,124 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Hellgorak" nameDescription="Hellgorak" race="fire" experience="10000" speed="330">
+	<health now="25850" max="25850" />
+	<look type="12" head="0" body="77" legs="1" feet="3" corpse="6068" />
+	<targetchange interval="5000" chance="28" />
+	<flags>
+		<flag summonable="0" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="0" />
+		<flag convinceable="0" />
+		<flag pushable="0" />
+		<flag canpushitems="1" />
+		<flag canpushcreatures="1" />
+		<flag targetdistance="1" />
+		<flag staticattack="85" />
+		<flag runonhealth="0" />
+		<flag canwalkonenergy="1" />
+		<flag canwalkonfire="1" />
+		<flag canwalkonpoison="1" />
+		<flag isboss="1" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-910" />
+		<attack name="energy" interval="1000" chance="11" length="8" spread="0" min="-250" max="-850">
+			<attribute key="areaEffect" value="purpleenergy" />
+		</attack>
+		<attack name="manadrain" interval="2000" chance="14" radius="5" target="0" min="-200" max="-400">
+			<attribute key="areaEffect" value="stun" />
+		</attack>
+		<attack name="fire" interval="1000" chance="11" radius="5" range="7" target="1" min="-50" max="-600">
+			<attribute key="areaEffect" value="firearea" />
+		</attack>
+		<attack name="energy" interval="1000" chance="11" radius="1" range="7" target="1" min="-200" max="-400">
+			<attribute key="areaEffect" value="energy" />
+			<attribute key="shootEffect" value="energy" />
+		</attack>
+		<attack name="manadrain" interval="2000" chance="14" radius="1" target="1" min="-300" max="-400">
+			<attribute key="areaEffect" value="teleport" />
+			<attribute key="shootEffect" value="energy" />
+		</attack>
+		<attack name="hellgorak skill reducer" target="0" interval="2000" chance="15" />
+	</attacks>
+	<defenses armor="70" defense="65">
+		<defense name="healing" interval="2000" chance="22" min="400" max="400">
+			<attribute key="areaEffect" value="greenshimmer" />
+		</defense>
+		<defense name="healing" interval="2000" chance="8" min="1700" max="1700">
+			<attribute key="areaEffect" value="greenshimmer" />
+		</defense>
+	</defenses>
+	<elements>
+		<element physicalPercent="98" />
+		<element deathPercent="98" />
+		<element holyPercent="95" />
+		<element icePercent="98" />
+		<element firePercent="98" />
+		<element energyPercent="98" />
+		<element earthPercent="98" />
+		<element drownPercent="-205" />
+	</elements>
+	<immunities>
+		<immunity lifedrain="1" />
+		<immunity paralyze="1" />
+		<immunity invisible="1" />
+	</immunities>
+	<voices interval="5000" chance="10">
+		<voice sentence="Delicious!" yell="0" />
+		<voice sentence="I'll sacrifice yours souls to seven!" yell="0" />
+		<voice sentence="I smell your fear." yell="0" />
+		<voice sentence="Your puny skills are no match for me." yell="0" />
+		<voice sentence="No man can defeat me!" yell="0" />
+		<voice sentence="I'm bad news for you mortals!" yell="0" />
+	</voices>
+	<loot>
+		<item name="Demonic Essence" chance="100000" />
+		<item name="Gold Coin" countmax="100" chance="100000" />
+		<item name="Gold Coin" countmax="98" chance="100000" />
+		<item name="Slightly Rusted Legs" chance="51300" />
+		<item name="Ultimate Health Potion" countmax="2" chance="42470" />
+		<item name="Slightly Rusted Armor" chance="32460" />
+		<item name="Spellbook of Warding" chance="30490" />
+		<item name="Beastslayer Axe" chance="30070" />
+		<item name="Great Spirit Potion" chance="21020" />
+		<item name="Platinum Coin" countmax="30" chance="20440" />
+		<item name="Great Health Potion" chance="18470" />
+		<item name="Crown Armor" chance="18310" />
+		<item name="Great Mana Potion" chance="17940" />
+		<item name="Crystal Necklace" chance="14420" />
+		<item name="Black Pearl" countmax="25" chance="14160" />
+		<item name="Small Ruby" countmax="25" chance="13200" />
+		<item name="White Pearl" countmax="25" chance="13200" />
+		<item name="Small Diamond" countmax="25" chance="12770" />
+		<item name="Noble Axe" chance="12240" />
+		<item name="Small Amethyst" countmax="25" chance="11970" />
+		<item name="Small Emerald" countmax="25" chance="11760" />
+		<item name="Small Sapphire" countmax="25" chance="11550" />
+		<item name="Small Topaz" countmax="25" chance="11340" />
+		<item name="Magma Legs" chance="11120" />
+		<item name="Spirit Cloak" chance="10380" />
+		<item name="Ruby Necklace" chance="10110" />
+		<item name="Crown Legs" chance="10010" />
+		<item name="Spellbook of Mind Control" chance="9950" />
+		<item name="Stone Skin Amulet" chance="9790" />
+		<item name="Golden Amulet" chance="9630" />
+		<item name="Focus Cape" chance="9580" />
+		<item name="Steel Boots" chance="9580" />
+		<item name="Demon Horn" countmax="2" chance="9530" />
+		<item name="Spellbook of Lost Souls" chance="8830" />
+		<item name="Knight Legs" chance="8730" />
+		<item name="Blue Robe" chance="8090" />
+		<item name="Butcher's Axe" chance="2290" />
+		<item name="Golden Armor" chance="2020" />
+		<item name="Vile Axe" chance="1220" />
+		<item name="Spellscroll of Prophecies" chance="1010" />
+		<item name="Executioner" chance="800" />
+		<item name="Golden Legs" chance="640" />
+		<item name="Demonbone Amulet" chance="590" />
+		<item name="Voltage Armor" chance="370" />
+		<item name="Demonwing Axe" chance="320" />
+		<item name="Great Axe" chance="270" />
+		<item name="Spellbook of Dark Mysteries" chance="160" />
+	</loot>
+</monster>

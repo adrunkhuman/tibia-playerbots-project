@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Rahemos" nameDescription="Rahemos" race="undead" experience="3100" speed="320">
+	<health now="3700" max="3700" />
+	<look type="87" corpse="6031" />
+	<targetchange interval="5000" chance="8" />
+	<flags>
+		<flag summonable="0" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="0" />
+		<flag convinceable="0" />
+		<flag pushable="0" />
+		<flag canpushitems="1" />
+		<flag canpushcreatures="1" />
+		<flag targetdistance="1" />
+		<flag staticattack="90" />
+		<flag runonhealth="0" />
+		<flag canwalkonenergy="1" />
+		<flag canwalkonfire="1" />
+		<flag canwalkonpoison="1" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-130" poison="80" />
+		<attack name="lifedrain" interval="3000" chance="7" range="1" min="-75" max="-750" />
+		<attack name="energy" interval="2000" chance="20" range="7" min="-60" max="-600">
+			<attribute key="shootEffect" value="energy" />
+			<attribute key="areaEffect" value="energy" />
+		</attack>
+		<attack name="physical" interval="3000" chance="20" range="7" min="-60" max="-600">
+			<attribute key="shootEffect" value="suddendeath" />
+			<attribute key="areaEffect" value="mortarea" />
+		</attack>
+		<attack name="speed" interval="1000" chance="12" radius="6" target="0" speedchange="-650" duration="50000">
+			<attribute key="areaEffect" value="redshimmer" />
+		</attack>
+		<attack name="drunk" interval="1000" chance="8" range="7" duration="50000">
+			<attribute key="shootEffect" value="energy" />
+			<attribute key="areaEffect" value="energyarea" />
+		</attack>
+		<attack name="outfit" interval="1000" chance="15" range="7" monster="Pig" duration="12000">
+			<attribute key="areaEffect" value="blueshimmer" />
+		</attack>
+	</attacks>
+	<defenses armor="40" defense="40">
+		<defense name="healing" interval="1000" chance="20" min="200" max="500">
+			<attribute key="areaEffect" value="blueshimmer" />
+		</defense>
+		<defense name="outfit" interval="1000" chance="5" monster="Demon" duration="4000">
+			<attribute key="areaEffect" value="blueshimmer" />
+		</defense>
+	</defenses>
+	<elements>
+		<element physicalPercent="-40" />
+		<element holyPercent="-1" />
+		<element firePercent="95" />
+		<element energyPercent="95" />
+	</elements>
+	<immunities>
+		<immunity death="1" />
+		<immunity ice="1" />
+		<immunity earth="1" />
+		<immunity invisible="1" />
+		<immunity paralyze="1" />
+	</immunities>
+	<summons maxSummons="1">
+		<summon name="Demon" interval="1000" chance="12" />
+	</summons>
+	<voices interval="5000" chance="10">
+		<voice sentence="Meet my friend from hell!" yell="0" />
+		<voice sentence="It's not a trick, it's Rahemos." yell="0" />
+		<voice sentence="I will make you believe in magic." yell="0" />
+		<voice sentence="Abrah Kadabrah!" yell="0" />
+		<voice sentence="It's a kind of magic." yell="0" />
+		<voice sentence="Nothing hidden in my wrappings." yell="0" />
+	</voices>
+	<loot>
+		<item name="Ancient Rune" chance="100000" />
+		<item name="Gold Coin" countmax="100" chance="89870" />
+		<item name="Gold Coin" countmax="100" chance="89870" />
+		<item name="Gold Coin" countmax="42" chance="89870" />
+		<item name="Great Mana Potion" chance="9050" />
+		<item name="Small Amethyst" countmax="3" chance="8140" />
+		<item name="Ring of Healing" chance="4090" />
+		<item name="Magician Hat" chance="1780" />
+		<item name="Violet Gem" chance="1130" />
+		<item name="Orb" chance="270" />
+		<item name="Twin Axe" chance="160" />
+		<item name="Crystal Wand" chance="110" />
+		<item name="Mini Mummy" chance="110" />
+	</loot>
+</monster>

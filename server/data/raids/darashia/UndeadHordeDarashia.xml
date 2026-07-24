@@ -1,0 +1,46 @@
+<raid>
+<announce delay="1000" type="event" message="Hordes of undead invade from the west of Darashia!" />
+<announce delay="480000" type="event" message="The undead are attacking Darashia!" />
+
+  <!--Area Spawns-->
+  <areaspawn delay="1000" fromx="33156" fromy="32414" fromz="7" tox="33182" toy="32458" toz="7">
+    <monster name="Skeleton" amount="25" />
+  </areaspawn>
+  
+  <areaspawn delay="240000" fromx="33156" fromy="32414" fromz="7" tox="33182" toy="32458" toz="7">
+    <monster name="Skeleton" amount="15" />
+	  <monster name="Ghoul" amount="15" />
+  </areaspawn>
+  
+  <areaspawn delay="360000" fromx="33156" fromy="32414" fromz="7" tox="33182" toy="32458" toz="7">
+    <monster name="Skeleton" amount="5" />
+	  <monster name="Ghoul" amount="15" />
+	  <monster name="Crypt Shambler" amount="13" />
+	  <monster name="Vampire" amount="5" />
+  </areaspawn>
+  
+  <areaspawn delay="480000" fromx="33156" fromy="32414" fromz="7" tox="33182" toy="32458" toz="7">
+    <monster name="Skeleton" amount="10" />
+	  <monster name="Ghoul" amount="10" />
+	  <monster name="Crypt Shambler" amount="13" />
+    <monster name="Vampire" amount="5" />
+    <monster name="Beholder" amount="9" />
+    <monster name="Demon Skeleton" amount="10" />
+    <monster name="Necromancer" amount="5" />
+    <monster name="Bone Beast" amount="2" />
+	  <monster name="Lich" amount="1" />
+  </areaspawn>
+  
+  <areaspawn delay="600000" fromx="33156" fromy="32414" fromz="7" tox="33182" toy="32458" toz="7">
+	  <monster name="Ghoul" amount="11" />
+	  <monster name="Crypt Shambler" amount="12" />
+    <monster name="Mummy" amount="5" />
+    <monster name="Vampire" amount="5" />
+    <monster name="Beholder" amount="8" />
+    <monster name="Demon Skeleton" amount="10" />
+    <monster name="Necromancer" amount="4" />
+    <monster name="Bone Beast" amount="2" />
+	  <monster name="Lich" amount="1" />
+  </areaspawn>
+
+</raid>

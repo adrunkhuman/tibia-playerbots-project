@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Dwarf Soldier" nameDescription="a dwarf soldier" race="blood" experience="70" speed="176" manacost="360">
+	<health now="135" max="135" />
+	<look type="71" corpse="6014" />
+	<targetchange interval="4000" chance="10" />
+	<flags>
+		<flag summonable="1" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="1" />
+		<flag convinceable="1" />
+		<flag pushable="0" />
+		<flag canpushitems="1" />
+		<flag canpushcreatures="0" />
+		<flag targetdistance="1" />
+		<flag staticattack="90" />
+		<flag runonhealth="0" />
+		<flag canwalkonenergy="0" />
+		<flag canwalkonfire="0" />
+		<flag canwalkonpoison="0" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-70" />
+		<attack name="physical" interval="2000" chance="10" range="7" min="0" max="-60">
+			<attribute key="shootEffect" value="bolt" />
+		</attack>
+	</attacks>
+	<defenses armor="9" defense="9" />
+	<elements>
+		<element deathPercent="-5" />
+		<element firePercent="-5" />
+		<element earthPercent="10" />
+	</elements>
+	<voices interval="5000" chance="10">
+		<voice sentence="Hail Durin!" yell="0" />
+	</voices>
+	<loot>
+		<item name="White Mushroom" countmax="2" chance="39930" />
+		<item name="Bolt" countmax="7" chance="37940" />
+		<item name="Gold Coin" countmax="12" chance="28370" />
+		<item name="Soldier Helmet" chance="11840" />
+		<item name="Shovel" chance="10020" />
+		<item name="Chain Armor" chance="7520" />
+		<item name="Piercing Bolt" countmax="3" chance="3810" />
+		<item name="Dwarven Shield" chance="3040" />
+		<item name="Crossbow" chance="3010" />
+		<item name="Battle Axe" chance="2490" />
+		<item name="Iron Ore" chance="310" />
+		<item name="Axe Ring" chance="120" />
+	</loot>
+</monster>

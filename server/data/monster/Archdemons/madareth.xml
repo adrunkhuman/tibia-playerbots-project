@@ -1,0 +1,108 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Madareth" nameDescription="Madareth" race="fire" experience="10000" speed="330">
+	<health now="75000" max="75000" />
+	<look type="12" head="77" body="78" legs="100" feet="79" corpse="8721" />
+	<targetchange interval="5000" chance="8" />
+	<flags>
+		<flag summonable="0" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="0" />
+		<flag convinceable="0" />
+		<flag pushable="0" />
+		<flag canpushitems="1" />
+		<flag canpushcreatures="1" />
+		<flag targetdistance="1" />
+		<flag staticattack="85" />
+		<flag runonhealth="1000" />
+		<flag canwalkonenergy="1" />
+		<flag canwalkonfire="1" />
+		<flag canwalkonpoison="1" />
+		<flag isboss="1" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-2000" />
+		<attack name="energy" interval="2000" chance="40" range="7" radius="6" target="0" min="-180" max="-660">
+			<attribute key="areaEffect" value="energyarea" />
+		</attack>
+		<attack name="death" interval="4000" chance="30" length="8" spread="0" min="-600" max="-850">
+			<attribute key="areaEffect" value="mortarea" />
+		</attack>
+		<attack name="manadrain" interval="2000" chance="20" radius="5" target="0" min="0" max="-200">
+			<attribute key="areaEffect" value="redshimmer" />
+		</attack>
+		<attack name="manadrain" interval="2000" chance="5" radius="7" target="0" min="0" max="-250">
+			<attribute key="areaEffect" value="redshimmer" />
+		</attack>
+		<attack name="speed" interval="1000" chance="10" range="7" speedchange="-800" duration="4000">
+			<attribute key="areaEffect" value="greenshimmer" />
+		</attack>
+		<attack name="madareth skill reducer" target="0" interval="2000" chance="15" />
+	</attacks>
+	<defenses armor="65" defense="65">
+		<defense name="healing" interval="3000" chance="35" min="250" max="310">
+			<attribute key="areaEffect" value="blueshimmer" />
+		</defense>
+	</defenses>
+	<elements>
+		<element deathPercent="95" />
+		<element icePercent="1" />
+		<element firePercent="10" />
+		<element energyPercent="99" />
+	</elements>
+	<immunities>
+		<immunity paralyze="1" />
+		<immunity invisible="1" />
+		<immunity drunk="1" />
+	</immunities>
+	<voices interval="1000" chance="5">
+		<voice sentence="I am going to play with yourself!" yell="0" />
+		<voice sentence="Feel my wrath!" yell="0" />
+		<voice sentence="You will all die!" yell="0" />
+		<voice sentence="No one matches my battle prowess!" yell="0" />
+	</voices>
+	<loot>
+		<item name="Gold Coin" countmax="100" chance="100000" />
+		<item name="Slightly Rusted Legs" chance="59320" />
+		<item name="Slightly Rusted Armor" chance="40680" />
+		<item name="Bullseye Potion" chance="35590" />
+		<item name="Great Health Potion" chance="30510" />
+		<item name="Berserk Potion" chance="27120" />
+		<item name="Great Spirit Potion" chance="27120" />
+		<item name="Mastermind Potion" chance="27120" />
+		<item name="Great Mana Potion" chance="22030" />
+		<item name="Death Ring" chance="20340" />
+		<item name="Platinum Coin" countmax="26" chance="20340" />
+		<item name="Springsprout Rod" chance="20340" />
+		<item name="Ultimate Health Potion" chance="20340" />
+		<item name="Two Handed Sword" chance="16950" />
+		<item name="Assassin Dagger" chance="15250" />
+		<item name="Axe Ring" chance="15250" />
+		<item name="Hailstorm Rod" chance="15250" />
+		<item name="Lute" chance="15250" />
+		<item name="Underworld Rod" chance="15250" />
+		<item name="Wand of Inferno" chance="15250" />
+		<item name="Nightmare Blade" chance="13560" />
+		<item name="Bloody Edge" chance="11860" />
+		<item name="Club Ring" chance="11860" />
+		<item name="Haunted Blade" chance="11860" />
+		<item name="Lyre" chance="11860" />
+		<item name="Ring of Healing" chance="11860" />
+		<item name="Time Ring" chance="11860" />
+		<item name="Wand of Voodoo" chance="11860" />
+		<item name="War Horn" chance="11860" />
+		<item name="Crystal Sword" chance="10170" />
+		<item name="Demon Horn" countmax="2" chance="10170" />
+		<item name="Demonic Essence" chance="10170" />
+		<item name="Life Ring" chance="10170" />
+		<item name="War Drum" chance="10170" />
+		<item name="Didgeridoo" chance="8470" />
+		<item name="Mercenary Sword" chance="8470" />
+		<item name="Relic Sword" chance="6780" />
+		<item name="Wand of Starstorm" chance="6780" />
+		<item name="Ice Rapier" chance="5080" />
+		<item name="Wooden Flute" chance="5080" />
+		<item name="Dwarven Ring" chance="3390" />
+		<item name="Sword Ring" chance="3390" />
+	</loot>
+</monster>

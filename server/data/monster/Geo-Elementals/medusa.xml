@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Medusa" nameDescription="a medusa" race="blood" experience="4050" speed="280">
+	<health now="4500" max="4500" />
+	<look type="330" corpse="10524" />
+	<targetchange interval="4000" chance="20" />
+	<flags>
+		<flag summonable="0" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="0" />
+		<flag convinceable="0" />
+		<flag pushable="0" />
+		<flag canpushitems="1" />
+		<flag canpushcreatures="1" />
+		<flag targetdistance="1" />
+		<flag staticattack="80" />
+		<flag runonhealth="0" />
+		<flag canwalkonenergy="0" />
+		<flag canwalkonfire="0" />
+		<flag canwalkonpoison="1" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-250" poison="840" />
+		<attack name="lifedrain" interval="2000" chance="10" target="1" range="7" min="-75" max="-150">
+			<attribute key="shootEffect" value="earth" />
+			<attribute key="areaEffect" value="carniphila" />
+		</attack>
+		<attack name="lifedrain" interval="2000" chance="10" target="1" range="7" min="-75" max="-150">
+			<attribute key="shootEffect" value="earth" />
+			<attribute key="areaEffect" value="carniphila" />
+		</attack>
+		<attack name="lifedrain" interval="2000" chance="10" target="1" range="7" min="-75" max="-150">
+			<attribute key="shootEffect" value="earth" />
+			<attribute key="areaEffect" value="carniphila" />
+		</attack>
+		<attack name="lifedrain" interval="2000" chance="10" target="1" range="7" min="-75" max="-150">
+			<attribute key="shootEffect" value="earth" />
+			<attribute key="areaEffect" value="carniphila" />
+		</attack>
+		<attack name="lifedrain" interval="2000" chance="10" target="1" range="7" min="-75" max="-150">
+			<attribute key="shootEffect" value="earth" />
+			<attribute key="areaEffect" value="carniphila" />
+		</attack>
+		<attack name="earth" interval="2000" chance="15" length="8" spread="3" min="-250" max="-500">
+			<attribute key="areaEffect" value="carniphila" />
+		</attack>
+		<attack name="speed" interval="2000" chance="25" radius="7" target="1" speedchange="-900">
+			<attribute key="areaEffect" value="poff" />
+		</attack>
+		<attack name="outfit" interval="2000" chance="1" target="1" range="7" monster="clay guardian" duration="3000" />
+	</attacks>
+	<defenses armor="30" defense="30">
+		<defense name="healing" interval="2000" chance="25" min="150" max="300">
+			<attribute key="areaEffect" value="blueshimmer" />
+		</defense>
+	</defenses>
+	<elements>
+		<element icePercent="20" />
+		<element firePercent="-10" />
+		<element energyPercent="-10" />
+	</elements>
+	<immunities>
+		<immunity earth="1" />
+		<immunity paralyze="1" />
+		<immunity invisible="1" />
+		<immunity lifedrain="1" />
+		<immunity drown="1" />
+	</immunities>
+	<voices interval="5000" chance="10">
+		<voice sentence="You will make sssuch a fine ssstatue!" yell="0" />
+		<voice sentence="Jussst look at me!" yell="0" />
+		<voice sentence="Are you tired or why are you moving thhat ssslow <chuckle>" yell="0" />
+		<voice sentence="There isss no chhhanccce of essscape" yell="0" />
+	</voices>
+	<loot>
+		<item name="Gold Coin" countmax="100" chance="100000" />
+		<item name="Gold Coin" countmax="90" chance="100000" />
+		<item name="Platinum Coin" countmax="6" chance="75040" />
+		<item name="Great Mana Potion" countmax="2" chance="9950" />
+		<item name="Strand of Medusa Hair" chance="9750" />
+		<item name="Ultimate Health Potion" countmax="2" chance="9580" />
+		<item name="Terra Amulet" chance="4140" />
+		<item name="Small Emerald" countmax="4" chance="3920" />
+		<item name="Medusa Shield" chance="3160" />
+		<item name="Knight Armor" chance="1970" />
+		<item name="Titan Axe" chance="1260" />
+		<item name="Terra Mantle" chance="860" />
+		<item name="Sacred Tree Amulet" chance="850" />
+		<item name="Terra Legs" chance="380" />
+		<item name="Slightly Rusted Armor" chance="300" />
+	</loot>
+</monster>

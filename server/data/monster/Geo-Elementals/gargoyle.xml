@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Gargoyle" nameDescription="a gargoyle" race="undead" experience="150" speed="200">
+	<health now="250" max="250" />
+	<look type="95" corpse="6027" />
+	<targetchange interval="4000" chance="10" />
+	<flags>
+		<flag summonable="0" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="1" />
+		<flag convinceable="0" />
+		<flag pushable="0" />
+		<flag canpushitems="1" />
+		<flag canpushcreatures="1" />
+		<flag targetdistance="1" />
+		<flag staticattack="90" />
+		<flag runonhealth="30" />
+		<flag canwalkonenergy="0" />
+		<flag canwalkonfire="0" />
+		<flag canwalkonpoison="1" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-65" />
+	</attacks>
+	<defenses armor="26" defense="26">
+		<defense name="healing" interval="2000" chance="20" min="5" max="15">
+			<attribute key="areaEffect" value="blueshimmer" />
+		</defense>
+	</defenses>
+	<elements>
+		<element physicalPercent="20" />
+		<element deathPercent="40" />
+		<element firePercent="-10" />
+	</elements>
+	<immunities>
+		<immunity lifedrain="1" />
+		<immunity earth="1" />
+		<immunity invisible="0" />
+		<immunity paralyze="0" />
+	</immunities>
+	<voices interval="5000" chance="10">
+		<voice sentence="Harrrr harrrr!" yell="0" />
+		<voice sentence="Chhhhhrrrrk!" yell="0" />
+		<voice sentence="There is a stone in your shoe!" yell="0" />
+		<voice sentence="Feel my claws, softskin." yell="0" />
+		<voice sentence="Stone sweet stone." yell="0" />
+	</voices>
+	<loot>
+		<item name="Gold Coin" countmax="30" chance="87700" />
+		<item name="Small Stone" countmax="10" chance="15030" />
+		<item name="Stone Wing" chance="11970" />
+		<item name="Potato" countmax="2" chance="9860" />
+		<item name="Strawberry" countmax="5" chance="2000" />
+		<item name="Morning Star" chance="1490" />
+		<item name="Battle Shield" chance="1380" />
+		<item name="Wolf Tooth Chain" chance="1080" />
+		<item name="Steel Helmet" chance="770" />
+		<item name="Piece of Marble Rock" chance="480" />
+		<item name="Dark Armor" chance="260" />
+		<item name="Club Ring" chance="220" />
+		<item name="Shiny Stone" chance="200" />
+	</loot>
+</monster>

@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Fire Devil" nameDescription="a fire devil" race="blood" experience="145" speed="180" manacost="530">
+	<health now="200" max="200" />
+	<look type="40" corpse="5985" />
+	<targetchange interval="4000" chance="10" />
+	<flags>
+		<flag summonable="1" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="1" />
+		<flag convinceable="1" />
+		<flag pushable="0" />
+		<flag canpushitems="1" />
+		<flag canpushcreatures="0" />
+		<flag targetdistance="4" />
+		<flag staticattack="90" />
+		<flag runonhealth="0" />
+		<flag canwalkonenergy="0" />
+		<flag canwalkonfire="1" />
+		<flag canwalkonpoison="0" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-35" />
+		<attack name="fire" interval="2000" chance="20" range="7" radius="4" target="1" min="-60" max="-95">
+			<attribute key="shootEffect" value="fire" />
+			<attribute key="areaEffect" value="firearea" />
+		</attack>
+		<attack name="fire" interval="2000" chance="15" range="7" radius="2" target="1" min="-60" max="-95">
+			<attribute key="shootEffect" value="fire" />
+			<attribute key="areaEffect" value="firearea" />
+		</attack>
+	</attacks>
+	<defenses armor="13" defense="13" />
+	<elements>
+		<element physicalPercent="10" />
+		<element deathPercent="20" />
+		<element holyPercent="-10" />
+		<element icePercent="-20" />
+		<element energyPercent="30" />
+		<element earthPercent="20" />
+	</elements>
+	<immunities>
+		<immunity fire="1" />
+	</immunities>
+	<voices interval="5000" chance="10">
+		<voice sentence="Hot, eh?" yell="0" />
+		<voice sentence="Hell, oh, hell!" yell="0" />
+	</voices>
+	<loot>
+		<item name="Small Pitchfork" chance="19470" />
+		<item name="Blank Rune" chance="10910" />
+		<item name="Scimitar" chance="3000" />
+		<item name="Torch" countmax="2" chance="1380" />
+		<item name="Double Axe" chance="1360" />
+		<item name="Cleaver" chance="970" />
+		<item name="Necrotic Rod" chance="490" />
+		<item name="Small Amethyst" chance="280" />
+		<item name="Guardian Shield" chance="220" />
+	</loot>
+</monster>

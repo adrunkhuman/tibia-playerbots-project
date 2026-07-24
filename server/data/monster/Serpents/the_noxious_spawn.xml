@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="The Noxious Spawn" nameDescription="The Noxious Spawn" race="venom" experience="6000" speed="360">
+	<health now="9500" max="9500" />
+	<look type="220" corpse="4323" />
+	<targetchange interval="5000" chance="8" />
+	<flags>
+		<flag summonable="0" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="0" />
+		<flag convinceable="0" />
+		<flag pushable="0" />
+		<flag canpushitems="1" />
+		<flag canpushcreatures="1" />
+		<flag targetdistance="1" />
+		<flag staticattack="90" />
+		<flag runonhealth="275" />
+		<flag canwalkonenergy="0" />
+		<flag canwalkonfire="0" />
+		<flag canwalkonpoison="1" />
+		<flag isboss="1" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-250" />
+		<attack name="speed" interval="2000" chance="10" range="7" radius="5" target="0" speedchange="-660" duration="5000">
+			<attribute key="areaEffect" value="redshimmer" />
+		</attack>
+		<attack name="earth" interval="2000" chance="7" length="8" spread="3" min="0" max="-550">
+			<attribute key="areaEffect" value="smallplants" />
+		</attack>
+		<attack name="lifedrain" interval="2000" chance="9" length="8" spread="0" min="0" max="-550">
+			<attribute key="areaEffect" value="rednote" />
+		</attack>
+		<attack name="outfit" interval="2000" chance="11" range="7" item="3976" duration="4000">
+			<attribute key="areaEffect" value="blueshimmer" />
+		</attack>
+	</attacks>
+	<defenses armor="18" defense="25">
+		<defense name="healing" interval="2000" chance="10" min="900" max="1000">
+			<attribute key="areaEffect" value="blueshimmer" />
+		</defense>
+	</defenses>
+	<elements>
+		<element firePercent="-10" />
+		<element energyPercent="-10" />
+	</elements>
+	<immunities>
+		<immunity invisible="1" />
+		<immunity paralyze="1" />
+	</immunities>
+	<voices interval="5000" chance="10">
+		<voice sentence="I bring you deathhhh, mortalssss" yell="0" />
+	</voices>
+	<loot>
+		<item name="Snake Skin" chance="100000" />
+		<item name="Winged Tail" chance="100000" />
+		<item name="Platinum Coin" countmax="5" chance="80000" />
+		<item name="Small Emerald" countmax="5" chance="72000" />
+		<item name="Great Mana Potion" countmax="4" chance="65330" />
+		<item name="Claw of 'The Noxious Spawn'" chance="44000" />
+		<item name="Noble Axe" chance="42670" />
+		<item name="Tower Shield" chance="42670" />
+		<item name="Mercenary Sword" chance="37330" />
+		<item name="Golden Mug" chance="32000" />
+		<item name="Assassin Star" countmax="98" chance="30670" />
+		<item name="Crown Armor" chance="29330" />
+		<item name="Green Mushroom" chance="16000" />
+		<item name="Spellbook of Mind Control" chance="16000" />
+		<item name="Life Ring" chance="12000" />
+		<item name="Royal Helmet" chance="5330" />
+		<item name="Swamplair Armor" chance="2670" />
+	</loot>
+</monster>

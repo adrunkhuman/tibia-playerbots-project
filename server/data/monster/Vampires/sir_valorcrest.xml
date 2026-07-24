@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Sir Valorcrest" nameDescription="Sir Valorcrest" race="undead" experience="1800" speed="270">
+	<health now="1600" max="1600" />
+	<look type="287" corpse="8937" />
+	<targetchange interval="5000" chance="10" />
+	<flags>
+		<flag summonable="0" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="0" />
+		<flag convinceable="0" />
+		<flag pushable="0" />
+		<flag canpushitems="1" />
+		<flag canpushcreatures="1" />
+		<flag targetdistance="1" />
+		<flag staticattack="90" />
+		<flag runonhealth="0" />
+		<flag canwalkonenergy="0" />
+		<flag canwalkonfire="0" />
+		<flag canwalkonpoison="1" />
+		<flag isboss="1" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-700" />
+		<attack name="drunk" interval="2000" chance="15" range="7" target="1" duration="10000">
+			<attribute key="areaEffect" value="redshimmer" />
+		</attack>
+	</attacks>
+	<defenses armor="38" defense="35">
+		<defense name="healing" interval="1000" chance="12" min="100" max="235">
+			<attribute key="areaEffect" value="blueshimmer" />
+		</defense>
+		<defense name="invisible" interval="3000" chance="25" duration="6000">
+			<attribute key="areaEffect" value="blueshimmer" />
+		</defense>
+		<defense name="speed" interval="2000" chance="15" speedchange="450" duration="5000">
+			<attribute key="areaEffect" value="redshimmer" />
+		</defense>
+	</defenses>
+	<elements>
+		<element physicalPercent="55" />
+		<element holyPercent="-5" />
+		<element firePercent="-5" />
+		<element energyPercent="-5" />
+	</elements>
+	<immunities>
+		<immunity lifedrain="1" />
+		<immunity death="1" />
+		<immunity earth="1" />
+		<immunity invisible="1" />
+		<immunity paralyze="1" />
+	</immunities>
+	<summons maxSummons="4">
+		<summon name="Vampire" interval="2000" chance="30" />
+	</summons>
+	<voices interval="5000" chance="10">
+		<voice sentence="I challenge you!" yell="0" />
+		<voice sentence="A battle makes the blood so hot and sweet." yell="0" />
+	</voices>
+	<loot>
+		<item name="Gold Coin" countmax="99" chance="100000" />
+		<item name="Vampire Lord Token" chance="100000" />
+		<item name="Strong Health Potion" chance="20000" />
+		<item name="Ring of Healing" chance="13000" />
+		<item name="Skull" chance="11000" />
+		<item name="Vampire Shield" chance="11000" />
+		<item name="Platinum Coin" countmax="4" chance="7000" />
+		<item name="Black Pearl" chance="1000" />
+		<item name="Chaos Mace" chance="1000" />
+	</loot>
+</monster>

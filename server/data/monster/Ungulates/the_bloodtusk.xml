@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="The Bloodtusk" nameDescription="The Bloodtusk" race="blood" experience="300" speed="190">
+	<health now="600" max="600" />
+	<look type="199" corpse="6074" />
+	<targetchange interval="5000" chance="8" />
+	<flags>
+		<flag summonable="0" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="0" />
+		<flag convinceable="0" />
+		<flag pushable="1" />
+		<flag canpushitems="1" />
+		<flag canpushcreatures="0" />
+		<flag staticattack="90" />
+		<flag targetdistance="1" />
+		<flag runonhealth="0" />
+		<flag canwalkonenergy="0" />
+		<flag canwalkonfire="0" />
+		<flag canwalkonpoison="0" />
+		<flag isboss="1" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-120" />
+	</attacks>
+	<defenses armor="40" defense="57" />
+	<elements>
+		<element icePercent="-10" />
+		<element firePercent="-10" />
+		<element earthPercent="15" />
+	</elements>
+	<immunities>
+		<immunity invisible="1" />
+		<immunity paralyze="1" />
+	</immunities>
+	<loot>
+		<item name="Gold Coin" countmax="100" chance="100000" />
+		<item name="Mammoth Tusk" countmax="2" chance="100000" />
+		<item name="Platinum Coin" countmax="5" chance="100000" />
+		<item name="Tusk Shield" chance="63860" />
+		<item name="Furry Club" chance="59040" />
+		<item name="Red Piece of Cloth" chance="57830" />
+		<item name="Tusk" countmax="4" chance="42170" />
+		<item name="Mammoth Fur Cape" chance="21690" />
+	</loot>
+</monster>

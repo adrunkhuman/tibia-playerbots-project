@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Hide" nameDescription="Hide" race="venom" experience="240" speed="280">
+	<health now="500" max="500" />
+	<look type="219" corpse="6060" />
+	<targetchange interval="5000" chance="8" />
+	<flags>
+		<flag summonable="0" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="0" />
+		<flag convinceable="0" />
+		<flag pushable="0" />
+		<flag canpushitems="1" />
+		<flag canpushcreatures="0" />
+		<flag targetdistance="1" />
+		<flag staticattack="90" />
+		<flag runonhealth="0" />
+		<flag isboss="1" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-140" poison="80" />
+	</attacks>
+	<defenses armor="25" defense="40">
+		<defense name="speed" interval="2000" chance="10" speedchange="340" duration="5000">
+			<attribute key="areaEffect" value="redshimmer" />
+		</defense>
+	</defenses>
+	<elements>
+		<element physicalPercent="40" />
+		<element icePercent="-15" />
+		<element firePercent="-15" />
+		<element energyPercent="10" />
+	</elements>
+	<immunities>
+		<immunity earth="1" />
+		<immunity invisible="1" />
+		<immunity paralyze="1" />
+	</immunities>
+	<loot>
+		<item name="Time Ring" chance="88350" />
+		<item name="Platinum Coin" countmax="8" chance="82520" />
+		<item name="Steel Helmet" chance="71840" />
+		<item name="Spider Silk" countmax="2" chance="63110" />
+		<item name="Knight Legs" chance="34000" />
+		<item name="Terra Hood" chance="29000" />
+	</loot>
+</monster>

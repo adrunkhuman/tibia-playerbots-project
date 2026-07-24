@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Minotaur" nameDescription="a minotaur" race="blood" experience="50" speed="168" manacost="330">
+	<health now="100" max="100" />
+	<look type="25" corpse="5969" />
+	<targetchange interval="4000" chance="0" />
+	<flags>
+		<flag summonable="1" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="1" />
+		<flag convinceable="1" />
+		<flag pushable="1" />
+		<flag canpushitems="0" />
+		<flag canpushcreatures="0" />
+		<flag targetdistance="1" />
+		<flag staticattack="90" />
+		<flag runonhealth="0" />
+		<flag canwalkonenergy="0" />
+		<flag canwalkonfire="0" />
+		<flag canwalkonpoison="0" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-45" />
+	</attacks>
+	<defenses armor="11" defense="11" />
+	<elements>
+		<element deathPercent="-10" />
+		<element holyPercent="10" />
+		<element icePercent="-10" />
+		<element firePercent="20" />
+	</elements>
+	<voices interval="5000" chance="10">
+		<voice sentence="Kaplar!" yell="0" />
+		<voice sentence="Hurr" yell="0" />
+	</voices>
+	<loot>
+		<item name="Gold Coin" countmax="25" chance="66310" />
+		<item name="Plate Shield" chance="20040" />
+		<item name="Mace" chance="13080" />
+		<item name="Chain Armor" chance="10060" />
+		<item name="Brass Helmet" chance="7980" />
+		<item name="Sword" chance="4980" />
+		<item name="Meat" chance="4960" />
+		<item name="Axe" chance="3980" />
+		<item name="Minotaur Horn" countmax="2" chance="2030" />
+		<item name="Minotaur Leather" chance="1010" />
+		<item name="Shovel" chance="310" />
+		<item name="Bronze Amulet" chance="110" />
+	</loot>
+</monster>

@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Freegoiz" nameDescription="Freegoiz" race="blood" experience="2000" speed="380">
+	<health now="8000" max="8000" />
+	<look type="110" corpse="6038" />
+	<targetchange interval="5000" chance="20" />
+	<flags>
+		<flag summonable="0" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="0" />
+		<flag convinceable="0" />
+		<flag pushable="0" />
+		<flag canpushitems="1" />
+		<flag canpushcreatures="1" />
+		<flag targetdistance="1" />
+		<flag staticattack="90" />
+		<flag runonhealth="0" />
+		<flag isboss="1" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-200" />
+		<attack name="ice" interval="3000" chance="13" range="7" radius="1" target="1" min="-100" max="-150">
+			<attribute key="shootEffect" value="snowball" />
+			<attribute key="areaEffect" value="icearea" />
+		</attack>
+		<attack name="ice" interval="2000" chance="9" length="5" spread="3" min="-40" max="-90">
+			<attribute key="areaEffect" value="icearea" />
+		</attack>
+	</attacks>
+	<defenses armor="188" defense="145" />
+	<immunities>
+		<immunity invisible="1" />
+	</immunities>
+	<voices interval="5000" chance="10">
+		<voice sentence="Yooodelaaahooohooo" yell="0" />
+	</voices>
+	<loot>
+	</loot>
+</monster>

@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Massacre" nameDescription="Massacre" race="blood" experience="20000" speed="390">
+	<health now="32000" max="32000" />
+	<look type="244" corpse="6336" />
+	<targetchange interval="60000" chance="0" />
+	<flags>
+		<flag summonable="0" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="0" />
+		<flag convinceable="0" />
+		<flag pushable="0" />
+		<flag canpushitems="1" />
+		<flag canpushcreatures="1" />
+		<flag targetdistance="1" />
+		<flag staticattack="90" />
+		<flag runonhealth="0" />
+		<flag canwalkonenergy="1" />
+		<flag canwalkonfire="1" />
+		<flag canwalkonpoison="1" />
+		<flag isboss="1" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-1700" />
+		<attack name="physical" interval="2000" chance="24" range="7" min="-280" max="-1100">
+			<attribute key="shootEffect" value="largerock" />
+		</attack>
+	</attacks>
+	<defenses armor="15" defense="15" />
+	<elements>
+		<element deathPercent="-10" />
+		<element icePercent="10" />
+		<element energyPercent="-1" />
+		<element earthPercent="1" />
+	</elements>
+	<immunities>
+		<immunity fire="1" />
+		<immunity invisible="1" />
+		<immunity paralyze="1" />
+	</immunities>
+	<voices interval="2000" chance="9">
+		<voice sentence="GRRRR!" yell="1" />
+		<voice sentence="GRRAAARRRHH!" yell="1" />
+		<voice sentence="HATE! HATE! KILL! KILL!" yell="1" />
+	</voices>
+	<loot>
+		<item name="Piece of Massacre's Shell" chance="100000" />
+		<item name="Demonic Essence" chance="96430" />
+		<item name="Soul Orb" chance="96430" />
+		<item name="Gold Coin" countmax="100" chance="89290" />
+		<item name="Gold Coin" countmax="100" chance="89290" />
+		<item name="Gold Coin" countmax="7" chance="89290" />
+		<item name="Meat" countmax="9" chance="82140" />
+		<item name="Orichalcum Pearl" countmax="6" chance="75000" />
+		<item name="Old Twig" chance="67860" />
+		<item name="Platinum Coin" countmax="6" chance="50000" />
+		<item name="Great Health Potion" chance="7140" />
+		<item name="Great Mana Potion" chance="7140" />
+		<item name="Big Bone" chance="3570" />
+		<item name="Berserker" chance="250" />
+		<item name="Heavy Mace" chance="250" />
+	</loot>
+</monster>

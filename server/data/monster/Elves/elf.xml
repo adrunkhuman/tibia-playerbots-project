@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Elf" nameDescription="an elf" race="blood" experience="42" speed="220" manacost="320">
+	<health now="100" max="100"/>
+	<look type="62" corpse="6003"/>
+	<targetchange interval="2000" chance="0"/>
+	<strategy attack="100" defense="0"/>
+	<flags>
+		<flag summonable="1"/>
+		<flag attackable="1"/>
+		<flag hostile="1"/>
+		<flag illusionable="1"/>
+		<flag convinceable="1"/>
+		<flag pushable="1"/>
+		<flag canpushitems="0"/>
+		<flag canpushcreatures="0"/>
+		<flag targetdistance="1"/>
+		<flag staticattack="90"/>
+		<flag runonhealth="0"/>
+		<flag canwalkonenergy="0" />
+		<flag canwalkonfire="0" />
+		<flag canwalkonpoison="0" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" skill="10" attack="15"/>
+		<attack name="physical" interval="1000" chance="5" range="7" min="-15" max="-25">
+			<attribute key="shootEffect" value="arrow"/>
+		</attack>
+	</attacks>
+	<defenses armor="6" defense="12"/>
+	<elements>
+		<element deathPercent="-10" />
+		<element holyPercent="20" />
+	</elements>
+	<immunities>
+		<immunity invisible="1" />
+		<immunity paralyze="0" />
+	</immunities>
+	<voices interval="5000" chance="10">
+		<voice sentence="Flee as long as you can." yell="0" />
+		<voice sentence="Death to the Defilers!" yell="0" />
+		<voice sentence="You are not welcome here." yell="0" />
+		<voice sentence="Bahaha aka!" yell="0" />
+		<voice sentence="Ulathil beia Thratha!" yell="0" />
+	</voices>
+	<loot>
+		<item name="Gold Coin" countmax="30" chance="44660" />
+		<item name="Plum" countmax="2" chance="20040" />
+		<item name="Studded Helmet" chance="15060" />
+		<item name="Leather Boots" chance="11040" />
+		<item name="Longsword" chance="10970" />
+		<item name="Studded Armor" chance="8980" />
+		<item name="Plate Shield" chance="8890" />
+		<item name="Arrow" countmax="3" chance="6990" />
+		<item name="Elvish Talisman" chance="1960" />
+		<item name="Heaven Blossom" chance="1010" />
+	</loot>
+</monster>

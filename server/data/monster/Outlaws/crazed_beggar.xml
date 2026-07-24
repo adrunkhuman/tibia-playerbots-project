@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Crazed Beggar" nameDescription="a crazed beggar" race="blood" experience="35" speed="154" manacost="300">
+	<health now="100" max="100" />
+	<look type="153" head="40" body="19" legs="21" feet="97" addons="3" corpse="3058" />
+	<targetchange interval="4000" chance="0" />
+	<flags>
+		<flag summonable="1" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="0" />
+		<flag convinceable="1" />
+		<flag pushable="1" />
+		<flag canpushitems="0" />
+		<flag canpushcreatures="0" />
+		<flag targetdistance="1" />
+		<flag staticattack="80" />
+		<flag runonhealth="0" />
+		<flag canwalkonenergy="0" />
+		<flag canwalkonfire="0" />
+		<flag canwalkonpoison="0" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-25" />
+	</attacks>
+	<defenses armor="4" defense="4" />
+	<elements>
+		<element physicalPercent="5" />
+		<element deathPercent="-10" />
+		<element holyPercent="10" />
+		<element energyPercent="20" />
+		<element earthPercent="-10" />
+	</elements>
+	<voices interval="1000" chance="5">
+		<voice sentence="Gimme money!" yell="0" />
+		<voice sentence="Raahhh!" yell="0" />
+		<voice sentence="Wanna buy roses??" yell="0" />
+		<voice sentence="You are one of THEM! Die!" yell="0" />
+		<voice sentence="They're coming! They're coming!" yell="0" />
+		<voice sentence="Hehehe!" yell="0" />
+		<voice sentence="Make it stop!" yell="0" />
+	</voices>
+	<loot>
+		<item name="Gold Coin" countmax="9" chance="99380" />
+		<item name="Dirty Cape" chance="60910" />
+		<item name="Roll" chance="19160" />
+		<item name="Meat" chance="9880" />
+		<item name="Wooden Spoon" chance="9610" />
+		<item name="Wooden Hammer" chance="6840" />
+		<item name="Red Rose" chance="5050" />
+		<item name="Rolling Pin" chance="4670" />
+		<item name="Sling Herb" chance="600" />
+		<item name="Small Blue Pillow" chance="600" />
+		<item name="Rum Flask" chance="490" />
+		<item name="Lute" chance="350" />
+		<item id="6092" chance="350" />
+		<item name="Heavily Rusted Armor" chance="300" />
+		<item name="Dwarven Ring" chance="140" />
+	</loot>
+</monster>

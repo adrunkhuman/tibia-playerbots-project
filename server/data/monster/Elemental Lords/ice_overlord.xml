@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Ice Overlord" nameDescription="Ice Overlord" race="undead" experience="2800" speed="390">
+	<health now="4000" max="4000" />
+	<look type="11" corpse="8965" />
+	<targetchange interval="20000" chance="15" />
+	<flags>
+		<flag summonable="0" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="0" />
+		<flag convinceable="0" />
+		<flag pushable="0" />
+		<flag canpushitems="1" />
+		<flag staticattack="85" />
+		<flag targetdistance="1" />
+		<flag runonhealth="0" />
+		<flag canwalkonenergy="0" />
+		<flag canwalkonfire="1" />
+		<flag canwalkonpoison="1" />
+		<flag lightlevel="4" />
+		<flag lightcolor="85" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-400" />
+		<attack name="ice" interval="2000" chance="18" length="8" spread="0" min="-400" max="-1000">
+			<attribute key="areaEffect" value="icearea" />
+		</attack>
+		<attack name="icecondition" interval="1000" chance="9" range="7" target="1" min="-160" max="-400">
+			<attribute key="shootEffect" value="smallice" />
+			<attribute key="areaEffect" value="iceattack" />
+		</attack>
+		<attack name="speed" interval="2000" chance="18" radius="6" target="0" speedchange="-800" duration="5000">
+			<attribute key="areaEffect" value="icetornado" />
+		</attack>
+		<attack name="speed" interval="1000" chance="9" range="7" target="1" speedchange="-800" duration="5000">
+			<attribute key="shootEffect" value="smallice" />
+			<attribute key="areaEffect" value="iceattack" />
+		</attack>
+	</attacks>
+	<defenses armor="30" defense="30" />
+	<elements>
+		<element physicalPercent="50" />
+		<element energyPercent="-25" />
+	</elements>
+	<immunities>
+		<immunity ice="1" />
+		<immunity fire="1" />
+		<immunity earth="1" />
+		<immunity invisible="0" />
+		<immunity paralyze="1" />
+	</immunities>
+	<loot>
+		<item name="Flawless Ice Crystal" chance="100000" />
+		<item name="Gold Coin" countmax="38" chance="80000" />
+		<item name="Platinum Coin" countmax="3" chance="80000" />
+		<item name="Crystalline Armor" chance="980" />
+	</loot>
+</monster>

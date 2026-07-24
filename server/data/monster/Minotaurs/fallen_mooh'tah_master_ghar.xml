@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Fallen Mooh'Tah Master Ghar" nameDescription="Fallen Mooh'Tah Master Ghar" race="blood" experience="4400" speed="190">
+	<health now="7990" max="7990" />
+	<look type="29" corpse="7349" />
+	<flags>
+		<flag summonable="0" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="0" />
+		<flag convinceable="0" />
+		<flag pushable="0" />
+		<flag canpushitems="1" />
+		<flag targetdistance="1" />
+		<flag runonhealth="0" />
+		<flag canwalkonenergy="0" />
+		<flag canwalkonfire="0" />
+		<flag canwalkonpoison="0" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-525" poison="360" />
+		<attack name="fire" interval="6000" chance="30" min="-80" max="-300" length="8" spread="3">
+			<attribute key="areaEffect" value="firearea" />
+		</attack>
+		<attack name="fire" interval="3000" chance="45" range="7" radius="1" target="1" min="-80" max="-200">
+			<attribute key="shootEffect" value="fire" />
+		</attack>
+		<attack name="death" interval="4000" chance="30" range="7" min="-215" max="-200">
+			<attribute key="shootEffect" value="death" />
+			<attribute key="areaEffect" value="mortarea" />
+		</attack>
+		<attack name="earth" interval="4500" chance="40" range="10" radius="1" target="1" min="-140" max="-295">
+			<attribute key="shootEffect" value="poison" />
+		</attack>
+		<attack name="earth" interval="5000" chance="30" length="8" spread="3" min="-191" max="-300">
+			<attribute key="areaEffect" value="poison" />
+		</attack>
+		<attack name="lifedrain" interval="4500" chance="40" range="10" radius="1" target="1" min="-215" max="-245">
+			<attribute key="areaEffect" value="redshimmer" />
+		</attack>
+		<attack name="lifedrain" interval="4000" chance="30" min="-220" max="-245">
+			<attribute key="shootEffect" value="death" />
+			<attribute key="areaEffect" value="mortarea" />
+		</attack>
+	</attacks>
+	<defenses armor="30" defense="33" />
+	<elements>
+		<element firePercent="60" />
+	</elements>
+	<immunities>
+		<immunity invisible="1" />
+		<immunity paralyze="1" />
+	</immunities>
+	<voices interval="2000" chance="5">
+		<voice sentence="I still know the ways of the Moo'Tah." yell="0" />
+		<voice sentence="I might be fallen but you will fall before me!" yell="0" />
+		<voice sentence="I will finish you" yell="0" />
+		<voice sentence="You are no match for a master of the Mooh'Tah!" yell="0" />
+	</voices>
+</monster>

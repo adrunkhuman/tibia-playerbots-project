@@ -1,0 +1,97 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Braindeath" nameDescription="a braindeath" race="venom" experience="985" speed="218">
+	<health now="1225" max="1225" />
+	<look type="256" corpse="7256" />
+	<targetchange interval="4000" chance="10" />
+	<flags>
+		<flag summonable="0" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="0" />
+		<flag convinceable="0" />
+		<flag pushable="0" />
+		<flag canpushitems="1" />
+		<flag canpushcreatures="1" />
+		<flag targetdistance="4" />
+		<flag staticattack="80" />
+		<flag runonhealth="0" />
+		<flag lightcolor="95" />
+		<flag lightlevel="3" />
+		<flag canwalkonenergy="1" />
+		<flag canwalkonfire="1" />
+		<flag canwalkonpoison="1" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-70" />
+		<attack name="energy" interval="2000" chance="10" range="7" min="-93" max="-170">
+			<attribute key="shootEffect" value="energy" />
+		</attack>
+		<attack name="fire" interval="2000" chance="10" range="7" min="-123" max="-155">
+			<attribute key="shootEffect" value="fire" />
+		</attack>
+		<attack name="death" interval="2000" chance="10" range="7" min="-154" max="-170">
+			<attribute key="shootEffect" value="suddendeath" />
+			<attribute key="areaEffect" value="smallclouds" />
+		</attack>
+		<attack name="earth" interval="2000" chance="10" range="7" min="-47" max="-125">
+			<attribute key="shootEffect" value="poison" />
+		</attack>
+		<attack name="lifedrain" interval="2000" chance="10" range="7" min="-150" max="-159">
+			<attribute key="shootEffect" value="suddendeath" />
+			<attribute key="areaEffect" value="smallclouds" />			
+			<attribute key="areaEffect" value="redshimmer" />
+		</attack>
+		<attack name="manadrain" interval="2000" chance="10" range="7" min="-146" max="-156" >
+			<attribute key="shootEffect" value="energy" />
+			<attribute key="areaEffect" value="redshimmer" />
+		</attack>
+		<attack name="speed" interval="4000" chance="55" radius="1" target="1" range="5" duration="12000" speedchange="-400">
+			<attribute key="shootEffect" value="suddendeath"/>			
+			<attribute key="areaEffect" value="smallclouds" />
+		</attack>
+	</attacks>
+	<defenses armor="12" defense="12">
+		<defense name="healing" interval="2000" chance="15" min="152" max="188">
+			<attribute key="areaEffect" value="blueshimmer" />
+		</defense>
+		<defense name="speed" interval="2000" chance="15" speedchange="260" duration="5000">
+			<attribute key="areaEffect" value="redshimmer" />
+		</defense>
+	</defenses>
+	<elements>
+		<element physicalPercent="15" />
+		<element holyPercent="-20" />
+		<element icePercent="20" />
+		<element firePercent="-15" />
+		<element energyPercent="10" />
+	</elements>
+	<immunities>
+		<immunity death="1" />
+		<immunity earth="1" />
+		<immunity invisible="1" />
+		<immunity paralyze="0" />
+	</immunities>
+	<summons maxSummons="2">
+		<summon name="Vampire" interval="2000" chance="10" />
+	</summons>
+	<voices interval="5000" chance="10">
+		<voice sentence="You have disturbed my thoughts!" yell="0" />
+		<voice sentence="Let me taste your brain!" yell="0" />
+		<voice sentence="You will be punished!" yell="0" />
+		<voice sentence="I will turn you into something more useful!" yell="0" />
+	</voices>
+	<loot>
+		<item name="Gold Coin" countmax="90" chance="98590" />
+		<item name="Bone Sword" chance="13080" />
+		<item name="Sniper Arrow" countmax="4" chance="9260" />
+		<item name="Steel Shield" chance="8450" />
+		<item name="Piece of Dead Brain" chance="4020" />
+		<item name="Beholder Eye" chance="4230" />
+		<item name="Clerical Mace" chance="2620" />
+		<item name="Haunted Blade" chance="1410" />
+		<item name="Spellbook" chance="800" />
+		<item name="Spiked Squelcher" chance="200" />
+		<item name="Beholder Shield" chance="200" />
+		<item name="Beholder Helmet" chance="400" />
+	</loot>
+</monster>

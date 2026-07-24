@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Frost Giant" nameDescription="a frost giant" race="blood" experience="150" speed="190" manacost="490">
+	<health now="270" max="270" />
+	<look type="257" corpse="7330" />
+	<targetchange interval="4000" chance="10" />
+	<flags>
+		<flag summonable="0" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="0" />
+		<flag convinceable="1" />
+		<flag pushable="0" />
+		<flag canpushitems="1" />
+		<flag staticattack="80" />
+		<flag targetdistance="1" />
+		<flag runonhealth="0" />
+		<flag canwalkonenergy="0" />
+		<flag canwalkonfire="0" />
+		<flag canwalkonpoison="0" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-110" />
+		<attack name="physical" interval="2000" chance="15" range="7" min="0" max="-90">
+			<attribute key="shootEffect" value="largerock" />
+		</attack>
+	</attacks>
+	<defenses armor="22" defense="22">
+		<defense name="speed" interval="2000" chance="15" speedchange="300" duration="5000">
+			<attribute key="areaEffect" value="redshimmer" />
+		</defense>
+	</defenses>
+	<immunities>
+		<immunity ice="1" />
+		<immunity invisible="0" />
+		<immunity paralyze="0" />
+	</immunities>
+	<voices interval="1000" chance="5">
+		<voice sentence="Hmm Humansoup!" yell="0" />
+		<voice sentence="Joh Thun!" yell="0" />
+		<voice sentence="Forle Bramma" yell="0" />
+		<voice sentence="Bröre Smöde!" yell="0" />
+		<voice sentence="Hörre Sjan Flan!" yell="0" />
+		<voice sentence="Stand still ya tasy snack!" yell="0" />
+	</voices>
+	<loot>
+		<item name="Gold Coin" countmax="40" chance="82100" />
+		<item name="Short Sword" chance="8220" />
+		<item name="Meat" countmax="2" chance="4920" />
+		<item name="Frost Giant Pelt" chance="4920" />
+		<item name="Ice Cube" chance="2210" />
+		<item name="Battle Shield" chance="1390" />
+		<item name="Health Potion" chance="900" />
+		<item name="Halberd" chance="560" />
+		<item name="Norse Shield" chance="290" />
+		<item name="Dark Helmet" chance="170" />
+		<item name="Club Ring" chance="120" />
+		<item name="Shard" chance="60" />
+	</loot>
+</monster>

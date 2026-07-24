@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Captain Jones" nameDescription="Captain Jones" race="undead" experience="620" speed="200">
+	<health now="555" max="555" />
+	<look type="196" corpse="5566" />
+	<targetchange interval="4000" chance="10" />
+	<flags>
+		<flag summonable="0" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="0" />
+		<flag convinceable="0" />
+		<flag pushable="0" />
+		<flag canpushitems="1" />
+		<flag canpushcreatures="1" />
+		<flag staticattack="90" />
+		<flag targetdistance="1" />
+		<flag runonhealth="0" />
+		<flag isboss="1" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-100" />
+		<attack name="death" interval="2000" chance="10" target="1" range="7" min="-50" max="-90">
+			<attribute key="shootEffect" value="death" />
+			<attribute key="areaEffect" value="smallclouds" />
+		</attack>
+		<attack name="outfit" interval="2000" chance="5" target="1" range="7" monster="skeleton" duration="4000">
+			<attribute key="shootEffect" value="explosion" />
+		</attack>
+		<attack name="physical" interval="2000" chance="10" target="0" radius="4" min="-40" max="-70">
+			<attribute key="areaEffect" value="redspark" />
+		</attack>
+		<attack name="physical" interval="2000" chance="10" target="0" radius="4" min="-40" max="-55">
+			<attribute key="areaEffect" value="rednote" />
+		</attack>
+	</attacks>
+	<defenses>
+		<defense name="healing" interval="2000" chance="5" min="40" max="70">
+			<attribute key="areaEffect" value="blueshimmer" />
+		</defense>
+	</defenses>
+	<elements>
+		<element firePercent="10" />
+		<element energyPercent="10" />
+		<element icePercent="20" />
+	</elements>
+	<immunities>
+		<immunity physical="1" />
+		<immunity earth="1" />
+		<immunity paralyze="1" />
+		<immunity invisible="1" />
+	</immunities>
+	<loot>
+		<item name="Gold Coin" countmax="100" chance="50000" />
+		<item name="Gold Coin" countmax="50" chance="50000" />
+		<item name="Stealth Ring" chance="11110" />
+		<item name="Crown Legs" chance="5000" />
+		<item name="Focus Cape" chance="5000" />
+		<item name="Red Robe" chance="5000" />
+		<item name="Spike Sword" chance="5000" />
+	</loot>
+</monster>

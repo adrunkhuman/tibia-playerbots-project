@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Orc Shaman" nameDescription="an orc shaman" race="blood" experience="110" speed="140">
+	<health now="115" max="115" />
+	<look type="6" corpse="5978" />
+	<targetchange interval="4000" chance="10" />
+	<flags>
+		<flag summonable="0" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="1" />
+		<flag convinceable="0" />
+		<flag pushable="0" />
+		<flag canpushitems="0" />
+		<flag canpushcreatures="0" />
+		<flag targetdistance="4" />
+		<flag staticattack="90" />
+		<flag runonhealth="15" />
+		<flag canwalkonenergy="0" />
+		<flag canwalkonfire="0" />
+		<flag canwalkonpoison="0" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-20" />
+		<attack name="energy" interval="2000" chance="15" range="7" min="-20" max="-30">
+			<attribute key="shootEffect" value="energyball" />
+		</attack>
+		<attack name="fire" interval="2000" chance="5" range="7" radius="1" target="1" min="-5" max="-45">
+			<attribute key="shootEffect" value="fire" />
+		</attack>
+	</attacks>
+	<defenses armor="8" defense="8">
+		<defense name="healing" interval="2000" chance="60" min="27" max="43">
+			<attribute key="areaEffect" value="blueshimmer" />
+		</defense>
+	</defenses>
+	<elements>
+		<element deathPercent="-5" />
+		<element holyPercent="10" />
+		<element energyPercent="50" />
+		<element earthPercent="-10" />
+	</elements>
+	<immunities>
+		<immunity invisible="1" />
+		<immunity paralyze="0" />
+	</immunities>
+	<summons maxSummons="4">
+		<summon name="Snake" interval="2000" chance="20" />
+	</summons>
+	<voices interval="5000" chance="10">
+		<voice sentence="Grak brrretz gulu." yell="0" />
+		<voice sentence="Huumans stinkk!" yell="0" />
+	</voices>
+	<loot>
+		<item name="Gold Coin" countmax="5" chance="89880" />
+		<item name="Corncob" countmax="2" chance="10840" />
+		<item name="Broken Shamanic Staff" chance="10380" />
+		<item name="Chain Armor" chance="8720" />
+		<item name="Shamanic Hood" chance="7410" />
+		<item name="Spear" chance="5240" />
+		<item name="Orc Leather" chance="3750" />
+		<item name="Orc Tooth" chance="2240" />
+		<item name="Wand of Decay" chance="960" />
+		<item id="1972" chance="460" />
+	</loot>
+</monster>

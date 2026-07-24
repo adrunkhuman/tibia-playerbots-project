@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Spirit of Water" nameDescription="a spirit of water" race="undead" experience="850" speed="200">
+	<health now="1400" max="1400" />
+	<look type="11" corpse="7349" />
+	<flags>
+		<flag summonable="0" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="0" />
+		<flag convinceable="0" />
+		<flag pushable="0" />
+		<flag canpushitems="1" />
+		<flag targetdistance="1" />
+		<flag runonhealth="0" />
+		<flag canwalkonenergy="0" />
+		<flag canwalkonfire="1" />
+		<flag canwalkonpoison="0" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-200" />
+		<attack name="drown" interval="2000" chance="15" target="1" range="7" radius="2" min="-150" max="-195">
+			<attribute key="areaEffect" value="bluebubble" />
+		</attack>
+		<attack name="poisoncondition" interval="2000" chance="20" range="7" min="-100" max="-180">
+			<attribute key="shootEffect" value="poison" />
+		</attack>
+		<attack name="poisoncondition" interval="2000" chance="20" target="0" radius="5" min="-110" max="-220">
+			<attribute key="areaEffect" value="poison" />
+		</attack>
+	</attacks>
+	<defenses armor="0" defense="0" />
+	<elements>
+		<element physicalPercent="30" />
+		<element holyPercent="50" />
+		<element energyPercent="-10" />
+	</elements>
+	<immunities>
+		<immunity ice="1" />
+		<immunity fire="1" />
+		<immunity invisible="1" />
+		<immunity paralyze="1" />
+		<immunity drown="1" />
+	</immunities>
+	<voices interval="5000" chance="5">
+		<voice sentence="Blubb" yell="0" />
+	</voices>
+</monster>

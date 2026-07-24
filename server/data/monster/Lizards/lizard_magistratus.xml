@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Lizard Magistratus" nameDescription="a lizard magistratus" race="blood" experience="2000" speed="200">
+	<health now="6250" max="6250" />
+	<look type="115" corpse="6041" />
+	<targetchange interval="4000" chance="10" />
+	<flags>
+		<flag summonable="0" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="0" />
+		<flag convinceable="0" />
+		<flag pushable="1" />
+		<flag canpushitems="1" />
+		<flag canpushcreatures="0" />
+		<flag targetdistance="4" />
+		<flag staticattack="90" />
+		<flag runonhealth="0" />
+		<flag canwalkonenergy="0" />
+		<flag canwalkonfire="1" />
+		<flag canwalkonpoison="1" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-60" />
+		<attack name="lizard magistratus curse" interval="2000" chance="10" range="5" />
+	</attacks>
+	<defenses armor="15" defense="15">
+		<defense name="healing" interval="2000" chance="50" min="200" max="250">
+			<attribute key="areaEffect" value="blueshimmer" />
+		</defense>
+	</defenses>
+	<elements>
+		<element firePercent="85" />
+	</elements>
+	<immunities>
+		<immunity earth="1" />
+		<immunity invisible="1" />
+		<immunity paralyze="1" />
+	</immunities>
+	<voices interval="5000" chance="10">
+		<voice sentence="I can't work wizh zuch dizturbancez!" yell="0" />
+		<voice sentence="Shhhhhhhh." yell="0" />
+	</voices>
+	<loot>
+		<item name="Gold Coin" countmax="50" chance="78330" />
+		<item name="Platinum Coin" countmax="20" chance="15750" />
+		<item name="Small Ruby" countmax="5" chance="9250" />
+		<item name="Strong Mana Potion" chance="7630" />
+		<item name="Great Mana Potion" chance="5280" />
+		<item name="Lizard Leather" chance="1300" />
+		<item name="Lizard Scale" chance="650" />
+	</loot>
+</monster>

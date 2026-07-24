@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="War Golem" nameDescription="a war golem" race="energy" experience="2750" speed="240">
+	<health now="4300" max="4300" />
+	<look type="326" corpse="10005" />
+	<targetchange interval="4000" chance="10" />
+	<flags>
+		<flag summonable="0" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="0" />
+		<flag convinceable="0" />
+		<flag pushable="0" />
+		<flag canpushitems="1" />
+		<flag canpushcreatures="1" />
+		<flag targetdistance="1" />
+		<flag staticattack="90" />
+		<flag runonhealth="0" />
+		<flag canwalkonenergy="1" />
+		<flag canwalkonfire="1" />
+		<flag canwalkonpoison="1" />
+		<flag lightlevel="3" />
+		<flag lightcolor="94" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-550" />
+		<attack name="energy" interval="2000" chance="15" range="7" min="-165" max="-220">
+			<attribute key="shootEffect" value="energy" />
+		</attack>
+		<attack name="outfit" interval="2000" chance="1" range="7" monster="skeleton" duration="3000" />
+		<attack name="war golem electrify" range="1" interval="2000" chance="15" />
+		<attack name="war golem skill reducer" interval="2000" chance="10" />
+	</attacks>
+	<defenses armor="40" defense="40">
+		<defense name="speed" interval="2000" chance="15" speedchange="300" duration="5000">
+			<attribute key="areaEffect" value="redshimmer" />
+		</defense>
+		<defense name="healing" interval="2000" chance="15" min="200" max="250">
+			<attribute key="areaEffect" value="blueshimmer" />
+		</defense>
+	</defenses>
+	<elements>
+		<element physicalPercent="10" />
+		<element deathPercent="20" />
+		<element holyPercent="50" />
+		<element icePercent="30" />
+		<element firePercent="15" />
+		<element energyPercent="5" />
+		<element earthPercent="50" />
+	</elements>
+	<immunities>
+		<immunity invisible="1" />
+		<immunity paralyze="1" />
+	</immunities>
+	<voices interval="2500" chance="10">
+		<voice sentence="Engaging Enemy!" yell="0" />
+		<voice sentence="Rrrtttarrrttarrrtta" yell="0" />
+		<voice sentence="Termination initialized!" yell="0" />
+		<voice sentence="Charging weapon systems!" yell="0" />
+		<voice sentence="Azerus barada nikto!" yell="0" />
+		<voice sentence="Eliminated" yell="0" />
+		<voice sentence="Auto repair in progress." yell="0" />
+		<voice sentence="The battle is joined!" yell="0" />
+		<voice sentence="Klonk klonk klonk" yell="0" />
+		<voice sentence="Threat level processed." yell="0" />
+	</voices>
+	<loot>
+		<item name="Gold Coin" countmax="100" chance="99530" />
+		<item name="Gold Coin" countmax="100" chance="99530" />
+		<item name="Gold Coin" countmax="64" chance="99530" />
+		<item name="Ultimate Health Potion" chance="9830" />
+		<item name="Morning Star" chance="8800" />
+		<item name="Great Mana Potion" chance="8760" />
+		<item name="Plate Shield" chance="8670" />
+		<item name="War Crystal" chance="7860" />
+		<item name="Epee" chance="6910" />
+		<item name="Battle Shield" chance="5320" />
+		<item name="Nail" countmax="5" chance="5240" />
+		<item name="Two Handed Sword" chance="4810" />
+		<item name="Rusted Armor" chance="3520" />
+		<item name="Iron Ore" chance="1800" />
+		<item name="Dwarven Ring" chance="1120" />
+		<item id="9976" chance="990" />
+		<item name="Life Crystal" chance="860" />
+		<item name="Berserk Potion" chance="820" />
+		<item name="Club Ring" chance="690" />
+		<item name="Bonebreaker" chance="600" />
+		<item name="Steel Boots" chance="560" />
+		<item name="Lightning Boots" chance="210" />
+		<item name="Jade Hammer" chance="170" />
+		<item name="Crystal of Power" chance="130" />
+		<item name="Berserker" chance="90" />
+		<item name="Crystal Pedestal" chance="40" />
+	</loot>
+</monster>
