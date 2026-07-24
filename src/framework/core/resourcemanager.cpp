@@ -1,0 +1,1298 @@
+/*
+ * Copyright (c) 2010-2026 OTClient <https://github.com/edubart/otclient>
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
+ */
+
+#include "resourcemanager.h"
+
+#include <physfs.h>
+
+#include "filestream.h"
+#include "graphicalapplication.h"
+#include "framework/graphics/drawpoolmanager.h"
+#include "framework/net/protocolhttp.h"
+#include "framework/platform/platform.h"
+#include "framework/util/crypt.h"
+
+#ifndef USE_PRECOMPILED_HEADERS
+#include <array>
+#include <cstdint>
+#include <filesystem>
+#endif
+
+#include <lzma.h>
+#ifdef FRAMEWORK_HAVE_LIBARCHIVE
+#include <archive.h>
+#include <archive_entry.h>
+#else
+#include "minizip/ioapi.h"
+#include "minizip/ioapi_mem.h"
+#include "minizip/unzip.h"
+#endif
+
+ResourceManager g_resources;
+
+namespace {
+
+std::string normalizeVirtualPath(std::string path)
+{
+    stdext::replace_all(path, "\\", "/");
+    while (!path.empty() && path.front() == '/')
+        path.erase(path.begin());
+    return path;
+}
+
+std::filesystem::path safeRelativePath(std::string path)
+{
+    const auto normalized = std::filesystem::path(normalizeVirtualPath(std::move(path))).lexically_normal();
+    const auto normalizedString = normalized.generic_string();
+    if (normalized.empty() || normalized.is_absolute() || normalizedString == "." || normalizedString == ".." || normalizedString.starts_with("../"))
+        return {};
+    return normalized;
+}
+
+bool ensureWriteDirectory(const std::filesystem::path& directory)
+{
+    std::filesystem::path current;
+    for (const auto& part : directory) {
+        if (part.empty() || part == ".")
+            continue;
+
+        current /= part;
+        const auto currentPath = current.generic_string();
+
+        PHYSFS_Stat stat = {};
+        if (PHYSFS_stat(currentPath.c_str(), &stat)) {
+            if (stat.filetype != PHYSFS_FILETYPE_DIRECTORY) {
+                g_logger.error("Unable to create directory '{}': path is a file", currentPath);
+                return false;
+            }
+            continue;
+        }
+
+        if (!PHYSFS_mkdir(currentPath.c_str())) {
+            g_logger.error(
+                "Unable to create directory '{}': {}",
+                currentPath,
+                PHYSFS_getErrorByCode(PHYSFS_getLastErrorCode())
+            );
+            return false;
+        }
+    }
+
+    return true;
+}
+
+bool decompressLzmaData(const std::string& input, std::string& output)
+{
+    constexpr size_t maxDecompressedSize = 256u * 1024u * 1024u;
+    lzma_stream stream = LZMA_STREAM_INIT;
+    lzma_ret ret = lzma_auto_decoder(&stream, UINT64_MAX, 0);
+    if (ret != LZMA_OK) {
+        g_logger.error("Unable to initialize LZMA decoder: {}", static_cast<int>(ret));
+        return false;
+    }
+
+    std::array<uint8_t, 8192> buffer{};
+    stream.next_in = reinterpret_cast<const uint8_t*>(input.data());
+    stream.avail_in = input.size();
+
+    output.clear();
+    do {
+        stream.next_out = buffer.data();
+        stream.avail_out = buffer.size();
+
+        ret = lzma_code(&stream, LZMA_FINISH);
+        if (ret != LZMA_OK && ret != LZMA_STREAM_END) {
+            lzma_end(&stream);
+            g_logger.error("LZMA decompression failed: {}", static_cast<int>(ret));
+            return false;
+        }
+
+        const auto written = buffer.size() - stream.avail_out;
+        if (output.size() + written > maxDecompressedSize) {
+            lzma_end(&stream);
+            g_logger.error(
+                "LZMA decompression output exceeded limit ({} bytes)",
+                maxDecompressedSize
+            );
+            return false;
+        }
+        output.append(reinterpret_cast<const char*>(buffer.data()), written);
+    } while (ret != LZMA_STREAM_END);
+
+    lzma_end(&stream);
+    return true;
+}
+
+std::string selectArchiveEntryPath(std::string entryName, std::string entryPrefix, const bool stripPrefix)
+{
+    stdext::replace_all(entryName, "\\", "/");
+    stdext::replace_all(entryPrefix, "\\", "/");
+
+    while (entryName.starts_with("./"))
+        entryName.erase(0, 2);
+    while (!entryPrefix.empty() && entryPrefix.front() == '/')
+        entryPrefix.erase(entryPrefix.begin());
+
+    const bool prefixLooksLikeFile = std::filesystem::path(entryPrefix).has_extension();
+    if (!entryPrefix.empty() && !prefixLooksLikeFile && !entryPrefix.ends_with('/'))
+        entryPrefix.push_back('/');
+
+    std::string relativePath;
+    if (entryPrefix.empty()) {
+        relativePath = entryName;
+        if (stripPrefix) {
+            if (const auto slash = relativePath.find('/'); slash != std::string::npos)
+                relativePath.erase(0, slash + 1);
+        }
+    } else {
+        auto prefixPos = entryName.find(entryPrefix);
+        while (prefixPos != std::string::npos && prefixPos > 0 && entryName[prefixPos - 1] != '/')
+            prefixPos = entryName.find(entryPrefix, prefixPos + 1);
+
+        if (prefixPos == std::string::npos)
+            return "";
+
+        relativePath = stripPrefix ? entryName.substr(prefixPos + entryPrefix.size()) : entryName.substr(prefixPos);
+    }
+
+    if (relativePath.empty())
+        return "";
+
+    const auto normalized = std::filesystem::path(relativePath).lexically_normal();
+    if (normalized.empty() || normalized.is_absolute())
+        return "";
+
+    const auto normalizedString = normalized.generic_string();
+    if (normalizedString == "." || normalizedString.starts_with("../") || normalizedString == "..")
+        return "";
+
+    return normalizedString;
+}
+
+HttpResult_ptr getDownloadedFile(std::string path)
+{
+    path = normalizeVirtualPath(std::move(path));
+    if (path.starts_with("downloads/"))
+        path.erase(0, std::string("downloads/").size());
+    return g_http.getFile(path);
+}
+
+#ifndef FRAMEWORK_HAVE_LIBARCHIVE
+bool extractDownloadedZipArchive(ResourceManager& resourceManager, const std::string& path, const std::string& archive, std::string destinationPath, const std::string& entryPrefix, const bool stripPrefix)
+{
+    if (archive.size() > UINT32_MAX) {
+        g_logger.error("Downloaded archive '{}' is too large for zip extraction", path);
+        return false;
+    }
+
+    zlib_filefunc_def fileFunctions = {};
+    ourmemory_t archiveMemory = {};
+    archiveMemory.base = const_cast<char*>(archive.data());
+    archiveMemory.size = static_cast<uint32_t>(archive.size());
+    archiveMemory.grow = 0;
+    fill_memory_filefunc(&fileFunctions, &archiveMemory);
+
+    unzFile zipFile = unzOpen2(nullptr, &fileFunctions);
+    if (!zipFile) {
+        g_logger.error("Unable to open downloaded zip archive '{}'. Non-zip archives require libarchive support.", path);
+        return false;
+    }
+
+    unz_global_info globalInfo = {};
+    if (unzGetGlobalInfo(zipFile, &globalInfo) != UNZ_OK) {
+        g_logger.error("Unable to read zip archive info for '{}'", path);
+        unzClose(zipFile);
+        return false;
+    }
+
+    destinationPath = normalizeVirtualPath(std::move(destinationPath));
+    if (!destinationPath.empty() && !destinationPath.ends_with('/'))
+        destinationPath.push_back('/');
+
+    bool wroteFile = false;
+    constexpr int maxFilenameSize = 1024;
+    constexpr int readSize = 8192;
+    std::array<char, maxFilenameSize> fileName = {};
+    std::array<char, readSize> readBuffer = {};
+
+    for (uint32_t i = 0; i < globalInfo.number_entry; ++i) {
+        unz_file_info fileInfo = {};
+        fileName.fill('\0');
+        if (unzGetCurrentFileInfo(zipFile, &fileInfo, fileName.data(), static_cast<uint16_t>(fileName.size()), nullptr, 0, nullptr, 0) != UNZ_OK) {
+            g_logger.error("Unable to read zip entry info from '{}'", path);
+            unzClose(zipFile);
+            return false;
+        }
+
+        std::string entryName = fileName.data();
+        const bool isDirectory = entryName.ends_with('/') || entryName.ends_with('\\');
+        const auto relativePath = selectArchiveEntryPath(entryName, entryPrefix, stripPrefix);
+
+        if (!isDirectory && !relativePath.empty()) {
+            if (unzOpenCurrentFile(zipFile) != UNZ_OK) {
+                g_logger.error("Unable to open zip entry '{}' from '{}'", entryName, path);
+                unzClose(zipFile);
+                return false;
+            }
+
+            std::string contents;
+            int readBytes = 0;
+            do {
+                readBytes = unzReadCurrentFile(zipFile, readBuffer.data(), readBuffer.size());
+                if (readBytes < 0) {
+                    g_logger.error("Unable to read zip entry '{}' from '{}': {}", entryName, path, readBytes);
+                    unzCloseCurrentFile(zipFile);
+                    unzClose(zipFile);
+                    return false;
+                }
+                if (readBytes > 0)
+                    contents.append(readBuffer.data(), static_cast<size_t>(readBytes));
+            } while (readBytes > 0);
+
+            if (unzCloseCurrentFile(zipFile) != UNZ_OK) {
+                g_logger.error("Unable to close zip entry '{}' from '{}'", entryName, path);
+                unzClose(zipFile);
+                return false;
+            }
+
+            const auto destinationFile = destinationPath + relativePath;
+            if (!resourceManager.writeFileBuffer(
+                    destinationFile,
+                    reinterpret_cast<const uint8_t*>(contents.data()),
+                    static_cast<uint32_t>(contents.size()),
+                    true
+                )) {
+                unzClose(zipFile);
+                return false;
+            }
+            wroteFile = true;
+        }
+
+        if (i + 1 < globalInfo.number_entry && unzGoToNextFile(zipFile) != UNZ_OK) {
+            g_logger.error("Unable to advance zip archive '{}' to next entry", path);
+            unzClose(zipFile);
+            return false;
+        }
+    }
+
+    unzClose(zipFile);
+    return wroteFile;
+}
+#endif
+
+} // namespace
+
+void ResourceManager::init(const char* argv0)
+{
+    PHYSFS_init(argv0);
+    PHYSFS_permitSymbolicLinks(1);
+
+#if defined(WIN32)
+    char fileName[255];
+    GetModuleFileNameA(nullptr, fileName, sizeof(fileName));
+    m_binaryPath = std::filesystem::absolute(fileName);
+#elif defined(ANDROID)
+    // nothing
+#else
+    m_binaryPath = std::filesystem::absolute(argv0);
+#endif
+}
+
+void ResourceManager::terminate()
+{
+    PHYSFS_deinit();
+}
+
+bool ResourceManager::discoverWorkDir(const std::string& existentFile)
+{
+    // search for modules directory
+    std::string possiblePaths[] = { g_platform.getCurrentDir(),
+                                    g_resources.getBaseDir(),
+                                    g_resources.getBaseDir() + "/game_data/",
+                                    g_resources.getBaseDir() + "../",
+                                    g_resources.getBaseDir() + "../share/" + g_app.getCompactName() + "/",
+                                    };
+
+    bool found = false;
+    for (const auto& dir : possiblePaths) {
+        if (!PHYSFS_mount(dir.c_str(), nullptr, 0))
+            continue;
+
+        if (PHYSFS_exists(existentFile.c_str())) {
+            g_logger.debug("Found work dir at '{}'", dir);
+            m_workDir = dir;
+            found = true;
+            break;
+        }
+        PHYSFS_unmount(dir.c_str());
+    }
+
+    return found;
+}
+
+bool ResourceManager::setupUserWriteDir(const std::string& appWriteDirName)
+{
+    // a --user-dir override points every persisted file at a caller-chosen dir,
+    // so multiple isolated profiles can coexist. see #1540
+    if (!m_userDirOverride.empty()) {
+        std::error_code ec;
+        // resolve to an absolute path so the write dir does not depend on the
+        // current working directory
+        const auto absolutePath = std::filesystem::absolute(m_userDirOverride, ec);
+        if (ec) {
+            g_logger.error("Unable to resolve user directory '{}': {}", m_userDirOverride, ec.message());
+            return false;
+        }
+        std::filesystem::create_directories(absolutePath, ec);
+        if (ec) {
+            g_logger.error("Unable to create user directory '{}': {}", absolutePath.generic_string(), ec.message());
+            return false;
+        }
+        return setWriteDir(absolutePath.generic_string());
+    }
+
+    const std::string userDir = getUserDir();
+    std::string dirName;
+#ifndef WIN32
+    dirName = fmt::format(".{}", appWriteDirName);
+#else
+    dirName = appWriteDirName;
+#endif
+    const std::string writeDir = userDir + dirName;
+
+    if (!PHYSFS_setWriteDir(writeDir.c_str())) {
+        if (!PHYSFS_setWriteDir(userDir.c_str()) || !PHYSFS_mkdir(dirName.c_str())) {
+            g_logger.error(
+                "Unable to create write directory '{}': {}",
+                writeDir,
+                PHYSFS_getErrorByCode(PHYSFS_getLastErrorCode())
+            );
+            return false;
+        }
+    }
+    return setWriteDir(writeDir);
+}
+
+bool ResourceManager::setWriteDir(const std::string& writeDir, bool)
+{
+    if (!PHYSFS_setWriteDir(writeDir.c_str())) {
+        g_logger.error(
+            "Unable to set write directory '{}': {}",
+            writeDir,
+            PHYSFS_getErrorByCode(PHYSFS_getLastErrorCode())
+        );
+        return false;
+    }
+
+    if (!m_writeDir.empty())
+        removeSearchPath(m_writeDir);
+
+    m_writeDir = writeDir;
+
+    if (!addSearchPath(writeDir))
+        g_logger.error("Unable to add write '{}' directory to search path", writeDir);
+
+    return true;
+}
+
+bool ResourceManager::addSearchPath(const std::string& path, const bool pushFront)
+{
+    std::string savePath = path;
+    if (!PHYSFS_mount(path.c_str(), nullptr, pushFront ? 0 : 1)) {
+        bool found = false;
+        for (const auto& searchPath : m_searchPaths) {
+            std::string newPath = searchPath + path;
+            if (PHYSFS_mount(newPath.c_str(), nullptr, pushFront ? 0 : 1)) {
+                savePath = newPath;
+                found = true;
+                break;
+            }
+        }
+
+        if (!found) {
+            /*g_logger.error(
+                "Could not add '{}' to directory search path. Reason {}",
+                path,
+                PHYSFS_getErrorByCode(PHYSFS_getLastErrorCode())
+            );
+            */
+
+            return false;
+        }
+    }
+    if (pushFront)
+        m_searchPaths.push_front(savePath);
+    else
+        m_searchPaths.push_back(savePath);
+    return true;
+}
+
+bool ResourceManager::removeSearchPath(const std::string& path)
+{
+    if (!PHYSFS_unmount(path.c_str()))
+        return false;
+    const auto it = std::ranges::find(m_searchPaths, path);
+    assert(it != m_searchPaths.end());
+    m_searchPaths.erase(it);
+    return true;
+}
+
+void ResourceManager::searchAndAddPackages(const std::string& packagesDir, const std::string& packageExt)
+{
+    auto files = listDirectoryFiles(packagesDir);
+    for (auto& file : std::ranges::reverse_view(files)) {
+        if (!file.ends_with(packageExt))
+            continue;
+        std::string package = getRealDir(packagesDir) + "/" + file;
+        if (!addSearchPath(package, true))
+            g_logger.error(
+                "Unable to read package '{}': {}",
+                package,
+                PHYSFS_getErrorByCode(PHYSFS_getLastErrorCode())
+            );
+    }
+}
+
+bool ResourceManager::fileExists(const std::string& fileName)
+{
+    if (fileName.find("/downloads") != std::string::npos)
+        return g_http.getFile(fileName.substr(10)) != nullptr;
+
+    return (PHYSFS_exists(resolvePath(fileName).c_str()) && !directoryExists(fileName));
+}
+
+bool ResourceManager::fileExistsInWorkDir(const std::string& fileName)
+{
+    const auto relativePath = safeRelativePath(fileName);
+    if (relativePath.empty())
+        return false;
+
+    std::error_code ec;
+    const auto fullPath = std::filesystem::path(getWorkDir()) / relativePath;
+    return std::filesystem::is_regular_file(fullPath, ec);
+}
+
+bool ResourceManager::directoryExists(const std::string& directoryName)
+{
+    if (directoryName == "/downloads")
+        return true;
+
+    PHYSFS_Stat stat = {};
+    if (!PHYSFS_stat(resolvePath(directoryName).c_str(), &stat)) {
+        return false;
+    }
+
+    return stat.filetype == PHYSFS_FILETYPE_DIRECTORY;
+}
+
+void ResourceManager::readFileStream(const std::string& fileName, std::iostream& out)
+{
+    const std::string buffer = readFileContents(fileName);
+    if (buffer.length() == 0) {
+        out.clear(std::ios::eofbit);
+        return;
+    }
+    out.clear(std::ios::goodbit);
+    out.write(&buffer[0], buffer.length());
+    out.seekg(0, std::ios::beg);
+}
+
+std::string ResourceManager::readFileContents(const std::string& fileName)
+{
+    const std::string fullPath = resolvePath(fileName);
+
+    if (fullPath.find(AY_OBFUSCATE("/downloads")) != std::string::npos) {
+        const auto dfile = g_http.getFile(fullPath.substr(10));
+        if (dfile)
+            return std::string(dfile->response.begin(), dfile->response.end());
+    }
+
+    PHYSFS_File* file = PHYSFS_openRead(fullPath.c_str());
+    if (!file)
+        throw Exception("unable to open file '{}': {}", fullPath, PHYSFS_getErrorByCode(PHYSFS_getLastErrorCode()));
+
+    const int fileSize = PHYSFS_fileLength(file);
+    std::string buffer(fileSize, 0);
+    PHYSFS_readBytes(file, &buffer[0], fileSize);
+    PHYSFS_close(file);
+
+#if ENABLE_ENCRYPTION == 1
+    const std::string encHeader(ENCRYPTION_HEADER);
+    if (buffer.size() >= encHeader.size() &&
+        buffer.compare(0, encHeader.size(), encHeader) == 0) {
+        buffer = buffer.substr(encHeader.size());
+        buffer = decrypt(buffer);
+    }
+#endif
+
+    return buffer;
+}
+
+std::string ResourceManager::readFileContentsFromWorkDir(const std::string& fileName)
+{
+    const auto relativePath = safeRelativePath(fileName);
+    if (relativePath.empty())
+        throw Exception("invalid workdir file path '{}'", fileName);
+
+    const auto fullPath = std::filesystem::path(getWorkDir()) / relativePath;
+    std::ifstream file(fullPath, std::ios::binary);
+    if (!file.is_open())
+        throw Exception("unable to open workdir file '{}'", fullPath.generic_string());
+
+    std::string buffer(std::istreambuf_iterator<char>(file), {});
+    file.close();
+    return buffer;
+}
+
+bool ResourceManager::writeFileBuffer(const std::string& fileName, const uint8_t* data, const uint32_t size, const bool createDirectory)
+{
+    if (createDirectory) {
+        const auto& path = std::filesystem::path(normalizeVirtualPath(fileName));
+        const auto& dirPath = path.parent_path();
+
+        if (!dirPath.empty() && !ensureWriteDirectory(dirPath))
+            return false;
+    }
+
+    const auto normalizedFileName = normalizeVirtualPath(fileName);
+    PHYSFS_file* file = PHYSFS_openWrite(normalizedFileName.c_str());
+    if (!file) {
+        g_logger.error(PHYSFS_getErrorByCode(PHYSFS_getLastErrorCode()));
+        return false;
+    }
+
+    PHYSFS_writeBytes(file, data, size);
+    PHYSFS_close(file);
+    return true;
+}
+
+bool ResourceManager::writeFileStream(const std::string& fileName, std::iostream& in)
+{
+    const std::streampos oldPos = in.tellg();
+    in.seekg(0, std::ios::end);
+    const std::streampos size = in.tellg();
+    in.seekg(0, std::ios::beg);
+    std::vector<char> buffer(size);
+    in.read(&buffer[0], size);
+    const bool ret = writeFileBuffer(fileName, (const uint8_t*)&buffer[0], size);
+    in.seekg(oldPos, std::ios::beg);
+    return ret;
+}
+
+bool ResourceManager::writeFileContents(const std::string& fileName, const std::string& data)
+{
+    return writeFileBuffer(fileName, (const uint8_t*)data.c_str(), data.size());
+}
+
+FileStreamPtr ResourceManager::openFile(const std::string& fileName)
+{
+    const std::string fullPath = resolvePath(fileName);
+
+    PHYSFS_File* file = PHYSFS_openRead(fullPath.c_str());
+    if (!file)
+        throw Exception("unable to open file '{}': {}", fullPath, PHYSFS_getErrorByCode(PHYSFS_getLastErrorCode()));
+    return { std::make_shared<FileStream>(fullPath, file, false) };
+}
+
+FileStreamPtr ResourceManager::appendFile(const std::string& fileName) const
+{
+    PHYSFS_File* file = PHYSFS_openAppend(fileName.c_str());
+    if (!file)
+        throw Exception("failed to append file '{}': {}", fileName, PHYSFS_getErrorByCode(PHYSFS_getLastErrorCode()));
+    return { std::make_shared<FileStream>(fileName, file, true) };
+}
+
+FileStreamPtr ResourceManager::createFile(const std::string& fileName) const
+{
+    PHYSFS_File* file = PHYSFS_openWrite(fileName.c_str());
+    if (!file)
+        throw Exception("failed to create file '{}': {}", fileName, PHYSFS_getErrorByCode(PHYSFS_getLastErrorCode()));
+    return { std::make_shared<FileStream>(fileName, file, true) };
+}
+
+bool ResourceManager::deleteFile(const std::string& fileName)
+{
+    return PHYSFS_delete(resolvePath(fileName).c_str()) != 0;
+}
+
+bool ResourceManager::makeDir(const std::string& directory)
+{
+    return PHYSFS_mkdir(directory.c_str());
+}
+
+std::list<std::string> ResourceManager::listDirectoryFiles(const std::string& directoryPath, const bool fullPath /* = false */, const bool raw /*= false*/, const bool recursive)
+{
+    std::list<std::string> files;
+    const auto path = raw ? directoryPath : resolvePath(directoryPath);
+    const auto rc = PHYSFS_enumerateFiles(path.c_str());
+
+    if (!rc)
+        return files;
+
+    for (int i = 0; rc[i] != nullptr; i++) {
+        std::string fileOrDir = rc[i];
+        if (fullPath) {
+            if (path != "/")
+                fileOrDir = path + "/" + fileOrDir;
+            else
+                fileOrDir = path + fileOrDir;
+        }
+
+        if (recursive && directoryExists("/" + fileOrDir)) {
+            const auto& moreFiles = listDirectoryFiles(fileOrDir, fullPath, raw, recursive);
+            files.insert(files.end(), moreFiles.begin(), moreFiles.end());
+        } else {
+            files.push_back(fileOrDir);
+        }
+    }
+
+    PHYSFS_freeList(rc);
+    files.sort();
+    return files;
+}
+
+std::vector<std::string> ResourceManager::getDirectoryFiles(const std::string& path, const bool filenameOnly, const bool recursive)
+{
+    if (!std::filesystem::exists(path))
+        return {};
+
+    const std::filesystem::path p(path);
+    return discoverPath(p, filenameOnly, recursive);
+}
+
+std::vector<std::string> ResourceManager::discoverPath(const std::filesystem::path& path, const bool filenameOnly, const bool recursive)
+{
+    std::vector<std::string> files;
+
+    /* Before doing anything, we have to add this directory to search path,
+     * this is needed so it works correctly when one wants to open a file.  */
+    addSearchPath(path.generic_string(), true);
+    for (std::filesystem::directory_iterator it(path), end; it != end; ++it) {
+        if (std::filesystem::is_directory(it->path().generic_string()) && recursive) {
+            std::vector<std::string> subfiles = discoverPath(it->path(), filenameOnly, recursive);
+            files.insert(files.end(), subfiles.begin(), subfiles.end());
+        } else {
+            if (filenameOnly)
+                files.push_back(it->path().filename().string());
+            else
+                files.push_back(it->path().generic_string() + "/" + it->path().filename().string());
+        }
+    }
+
+    return files;
+}
+
+std::string ResourceManager::resolvePath(const std::string& path)
+{
+    std::string fullPath;
+    if (path.starts_with("/"))
+        fullPath = path;
+    else if (g_drawPool.isPreDrawing())
+        fullPath = "/" + path;
+    else {
+        if (const std::string scriptPath = "/" + g_lua.getCurrentSourcePath(); !scriptPath.empty())
+            fullPath += scriptPath + "/";
+        fullPath += path;
+    }
+
+    if (!(fullPath.starts_with("/")))
+        g_logger.traceWarning(fmt::format("the following file path is not fully resolved: {}", path));
+
+    stdext::replace_all(fullPath, "//", "/");
+    return fullPath;
+}
+
+std::string ResourceManager::getRealDir(const std::string& path)
+{
+    std::string dir;
+    if (const char* cdir = PHYSFS_getRealDir(resolvePath(path).c_str()))
+        dir = cdir;
+    return dir;
+}
+
+std::string ResourceManager::getRealPath(const std::string& path)
+{
+    return getRealDir(path) + "/" + path;
+}
+
+std::string ResourceManager::getBaseDir()
+{
+#ifdef ANDROID
+    return g_androidManager.getAppBaseDir();
+#else
+    return PHYSFS_getBaseDir();
+#endif
+}
+
+std::string ResourceManager::getUserDir()
+{
+#ifdef ANDROID
+    return getBaseDir() + "/";
+#elif defined(__EMSCRIPTEN__)
+    return "/user/";
+#else
+    static const char* orgName = g_app.getOrganizationName().data();
+    static const char* appName = g_app.getCompactName().data();
+
+    return PHYSFS_getPrefDir(orgName, appName);
+#endif
+}
+
+std::string ResourceManager::guessFilePath(const std::string& filename, const std::string& type)
+{
+    if (isFileType(filename, type))
+        return filename;
+    return filename + "." + type;
+}
+
+bool ResourceManager::isFileType(const std::string& filename, const std::string& type)
+{
+    if (filename.ends_with(std::string(".") + type))
+        return true;
+    return false;
+}
+
+std::string ResourceManager::getFileName(const std::string& filePath)
+{
+    return std::filesystem::path(filePath).filename().string();
+}
+
+ticks_t ResourceManager::getFileTime(const std::string& filename)
+{
+    return g_platform.getFileModificationTime(getRealPath(filename));
+}
+
+std::string ResourceManager::encrypt(const std::string& data, const std::string& password)
+{
+    const int len = data.length(),
+        plen = password.length();
+
+    std::ostringstream ss;
+    int j = 0;
+    for (int i = -1; ++i < len;) {
+        int ct = data[i];
+        if (i % 2) {
+            ct = ct - password[j] + i;
+        } else {
+            ct = ct + password[j] - i;
+        }
+        ss << static_cast<char>(ct);
+        ++j;
+
+        if (j >= plen)
+            j = 0;
+    }
+
+    return ss.str();
+}
+std::string ResourceManager::decrypt(const std::string& data)
+{
+    const auto& password = std::string(ENCRYPTION_PASSWORD);
+
+    const int len = data.length(),
+        plen = password.length();
+
+    std::ostringstream ss;
+    int j = 0;
+    for (int i = -1; ++i < len;) {
+        int ct = data[i];
+        if (i % 2) {
+            ct = ct + password[j] - i;
+        } else {
+            ct = ct - password[j] + i;
+        }
+        ss << static_cast<char>(ct);
+        ++j;
+
+        if (j >= plen)
+            j = 0;
+    }
+
+    return ss.str();
+}
+
+uint8_t* ResourceManager::decrypt(uint8_t* data, const int32_t size)
+{
+    const auto& password = std::string(ENCRYPTION_PASSWORD);
+    const int plen = password.length();
+
+    int j = 0;
+    for (int i = -1; ++i < size;) {
+        const int ct = data[i];
+        if (i % 2) {
+            data[i] = ct + password[j] - i;
+        } else {
+            data[i] = ct - password[j] + i;
+        }
+        ++j;
+
+        if (j >= plen)
+            j = 0;
+    }
+
+    return data;
+}
+
+void ResourceManager::runEncryption(const std::string& password)
+{
+    std::vector<std::string> excludedExtensions = { ".rar",".ogg",".xml",".dll",".exe", ".log",".otb" };
+    for (const auto& entry : std::filesystem::recursive_directory_iterator("./")) {
+        if (std::string ext = entry.path().extension().string();
+            std::ranges::find(excludedExtensions, ext) != excludedExtensions.end())
+            continue;
+
+        std::ifstream ifs(entry.path().string(), std::ios_base::binary);
+        std::string data((std::istreambuf_iterator(ifs)), std::istreambuf_iterator<char>());
+        ifs.close();
+        data = encrypt(data, password);
+        std::string finalData = std::string(ENCRYPTION_HEADER) + data;
+        save_string_into_file(finalData, entry.path().string());
+    }
+}
+
+void ResourceManager::save_string_into_file(const std::string& contents, const std::string& name)
+{
+    std::ofstream datFile;
+    datFile.open(name, std::ofstream::binary | std::ofstream::trunc | std::ofstream::out);
+    datFile.write(contents.c_str(), contents.size());
+    datFile.close();
+}
+
+std::string ResourceManager::fileChecksum(const std::string& path) {
+    static stdext::map<std::string, std::string> cache;
+
+    const auto it = cache.find(path);
+    if (it != cache.end())
+        return it->second;
+
+    PHYSFS_File* file = PHYSFS_openRead(path.c_str());
+    if (!file)
+        return "";
+
+    const int fileSize = PHYSFS_fileLength(file);
+    std::string buffer(fileSize, 0);
+    PHYSFS_readBytes(file, &buffer[0], fileSize);
+    PHYSFS_close(file);
+
+    auto checksum = g_crypt.crc32(buffer, false);
+    cache[path] = checksum;
+
+    return checksum;
+}
+
+std::string ResourceManager::fileSha256(const std::string& path)
+{
+    try {
+        return g_crypt.sha256(readFileContents(path));
+    } catch (const stdext::exception& e) {
+        g_logger.debug("Unable to read '{}' for SHA-256: {}", path, e.what());
+        return "";
+    }
+}
+
+std::string ResourceManager::fileSha256InWorkDir(const std::string& path)
+{
+    try {
+        return g_crypt.sha256(readFileContentsFromWorkDir(path));
+    } catch (const stdext::exception& e) {
+        g_logger.debug("Unable to read workdir file '{}' for SHA-256: {}", path, e.what());
+        return "";
+    }
+}
+
+bool ResourceManager::writeDownloadedFile(const std::string& path, std::string destinationPath, const bool decompressLzma)
+{
+    const auto downloadedFile = getDownloadedFile(path);
+    if (!downloadedFile) {
+        g_logger.error("Cannot find downloaded file '{}'", path);
+        return false;
+    }
+
+    std::string contents = downloadedFile->response;
+    if (decompressLzma) {
+        std::string decompressed;
+        if (!decompressLzmaData(contents, decompressed))
+            return false;
+        contents = std::move(decompressed);
+    }
+
+    destinationPath = normalizeVirtualPath(std::move(destinationPath));
+    return writeFileBuffer(
+        destinationPath,
+        reinterpret_cast<const uint8_t*>(contents.data()),
+        static_cast<uint32_t>(contents.size()),
+        true
+    );
+}
+
+bool ResourceManager::writeDownloadedFileToWorkDir(const std::string& path, std::string destinationPath, const bool decompressLzma)
+{
+    const auto oldWriteDir = getWriteDir();
+    if (!setWriteDir(getWorkDir()))
+        return false;
+
+    const bool ok = writeDownloadedFile(path, std::move(destinationPath), decompressLzma);
+    setWriteDir(oldWriteDir);
+    addSearchPath(getWorkDir(), true);
+    return ok;
+}
+
+bool ResourceManager::extractDownloadedArchive(const std::string& path, std::string destinationPath, const std::string& entryPrefix, const bool stripPrefix)
+{
+#ifndef FRAMEWORK_HAVE_LIBARCHIVE
+    const auto downloadedFile = getDownloadedFile(path);
+    if (!downloadedFile) {
+        g_logger.error("Cannot find downloaded archive '{}'", path);
+        return false;
+    }
+
+    const auto& archive = downloadedFile->response;
+    if (archive.empty()) {
+        g_logger.error("Downloaded archive '{}' is empty", path);
+        return false;
+    }
+
+    return extractDownloadedZipArchive(*this, path, archive, std::move(destinationPath), entryPrefix, stripPrefix);
+#else
+    const auto downloadedFile = getDownloadedFile(path);
+    if (!downloadedFile) {
+        g_logger.error("Cannot find downloaded archive '{}'", path);
+        return false;
+    }
+
+    const auto& archive = downloadedFile->response;
+    if (archive.empty()) {
+        g_logger.error("Downloaded archive '{}' is empty", path);
+        return false;
+    }
+
+    auto* archiveReader = archive_read_new();
+    if (!archiveReader) {
+        g_logger.error("Unable to initialize archive reader for '{}'", path);
+        return false;
+    }
+
+    archive_read_support_format_zip(archiveReader);
+    archive_read_support_format_rar(archiveReader);
+    archive_read_support_format_rar5(archiveReader);
+    archive_read_support_filter_all(archiveReader);
+
+    if (archive_read_open_memory(archiveReader, archive.data(), archive.size()) != ARCHIVE_OK) {
+        g_logger.error(
+            "Unable to open downloaded archive '{}': {}",
+            path,
+            archive_error_string(archiveReader)
+        );
+        archive_read_free(archiveReader);
+        return false;
+    }
+
+    destinationPath = normalizeVirtualPath(std::move(destinationPath));
+    if (!destinationPath.empty() && !destinationPath.ends_with('/'))
+        destinationPath.push_back('/');
+
+    bool wroteFile = false;
+    constexpr int readSize = 8192;
+    std::array<char, readSize> readBuffer = {};
+
+    archive_entry* entry = nullptr;
+    int archiveResult = ARCHIVE_OK;
+    while ((archiveResult = archive_read_next_header(archiveReader, &entry)) == ARCHIVE_OK) {
+        const char* entryPath = archive_entry_pathname_utf8(entry);
+        if (!entryPath)
+            entryPath = archive_entry_pathname(entry);
+
+        std::string entryName = entryPath ? entryPath : "";
+        const bool isDirectory = entryName.ends_with('/') || entryName.ends_with('\\');
+        const auto relativePath = selectArchiveEntryPath(entryName, entryPrefix, stripPrefix);
+
+        if (!isDirectory && !relativePath.empty()) {
+            std::string contents;
+            la_ssize_t readBytes = 0;
+            do {
+                readBytes = archive_read_data(archiveReader, readBuffer.data(), readBuffer.size());
+                if (readBytes < 0) {
+                    g_logger.error(
+                        "Unable to read archive entry '{}' from '{}': {}",
+                        entryName,
+                        path,
+                        archive_error_string(archiveReader)
+                    );
+                    archive_read_free(archiveReader);
+                    return false;
+                }
+                if (readBytes > 0)
+                    contents.append(readBuffer.data(), static_cast<size_t>(readBytes));
+            } while (readBytes > 0);
+
+            const auto destinationFile = destinationPath + relativePath;
+            if (!writeFileBuffer(
+                    destinationFile,
+                    reinterpret_cast<const uint8_t*>(contents.data()),
+                    static_cast<uint32_t>(contents.size()),
+                    true
+                )) {
+                archive_read_free(archiveReader);
+                return false;
+            }
+            wroteFile = true;
+        } else {
+            archive_read_data_skip(archiveReader);
+        }
+    }
+
+    if (archiveResult != ARCHIVE_EOF) {
+        g_logger.error(
+            "Unable to read archive '{}': {}",
+            path,
+            archive_error_string(archiveReader)
+        );
+        archive_read_free(archiveReader);
+        return false;
+    }
+
+    archive_read_free(archiveReader);
+    return wroteFile;
+#endif
+}
+
+bool ResourceManager::extractDownloadedArchiveToWorkDir(const std::string& path, std::string destinationPath, const std::string& entryPrefix, const bool stripPrefix)
+{
+    const auto oldWriteDir = getWriteDir();
+    if (!setWriteDir(getWorkDir()))
+        return false;
+
+    const bool ok = extractDownloadedArchive(path, std::move(destinationPath), entryPrefix, stripPrefix);
+    setWriteDir(oldWriteDir);
+    addSearchPath(getWorkDir(), true);
+    return ok;
+}
+
+bool ResourceManager::extractDownloadedZip(const std::string& path, std::string destinationPath, const std::string& entryPrefix, const bool stripPrefix)
+{
+    return extractDownloadedArchive(path, std::move(destinationPath), entryPrefix, stripPrefix);
+}
+
+bool ResourceManager::writeFileContentsToWorkDir(const std::string& fileName, const std::string& data)
+{
+    const auto oldWriteDir = getWriteDir();
+    if (!setWriteDir(getWorkDir()))
+        return false;
+
+    const bool ok = writeFileBuffer(fileName, reinterpret_cast<const uint8_t*>(data.c_str()), data.size(), true);
+    setWriteDir(oldWriteDir);
+    addSearchPath(getWorkDir(), true);
+    return ok;
+}
+
+std::unordered_map<std::string, std::string> ResourceManager::filesChecksums()
+{
+    std::unordered_map<std::string, std::string> ret;
+    auto files = listDirectoryFiles("/", true, false, true);
+    for (auto& filePath : std::ranges::reverse_view(files)) {
+        PHYSFS_File* file = PHYSFS_openRead(filePath.c_str());
+        if (!file)
+            continue;
+
+        const int fileSize = PHYSFS_fileLength(file);
+        std::string buffer(fileSize, 0);
+        PHYSFS_readBytes(file, &buffer[0], fileSize);
+        PHYSFS_close(file);
+
+        const auto checksum = g_crypt.crc32(buffer, false);
+        ret[filePath] = checksum;
+    }
+
+    return ret;
+}
+
+std::string ResourceManager::selfChecksum() {
+#ifdef ANDROID
+    return "";
+#else
+    static std::string checksum;
+    if (!checksum.empty())
+        return checksum;
+
+    std::ifstream file(m_binaryPath.string(), std::ios::binary);
+    if (!file.is_open())
+        return "";
+
+    std::string buffer(std::istreambuf_iterator<char>(file), {});
+    file.close();
+
+    checksum = g_crypt.crc32(buffer, false);
+    return checksum;
+#endif
+}
+
+void ResourceManager::updateFiles(const std::set<std::string>& files) {
+    g_logger.info("Updating client, {} files", files.size());
+
+    const auto& oldWriteDir = getWriteDir();
+    setWriteDir(getWorkDir());
+    for (auto fileName : files) {
+        if (fileName.empty())
+            continue;
+
+        if (fileName.size() > 1 && fileName[0] == '/')
+            fileName = fileName.substr(1);
+
+        auto dFile = g_http.getFile(fileName);
+
+        if (dFile) {
+            if (!writeFileBuffer(fileName, (const uint8_t*)dFile->response.data(), dFile->response.size(), true)) {
+                g_logger.error("Cannot write file: {}", fileName);
+            } else {
+                //g_logger.info("Updated file: {}", fileName);
+            }
+        } else {
+            g_logger.error("Cannot find file: {} in downloads", fileName);
+        }
+    }
+    setWriteDir(oldWriteDir);
+    addSearchPath(getWorkDir(), true);
+}
+
+void ResourceManager::updateExecutable(std::string fileName)
+{
+#if defined(ANDROID) || defined(FREE_VERSION)
+    g_logger.fatal("Executable cannot be updated on android or in free version");
+#else
+    if (fileName.size() <= 2) {
+        g_logger.fatal("Invalid executable name");
+    }
+
+    if (fileName[0] == '/')
+        fileName = fileName.substr(1);
+
+    const auto dFile = g_http.getFile(fileName);
+    if (!dFile)
+        g_logger.fatal("Cannot find executable: {} in downloads", fileName);
+
+    const auto& oldWriteDir = getWriteDir();
+    setWriteDir(getWorkDir());
+    const std::filesystem::path path(m_binaryPath);
+    const auto newBinary = path.stem().string() + "-" + std::to_string(time(nullptr)) + path.extension().string();
+    g_logger.info("Updating binary file: {}", newBinary);
+    PHYSFS_file* file = PHYSFS_openWrite(newBinary.c_str());
+    if (!file) {
+        return g_logger.fatal(
+            "Can't open {} for writing: {}",
+            newBinary,
+            PHYSFS_getErrorByCode(PHYSFS_getLastErrorCode())
+        );
+    }
+
+    PHYSFS_writeBytes(file, dFile->response.data(), dFile->response.size());
+    PHYSFS_close(file);
+    setWriteDir(oldWriteDir);
+
+#endif
+}
+
+bool ResourceManager::launchCorrect(const std::vector<std::string>& args) { // curently works only on windows
+#if (defined(ANDROID) || defined(FREE_VERSION))
+    return false;
+#else
+    const auto normalizeName = [](std::string name) {
+        const auto dash = name.find('-');
+        if (dash != std::string::npos) {
+            name = name.substr(0, dash);
+        }
+        stdext::tolower(name);
+        return name;
+    };
+
+    auto fileName2 = normalizeName(m_binaryPath.stem().string());
+
+    const std::filesystem::path path(m_binaryPath.parent_path());
+    std::error_code ec;
+    if (path.empty() || !std::filesystem::exists(path, ec) || ec) {
+        return false;
+    }
+
+    auto lastWrite = last_write_time(m_binaryPath, ec);
+    std::filesystem::path binary = m_binaryPath;
+    for (auto it = std::filesystem::directory_iterator(path, ec);
+         !ec && it != std::filesystem::directory_iterator();
+         ++it) {
+        const auto& entry = *it;
+        if (is_directory(entry.path()))
+            continue;
+
+        auto fileName1 = normalizeName(entry.path().stem().string());
+        if (fileName1 != fileName2)
+            continue;
+
+        if (entry.path().extension() == m_binaryPath.extension()) {
+            std::error_code _ec;
+            auto writeTime = last_write_time(entry.path(), _ec);
+            if (!_ec && writeTime > lastWrite) {
+                lastWrite = writeTime;
+                binary = entry.path();
+            }
+        }
+    }
+
+    if (ec) {
+        return false;
+    }
+
+    for (auto it = std::filesystem::directory_iterator(path, ec);
+         !ec && it != std::filesystem::directory_iterator();
+         ++it) { // remove old
+        const auto& entry = *it;
+        if (is_directory(entry.path()))
+            continue;
+
+        auto fileName1 = normalizeName(entry.path().stem().string());
+        if (fileName1 != fileName2)
+            continue;
+
+        if (entry.path().extension() == m_binaryPath.extension()) {
+            if (binary == entry.path())
+                continue;
+            std::error_code _ec;
+            std::filesystem::remove(entry.path(), _ec);
+        }
+    }
+
+    if (ec) {
+        return false;
+    }
+
+    if (binary == m_binaryPath)
+        return false;
+
+    g_platform.spawnProcess(binary.string(), args);
+    return true;
+#endif
+}
+
+std::string ResourceManager::createArchive(const std::unordered_map<std::string, std::string>& /*files*/) { return ""; }
+
+std::unordered_map<std::string, std::string> ResourceManager::decompressArchive(std::string /*dataOrPath*/)
+{
+    std::unordered_map<std::string, std::string> ret;
+    return ret;
+}

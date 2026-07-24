@@ -1,0 +1,8 @@
+# Normalize source code before commits
+.gitattributes text eol=lf
+*.lua eol=lf 
+*.md  text eol=lf
+*.txt eol=lf 
+*.ot* eol=lf 
+*.cpp eol=lf 
+*.h   eol=lf 

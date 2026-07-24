@@ -1,0 +1,21 @@
+Module
+  name: client_entergame
+  description: Manages enter game and character list windows
+  author: edubart
+  website: https://github.com/edubart/otclient
+
+  dependencies:
+    - client_assets
+    - game_features
+    - game_things
+
+  @onLoad: |
+    dofile 'entergame'
+    dofile 'characterlist'
+    dofile 'createAccount'
+    EnterGame.init()
+    CharacterList.init()
+
+  @onUnload: |
+    EnterGame.terminate()
+    CharacterList.terminate()

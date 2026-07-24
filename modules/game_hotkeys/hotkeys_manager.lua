@@ -1,0 +1,1036 @@
+HOTKEY_MANAGER_USE = nil
+HOTKEY_MANAGER_USEONSELF = 1
+HOTKEY_MANAGER_USEONTARGET = 2
+HOTKEY_MANAGER_USEWITH = 3
+HOTKEY_MANAGER_USEATCURSOR = 4
+
+HOTKEY_ACTION_TOGGLE_WASD = 1
+HOTKEY_ACTION_ATTACK_NEXT = 2
+HOTKEY_ACTION_ATTACK_PREV = 3
+HOTKEY_ACTION_TOGGLE_CHASE = 4
+
+HotkeyActions = {{
+    id = HOTKEY_ACTION_TOGGLE_WASD,
+    text = tr('Toggle WASD chat mode')
+}, {
+    id = HOTKEY_ACTION_ATTACK_NEXT,
+    text = tr('Attack next creature in battle list')
+}, {
+    id = HOTKEY_ACTION_ATTACK_PREV,
+    text = tr('Attack previous creature in battle list')
+}, {
+    id = HOTKEY_ACTION_TOGGLE_CHASE,
+    text = tr('Toggle chase mode')
+}}
+
+HotkeyColors = {
+    text = '#888888',
+    textAutoSend = '#FFFFFF',
+    itemUse = '#8888FF',
+    itemUseSelf = '#00FF00',
+    itemUseTarget = '#FF0000',
+    itemUseWith = '#F5B325',
+    action = '#F97ACD'
+}
+
+hotkeysManagerLoaded = false
+hotkeysWindow = nil
+
+currentHotkeyLabel = nil
+currentItemPreview = nil
+itemWidget = nil
+addHotkeyButton = nil
+removeHotkeyButton = nil
+hotkeyActionCombo = nil
+hotkeyText = nil
+hotKeyTextLabel = nil
+sendAutomatically = nil
+selectObjectButton = nil
+clearObjectButton = nil
+useOnSelf = nil
+useOnTarget = nil
+useWith = nil
+useAtCursor = nil
+defaultComboKeys = nil
+perServer = true
+perCharacter = true
+mouseGrabberWidget = nil
+useRadioGroup = nil
+currentHotkeys = nil
+boundCombosCallback = {}
+hotkeysList = {}
+local hotkeyBlockingSources = {}
+local nextSourceId = 1
+lastHotkeyTime = g_clock.millis()
+local hotkeysWindowButton = nil
+
+-- public functions
+function init()
+
+    Keybind.new("Windows", "Show/hide Hotkeys", "Ctrl+K", "")
+    Keybind.bind("Windows", "Show/hide Hotkeys", {
+      {
+        type = KEY_DOWN,
+        callback = toggle,
+      }
+    })
+    hotkeysWindow = g_ui.displayUI('hotkeys_manager')
+    hotkeysWindow:setVisible(false)
+    hotkeysWindowButton = modules.client_topmenu.addRightGameToggleButton('hotkeysWindowButton', tr('Hotkeys'), '/images/options/hotkeys', toggle)
+
+    currentHotkeys = hotkeysWindow:getChildById('currentHotkeys')
+    currentItemPreview = hotkeysWindow:getChildById('itemPreview')
+    addHotkeyButton = hotkeysWindow:getChildById('addHotkeyButton')
+    removeHotkeyButton = hotkeysWindow:getChildById('removeHotkeyButton')
+    hotkeyText = hotkeysWindow:getChildById('hotkeyText')
+    hotKeyTextLabel = hotkeysWindow:getChildById('hotKeyTextLabel')
+    sendAutomatically = hotkeysWindow:getChildById('sendAutomatically')
+    selectObjectButton = hotkeysWindow:getChildById('selectObjectButton')
+    clearObjectButton = hotkeysWindow:getChildById('clearObjectButton')
+    useOnSelf = hotkeysWindow:getChildById('useOnSelf')
+    useOnTarget = hotkeysWindow:getChildById('useOnTarget')
+    useWith = hotkeysWindow:getChildById('useWith')
+    useAtCursor = hotkeysWindow:getChildById('useAtCursor')
+
+    useRadioGroup = UIRadioGroup.create()
+    useRadioGroup:addWidget(useOnSelf)
+    useRadioGroup:addWidget(useOnTarget)
+    useRadioGroup:addWidget(useWith)
+    useRadioGroup:addWidget(useAtCursor)
+    useRadioGroup.onSelectionChange = function(self, selected)
+        onChangeUseType(selected)
+    end
+
+    hotkeyActionCombo = hotkeysWindow:getChildById('hotkeyActionCombo')
+
+    hotkeyActionCombo:addOption('None', 0)
+    for _, action in pairs(HotkeyActions) do
+        hotkeyActionCombo:addOption(action.text, action.id)
+    end
+
+    hotkeyActionCombo.onOptionChange = onActionChange
+
+    mouseGrabberWidget = g_ui.createWidget('UIWidget')
+    mouseGrabberWidget:setVisible(false)
+    mouseGrabberWidget:setFocusable(false)
+    mouseGrabberWidget.onMouseRelease = onChooseItemMouseRelease
+
+    currentHotkeys.onChildFocusChange = function(self, hotkeyLabel)
+        onSelectHotkeyLabel(hotkeyLabel)
+    end
+    g_keyboard.bindKeyPress('Down', function()
+        currentHotkeys:focusNextChild(KeyboardFocusReason)
+    end, hotkeysWindow)
+    g_keyboard.bindKeyPress('Up', function()
+        currentHotkeys:focusPreviousChild(KeyboardFocusReason)
+    end, hotkeysWindow)
+
+    connect(g_game, {
+        onGameStart = online,
+        onGameEnd = offline
+    })
+
+    load()
+end
+
+function terminate()
+    disconnect(g_game, {
+        onGameStart = online,
+        onGameEnd = offline
+    })
+
+    Keybind.delete("Windows", "Show/hide Hotkeys")
+
+    unload()
+
+    hotkeysWindow:destroy()
+
+    mouseGrabberWidget:destroy()
+    hotkeysWindow = nil
+
+    hotkeyActionCombo = nil
+    hotKeyTextLabel = nil
+    hotkeyText = nil
+    sendAutomatically = nil
+    selectObjectButton = nil
+    clearObjectButton = nil
+    mouseGrabberWidget = nil
+    addHotkeyButton = nil
+    removeHotkeyButton = nil
+    itemPreview = nil
+    useOnSelf = nil
+    useOnTarget = nil
+    useWith = nil
+    useAtCursor = nil
+    currentHotkeys = nil
+    hotkeysWindowButton = nil
+end
+
+function configure(savePerServer, savePerCharacter)
+    perServer = savePerServer
+    perCharacter = savePerCharacter
+    reload()
+end
+
+function online()
+    reload()
+    hide()
+end
+
+function offline()
+    unload()
+    hide()
+end
+
+function show()
+    if not g_game.isOnline() then
+        return
+    end
+    hotkeysWindow:show()
+    hotkeysWindow:raise()
+    hotkeysWindow:focus()
+    if hotkeysWindowButton then
+        hotkeysWindowButton:setOn(true)
+    end
+end
+
+function hide()
+    hotkeysWindow:hide()
+    if hotkeysWindowButton then
+        hotkeysWindowButton:setOn(false)
+    end
+end
+
+function toggle()
+    if not hotkeysWindow:isVisible() then
+        show()
+    else
+        hide()
+    end
+end
+
+function ok()
+    save()
+    hide()
+end
+
+function cancel()
+    reload()
+    hide()
+end
+
+function load(forceDefaults)
+    local serverHost = nil
+    hotkeysManagerLoaded = false
+
+    local hotkeySettings = g_settings.getNode('game_hotkeys')
+    local hotkeys = {}
+
+    if not table.empty(hotkeySettings) then
+        hotkeys = hotkeySettings
+    end
+    if perServer and not table.empty(hotkeys) then
+        if G.host ~= nil then
+            serverHost = string.gsub(G.host, "^https?://", "")
+            hotkeys = hotkeys[serverHost]
+        end
+    end
+    if perCharacter and not table.empty(hotkeys) then
+        hotkeys = hotkeys[g_game.getCharacterName()]
+    end
+
+    hotkeyList = {}
+    if not forceDefaults then
+        if not table.empty(hotkeys) then
+            for keyCombo, setting in pairs(hotkeys) do
+                keyCombo = tostring(keyCombo)
+                addKeyCombo(keyCombo, setting)
+                hotkeyList[keyCombo] = setting
+            end
+        end
+    end
+
+    if currentHotkeys:getChildCount() == 0 then
+        loadDefautComboKeys()
+    end
+
+    hotkeysManagerLoaded = true
+end
+
+function unload()
+    for keyCombo, callback in pairs(boundCombosCallback) do
+        g_keyboard.unbindKeyPress(keyCombo, callback)
+    end
+    boundCombosCallback = {}
+    currentHotkeys:destroyChildren()
+    currentHotkeyLabel = nil
+    updateHotkeyForm(true)
+    hotkeyList = {}
+end
+
+function reset()
+    unload()
+    load(true)
+end
+
+function reload()
+    unload()
+    load()
+end
+
+function save()
+    local serverHost = string.gsub(G.host, "^https?://", "")
+    local hotkeySettings = g_settings.getNode('game_hotkeys') or {}
+    local hotkeys = hotkeySettings
+
+    if perServer then
+        if not hotkeys[serverHost] then
+            hotkeys[serverHost] = {}
+        end
+        hotkeys = hotkeys[serverHost]
+    end
+
+    if perCharacter then
+        local char = g_game.getCharacterName()
+        if not hotkeys[char] then
+            hotkeys[char] = {}
+        end
+        hotkeys = hotkeys[char]
+    end
+
+    table.clear(hotkeys)
+
+    for _, child in pairs(currentHotkeys:getChildren()) do
+        hotkeys[child.keyCombo] = {
+            autoSend = child.autoSend,
+            itemId = child.itemId,
+            subType = child.subType,
+            useType = child.useType,
+            value = child.value,
+            action = child.action
+        }
+    end
+
+    hotkeyList = hotkeys
+    g_settings.setNode('game_hotkeys', hotkeySettings)
+    g_settings.save()
+end
+
+function loadDefautComboKeys()
+    if not defaultComboKeys then
+        for i = 1, 12 do
+            addKeyCombo('F' .. i)
+        end
+        for i = 1, 4 do
+            addKeyCombo('Shift+F' .. i)
+        end
+    else
+        for keyCombo, keySettings in pairs(defaultComboKeys) do
+            addKeyCombo(keyCombo, keySettings)
+        end
+    end
+end
+
+function setDefaultComboKeys(combo)
+    defaultComboKeys = combo
+end
+
+function onActionChange(comboBox, option)
+    local action = comboBox:getCurrentOption().data
+    if currentHotkeyLabel then
+        if action > 0 then
+            currentHotkeyLabel.action = action
+            currentHotkeyLabel.itemId = nil
+            currentHotkeyLabel.value = nil
+            currentHotkeyLabel.autoSend = nil
+        else
+            currentHotkeyLabel.action = nil
+        end
+        updateHotkeyLabel(currentHotkeyLabel)
+        updateHotkeyForm(true, true)
+    end
+end
+
+function onChooseItemMouseRelease(self, mousePosition, mouseButton)
+    local item = nil
+    if mouseButton == MouseLeftButton then
+        local clickedWidget = modules.game_interface.getRootPanel():recursiveGetChildByPos(mousePosition, false)
+        if clickedWidget then
+            if clickedWidget:getClassName() == 'UIGameMap' then
+                local tile = clickedWidget:getTile(mousePosition)
+                if tile then
+                    local thing = tile:getTopMoveThing()
+                    if thing and thing:isItem() then
+                        item = thing
+                    end
+                end
+            elseif clickedWidget:getClassName() == 'UIItem' and not clickedWidget:isVirtual() then
+                item = clickedWidget:getItem()
+            end
+        end
+    end
+
+    if item and currentHotkeyLabel then
+        currentHotkeyLabel.itemId = item:getId()
+        if item:isFluidContainer() then
+            currentHotkeyLabel.subType = item:getSubType()
+        end
+        if item:isMultiUse() then
+            currentHotkeyLabel.useType = HOTKEY_MANAGER_USEWITH
+        else
+            currentHotkeyLabel.useType = HOTKEY_MANAGER_USE
+        end
+        currentHotkeyLabel.value = nil
+        currentHotkeyLabel.autoSend = false
+        updateHotkeyLabel(currentHotkeyLabel)
+        updateHotkeyForm(true)
+    end
+
+    show()
+
+    -- Restore cursor
+    if modules.client_options and modules.client_options.getOption('nativeCursor') then
+        g_window.restoreMouseCursor()
+    else
+        g_mouse.popCursor('target')
+    end
+    self:ungrabMouse()
+    return true
+end
+
+function startChooseItem()
+    if g_ui.isMouseGrabbed() then
+        return
+    end
+    mouseGrabberWidget:grabMouse()
+    -- Use native cursor when enabled, otherwise use custom cursor
+    if modules.client_options and modules.client_options.getOption('nativeCursor') then
+        g_window.setSystemCursor('cross')
+    else
+        g_mouse.pushCursor('target')
+    end
+    hide()
+end
+
+function clearObject()
+    currentHotkeyLabel.itemId = nil
+    currentHotkeyLabel.subType = nil
+    currentHotkeyLabel.useType = nil
+    currentHotkeyLabel.autoSend = nil
+    currentHotkeyLabel.value = nil
+    currentHotkeyLabel.action = nil
+    updateHotkeyLabel(currentHotkeyLabel)
+    updateHotkeyForm(true)
+end
+
+function addHotkey()
+    local assignWindow = g_ui.createWidget('HotkeyAssignWindow', rootWidget)
+    assignWindow:grabKeyboard()
+
+    local comboLabel = assignWindow:getChildById('comboPreview')
+    comboLabel.keyCombo = ''
+    assignWindow.onKeyDown = hotkeyCapture
+end
+
+function addKeyCombo(keyCombo, keySettings, focus)
+    if keyCombo == nil or #keyCombo == 0 then
+        return
+    end
+    if not keyCombo then
+        return
+    end
+    if modules.game_actionbar and modules.game_actionbar.removeHotkeyFromActionBar then
+        modules.game_actionbar.removeHotkeyFromActionBar(keyCombo)
+    end
+    local hotkeyLabel = currentHotkeys:getChildById(keyCombo)
+    if not hotkeyLabel then
+        hotkeyLabel = g_ui.createWidget('HotkeyListLabel')
+        hotkeyLabel:setId(keyCombo)
+
+        local children = currentHotkeys:getChildren()
+        children[#children + 1] = hotkeyLabel
+        table.sort(children, function(a, b)
+            if a:getId():len() < b:getId():len() then
+                return true
+            elseif a:getId():len() == b:getId():len() then
+                return a:getId() < b:getId()
+            else
+                return false
+            end
+        end)
+        for i = 1, #children do
+            if children[i] == hotkeyLabel then
+                currentHotkeys:insertChild(i, hotkeyLabel)
+                break
+            end
+        end
+
+        if keySettings then
+            currentHotkeyLabel = hotkeyLabel
+            hotkeyLabel.keyCombo = keyCombo
+            hotkeyLabel.autoSend = toboolean(keySettings.autoSend)
+            hotkeyLabel.itemId = tonumber(keySettings.itemId)
+            hotkeyLabel.subType = tonumber(keySettings.subType)
+            hotkeyLabel.useType = tonumber(keySettings.useType)
+            hotkeyLabel.action = tonumber(keySettings.action)
+            if keySettings.value then
+                hotkeyLabel.value = tostring(keySettings.value)
+            end
+        else
+            hotkeyLabel.keyCombo = keyCombo
+            hotkeyLabel.autoSend = false
+            hotkeyLabel.itemId = nil
+            hotkeyLabel.subType = nil
+            hotkeyLabel.useType = nil
+            hotkeyLabel.action = nil
+            hotkeyLabel.value = ''
+        end
+
+        updateHotkeyLabel(hotkeyLabel)
+
+        boundCombosCallback[keyCombo] = function()
+            doKeyCombo(keyCombo)
+        end
+        g_keyboard.bindKeyPress(keyCombo, boundCombosCallback[keyCombo])
+    end
+
+    if focus then
+        currentHotkeys:focusChild(hotkeyLabel)
+        currentHotkeys:ensureChildVisible(hotkeyLabel)
+        updateHotkeyForm(true)
+    end
+end
+
+function doKeyCombo(keyCombo)
+    if not g_game.isOnline() then
+        return
+    end
+    if not canPerformKeyCombo(keyCombo) then
+        return
+    end
+    local hotKey = hotkeyList[keyCombo]
+    if not hotKey then
+        return
+    end
+
+    if g_clock.millis() - lastHotkeyTime < modules.client_options.getOption('hotkeyDelay') then
+        return
+    end
+    lastHotkeyTime = g_clock.millis()
+
+    if hotKey.action then
+        if hotKey.action == HOTKEY_ACTION_TOGGLE_WASD then
+            modules.game_console.toggleChat()
+        elseif hotKey.action == HOTKEY_ACTION_ATTACK_NEXT then
+            modules.game_battle.attackNext()
+        elseif hotKey.action == HOTKEY_ACTION_ATTACK_PREV then
+            modules.game_battle.attackNext(true)
+        elseif hotKey.action == HOTKEY_ACTION_TOGGLE_CHASE then
+            toggleChaseMode()
+        end
+
+    elseif hotKey.itemId == nil then
+        if not hotKey.value or #hotKey.value == 0 then
+            return
+        end
+        if hotKey.autoSend then
+            modules.game_console.sendMessage(hotKey.value)
+        else
+            scheduleEvent(function()
+                if not modules.game_console.isChatEnabled() then
+                    modules.game_console.switchChatOnCall()
+                end
+                modules.game_console.setTextEditText(hotKey.value)
+            end, 1)
+        end
+    else
+        executeHotkeyItem(hotKey.useType, hotKey.itemId, hotKey.subType)
+    end
+end
+
+function toggleChaseMode()
+    local currentMode = g_game.getChaseMode()
+    local nextMode = currentMode == ChaseOpponent and DontChase or ChaseOpponent
+    g_game.setChaseMode(nextMode)
+end
+
+function executeHotkeyItem(action, itemId, subType)
+    local function get_use_thing_under_cursor()
+        local mapPanel = modules.game_interface and modules.game_interface.getMapPanel and modules.game_interface.getMapPanel()
+        if not mapPanel then
+            return nil
+        end
+
+        local mousePosition = g_window.getMousePosition()
+        if not mapPanel:containsPoint(mousePosition) then
+            return nil
+        end
+
+        local mapPosition = mapPanel:getPosition(mousePosition)
+        if not mapPosition then
+            return nil
+        end
+
+        local localPlayer = g_game.getLocalPlayer()
+        if localPlayer and mapPosition.z ~= localPlayer:getPosition().z then
+            local dz = mapPosition.z - localPlayer:getPosition().z
+            mapPosition.x = mapPosition.x + dz
+            mapPosition.y = mapPosition.y + dz
+            mapPosition.z = localPlayer:getPosition().z
+        end
+
+        local tile = g_map.getTile(mapPosition)
+        if not tile then
+            return nil
+        end
+
+        local virtualItem = Item.create(itemId)
+        if virtualItem:isFluidContainer() or virtualItem:isMultiUse() then
+            return tile:getTopMultiUseThing()
+        end
+        return tile:getTopUseThing()
+    end
+
+    if action == HOTKEY_MANAGER_USE then
+        if g_game.getClientVersion() < 780 or subType then
+            local item = g_game.findPlayerItem(itemId, subType or -1)
+            if item then
+                g_game.use(item)
+            end
+        else
+            g_game.useInventoryItem(itemId)
+        end
+    elseif action == HOTKEY_MANAGER_USEONSELF then
+        if g_game.getClientVersion() < 780 or subType then
+            local item = g_game.findPlayerItem(itemId, subType or -1)
+            if item then
+                g_game.useWith(item, g_game.getLocalPlayer())
+            end
+        else
+            g_game.useInventoryItemWith(itemId, g_game.getLocalPlayer())
+        end
+    elseif action == HOTKEY_MANAGER_USEONTARGET then
+        local attackingCreature = g_game.getAttackingCreature()
+        if not attackingCreature then
+            local item = Item.create(itemId)
+            if g_game.getClientVersion() < 780 or subType then
+                local tmpItem = g_game.findPlayerItem(itemId, subType or -1)
+                if not tmpItem then
+                    return
+                end
+                item = tmpItem
+            end
+
+            modules.game_interface.startUseWith(item)
+            return
+        end
+
+        if not attackingCreature:getTile() then
+            return
+        end
+        if g_game.getClientVersion() < 780 or subType then
+            local item = g_game.findPlayerItem(itemId, subType or -1)
+            if item then
+                g_game.useWith(item, attackingCreature)
+            end
+        else
+            g_game.useInventoryItemWith(itemId, attackingCreature)
+        end
+    elseif action == HOTKEY_MANAGER_USEWITH then
+        local item = Item.create(itemId)
+        if g_game.getClientVersion() < 780 or subType then
+            local tmpItem = g_game.findPlayerItem(itemId, subType or -1)
+            if not tmpItem then
+                return true
+            end
+            item = tmpItem
+        end
+        modules.game_interface.startUseWith(item)
+    elseif action == HOTKEY_MANAGER_USEATCURSOR then
+        local useThing = get_use_thing_under_cursor()
+        if not useThing then
+            local item = Item.create(itemId)
+            if g_game.getClientVersion() < 780 or subType then
+                local tmpItem = g_game.findPlayerItem(itemId, subType or -1)
+                if not tmpItem then
+                    return
+                end
+                item = tmpItem
+            end
+            modules.game_interface.startUseWith(item)
+            return
+        end
+
+        if g_game.getClientVersion() < 780 or subType then
+            local item = g_game.findPlayerItem(itemId, subType or -1)
+            if item then
+                g_game.useWith(item, useThing)
+            end
+        else
+            g_game.useInventoryItemWith(itemId, useThing)
+        end
+    end
+end
+
+function updateHotkeyLabel(hotkeyLabel)
+    if not hotkeyLabel then
+        return
+    end
+    if hotkeyLabel.useType == HOTKEY_MANAGER_USEONSELF then
+        hotkeyLabel:setText(tr('%s: (use object on yourself)', hotkeyLabel.keyCombo))
+        hotkeyLabel:setColor(HotkeyColors.itemUseSelf)
+    elseif hotkeyLabel.useType == HOTKEY_MANAGER_USEONTARGET then
+        hotkeyLabel:setText(tr('%s: (use object on target)', hotkeyLabel.keyCombo))
+        hotkeyLabel:setColor(HotkeyColors.itemUseTarget)
+    elseif hotkeyLabel.useType == HOTKEY_MANAGER_USEWITH then
+        hotkeyLabel:setText(tr('%s: (use object with crosshair)', hotkeyLabel.keyCombo))
+        hotkeyLabel:setColor(HotkeyColors.itemUseWith)
+    elseif hotkeyLabel.useType == HOTKEY_MANAGER_USEATCURSOR then
+        hotkeyLabel:setText(tr('%s: (use object at cursor position)', hotkeyLabel.keyCombo))
+        hotkeyLabel:setColor(HotkeyColors.itemUseWith)
+    elseif hotkeyLabel.itemId ~= nil then
+        hotkeyLabel:setText(tr('%s: (use object)', hotkeyLabel.keyCombo))
+        hotkeyLabel:setColor(HotkeyColors.itemUse)
+    elseif hotkeyLabel.action then
+        for _, action in pairs(HotkeyActions) do
+            if action.id == hotkeyLabel.action then
+                hotkeyLabel:setText(tr('%s: ' .. action.text, hotkeyLabel.keyCombo))
+                break
+            end
+        end
+        hotkeyLabel:setColor(HotkeyColors.action)
+    else
+        local text = hotkeyLabel.keyCombo .. ': '
+        if hotkeyLabel.value then
+            text = text .. hotkeyLabel.value
+        end
+        hotkeyLabel:setText(text)
+        if hotkeyLabel.autoSend then
+            hotkeyLabel:setColor(HotkeyColors.autoSend)
+        else
+            hotkeyLabel:setColor(HotkeyColors.text)
+        end
+    end
+end
+
+function updateHotkeyForm(reset, dontUpdateCombo)
+    if currentHotkeyLabel then
+        removeHotkeyButton:enable()
+        if currentHotkeyLabel.itemId ~= nil then
+            if not dontUpdateCombo then
+                hotkeyActionCombo:setCurrentIndex(1)
+            end
+            hotkeyActionCombo:disable()
+            hotkeyText:clearText()
+            hotkeyText:disable()
+            hotKeyTextLabel:disable()
+            sendAutomatically:setChecked(false)
+            sendAutomatically:disable()
+            selectObjectButton:disable()
+            clearObjectButton:enable()
+            currentItemPreview:setItemId(currentHotkeyLabel.itemId)
+            if currentHotkeyLabel.subType then
+                currentItemPreview:setItemSubType(currentHotkeyLabel.subType)
+            end
+            if currentItemPreview:getItem():isMultiUse() then
+                useOnSelf:enable()
+                useOnTarget:enable()
+                useWith:enable()
+                useAtCursor:enable()
+                if currentHotkeyLabel.useType == HOTKEY_MANAGER_USEONSELF then
+                    useRadioGroup:selectWidget(useOnSelf)
+                elseif currentHotkeyLabel.useType == HOTKEY_MANAGER_USEONTARGET then
+                    useRadioGroup:selectWidget(useOnTarget)
+                elseif currentHotkeyLabel.useType == HOTKEY_MANAGER_USEWITH then
+                    useRadioGroup:selectWidget(useWith)
+                elseif currentHotkeyLabel.useType == HOTKEY_MANAGER_USEATCURSOR then
+                    useRadioGroup:selectWidget(useAtCursor)
+                end
+            else
+                useOnSelf:disable()
+                useOnTarget:disable()
+                useWith:disable()
+                useAtCursor:disable()
+                useRadioGroup:clearSelected()
+            end
+        elseif currentHotkeyLabel.action then
+            if not dontUpdateCombo then
+                hotkeyActionCombo:setCurrentOptionByData(currentHotkeyLabel.action)
+            end
+            hotkeyActionCombo:enable()
+            hotkeyText:clearText()
+            hotkeyText:disable()
+            hotKeyTextLabel:disable()
+            sendAutomatically:setChecked(false)
+            sendAutomatically:disable()
+            selectObjectButton:disable()
+            useOnSelf:disable()
+            useOnTarget:disable()
+            useWith:disable()
+            useAtCursor:disable()
+            useRadioGroup:clearSelected()
+            selectObjectButton:disable()
+            clearObjectButton:disable()
+        else
+            if not dontUpdateCombo then
+                hotkeyActionCombo:setCurrentIndex(1)
+            end
+            hotkeyActionCombo:enable()
+            useOnSelf:disable()
+            useOnTarget:disable()
+            useWith:disable()
+            useAtCursor:disable()
+            useRadioGroup:clearSelected()
+            hotkeyText:enable()
+            hotkeyText:focus()
+            hotKeyTextLabel:enable()
+            hotkeyText:setText(currentHotkeyLabel.value)
+            if reset then
+                hotkeyText:setCursorPos(-1)
+            end
+            sendAutomatically:setChecked(currentHotkeyLabel.autoSend)
+            sendAutomatically:setEnabled(currentHotkeyLabel.value and #currentHotkeyLabel.value > 0)
+            selectObjectButton:enable()
+            clearObjectButton:disable()
+            currentItemPreview:clearItem()
+        end
+    else
+        if not dontUpdateCombo then
+            hotkeyActionCombo:setCurrentIndex(1)
+        end
+        hotkeyActionCombo:disable()
+        removeHotkeyButton:disable()
+        hotkeyText:disable()
+        sendAutomatically:disable()
+        selectObjectButton:disable()
+        clearObjectButton:disable()
+        useOnSelf:disable()
+        useOnTarget:disable()
+        useWith:disable()
+        useAtCursor:disable()
+        hotkeyText:clearText()
+        useRadioGroup:clearSelected()
+        sendAutomatically:setChecked(false)
+        currentItemPreview:clearItem()
+    end
+end
+
+function removeHotkey()
+    if currentHotkeyLabel == nil then
+        return
+    end
+    g_keyboard.unbindKeyPress(currentHotkeyLabel.keyCombo, boundCombosCallback[currentHotkeyLabel.keyCombo])
+    boundCombosCallback[currentHotkeyLabel.keyCombo] = nil
+    currentHotkeyLabel:destroy()
+    currentHotkeyLabel = nil
+end
+
+function onHotkeyTextChange(value)
+    if not hotkeysManagerLoaded then
+        return
+    end
+    if currentHotkeyLabel == nil then
+        return
+    end
+    currentHotkeyLabel.value = value
+    if value == '' then
+        currentHotkeyLabel.autoSend = false
+    end
+    updateHotkeyLabel(currentHotkeyLabel)
+    updateHotkeyForm(false, true)
+end
+
+function onSendAutomaticallyChange(autoSend)
+    if not hotkeysManagerLoaded then
+        return
+    end
+    if currentHotkeyLabel == nil then
+        return
+    end
+    if not currentHotkeyLabel.value or #currentHotkeyLabel.value == 0 then
+        return
+    end
+    currentHotkeyLabel.autoSend = autoSend
+    updateHotkeyLabel(currentHotkeyLabel)
+    updateHotkeyForm(false, true)
+end
+
+function onChangeUseType(useTypeWidget)
+    if not hotkeysManagerLoaded then
+        return
+    end
+    if currentHotkeyLabel == nil then
+        return
+    end
+    if useTypeWidget == useOnSelf then
+        currentHotkeyLabel.useType = HOTKEY_MANAGER_USEONSELF
+    elseif useTypeWidget == useOnTarget then
+        currentHotkeyLabel.useType = HOTKEY_MANAGER_USEONTARGET
+    elseif useTypeWidget == useWith then
+        currentHotkeyLabel.useType = HOTKEY_MANAGER_USEWITH
+    elseif useTypeWidget == useAtCursor then
+        currentHotkeyLabel.useType = HOTKEY_MANAGER_USEATCURSOR
+    else
+        currentHotkeyLabel.useType = HOTKEY_MANAGER_USE
+    end
+    updateHotkeyLabel(currentHotkeyLabel)
+    updateHotkeyForm()
+end
+
+function onSelectHotkeyLabel(hotkeyLabel)
+    currentHotkeyLabel = hotkeyLabel
+    updateHotkeyForm(true)
+end
+
+function hotkeyCapture(assignWindow, keyCode, keyboardModifiers)
+    local keyCombo = determineKeyComboDesc(keyCode, keyboardModifiers)
+    local comboPreview = assignWindow:getChildById('comboPreview')
+    comboPreview:setText(tr('Current hotkey to add: %s', keyCombo))
+    comboPreview.keyCombo = keyCombo
+    comboPreview:resizeToText()
+    assignWindow:getChildById('addButton'):enable()
+    return true
+end
+
+function hotkeyCaptureOk(assignWindow, keyCombo)
+    addKeyCombo(keyCombo, nil, true)
+    assignWindow:destroy()
+end
+
+function enableHotkeys(sourceId)
+    if sourceId then
+        hotkeyBlockingSources[sourceId] = nil
+    end
+end
+
+function disableHotkeys(sourceIdentifier)
+    local sourceId = sourceIdentifier or ("auto_" .. nextSourceId)
+    nextSourceId = nextSourceId + 1
+    hotkeyBlockingSources[sourceId] = true
+    return sourceId
+end
+
+local function getCallerModule()
+    local info = debug.getinfo(3, "S")
+    if info and info.source then
+        local source = info.source:gsub("@", "")
+        local moduleName = source:match("/modules/([^/]+)/") or 
+                          source:match("\\modules\\([^\\]+)\\") or
+                          source:match("([^/\\]+)%.lua$") or
+                          "unknown"
+        return moduleName:gsub("_", "")
+    end
+    return "unknown"
+end
+
+function createHotkeyBlock(sourceIdentifier)
+    local callerModule = getCallerModule()
+    local fullId = sourceIdentifier and 
+        (sourceIdentifier .. "_" .. callerModule) or 
+        ("auto_" .. callerModule .. "_" .. nextSourceId)
+    local blockId = disableHotkeys(fullId)
+    return {
+        release = function()
+            enableHotkeys(blockId)
+        end,
+        getId = function()
+            return fullId
+        end
+    }
+end
+
+function areHotkeysDisabled()
+    for _ in pairs(hotkeyBlockingSources) do
+        return true
+    end
+    return false
+end
+
+function clearAllHotkeyBlocks()
+    hotkeyBlockingSources = {}
+end
+function getHotkeyBlockingInfo()
+    local count = 0
+    local sources = {}
+    for sourceId in pairs(hotkeyBlockingSources) do
+        count = count + 1
+        table.insert(sources, sourceId)
+    end
+    table.sort(sources)
+    return count, sources
+end
+
+function printHotkeyBlockingInfo()
+    local count, sources = getHotkeyBlockingInfo()
+    print("=== Hotkey Blocking Info ===")
+    print("Total blocks: " .. count)
+    if count > 0 then
+        print("Active sources:")
+        for i, source in ipairs(sources) do
+            print("  " .. i .. ". " .. source)
+        end
+    else
+        print("No active blocks")
+    end
+    print("===========================")
+end
+
+-- Even if hotkeys are enabled, only the hotkeys containing Ctrl or Alt or F1-F12 will be enabled when
+-- chat is opened (no WASD mode). This is made to prevent executing hotkeys while typing...
+function canPerformKeyCombo(keyCombo)
+    if areHotkeysDisabled() then
+        return false
+    end
+    if not modules.game_console.isChatEnabled() then
+        return true
+    end
+    local platformType = g_window.getPlatformType() or ""
+    local isMacOS = platformType:find("MACOS") ~= nil
+    if isMacOS then
+        return  string.match(keyCombo, "Cmd%+") or
+                string.match(keyCombo, "Ctrl%+") or
+                string.match(keyCombo, "Alt%+") or
+                string.match(keyCombo, "Option%+") or
+                string.match(keyCombo, "F%d+")
+    end
+    return  string.match(keyCombo, "Ctrl%+") or
+            string.match(keyCombo, "Alt%+") or
+            string.match(keyCombo, "F%d+")
+end
+
+-- Actionbar
+function removeHotkeyByCombo(keyCombo)
+    if not keyCombo or keyCombo == "" then
+        return false
+    end
+    local hotkeyLabel = currentHotkeys and currentHotkeys:getChildById(keyCombo)
+    if hotkeyLabel then
+        if boundCombosCallback[keyCombo] then
+            g_keyboard.unbindKeyPress(keyCombo, boundCombosCallback[keyCombo])
+            boundCombosCallback[keyCombo] = nil
+        end
+        if currentHotkeyLabel == hotkeyLabel then
+            currentHotkeyLabel = nil
+        end
+        hotkeyLabel:destroy()
+        updateHotkeyForm(true)
+        return true
+    end
+    return false
+end
+
+function isHotkeyUsedByManager(keyCombo)
+    if not keyCombo or keyCombo == "" then
+        return false
+    end
+    if boundCombosCallback[keyCombo] then
+        return true
+    end
+    if currentHotkeys then
+        local hotkeyLabel = currentHotkeys:getChildById(keyCombo)
+        if hotkeyLabel then
+            return true
+        end
+    end
+    return false
+end
