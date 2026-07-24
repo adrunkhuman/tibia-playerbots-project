@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Merikh the Slaughterer" nameDescription="Merikh the Slaughterer" race="blood" experience="1500" speed="235">
+	<health now="2000" max="2000" />
+	<look type="103" corpse="6032" />
+	<targetchange interval="2000" chance="5" />
+	<flags>
+		<flag summonable="1" />
+		<flag illusionable="0" />
+		<flag convinceable="1" />
+		<flag isboss="1" />
+		<flag pushable="0" />
+		<flag canpushitems="0" />
+		<flag canpushcreatures="0" />
+		<flag targetdistance="1" />
+		<flag canwalkonenergy="0" />
+		<flag canwalkonfire="0" />
+		<flag canwalkonpoison="0" />
+		<flag staticattack="90" />
+		<flag runonhealth="0" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-305" />
+		<attack name="fire" interval="2000" chance="15" range="7" radius="5" min="-110" max="-230">
+			<attribute key="shootEffect" value="fire" />
+			<attribute key="areaEffect" value="fire" />
+		</attack>
+		<attack name="energy" interval="2000" chance="10" target="0" radius="3" min="-84" max="-220">
+			<attribute key="areaEffect" value="energy" />
+		</attack>
+		<attack name="physical" interval="2000" chance="15" range="7" min="-65" max="-120">
+			<attribute key="shootEffect" value="death" />
+			<attribute key="areaEffect" value="mortarea" />
+		</attack>
+		<attack name="djinn electrify" interval="2000" range="5" chance="15" />
+	</attacks>
+	<defenses armor="30" defense="30">
+		<defense name="healing" interval="2000" chance="15" min="50" max="100">
+			<attribute key="areaEffect" value="blueshimmer" />
+		</defense>
+	</defenses>
+	<elements>
+		<element firePercent="1" />
+		<element icePercent="-1" />
+		<element holyPercent="-1" />
+		<element deathPercent="1" />
+	</elements>
+	<summons maxSummons="2">
+		<summon name="green djinn" interval="2000" chance="10" />
+	</summons>
+	<immunities>
+		<immunity paralyze="1" />
+		<immunity invisible="1" />
+		<immunity drunk="1" />
+	</immunities>
+	<voices interval="1000" chance="5">
+		<voice sentence="Your death will be slow and painful." yell="0" />
+	</voices>
+	<loot>
+		<item name="Green Piece of Cloth" countmax="4" chance="100000" />
+		<item name="Jewelled Belt" chance="100000" />
+		<item name="Gold Coin" countmax="100" chance="97220" />
+		<item name="Gold Coin" countmax="21" chance="97220" />
+		<item name="Noble Turban" chance="63890" />
+		<item name="Shiny Stone" chance="58330" />
+		<item name="Royal Spear" countmax="3" chance="55560" />
+		<item name="Heavy Machete" chance="41670" />
+		<item name="Strong Mana Potion" countmax="3" chance="41670" />
+		<item name="Mystic Turban" chance="36110" />
+		<item name="Magma Monocle" chance="8330" />
+		<item name="Green Gem" chance="2780" />
+		<item name="Small Emerald" countmax="2" chance="2780" />
+	</loot>
+</monster>

@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Fury of the Emperor" nameDescription="Fury of the Emperor" race="undead" experience="26600" speed="450">
+	<health now="51000" max="51000" />
+	<look type="351" corpse="0" />
+	<targetchange interval="5000" chance="8" />
+	<flags>
+		<flag summonable="0" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="0" />
+		<flag convinceable="0" />
+		<flag pushable="0" />
+		<flag canpushitems="1" />
+		<flag canpushcreatures="1" />
+		<flag targetdistance="1" />
+		<flag staticattack="90" />
+		<flag runonhealth="0" />
+		<flag isboss="1" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-600" />
+		<attack name="energy" interval="3000" chance="17" length="8" spread="3" min="0" max="-700">
+			<attribute key="areaEffect" value="energy" />
+		</attack>
+		<attack name="physical" interval="3000" chance="10" length="8" spread="0" min="-100" max="-700">
+			<attribute key="areaEffect" value="fire" />
+		</attack>
+		<attack name="manadrain" interval="2000" chance="21" radius="6" target="0" min="0" max="-350">
+			<attribute key="areaEffect" value="poff" />
+		</attack>
+	</attacks>
+	<defenses armor="65" defense="55" />
+	<elements>
+		<element physicalPercent="-10" />
+		<element deathPercent="100" />
+		<element holyPercent="-15" />
+		<element firePercent="10" />
+		<element energyPercent="-10" />
+		<element earthPercent="100" />
+	</elements>
+	<immunities>
+		<immunity invisible="0" />
+		<immunity paralyze="1" />
+		<immunity death="1" />
+		<immunity earth="1" />
+	</immunities>
+	<summons maxSummons="2">
+		<summon name="Draken Warmaster" interval="2000" chance="10" max="2" />
+	</summons>
+</monster>

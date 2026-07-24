@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Goblin Scavenger" nameDescription="a goblin scavenger" race="blood" experience="37" speed="132" manacost="310">
+	<health now="60" max="60" />
+	<look type="297" corpse="6002" />
+	<targetchange interval="4000" chance="10" />
+	<flags>
+		<flag summonable="0" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="1" />
+		<flag convinceable="1" />
+		<flag pushable="1" />
+		<flag canpushitems="0" />
+		<flag canpushcreatures="0" />
+		<flag targetdistance="1" />
+		<flag staticattack="90" />
+		<flag runonhealth="15" />
+		<flag canwalkonenergy="0" />
+		<flag canwalkonfire="0" />
+		<flag canwalkonpoison="0" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-15" />
+		<attack name="physical" interval="2000" chance="10" range="7" min="0" max="-30">
+			<attribute key="shootEffect" value="spear" />
+		</attack>
+		<attack name="lifedrain" interval="2000" chance="5" range="7" min="-22" max="-30">
+			<attribute key="areaEffect" value="redshimmer" />
+		</attack>
+		<attack name="death" interval="2000" chance="5" range="7" min="-1" max="-30">
+			<attribute key="shootEffect" value="suddendeath" />
+			<attribute key="areaEffect" value="mortarea" />
+			<attribute key="areaEffect" value="smallclouds" />
+		</attack>
+	</attacks>
+	<defenses armor="7" defense="7">
+		<defense name="healing" interval="2000" chance="15" min="10" max="16">
+			<attribute key="areaEffect" value="energy" />
+		</defense>
+		<defense name="speed" interval="2000" chance="15" speedchange="160" duration="3000">
+			<attribute key="areaEffect" value="redshimmer" />
+		</defense>
+	</defenses>
+	<elements>
+		<element deathPercent="-10" />
+		<element holyPercent="20" />
+		<element energyPercent="20" />
+		<element earthPercent="-10" />
+	</elements>
+	<voices interval="1000" chance="5">
+		<voice sentence="Gimme gimme!" yell="0" />
+		<voice sentence="All mine!" yell="0" />
+		<voice sentence="Uhh!" yell="0" />
+		<voice sentence="You mean!" yell="0" />
+		<voice sentence="Shiny, shiny!" yell="0" />
+	</voices>
+	<loot>
+		<item name="Gold Coin" countmax="9" chance="50080" />
+		<item name="Small Stone" countmax="2" chance="24950" />
+		<item name="Dagger" chance="18170" />
+		<item name="Fish" chance="12960" />
+		<item name="Bone" chance="12670" />
+		<item name="Leather Helmet" chance="9960" />
+		<item name="Small Axe" chance="9440" />
+		<item name="Short Sword" chance="8980" />
+		<item name="Leather Armor" chance="7670" />
+		<item name="Mouldy Cheese" chance="6970" />
+		<item name="Bone Club" chance="5010" />
+	</loot>
+</monster>

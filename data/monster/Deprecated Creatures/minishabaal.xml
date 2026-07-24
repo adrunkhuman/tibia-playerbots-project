@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Minishabaal" nameDescription="Minishabaal" race="blood" experience="4000" speed="700">
+	<health now="6000" max="6000" />
+	<look type="237" corpse="6364" />
+	<targetchange interval="5000" chance="8" />
+	<flags>
+		<flag summonable="0" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="0" />
+		<flag convinceable="0" />
+		<flag pushable="0" />
+		<flag canpushitems="1" />
+		<flag canpushcreatures="1" />
+		<flag targetdistance="4" />
+		<flag staticattack="90" />
+		<flag runonhealth="3599" />
+		<flag isboss="1" />
+	</flags>
+	<attacks>
+		<attack name="fire" interval="2000" chance="10" range="7" radius="5" target="1" min="-200" max="-250">
+			<attribute key="shootEffect" value="fire" />
+			<attribute key="areaEffect" value="bluefirework" />
+		</attack>
+		<attack name="fire" interval="3000" chance="34" range="7" radius="5" target="1" min="-180" max="-250">
+			<attribute key="shootEffect" value="fire" />
+			<attribute key="areaEffect" value="redfirework" />
+		</attack>
+		<attack name="speed" interval="1000" range="7" target="1" chance="12" speedchange="-800" duration="4000">
+			<attribute key="areaEffect" value="redshimmer" />
+		</attack>
+		<attack name="physical" interval="3000" chance="34" range="7" radius="5" target="0" min="0" max="0">
+			<attribute key="areaEffect" value="teleport" />
+		</attack>
+		<attack name="outfit" interval="10000" chance="15" range="7" target="1" monster="chicken" duration="500">
+			<attribute key="shootEffect" value="energy" />
+			<attribute key="areaEffect" value="energy" />
+		</attack>
+	</attacks>
+	<defenses armor="29" defense="29">
+		<defense name="healing" interval="1000" chance="50" min="155" max="255">
+			<attribute key="areaEffect" value="blueshimmer" />
+		</defense>
+		<defense name="speed" interval="1000" chance="12" speedchange="800" duration="4000">
+			<attribute key="areaEffect" value="redshimmer" />
+		</defense>
+		<defense name="invisible" interval="4000" chance="50" duration="4000">
+			<attribute key="areaEffect" value="redshimmer" />
+		</defense>
+	</defenses>
+	<immunities>
+		<immunity invisible="1" />
+		<immunity paralyze="1" />
+	</immunities>
+	<summons maxSummons="3">
+		<summon name="Diabolic Imp" interval="2000" chance="40" />
+	</summons>
+	<voices interval="5000" chance="10">
+		<voice sentence="WHERE'S FLUFFY?" yell="1" />
+		<voice sentence="Naaa-Nana-Naaa-Naaa!" yell="0" />
+		<voice sentence="COME HERE FLUFFY" yell="1" />
+		<voice sentence="My brother will come and get you for this!" yell="0" />
+		<voice sentence="Get them Fluffy!" yell="0" />
+		<voice sentence="Muahaha!" yell="0" />
+		<voice sentence="Pftt, Ferumbras such an upstart." yell="0" />
+		<voice sentence="He He He" yell="0" />
+		<voice sentence="My other dragon is a red one." yell="0" />
+		<voice sentence="My dragon is not that old, it's just second hand." yell="0" />
+		<voice sentence="When I am big I want to become the ruthless eighth." yell="0" />
+		<voice sentence="I had Princess Lumelia as breakfast" yell="0" />
+	</voices>
+	<loot>
+		<item name="Gold Coin" countmax="100" chance="100000" />
+		<item name="Gold Coin" countmax="50" chance="100000" />
+		<item name="Pitchfork" chance="28570" />
+		<item name="Fire Axe" chance="61660" />
+		<item name="Soul Orb" chance="909" />
+		<item name="Demonic Essence" chance="10000" />
+		<item name="Small Amethyst" chance="85000" />
+		<item name="Surprise Bag (Red)" countmax="5" chance="87500" />
+		<item name="Crown Legs" chance="55280" />
+		<item name="Demon Shield" chance="71500" />
+		<item name="Guardian Shield" chance="81000" />
+		<item name="Demonbone Amulet" chance="9909" />
+		<item name="Golden Legs" chance="8180" />
+		<item name="Tempest Shield" chance="1100" />
+		<item name="Demon Helmet" chance="900" />
+		<item name="Death Ring" chance="900" />
+	</loot>
+</monster>

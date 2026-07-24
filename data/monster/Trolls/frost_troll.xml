@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Frost Troll" nameDescription="a frost troll" race="blood" experience="23" speed="140" manacost="300">
+	<health now="55" max="55" />
+	<look type="53" corpse="5998" />
+	<targetchange interval="4000" chance="0" />
+	<flags>
+		<flag summonable="1" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="1" />
+		<flag convinceable="1" />
+		<flag pushable="1" />
+		<flag canpushitems="0" />
+		<flag canpushcreatures="0" />
+		<flag targetdistance="1" />
+		<flag staticattack="90" />
+		<flag runonhealth="10" />
+		<flag canwalkonenergy="0" />
+		<flag canwalkonfire="0" />
+		<flag canwalkonpoison="0" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-20" />
+	</attacks>
+	<defenses armor="6" defense="6" />
+	<elements>
+		<element deathPercent="-10" />
+		<element holyPercent="10" />
+		<element firePercent="40" />
+		<element energyPercent="-15" />
+		<element earthPercent="-10" />
+	</elements>
+	<voices interval="5000" chance="10">
+		<voice sentence="Brrr" yell="0" />
+		<voice sentence="Broar!" yell="0" />
+	</voices>
+	<loot>
+		<item name="Gold Coin" countmax="12" chance="50350" />
+		<item name="Spear" chance="20290" />
+		<item name="Fish" chance="18200" />
+		<item name="Rapier" chance="15550" />
+		<item name="Wooden Shield" chance="15540" />
+		<item name="Twigs" chance="8170" />
+		<item name="Frosty Ear of a Troll" chance="2010" />
+		<item name="Coat" chance="1120" />
+	</loot>
+</monster>

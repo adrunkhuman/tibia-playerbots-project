@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Vampire Bride" nameDescription="a vampire bride" race="blood" experience="1050" speed="230">
+	<health now="1200" max="1200" />
+	<look type="312" corpse="9658" />
+	<targetchange interval="4000" chance="10" />
+	<flags>
+		<flag summonable="0" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="0" />
+		<flag convinceable="0" />
+		<flag pushable="0" />
+		<flag canpushitems="1" />
+		<flag canpushcreatures="1" />
+		<flag targetdistance="1" />
+		<flag staticattack="80" />
+		<flag runonhealth="0" />
+		<flag canwalkonenergy="0" />
+		<flag canwalkonfire="0" />
+		<flag canwalkonpoison="1" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-190" />
+		<attack name="lifedrain" interval="3000" chance="15" target="1" range="1" min="-60" max="-130">
+			<attribute key="areaEffect" value="redshimmer" />
+		</attack>
+		<attack name="death" interval="2000" chance="10" target="1" range="7" min="-60" max="-150">
+			<attribute key="shootEffect" value="suddendeath" />
+			<attribute key="areaEffect" value="mortarea" />
+		</attack>
+		<attack name="death" interval="4000" chance="5" target="1" range="7" min="-60" max="-150">
+			<attribute key="shootEffect" value="suddendeath" />
+			<attribute key="areaEffect" value="hearts" />
+		</attack>
+		<attack name="energy" interval="2000" chance="15" target="1" range="7" min="-60" max="-150">
+			<attribute key="shootEffect" value="energy" />
+		</attack>
+	</attacks>
+	<defenses armor="20" defense="20">
+		<defense name="healing" interval="2000" chance="15" min="40" max="80">
+			<attribute key="areaEffect" value="blueshimmer" />
+		</defense>
+	</defenses>
+	<elements>
+		<element holyPercent="-10" />
+		<element icePercent="20" />
+		<element firePercent="-10" />
+		<element energyPercent="10" />
+		<element earthPercent="20" />
+	</elements>
+	<immunities>
+		<immunity death="1" />
+		<immunity invisible="1" />
+		<immunity paralyze="0" />
+	</immunities>
+	<voices interval="5000" chance="10">
+		<voice sentence="You won't regret you came to me, sweetheart." yell="0" />
+		<voice sentence="Come, let me kiss you, darling. Oh wait, I meant kill." yell="0" />
+		<voice sentence="Are you suffering nicely enough?" yell="0" />
+		<voice sentence="Dead is the new alive." yell="0" />
+		<voice sentence="Kneel before your Mistress!" yell="0" />
+		<voice sentence="Enjoy the pain - I know you love it." yell="0" />
+	</voices>
+	<loot>
+		<item name="Gold Coin" countmax="100" chance="93630" />
+		<item name="Gold Coin" countmax="49" chance="93630" />
+		<item name="Strong Mana Potion" chance="10300" />
+		<item name="Vampire Teeth" chance="10010" />
+		<item name="Platinum Coin" chance="9980" />
+		<item name="Moonlight Rod" chance="5210" />
+		<item name="Blood Preservation" chance="5030" />
+		<item name="Strong Health Potion" chance="4820" />
+		<item name="Emerald Bangle" chance="1050" />
+		<item name="Rusted Armor" chance="1040" />
+		<item name="Small Diamond" countmax="2" chance="1040" />
+		<item name="Velvet Tapestry" chance="1010" />
+		<item name="Hibiscus Dress" chance="1000" />
+		<item name="Boots of Haste" chance="220" />
+		<item name="Flower Bouquet" chance="170" />
+		<item name="Mysterious Voodoo Skull" chance="130" />
+		<item name="Blood Goblet" chance="100" />
+	</loot>
+</monster>

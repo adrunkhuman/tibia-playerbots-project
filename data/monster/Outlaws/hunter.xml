@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Hunter" nameDescription="a hunter" race="blood" experience="150" speed="210" manacost="530">
+	<health now="150" max="150" />
+	<look type="129" head="95" body="116" legs="120" feet="115" corpse="3058" />
+	<targetchange interval="4000" chance="10" />
+	<flags>
+		<flag summonable="0" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="1" />
+		<flag convinceable="1" />
+		<flag pushable="0" />
+		<flag canpushitems="1" />
+		<flag canpushcreatures="0" />
+		<flag targetdistance="4" />
+		<flag staticattack="90" />
+		<flag runonhealth="10" />
+		<flag canwalkonenergy="0" />
+		<flag canwalkonfire="0" />
+		<flag canwalkonpoison="0" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-20" />
+		<attack name="physical" interval="2000" chance="50" range="7" min="0" max="-100">
+			<attribute key="shootEffect" value="arrow" />
+		</attack>
+	</attacks>
+	<defenses armor="8" defense="8" />
+	<elements>
+		<element physicalPercent="-5" />
+		<element holyPercent="20" />
+	</elements>
+	<voices interval="5000" chance="10">
+		<voice sentence="Bullseye!" yell="0" />
+		<voice sentence="Guess who we are hunting!" yell="0" />
+		<voice sentence="You'll make a nice trophy!" yell="0" />
+		<voice sentence="Guess who we're hunting, hahaha!" yell="0" />
+	</voices>
+	<loot>
+		<item name="Arrow" countmax="22" chance="82480" />
+		<item name="Orange" countmax="2" chance="20130" />
+		<item name="Roll" countmax="2" chance="11080" />
+		<item name="Hunter's Quiver" chance="10130" />
+		<item name="Bow" chance="5830" />
+		<item name="Burst Arrow" countmax="3" chance="5160" />
+		<item name="Brass Armor" chance="5130" />
+		<item name="Brass Helmet" chance="5020" />
+		<item name="Poison Arrow" countmax="4" chance="4340" />
+		<item name="Dragon Necklace" chance="3130" />
+		<item name="Torch" chance="3080" />
+		<item name="Sniper Gloves" chance="550" />
+		<item name="Deer Trophy" chance="440" />
+		<item name="Small Ruby" chance="170" />
+		<item name="Lion Trophy" chance="130" />
+		<item name="Wolf Trophy" chance="130" />
+		<item name="Slingshot" chance="120" />
+	</loot>
+</monster>

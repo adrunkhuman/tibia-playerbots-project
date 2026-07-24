@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Pirate Skeleton" nameDescription="a pirate skeleton" race="undead" experience="85" speed="180">
+	<health now="190" max="190" />
+	<look type="195" corpse="6070" />
+	<targetchange interval="5000" chance="0" />
+	<flags>
+		<flag summonable="0" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="1" />
+		<flag convinceable="0" />
+		<flag pushable="1" />
+		<flag canpushitems="1" />
+		<flag canpushcreatures="0" />
+		<flag targetdistance="1" />
+		<flag staticattack="90" />
+		<flag runonhealth="10" />
+		<flag canwalkonenergy="0" />
+		<flag canwalkonfire="0" />
+		<flag canwalkonpoison="0" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-50" />
+	</attacks>
+	<defenses armor="15" defense="15" />
+	<elements>
+		<element holyPercent="-25" />
+	</elements>
+	<immunities>
+		<immunity death="1" />
+	</immunities>
+	<loot>
+		<item name="Gold Coin" countmax="25" chance="50120" />
+		<item name="Spooky Blue Eye" chance="5330" />
+		<item name="Big Bone" chance="4950" />
+		<item name="Bone" chance="4810" />
+		<item name="Skull" chance="4710" />
+		<item name="Bone Club" chance="1040" />
+		<item name="Short Sword" chance="900" />
+		<item name="Sword" chance="640" />
+	</loot>
+</monster>

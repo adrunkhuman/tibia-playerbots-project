@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Island Troll" nameDescription="an island troll" race="blood" experience="20" speed="126" manacost="290">
+	<health now="50" max="50" />
+	<look type="282" corpse="7930" />
+	<targetchange interval="5000" chance="0" />
+	<flags>
+		<flag summonable="1" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="1" />
+		<flag convinceable="1" />
+		<flag pushable="1" />
+		<flag canpushitems="0" />
+		<flag canpushcreatures="0" />
+		<flag targetdistance="1" />
+		<flag staticattack="90" />
+		<flag runonhealth="15" />
+		<flag canwalkonenergy="0" />
+		<flag canwalkonfire="0" />
+		<flag canwalkonpoison="0" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-10" />
+	</attacks>
+	<defenses armor="6" defense="6" />
+	<voices interval="5000" chance="10">
+		<voice sentence="Groar" yell="0" />
+		<voice sentence="Hmmm, turtles" yell="0" />
+		<voice sentence="Hmmm, dogs" yell="0" />
+		<voice sentence="Hmmm, worms" yell="0" />
+		<voice sentence="Gruntz!" yell="0" />
+	</voices>
+	<loot>
+		<item name="Gold Coin" countmax="10" chance="59950" />
+		<item name="Wood" chance="30670" />
+		<item name="Spear" chance="19990" />
+		<item name="Hand Axe" chance="17780" />
+		<item name="Wooden Shield" chance="15300" />
+		<item name="Leather Boots" chance="9970" />
+		<item name="Leather Helmet" chance="9780" />
+		<item name="Rope" chance="7950" />
+		<item name="Studded Club" chance="5070" />
+		<item name="Mango" chance="5040" />
+		<item name="Silver Amulet" chance="80" />
+		<item name="Marlin" chance="70" />
+	</loot>
+</monster>

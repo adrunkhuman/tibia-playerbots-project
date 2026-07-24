@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Munster" nameDescription="Munster" race="blood" experience="35" speed="200">
+	<health now="58" max="58" />
+	<look type="56" corpse="2813" />
+	<targetchange interval="60000" chance="0" />
+	<flags>
+		<flag summonable="0" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="0" />
+		<flag convinceable="0" />
+		<flag pushable="1" />
+		<flag canpushitems="0" />
+		<flag targetdistance="1" />
+		<flag staticattack="80" />
+		<flag runonhealth="10" />
+		<flag isboss="1" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-15" />
+	</attacks>
+	<defenses armor="2" defense="4" />
+	<summons maxSummons="2">
+		<summon name="Rat" interval="2000" chance="20" max="2" />
+	</summons>
+	<voices interval="2000" chance="5">
+		<voice sentence="Meeeeep!" yell="0" />
+		<voice sentence="Meep!" yell="0" />
+	</voices>
+	<loot>
+		<item name="Bone Club" chance="85710" />
+		<item name="Gold Coin" countmax="24" chance="81120" />
+		<item name="Cheese" chance="72450" />
+		<item name="Worm" countmax="4" chance="51020" />
+		<item name="Die" chance="1020" />
+		<item name="Cookie" countmax="2" chance="510" />
+	</loot>
+</monster>

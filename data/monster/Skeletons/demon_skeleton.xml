@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Demon Skeleton" nameDescription="a demon skeleton" race="undead" experience="240" speed="180" manacost="620">
+	<health now="400" max="400" />
+	<look type="37" corpse="5963" />
+	<targetchange interval="4000" chance="10" />
+	<flags>
+		<flag summonable="1" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="1" />
+		<flag convinceable="1" />
+		<flag pushable="0" />
+		<flag canpushitems="1" />
+		<flag canpushcreatures="1" />
+		<flag targetdistance="1" />
+		<flag staticattack="90" />
+		<flag runonhealth="0" />
+		<flag canwalkonenergy="0" />
+		<flag canwalkonfire="1" />
+		<flag canwalkonpoison="1" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-185" />
+		<attack name="death" interval="2000" chance="10" radius="1" target="1" range="1" min="-30" max="-50">
+			<attribute key="areaEffect" value="smallclouds" />
+		</attack>
+	</attacks>
+	<defenses armor="25" defense="25" />
+	<elements>
+		<element holyPercent="-25" />
+	</elements>
+	<immunities>
+		<immunity paralyze="1" />
+		<immunity death="1" />
+		<immunity fire="1" />
+		<immunity earth="1" />
+		<immunity drown="1" />
+		<immunity lifedrain="1" />
+		<immunity drunk="1" />
+	</immunities>
+	<loot>
+		<item name="Gold Coin" countmax="75" chance="97510" />
+		<item name="Demonic Skeletal Hand" chance="12010" />
+		<item name="Throwing Star" countmax="3" chance="9990" />
+		<item name="Health Potion" countmax="2" chance="9720" />
+		<item name="Mana Potion" chance="5040" />
+		<item name="Battle Shield" chance="4950" />
+		<item name="Torch" chance="4850" />
+		<item name="Battle Hammer" chance="4050" />
+		<item name="Iron Helmet" chance="3390" />
+		<item name="Black Pearl" chance="2990" />
+		<item name="Small Ruby" chance="1510" />
+		<item name="Mysterious Fetish" chance="530" />
+		<item name="Mind Stone" chance="470" />
+		<item name="Guardian Shield" chance="110" />
+	</loot>
+</monster>

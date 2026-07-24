@@ -1,0 +1,97 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Infernalist" nameDescription="an infernalist" race="blood" experience="4000" speed="220">
+	<health now="3650" max="3650" />
+	<look type="130" head="78" body="76" legs="94" feet="39" addons="2" corpse="3058" />
+	<targetchange interval="4000" chance="10" />
+	<flags>
+		<flag summonable="0" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="0" />
+		<flag convinceable="0" />
+		<flag pushable="0" />
+		<flag canpushitems="1" />
+		<flag canpushcreatures="1" />
+		<flag targetdistance="4" />
+		<flag staticattack="95" />
+		<flag runonhealth="1094" />
+		<flag canwalkonenergy="1" />
+		<flag canwalkonfire="1" />
+		<flag canwalkonpoison="1" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-100" />
+		<attack name="fire" interval="2000" chance="40" range="7" target="1" min="-65" max="-180">
+			<attribute key="shootEffect" value="fire" />
+			<attribute key="areaEffect" value="fire" />
+		</attack>
+		<attack name="fire" interval="2000" chance="20" range="7" radius="2" target="1" min="-90" max="-180">
+			<attribute key="shootEffect" value="burstarrow" />
+			<attribute key="areaEffect" value="firearea" />
+		</attack>
+		<attack name="manadrain" interval="2000" chance="20" target="1" range="7" radius="3" min="-53" max="-120">
+			<attribute key="areaEffect" value="teleport" />
+			<attribute key="shootEffect" value="energyball" />
+		</attack>
+		<attack name="firefield" interval="2000" chance="15" range="7" radius="3" target="1">
+			<attribute key="shootEffect" value="fire" />
+		</attack>
+		<attack name="fire" interval="2000" chance="10" length="8" spread="0" min="-150" max="-250">
+			<attribute key="areaEffect" value="fireattack" />
+		</attack>
+		<attack name="physical" interval="2000" chance="5" radius="2" target="0" min="-100" max="-150">
+			<attribute key="areaEffect" value="explosionarea" />
+		</attack>
+		<attack name="infernalist skill reducer" interval="2000" target="1" range="7" chance="5" />
+	</attacks>
+	<defenses armor="15" defense="15">
+		<defense name="healing" interval="2000" chance="15" min="60" max="230">
+			<attribute key="areaEffect" value="blueshimmer" />
+		</defense>
+		<defense name="invisible" interval="2000" chance="15" duration="8000">
+			<attribute key="areaEffect" value="blueshimmer" />
+		</defense>
+	</defenses>
+	<elements>
+		<element physicalPercent="-5" />
+		<element deathPercent="10" />
+		<element holyPercent="20" />
+		<element icePercent="-5" />
+		<element earthPercent="95" />
+	</elements>
+	<immunities>
+		<immunity fire="1" />
+		<immunity energy="1" />
+		<immunity invisible="1" />
+		<immunity paralyze="1" />
+	</immunities>
+	<summons maxSummons="1">
+		<summon name="Fire Elemental" interval="2000" chance="20" />
+	</summons>
+	<voices interval="5000" chance="10">
+		<voice sentence="Some like it hot!" yell="0" />
+		<voice sentence="Nothing will remain but your scorched bones!" yell="0" />
+		<voice sentence="Feel the heat of battle!" yell="0" />
+		<voice sentence="It's cooking time!" yell="0" />
+	</voices>
+	<loot>
+		<item name="Gold Coin" countmax="100" chance="97770" />
+		<item name="Gold Coin" countmax="51" chance="97770" />
+		<item name="Great Health Potion" chance="19340" />
+		<item name="Great Mana Potion" chance="19320" />
+		<item name="Raspberry" countmax="5" chance="7980" />
+		<item name="Skull Staff" chance="6540" />
+		<item name="Small Enchanted Ruby" chance="4650" />
+		<item name="Energy Ring" chance="2100" />
+		<item name="Red Piece of Cloth" chance="1210" />
+		<item name="Royal Tapestry" chance="780" />
+		<item name="Magic Sulphur" chance="640" />
+		<item name="Spellbook of Mind Control" chance="490" />
+		<item name="Black Skull" chance="420" />
+		<item name="Red Tome" chance="300" />
+		<item name="Magma Boots" chance="190" />
+		<item name="Gold Ingot" chance="130" />
+		<item name="Crystal of Power" chance="90" />
+		<item name="Piggy Bank" chance="90" />
+	</loot>
+</monster>

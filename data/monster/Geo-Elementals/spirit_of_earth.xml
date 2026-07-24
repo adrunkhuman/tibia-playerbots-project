@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Spirit of Earth" nameDescription="a spirit of earth" race="undead" experience="800" speed="180">
+	<health now="1200" max="1200" />
+	<look type="67" corpse="7349" />
+	<flags>
+		<flag summonable="0" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="0" />
+		<flag convinceable="0" />
+		<flag pushable="0" />
+		<flag canpushitems="1" />
+		<flag targetdistance="1" />
+		<flag runonhealth="0" />
+		<flag canwalkonenergy="0" />
+		<flag canwalkonfire="0" />
+		<flag canwalkonpoison="1" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-180" />
+		<attack name="earth" interval="2000" chance="10" range="7" target="1" min="-50" max="-130">
+			<attribute key="shootEffect" value="smallstone" />
+			<attribute key="areaEffect" value="poff" />
+		</attack>
+		<attack name="physical" interval="2000" chance="10" length="7" spread="0" min="-67" max="-100">
+			<attribute key="areaEffect" value="groundshaker" />
+		</attack>
+		<attack name="lifedrain" interval="2000" chance="10" target="0" radius="3" min="-100" max="-160">
+			<attribute key="areaEffect" value="poff" />
+		</attack>
+		<attack name="speed" interval="2000" chance="10" range="5" target="1" speedchange="-330" duration="5000">
+			<attribute key="shootEffect" value="poison" />			
+			<attribute key="areaEffect" value="sleep" />
+		</attack>
+		<attack name="poisoncondition" interval="2000" chance="20" length="8" spread="0" min="-200" max="-260">
+			<attribute key="areaEffect" value="bigplants" />
+		</attack>		
+	</attacks>
+	<defenses armor="30" defense="32">
+		<defense name="healing" interval="2000" chance="5" min="66" max="127">
+			<attribute key="areaEffect" value="blueshimmer" />
+		</defense>
+	</defenses>
+	<elements>
+		<element icePercent="-5" />
+		<element energyPercent="50" />
+	</elements>
+	<immunities>
+		<immunity invisible="1" />
+		<immunity paralyze="1" />
+	</immunities>
+	<voices interval="5000" chance="5">
+		<voice sentence="When the dust settles there will only be one." yell="0" />
+		<voice sentence="You're so soft and vulnerable." yell="0" />
+		<voice sentence="Show your strength ... or perish." yell="0" />
+	</voices>
+</monster>

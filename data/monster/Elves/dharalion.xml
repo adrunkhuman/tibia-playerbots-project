@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Dharalion" nameDescription="Dharalion" race="blood" experience="570" speed="240">
+	<health now="390" max="390" />
+	<look type="203" corpse="6011" />
+	<targetchange interval="5000" chance="8" />
+	<flags>
+		<flag summonable="0" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="0" />
+		<flag convinceable="0" />
+		<flag pushable="0" />
+		<flag canpushitems="1" />
+		<flag canpushcreatures="1" />
+		<flag targetdistance="4" />
+		<flag staticattack="90" />
+		<flag runonhealth="0" />
+		<flag isboss="1" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-30" />
+		<attack name="manadrain" interval="1000" chance="15" range="7" min="0" max="-100" />
+		<attack name="energy" interval="1000" chance="13" range="7" min="-80" max="-100">
+			<attribute key="shootEffect" value="energy" />
+			<attribute key="areaEffect" value="energy" />
+		</attack>
+		<attack name="death" interval="1000" chance="10" range="7" min="-80" max="-151">
+			<attribute key="shootEffect" value="suddendeath" />
+		</attack>
+		<attack name="dharalion skill reducer" interval="2000" chance="15" range="5"/>
+	</attacks>
+	<defenses armor="15" defense="25">
+		<defense name="healing" interval="1000" chance="20" min="90" max="120">
+			<attribute key="areaEffect" value="blueshimmer" />
+		</defense>
+		<defense name="speed" interval="1000" chance="7" speedchange="300" duration="10000">
+			<attribute key="areaEffect" value="redshimmer" />
+		</defense>
+	</defenses>
+	<elements>
+		<element holyPercent="-10" />
+	</elements>
+	<immunities>
+		<immunity invisible="1" />
+		<immunity paralyze="1" />
+	</immunities>
+	<summons maxSummons="2">
+		<summon name="Demon Skeleton" interval="1000" chance="6" />
+	</summons>
+	<voices interval="5000" chance="10">
+		<voice sentence="Muahahaha!" yell="0" />
+		<voice sentence="Feel my wrath!" yell="0" />
+		<voice sentence="My powers are divine!" yell="0" />
+		<voice sentence="Noone will stop my ascension!" yell="0" />
+		<voice sentence="You desecrated this temple!" yell="0" />
+	</voices>
+	<loot>
+		<item name="Gold Coin" countmax="100" chance="100000" />
+		<item name="Holy Orchid" chance="100000" />
+		<item name="Elvish Talisman" chance="89580" />
+		<item name="Elven Astral Observer" chance="85420" />
+		<item name="Yellow Gem" chance="35420" />
+		<item name="Melon" chance="26040" />
+		<item name="Blank Rune" chance="19790" />
+		<item name="Elven Amulet" chance="17710" />
+		<item name="Great Mana Potion" chance="15630" />
+		<item name="Bread" chance="14580" />
+		<item name="Life Crystal" chance="13540" />
+		<item name="Sling Herb" chance="9380" />
+		<item name="Cornucopia" chance="8330" />
+		<item name="Green Tunic" chance="6250" />
+		<item name="Royal Spear" countmax="2" chance="1040" />
+	</loot>
+</monster>

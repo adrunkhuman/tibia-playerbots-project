@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Fernfang" nameDescription="Fernfang" race="blood" experience="600" speed="240">
+	<health now="400" max="400" />
+	<look type="206" corpse="3058" />
+	<targetchange interval="5000" chance="8" />
+	<flags>
+		<flag summonable="0" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="0" />
+		<flag convinceable="0" />
+		<flag pushable="0" />
+		<flag canpushitems="1" />
+		<flag canpushcreatures="1" />
+		<flag targetdistance="4" />
+		<flag staticattack="90" />
+		<flag runonhealth="0" />
+		<flag isboss="1" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-50" />
+		<attack name="manadrain" interval="1000" chance="25" range="7" min="-25" max="-45">
+			<attribute key="areaEffect" value="redshimmer" />
+		</attack>
+		<attack name="holy" interval="2000" chance="80" range="7" min="-65" max="-180">
+			<attribute key="shootEffect" value="holy" />
+			<attribute key="areaEffect" value="holyarea" />
+		</attack>
+	</attacks>
+	<defenses armor="15" defense="10">
+		<defense name="healing" interval="1000" chance="15" min="90" max="120">
+			<attribute key="areaEffect" value="blueshimmer" />
+		</defense>
+		<defense name="outfit" interval="1000" chance="5" monster="war wolf" duration="14000">
+			<attribute key="areaEffect" value="blueshimmer" />
+		</defense>
+	</defenses>
+	<elements>
+		<element icePercent="70" />
+		<element earthPercent="50" />
+	</elements>
+	<immunities>
+		<immunity invisible="1" />
+		<immunity paralyze="1" />
+	</immunities>
+	<summons maxSummons="3">
+		<summon name="War Wolf" interval="1000" chance="13" />
+	</summons>
+	<voices interval="5000" chance="10">
+		<voice sentence="Yoooohuuuu!" yell="0" />
+		<voice sentence="You desacrated this place!" yell="0" />
+		<voice sentence="I will cleanse this isle!" yell="0" />
+		<voice sentence="Grrrrrrr" yell="0" />
+	</voices>
+	<loot>
+		<item name="Book of Prayers" chance="100000" />
+		<item name="Gold Coin" countmax="99" chance="100000" />
+		<item name="Platinum Coin" countmax="3" chance="97830" />
+		<item name="Star Herb" chance="91300" />
+		<item name="Rope Belt" chance="56520" />
+		<item name="Power Ring" chance="45650" />
+		<item name="Yellow Gem" chance="45650" />
+		<item name="Safety Pin" chance="41300" />
+		<item name="Blank Rune" chance="17390" />
+		<item name="Bread" chance="13040" />
+		<item name="Green Tunic" chance="13040" />
+		<item name="Strong Mana Potion" chance="13040" />
+		<item name="Brown Flask" chance="10870" />
+		<item name="Lamp" chance="10870" />
+		<item name="Staff" chance="10870" />
+		<item name="Wolf Tooth Chain" chance="8700" />
+		<item name="Sling Herb" chance="6520" />
+		<item name="Wooden Whistle" chance="6520" />
+		<item name="Life Crystal" chance="2170" />
+	</loot>
+</monster>

@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="The Frog Prince" nameDescription="The Frog Prince" race="blood" experience="1" speed="320">
+	<health now="55" max="55" />
+	<look type="224" corpse="6079" />
+	<targetchange interval="5000" chance="20" />
+	<flags>
+		<flag summonable="0" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="0" />
+		<flag convinceable="0" />
+		<flag pushable="1" />
+		<flag canpushitems="0" />
+		<flag canpushcreatures="0" />
+		<flag targetdistance="1" />
+		<flag staticattack="90" />
+		<flag runonhealth="30" />
+		<flag canwalkonenergy="0" />
+		<flag canwalkonfire="0" />
+		<flag canwalkonpoison="0" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-1" />
+	</attacks>
+	<defenses armor="3" defense="2" />
+	<elements>
+		<element earthPercent="80" />
+		<element energyPercent="90" />
+		<element icePercent="90" />
+		<element firePercent="90" />
+		<element physicalPercent="98" />
+	</elements>
+	<immunities>
+		<immunity invisible="0" />
+		<immunity paralyze="0" />
+	</immunities>
+	<voices interval="1000" chance="2">
+		<voice sentence="Don't Kill me!!!" yell="0" />
+		<voice sentence="Perhaps a kiss might release me!" yell="0" />
+		<voice sentence="Have mercy!" yell="0" />
+	</voices>
+</monster>

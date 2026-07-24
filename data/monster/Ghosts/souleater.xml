@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Souleater" nameDescription="a souleater" race="undead" experience="1300" speed="200">
+	<health now="1100" max="1100" />
+	<look type="355" corpse="12631" />
+	<targetchange interval="4000" chance="10" />
+	<flags>
+		<flag summonable="0" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="0" />
+		<flag convinceable="0" />
+		<flag pushable="0" />
+		<flag canpushitems="1" />
+		<flag canpushcreatures="1" />
+		<flag targetdistance="1" />
+		<flag staticattack="80" />
+		<flag runonhealth="0" />
+		<flag canwalkonenergy="0" />
+		<flag canwalkonfire="0" />
+		<flag canwalkonpoison="0" />
+		<flag lightlevel="3" />
+		<flag lightcolor="66" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-210" />
+		<attack name="ice" interval="2000" chance="100" range="7" target="1" min="-50" max="-130">
+			<attribute key="shootEffect" value="smallice" />
+			<attribute key="areaEffect" value="icearea" />
+		</attack>
+		<attack name="souleater drown" interval="2000" chance="10" />
+		<attack name="death" interval="2000" chance="10" length="4" spread="3" target="0" min="-100" max="-200">
+			<attribute key="areaEffect" value="rednote" />
+		</attack>
+		<attack name="lifedrain" interval="2000" chance="25" radius="4" target="0" min="-30" max="-60">
+			<attribute key="areaEffect" value="redshimmer" />
+		</attack>
+	</attacks>
+	<defenses armor="30" defense="30">
+		<defense name="invisible" interval="2000" chance="5" duration="3000">
+			<attribute key="areaEffect" value="blueshimmer" />
+		</defense>
+		<defense name="healing" interval="2000" chance="15" min="75" max="202">
+			<attribute key="areaEffect" value="blueshimmer" />
+		</defense>
+	</defenses>
+	<elements>
+		<element physicalPercent="60" />
+		<element holyPercent="-10" />
+		<element icePercent="50" />
+		<element firePercent="-10" />
+		<element energyPercent="-10" />
+	</elements>
+	<immunities>
+		<immunity death="1" />
+		<immunity invisible="1" />
+		<immunity paralyze="1" />
+	</immunities>
+	<voices interval="5000" chance="10">
+		<voice sentence="I will feed on you." yell="0" />
+		<voice sentence="Aaaahh" yell="0" />
+		<voice sentence="Life is such a fickle thing!" yell="0" />
+		<voice sentence="Souuuls!" yell="0" />
+		<voice sentence="I will devour your soul." yell="0" />
+	</voices>
+	<loot>
+		<item name="Gold Coin" countmax="100" chance="88040" />
+		<item name="Gold Coin" countmax="100" chance="88040" />
+		<item name="Platinum Coin" countmax="6" chance="49750" />
+		<item name="Lizard Essence" chance="15000" />
+		<item name="Ultimate Health Potion" chance="9160" />
+		<item name="Great Mana Potion" chance="7940" />
+		<item name="Ectoplasmic Sushi" chance="1980" />
+		<item name="Necrotic Rod" chance="960" />
+		<item name="Wand of Cosmic Energy" chance="940" />
+		<item name="Death Ring" chance="320" />
+		<item name="Spirit Container" chance="130" />
+		<item name="Souleater Trophy" chance="10" />
+	</loot>
+</monster>

@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Mutated Bat" nameDescription="a mutated bat" race="blood" experience="615" speed="210">
+	<health now="900" max="900" />
+	<look type="307" corpse="9829" />
+	<targetchange interval="4000" chance="10" />
+	<flags>
+		<flag summonable="0" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="0" />
+		<flag convinceable="0" />
+		<flag pushable="0" />
+		<flag canpushitems="1" />
+		<flag canpushcreatures="1" />
+		<flag targetdistance="1" />
+		<flag staticattack="90" />
+		<flag runonhealth="275" />
+		<flag canwalkonenergy="0" />
+		<flag canwalkonfire="0" />
+		<flag canwalkonpoison="1" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-168" poison="120" />
+		<attack name="earth" interval="2000" chance="15" range="7" min="-70" max="-180">
+			<attribute key="shootEffect" value="poison" />
+		</attack>
+		<attack name="drown" interval="2000" chance="15" target="0" radius="6" min="-30" max="-90">
+			<attribute key="areaEffect" value="whitenote" />
+		</attack>
+		<attack name="mutated bat curse" interval="2000" chance="10" />
+		<attack name="poisoncondition" interval="2000" chance="15" target="0" length="4" spread="3" min="-190" max="-240">
+			<attribute key="areaeffect" value="poison" />
+		</attack>
+	</attacks>
+	<defenses armor="19" defense="19">
+		<defense name="healing" interval="2000" chance="10" min="80" max="95">
+			<attribute key="areaEffect" value="blueshimmer" />
+		</defense>
+	</defenses>
+	<immunities>
+		<immunity death="1" />
+		<immunity earth="1" />
+		<immunity drown="1" />
+		<immunity invisible="1" />
+		<immunity paralyze="0" />
+	</immunities>
+	<voices interval="5000" chance="10">
+		<voice sentence="Shriiiiiek" yell="0" />
+	</voices>
+	<loot>
+		<item name="Gold Coin" countmax="100" chance="92340" />
+		<item name="Gold Coin" countmax="30" chance="92340" />
+		<item name="Heavily Rusted Armor" chance="12470" />
+		<item name="Battle Shield" chance="8020" />
+		<item name="Obsidian Lance" chance="6460" />
+		<item name="Mutated Bat Ear" chance="5010" />
+		<item name="Star Herb" chance="4840" />
+		<item name="Bat Wing" countmax="2" chance="4620" />
+		<item name="Energy Ring" chance="880" />
+		<item name="Black Pearl" countmax="3" chance="780" />
+		<item name="Rusted Armor" chance="700" />
+		<item name="Small Amethyst" countmax="2" chance="610" />
+		<item name="Batwing Hat" chance="120" />
+		<item name="Mercenary Sword" chance="120" />
+		<item name="Black Shield" chance="90" />
+	</loot>
+</monster>

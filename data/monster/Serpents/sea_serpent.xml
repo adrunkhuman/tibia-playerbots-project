@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Sea Serpent" nameDescription="a sea serpent" race="blood" experience="2300" speed="350">
+	<health now="1950" max="1950" />
+	<look type="275" corpse="8307" />
+	<targetchange interval="4000" chance="10" />
+	<flags>
+		<flag summonable="0" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="0" />
+		<flag convinceable="0" />
+		<flag pushable="0" />
+		<flag canpushitems="1" />
+		<flag canpushcreatures="1" />
+		<flag staticattack="70" />
+		<flag targetdistance="1" />
+		<flag runonhealth="0" />
+		<flag canwalkonenergy="1" />
+		<flag canwalkonfire="1" />
+		<flag canwalkonpoison="1" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-250" />
+		<attack name="earth" interval="2000" chance="15" length="7" spread="2" min="-60" max="-300">
+			<attribute key="areaEffect" value="smallplants" />
+		</attack>
+		<attack name="ice" interval="2000" chance="15" length="7" spread="2" min="-101" max="-300">
+			<attribute key="areaEffect" value="iceattack" />
+		</attack>
+		<attack name="sea serpent drown" range="5" interval="2000" chance="15" />
+	</attacks>
+	<defenses armor="45" defense="45">
+		<defense name="healing" interval="2000" chance="30" min="70" max="273">
+			<attribute key="areaEffect" value="blueshimmer" />
+		</defense>
+		<defense name="speed" interval="2000" chance="15" speedchange="400" duration="5000">
+			<attribute key="areaEffect" value="redshimmer" />
+		</defense>
+	</defenses>
+	<elements>
+		<element physicalPercent="-10" />
+		<element deathPercent="10" />
+		<element firePercent="30" />
+		<element energyPercent="-5" />
+	</elements>
+	<immunities>
+		<immunity ice="1" />
+		<immunity invisible="1" />
+		<immunity paralyze="1" />
+		<immunity drown="1" />
+	</immunities>
+	<voices interval="5000" chance="10">
+		<voice sentence="HISSSS" yell="1" />
+		<voice sentence="CHHHRRRR" yell="1" />
+	</voices>
+	<loot>
+		<item name="Gold Coin" countmax="100" chance="98310" />
+		<item name="Gold Coin" countmax="100" chance="98310" />
+		<item name="Gold Coin" countmax="36" chance="98310" />
+		<item name="Dragon Ham" chance="60560" />
+		<item name="Platinum Coin" countmax="3" chance="26720" />
+		<item name="Sea Serpent Scale" chance="10110" />
+		<item name="Plate Legs" chance="7110" />
+		<item name="Small Sapphire" countmax="3" chance="5890" />
+		<item name="Strong Health Potion" chance="5000" />
+		<item name="Serpent Sword" chance="4050" />
+		<item name="Strong Mana Potion" chance="3970" />
+		<item name="Spirit Cloak" chance="2900" />
+		<item name="Ring of Healing" chance="1140" />
+		<item name="Northwind Rod" chance="1020" />
+		<item name="Great Mana Potion" chance="930" />
+		<item name="Glacier Amulet" chance="880" />
+		<item name="Glacier Kilt" chance="430" />
+		<item name="Stealth Ring" chance="410" />
+		<item name="Focus Cape" chance="410" />
+		<item name="Leviathan's Amulet" chance="120" />
+		<item name="Crystalline Armor" chance="90" />
+	</loot>
+</monster>

@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="The Horned Fox" nameDescription="The Horned Fox" race="blood" experience="300" speed="210">
+	<health now="265" max="265" />
+	<look type="202" corpse="5983" />
+	<targetchange interval="5000" chance="8" />
+	<flags>
+		<flag summonable="0" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="0" />
+		<flag convinceable="0" />
+		<flag pushable="0" />
+		<flag canpushitems="1" />
+		<flag canpushcreatures="1" />
+		<flag targetdistance="1" />
+		<flag staticattack="90" />
+		<flag runonhealth="0" />
+		<flag isboss="1" />
+		<flag canwalkonenergy="0" />
+		<flag canwalkonfire="0" />
+		<flag canwalkonpoison="0" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-100" />
+		<attack name="physical" interval="1000" chance="25" range="7" min="-10" max="-20">
+			<attribute key="shootEffect" value="bolt" />
+		</attack>
+		<attack name="poisoncondition" interval="1000" chance="17" range="7" min="-80" max="-120">
+			<attribute key="shootEffect" value="bolt" />
+		</attack>
+	</attacks>
+	<defenses armor="16" defense="16">
+		<defense name="healing" interval="1000" chance="15" min="25" max="75">
+			<attribute key="areaEffect" value="redshimmer" />
+		</defense>
+		<defense name="invisible" interval="1000" chance="10" duration="2000">
+			<attribute key="areaEffect" value="blueshimmer" />
+		</defense>
+	</defenses>
+	<elements>
+		<element deathPercent="-1" />
+		<element icePercent="-1" />
+	</elements>
+	<immunities>
+		<immunity invisible="1" />
+		<immunity paralyze="1" />
+	</immunities>
+	<summons maxSummons="2">
+		<summon name="Minotaur Archer" interval="1000" chance="13" max="2" />
+		<summon name="Minotaur Guard" interval="1000" chance="13" max="2" />
+		<summon name="Minotaur Mage" interval="1000" chance="13" max="2" />
+	</summons>
+	<voices interval="5000" chance="10">
+		<voice sentence="I'll be back!" yell="0" />
+		<voice sentence="You will never get me!" yell="0" />
+		<voice sentence="Help me, Boys!" yell="0" />
+		<voice sentence="Catch me, if you can!" yell="0" />
+	</voices>
+	<loot>
+		<item name="Nose Ring" chance="100000" />
+		<item name="Gold Coin" countmax="99" chance="96880" />
+		<item name="Minotaur Leather" chance="96880" />
+		<item name="Minotaur Horn" countmax="2" chance="93750" />
+		<item name="Piece of Warrior Armor" chance="81250" />
+		<item name="Piercing Bolt" countmax="14" chance="46880" />
+		<item name="Brass Armor" chance="28130" />
+		<item name="Meat" chance="15630" />
+		<item name="Battle Shield" chance="12500" />
+		<item name="Dwarven Helmet" chance="9380" />
+		<item name="Strong Health Potion" chance="9380" />
+		<item name="Fishing Rod" chance="6250" />
+		<item name="Double Axe" chance="3130" />
+	</loot>
+</monster>

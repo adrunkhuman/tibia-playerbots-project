@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Svoren the Mad" nameDescription="Svoren the Mad" race="blood" experience="3000" speed="180">
+	<health now="6310" max="6310" />
+	<look type="254" head="61" body="61" legs="61" feet="4" corpse="7349" />
+	<flags>
+		<flag summonable="0" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="0" />
+		<flag convinceable="0" />
+		<flag pushable="0" />
+		<flag canpushitems="1" />
+		<flag targetdistance="1" />
+		<flag runonhealth="0" />
+		<flag canwalkonenergy="1" />
+		<flag canwalkonfire="1" />
+		<flag canwalkonpoison="1" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-525" />
+		<attack name="speed" interval="3500" chance="35" radius="5" target="0" range="7" duration="15000" speedchange="-250">
+			<attribute key="areaEffect" value="whitenote" />
+		</attack>
+		<attack name="poison" interval="3500" chance="35" radius="5" target="0" range="7" min="-79" max="-99">
+			<attribute key="areaEffect" value="poison" />
+		</attack>
+		<attack name="physical" interval="3500" chance="35" spread="1" length="4" min="-153" max="-219">
+			<attribute key="areaEffect" value="yellownote" />
+		</attack>
+	</attacks>
+	<defenses armor="25" defense="27">
+		<defense name="healing" interval="2000" chance="15" min="74" max="88">
+			<attribute key="areaEffect" value="greennote" />
+		</defense>
+		<defense name="speed" interval="2000" chance="15" speedchange="300" duration="5000">
+			<attribute key="areaEffect" value="bluenote" />
+		</defense>
+	</defenses>
+	<immunities>
+		<immunity ice="1" />
+		<immunity fire="1" />
+		<immunity energy="1" />
+		<immunity earth="1" />
+		<immunity invisible="1" />
+		<immunity paralyze="1" />
+	</immunities>
+	<voices interval="2000" chance="5">
+		<voice sentence="Not that tower again!" yell="0" />
+		<voice sentence="Are we there soon mommy?" yell="0" />
+		<voice sentence="The cat has grown some horns!" yell="0" />
+		<voice sentence="What was I doing here again?" yell="0" />
+		<voice sentence="Ah madness I embrace you!" yell="0" />
+		<voice sentence="No mommy NO, Leave me alone!" yell="0" />
+	</voices>
+</monster>

@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Rukor Zad" nameDescription="Rukor Zad" race="blood" experience="380" speed="430">
+	<health now="380" max="380" />
+	<look type="152" head="114" body="95" legs="95" feet="95" addons="3" corpse="3058" />
+	<targetchange interval="4000" chance="0" />
+	<flags>
+		<flag summonable="0" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="0" />
+		<flag convinceable="0" />
+		<flag pushable="0" />
+		<flag canpushitems="1" />
+		<flag canpushcreatures="1" />
+		<flag targetdistance="1" />
+		<flag staticattack="90" />
+		<flag runonhealth="0" />
+		<flag canwalkonenergy="0" />
+		<flag canwalkonfire="0" />
+		<flag isboss="1" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-170" />
+		<attack name="physical" interval="2000" chance="15" range="7" min="0" max="-100">
+			<attribute key="shootEffect" value="throwingstar" />
+		</attack>
+		<attack name="physical" interval="2000" chance="15" range="7" min="0" max="-100">
+			<attribute key="shootEffect" value="poisonarrow" />
+		</attack>
+		<attack name="poisoncondition" interval="2000" chance="10" range="7" min="-20" max="-160">
+			<attribute key="shootEffect" value="poison" />
+			<attribute key="areaEffect" value="poison" />
+		</attack>
+		<attack name="drunk" interval="3000" chance="34" range="7" duration="5000" />
+	</attacks>
+	<defenses armor="15" defense="15">
+		<defense name="invisible" interval="2000" chance="10" duration="2000">
+			<attribute key="areaEffect" value="blueshimmer" />
+		</defense>
+	</defenses>
+	<elements>
+		<element physicalPercent="1" />
+		<element deathPercent="5" />
+		<element firePercent="5" />
+		<element energyPercent="10" />
+		<element earthPercent="20" />
+	</elements>
+	<immunities>
+		<immunity invisible="1" />
+		<immunity paralyze="1" />
+	</immunities>
+	<voices interval="1000" chance="2">
+		<voice sentence="I'll teach you the art of death!" yell="0" />
+		<voice sentence="Haiiii!" yell="0" />
+		<voice sentence="You shouldn`t have come here!" yell="0" />
+		<voice sentence="You are no match for a master assassin!" yell="0" />
+		<voice sentence="I can kill a man in a thousand ways. And that`s only with a spoon!" yell="0" />
+	</voices>
+	<loot>
+		<item name="Gold Coin" countmax="80" chance="87500" />
+		<item name="Throwing Star" countmax="5" chance="37500" />
+		<item name="Battle Shield" chance="25000" />
+		<item name="Plate Shield" chance="12500" />
+		<item name="Viper Star" countmax="4" chance="12500" />
+	</loot>
+</monster>

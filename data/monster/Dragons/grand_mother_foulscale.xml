@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Grand Mother Foulscale" nameDescription="Grand Mother Foulscale" race="blood" experience="1400" speed="180">
+	<health now="1850" max="1850" />
+	<look type="34" corpse="5973" />
+	<targetchange interval="5000" chance="8" />
+	<flags>
+		<flag summonable="0" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="0" />
+		<flag convinceable="0" />
+		<flag pushable="0" />
+		<flag canpushitems="1" />
+		<flag canpushcreatures="1" />
+		<flag targetdistance="1" />
+		<flag staticattack="90" />
+		<flag runonhealth="400" />
+		<flag isboss="1" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-170" />
+		<attack name="fire" interval="2000" chance="15" range="7" radius="4" target="1" min="-45" max="-85">
+			<attribute key="shootEffect" value="fire" />
+			<attribute key="areaEffect" value="firearea" />
+		</attack>
+		<attack name="fire" interval="2000" chance="8" length="8" spread="3" min="-90" max="-150">
+			<attribute key="areaEffect" value="firearea" />
+		</attack>
+	</attacks>
+	<defenses armor="27" defense="20">
+		<defense name="healing" interval="1000" chance="17" min="34" max="66">
+			<attribute key="areaEffect" value="blueshimmer" />
+		</defense>
+	</defenses>
+	<elements>
+		<element icePercent="-5" />
+		<element energyPercent="25" />
+		<element earthPercent="80" />
+	</elements>
+	<immunities>
+		<immunity fire="1" />
+		<immunity invisible="1" />
+		<immunity paralyze="1" />
+	</immunities>
+	<summons maxSummons="4">
+		<summon name="dragon hatchling" interval="4000" chance="40" />
+	</summons>
+	<voices interval="5000" chance="10">
+		<voice sentence="GROOAAARRR!" yell="1" />
+	</voices>
+	<loot>
+		<item name="Green Dragon Leather" chance="100000" />
+		<item name="Green Dragon Scale" chance="100000" />
+		<item name="Gold Coin" countmax="71" chance="87180" />
+		<item name="Dragon Ham" chance="33330" />
+		<item name="Double Axe" chance="15380" />
+		<item name="Plate Legs" chance="15380" />
+		<item name="Dragon Hammer" chance="12820" />
+		<item name="Crossbow" chance="7690" />
+		<item name="Steel Helmet" chance="7690" />
+		<item name="Burst Arrow" countmax="8" chance="5130" />
+		<item name="Dragon Shield" chance="5130" />
+		<item name="Broadsword" chance="2560" />
+		<item name="Dragonbone Staff" chance="2560" />
+	</loot>
+</monster>

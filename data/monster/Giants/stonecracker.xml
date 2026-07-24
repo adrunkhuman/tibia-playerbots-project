@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Stonecracker" nameDescription="Stonecracker" race="blood" experience="3500" speed="280">
+	<health now="6500" max="6500" />
+	<look type="55" corpse="5999" />
+	<targetchange interval="5000" chance="8" />
+	<flags>
+		<flag summonable="0" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="0" />
+		<flag convinceable="0" />
+		<flag pushable="0" />
+		<flag canpushitems="1" />
+		<flag canpushcreatures="1" />
+		<flag targetdistance="1" />
+		<flag staticattack="90" />
+		<flag runonhealth="0" />
+		<flag canwalkonenergy="0" />
+		<flag canwalkonfire="1" />
+		<flag canwalkonpoison="1" />
+		<flag isboss="1" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-500" />
+		<attack name="physical" interval="2000" chance="20" range="7" min="-200" max="-280">
+			<attribute key="shootEffect" value="largerock" />
+		</attack>
+	</attacks>
+	<defenses armor="40" defense="45">
+		<defense name="speed" interval="2000" chance="10" speedchange="360" duration="4000">
+			<attribute key="areaEffect" value="redshimmer" />
+		</defense>
+		<defense name="healing" interval="2000" chance="10" min="500" max="600">
+			<attribute key="areaEffect" value="blueshimmer" />
+		</defense>
+	</defenses>
+	<elements>
+		<element physicalPercent="1" />
+		<element holyPercent="1" />
+		<element firePercent="40" />
+		<element energyPercent="30" />
+		<element earthPercent="75" />
+	</elements>
+	<immunities>
+		<immunity invisible="1" />
+		<immunity paralyze="1" />
+	</immunities>
+	<voices interval="5000" chance="10">
+		<voice sentence="HUAHAHA!" yell="1" />
+	</voices>
+	<loot>
+		<item name="Behemoth Claw" chance="100000" />
+		<item name="Gold Coin" countmax="78" chance="100000" />
+		<item name="Perfect Behemoth Fang" chance="100000" />
+		<item name="Behemoth Trophy" chance="97620" />
+		<item name="Small Amethyst" countmax="3" chance="69050" />
+		<item name="Assassin Star" countmax="94" chance="64290" />
+		<item name="Two Handed Sword" chance="52380" />
+		<item name="Meat" countmax="3" chance="23810" />
+		<item name="Dark Armor" chance="14290" />
+		<item name="Double Axe" chance="7140" />
+		<item name="Shiny Stone" chance="4760" />
+	</loot>
+</monster>

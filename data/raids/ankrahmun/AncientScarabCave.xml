@@ -1,0 +1,7 @@
+<raid>
+  <announce delay="1000" type="event" message="Something is crawling deep in the Ankrahmun Scarab caves."/>
+  <!--Area Spawns-->
+  <areaspawn delay="20000" fromx="33041" fromy="32762" fromz="11" tox="33078" toy="32793" toz="11">
+	  <monster name="Ancient Scarab" amount="15" />
+	</areaspawn>
+</raid>

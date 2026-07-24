@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Orc Marauder" nameDescription="an orc marauder" race="blood" experience="205" speed="210" manacost="490">
+	<health now="235" max="235" />
+	<look type="342" corpse="11251" />
+	<targetchange interval="4000" chance="10" />
+	<flags>
+		<flag summonable="0" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="0" />
+		<flag convinceable="1" />
+		<flag pushable="0" />
+		<flag canpushitems="1" />
+		<flag canpushcreatures="1" />
+		<flag targetdistance="4" />
+		<flag staticattack="90" />
+		<flag runonhealth="0" />
+		<flag canwalkonenergy="0" />
+		<flag canwalkonfire="0" />
+		<flag canwalkonpoison="0" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-100" />
+		<attack name="physical" interval="2000" chance="50" range="7" min="0" max="-80">
+			<attribute key="shootEffect" value="onyxarrow" />
+		</attack>
+	</attacks>
+	<defenses armor="25" defense="25">
+		<defense name="speed" interval="2000" chance="15" speedchange="350" duration="5000">
+			<attribute key="areaEffect" value="redshimmer" />
+		</defense>
+	</defenses>
+	<elements>
+		<element deathPercent="-10" />
+		<element holyPercent="10" />
+		<element energyPercent="20" />
+		<element earthPercent="-10" />
+	</elements>
+	<immunities>
+		<immunity invisible="1" />
+		<immunity paralyze="0" />
+	</immunities>
+	<voices interval="5000" chance="10">
+		<voice sentence="Grrrrrr" yell="0" />
+	</voices>
+	<loot>
+		<item name="Gold Coin" countmax="90" chance="55290" />
+		<item name="Meat" chance="24670" />
+		<item name="Shaggy Tail" chance="10010" />
+		<item name="Bow" chance="5160" />
+		<item name="Broken Crossbow" chance="5080" />
+		<item name="Orc Tooth" chance="3940" />
+		<item name="Orc Leather" chance="3890" />
+		<item name="Orcish Axe" chance="1410" />
+		<item name="Obsidian Lance" chance="1070" />
+		<item name="Crossbow" chance="490" />
+		<item name="Silkweaver Bow" chance="60" />
+	</loot>
+</monster>

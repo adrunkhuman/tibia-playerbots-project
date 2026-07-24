@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Ghoul" nameDescription="a ghoul" race="blood" experience="85" speed="144" manacost="450">
+	<health now="100" max="100" />
+	<look type="18" corpse="5976" />
+	<targetchange interval="4000" chance="0" />
+	<flags>
+		<flag summonable="1" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="1" />
+		<flag convinceable="1" />
+		<flag pushable="0" />
+		<flag canpushitems="1" />
+		<flag canpushcreatures="0" />
+		<flag targetdistance="1" />
+		<flag staticattack="90" />
+		<flag runonhealth="0" />
+		<flag canwalkonenergy="0" />
+		<flag canwalkonfire="0" />
+		<flag canwalkonpoison="0" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-70" />
+		<attack name="lifedrain" interval="2000" chance="10" radius="1" target="1" range="1" min="-15" max="-27">
+			<attribute key="areaEffect" value="smallclouds" />
+		</attack>
+	</attacks>
+	<defenses armor="8" defense="8">
+		<defense name="healing" interval="2000" chance="5" min="9" max="15">
+			<attribute key="areaEffect" value="blueshimmer" />
+		</defense>
+	</defenses>
+	<elements>
+		<element holyPercent="-25" />
+		<element icePercent="10" />
+		<element energyPercent="30" />
+		<element earthPercent="20" />
+	</elements>
+	<immunities>
+		<immunity death="1" />
+		<immunity drown="1" />
+		<immunity lifedrain="1" />
+		<immunity drunk="1" />
+		<immunity paralyze="1" />
+		<immunity invisible="1" />
+	</immunities>
+	<loot>
+		<item name="Gold Coin" countmax="30" chance="69930" />
+		<item name="Rotten Piece of Cloth" chance="14830" />
+		<item name="Worm" countmax="2" chance="10010" />
+		<item name="Ghoul Snack" chance="5090" />
+		<item name="Torch" chance="5050" />
+		<item name="Pile of Grave Earth" chance="1050" />
+		<item name="Scale Armor" chance="1000" />
+		<item name="Brown Piece of Cloth" chance="970" />
+		<item name="Viking Helmet" chance="960" />
+		<item name="Skull" chance="330" />
+		<item name="Life Ring" chance="200" />
+	</loot>
+</monster>

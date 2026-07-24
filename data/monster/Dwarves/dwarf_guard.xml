@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Dwarf Guard" nameDescription="a dwarf guard" race="blood" experience="165" speed="206" manacost="650">
+	<health now="245" max="245" />
+	<look type="70" corpse="6013" />
+	<targetchange interval="4000" chance="10" />
+	<flags>
+		<flag summonable="1" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="1" />
+		<flag convinceable="1" />
+		<flag pushable="0" />
+		<flag canpushitems="1" />
+		<flag canpushcreatures="1" />
+		<flag targetdistance="1" />
+		<flag staticattack="90" />
+		<flag runonhealth="0" />
+		<flag canwalkonenergy="0" />
+		<flag canwalkonfire="0" />
+		<flag canwalkonpoison="0" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-140" />
+	</attacks>
+	<defenses armor="15" defense="15" />
+	<elements>
+		<element physicalPercent="20" />
+		<element deathPercent="-5" />
+		<element firePercent="-5" />
+		<element earthPercent="20" />
+	</elements>
+	<immunities>
+		<immunity invisible="1" />
+		<immunity paralyze="0" />
+	</immunities>
+	<voices interval="5000" chance="10">
+		<voice sentence="Hail Durin!" yell="0" />
+	</voices>
+	<loot>
+		<item name="White Mushroom" countmax="2" chance="55200" />
+		<item name="Leather Boots" chance="40090" />
+		<item name="Gold Coin" countmax="30" chance="39940" />
+		<item name="Scale Armor" chance="9000" />
+		<item name="Battle Shield" chance="6030" />
+		<item name="Battle Hammer" chance="3840" />
+		<item name="Steel Helmet" chance="1550" />
+		<item name="Double Axe" chance="600" />
+		<item name="Iron Ore" chance="480" />
+		<item name="Health Potion" chance="390" />
+		<item name="Axe Ring" chance="200" />
+		<item name="Coal" chance="190" />
+		<item name="Small Amethyst" chance="120" />
+	</loot>
+</monster>

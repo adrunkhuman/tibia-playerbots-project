@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Undead Gladiator" nameDescription="an undead gladiator" race="undead" experience="800" speed="220">
+	<health now="1000" max="1000" />
+	<look type="306" corpse="9823" />
+	<targetchange interval="4000" chance="10" />
+	<flags>
+		<flag summonable="0" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="0" />
+		<flag convinceable="0" />
+		<flag pushable="0" />
+		<flag canpushitems="1" />
+		<flag canpushcreatures="1" />
+		<flag targetdistance="1" />
+		<flag staticattack="90" />
+		<flag runonhealth="0" />
+		<flag canwalkonenergy="0" />
+		<flag canwalkonfire="1" />
+		<flag canwalkonpoison="0" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-250" />
+		<attack name="physical" interval="2000" chance="20" range="7" min="0" max="-135">
+			<attribute key="shootEffect" value="whirlwindsword" />
+		</attack>
+	</attacks>
+	<defenses armor="35" defense="35">
+		<defense name="invisible" interval="2000" chance="15" duration="3000">
+			<attribute key="areaEffect" value="blueshimmer" />
+		</defense>
+	</defenses>
+	<elements>
+		<element deathPercent="-5" />
+		<element holyPercent="10" />
+		<element firePercent="80" />
+		<element energyPercent="20" />
+		<element earthPercent="-10" />
+	</elements>
+	<immunities>
+		<immunity invisible="1" />
+		<immunity paralyze="0" />
+	</immunities>
+	<voices interval="5000" chance="10">
+		<voice sentence="Bring it!" yell="0" />
+		<voice sentence="Another foolish adventurer who tries to beat me." yell="0" />
+		<voice sentence="Let's battle it out in a duel!" yell="0" />
+		<voice sentence="I'll fight here in eternity and beyond." yell="0" />
+		<voice sentence="I will not give up!" yell="0" />
+	</voices>
+	<loot>
+		<item name="Gold Coin" countmax="100" chance="95270" />
+		<item name="Gold Coin" countmax="49" chance="95270" />
+		<item name="Throwing Star" countmax="18" chance="14830" />
+		<item name="Scimitar" chance="10700" />
+		<item name="Broken Gladiator Shield" chance="5240" />
+		<item name="Belted Cape" chance="5160" />
+		<item name="Brass Legs" chance="4950" />
+		<item name="Brass Armor" chance="4850" />
+		<item name="Hunting Spear" chance="4590" />
+		<item name="Plate Armor" chance="2250" />
+		<item name="Plate Legs" chance="2240" />
+		<item name="Two Handed Sword" chance="1950" />
+		<item name="Protection Amulet" chance="1920" />
+		<item name="Dark Helmet" chance="1350" />
+		<item name="Health Potion" chance="400" />
+		<item name="Knight Axe" chance="240" />
+		<item name="Flask of Warrior's Sweat" chance="180" />
+		<item name="Crusader Helmet" chance="170" />
+		<item name="Stealth Ring" chance="50" />
+	</loot>
+</monster>

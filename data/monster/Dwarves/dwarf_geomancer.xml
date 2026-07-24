@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Dwarf Geomancer" nameDescription="a dwarf geomancer" race="blood" experience="265" speed="200">
+	<health now="380" max="380" />
+	<look type="66" corpse="6015" />
+	<targetchange interval="4000" chance="10" />
+	<flags>
+		<flag summonable="0" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="1" />
+		<flag convinceable="0" />
+		<flag pushable="0" />
+		<flag canpushitems="1" />
+		<flag canpushcreatures="1" />
+		<flag targetdistance="4" />
+		<flag staticattack="70" />
+		<flag runonhealth="150" />
+		<flag canwalkonenergy="0" />
+		<flag canwalkonfire="1" />
+		<flag canwalkonpoison="0" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-100" />
+		<attack name="earth" interval="2000" chance="20" range="7" min="-50" max="-110">
+			<attribute key="shootEffect" value="smallearth" />
+			<attribute key="areaEffect" value="greenbubble" />
+		</attack>
+		<attack name="manadrain" interval="2000" chance="10" range="7" min="-25" max="-80" />
+	</attacks>
+	<defenses armor="15" defense="15">
+		<defense name="healing" interval="2000" chance="40" min="25" max="130">
+			<attribute key="areaEffect" value="blueshimmer" />
+		</defense>
+	</defenses>
+	<elements>
+		<element deathPercent="-10" />
+		<element holyPercent="10" />
+		<element icePercent="-5" />
+		<element firePercent="60" />
+		<element energyPercent="10" />
+		<element earthPercent="20" />
+	</elements>
+	<immunities>
+		<immunity invisible="1" />
+		<immunity paralyze="0" />
+	</immunities>
+	<voices interval="5000" chance="10">
+		<voice sentence="Hail Durin!" yell="0" />
+		<voice sentence="Earth is the strongest element." yell="0" />
+		<voice sentence="Dust to dust." yell="0" />
+	</voices>
+	<loot>
+		<item name="Gold Coin" countmax="45" chance="75510" />
+		<item name="White Mushroom" countmax="2" chance="58910" />
+		<item name="Blank Rune" chance="33590" />
+		<item name="Pear" chance="24850" />
+		<item name="Magic Light Wand" chance="13830" />
+		<item name="Geomancer's Robe" chance="8110" />
+		<item name="Geomancer's Staff" chance="6600" />
+		<item name="Clerical Mace" chance="1060" />
+		<item name="Dwarven Ring" chance="660" />
+		<item name="Small Sapphire" chance="570" />
+		<item name="Spellbook" chance="500" />
+		<item name="Terra Boots" chance="400" />
+		<item name="Iron Ore" chance="310" />
+	</loot>
+</monster>

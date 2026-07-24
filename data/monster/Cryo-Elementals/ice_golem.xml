@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Ice Golem" nameDescription="an ice golem" race="undead" experience="295" speed="195">
+	<health now="385" max="385" />
+	<look type="261" corpse="7282" />
+	<targetchange interval="2000" chance="5" />
+	<flags>
+		<flag summonable="0" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="0" />
+		<flag convinceable="0" />
+		<flag pushable="0" />
+		<flag canpushitems="1" />
+		<flag staticattack="50" />
+		<flag targetdistance="1" />
+		<flag runonhealth="0" />
+		<flag canwalkonenergy="0" />
+		<flag canwalkonfire="1" />
+		<flag canwalkonpoison="0" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-220" />
+		<attack name="speed" interval="1000" chance="13" length="8" spread="0" speedchange="-800" duration="20000">
+			<attribute key="areaEffect" value="icearea" />
+		</attack>
+		<attack name="ice" interval="1000" chance="15" range="7" min="-50" max="-85">
+			<attribute key="shootEffect" value="smallice" />
+			<attribute key="areaEffect" value="iceattack" />
+		</attack>
+		<attack name="ice golem skill reducer" interval="2000" chance="10" />
+	</attacks>
+	<defenses armor="25" defense="26" />
+	<elements>
+		<element physicalPercent="20" />
+		<element energyPercent="-20" />
+	</elements>
+	<immunities>
+		<immunity holy="1" />
+		<immunity death="1" />
+		<immunity fire="1" />
+		<immunity ice="1" />
+		<immunity invisible="1" />
+		<immunity paralyze="1" />
+	</immunities>
+	<voices interval="2000" chance="5">
+		<voice sentence="Gnarr." yell="0" />
+		<voice sentence="Chrrr." yell="0" />
+		<voice sentence="Crrrrk." yell="0" />
+	</voices>
+	<loot>
+		<item name="Gold Coin" countmax="100" chance="100000" />
+		<item name="Gold Coin" countmax="20" chance="100000" />
+		<item name="Frosty Heart" chance="14270" />
+		<item name="Ice Cube" chance="5090" />
+		<item name="Strong Mana Potion" chance="3040" />
+		<item name="Strong Health Potion" chance="2460" />
+		<item name="Black Pearl" chance="1490" />
+		<item name="Small Diamond" chance="750" />
+		<item name="Small Sapphire" chance="570" />
+		<item name="Crystal Sword" chance="570" />
+		<item name="Strange Helmet" chance="350" />
+		<item name="Ice Rapier" chance="320" />
+		<item name="Shard" chance="190" />
+		<item name="Glacier Mask" chance="190" />
+	</loot>
+</monster>

@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Chakoya Toolshaper" nameDescription="a chakoya toolshaper" race="blood" experience="40" speed="136" manacost="305">
+	<health now="80" max="80" />
+	<look type="259" corpse="7320" />
+	<targetchange interval="60000" chance="0" />
+	<flags>
+		<flag summonable="0" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="0" />
+		<flag convinceable="1" />
+		<flag pushable="0" />
+		<flag canpushitems="1" />
+		<flag targetdistance="1" />
+		<flag staticattack="80" />
+		<flag runonhealth="0" />
+		<flag canwalkonenergy="0" />
+		<flag canwalkonfire="0" />
+		<flag canwalkonpoison="0" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-35" />
+		<attack name="physical" interval="2000" chance="10" range="7" radius="1" target="1" min="0" max="-45">
+			<attribute key="shootEffect" value="smallstone" />
+			<attribue key="areaEffect" value="poff" />
+		</attack>
+	</attacks>
+	<defenses armor="7" defense="7" />
+	<elements>
+		<element deathPercent="-5" />
+		<element holyPercent="10" />
+		<element firePercent="40" />
+		<element energyPercent="-15" />
+	</elements>
+	<immunities>
+		<immunity ice="1" />
+	</immunities>
+	<voices interval="5000" chance="10">
+		<voice sentence="Suvituka siq chuqua!" yell="0" />
+		<voice sentence="Kiyosa sipaju!" yell="0" />
+		<voice sentence="Jinuma jamjam!" yell="0" />
+		<voice sentence="Chikuva!" yell="0" />
+	</voices>
+	<loot>
+		<item name="Gold Coin" countmax="20" chance="78730" />
+		<item name="Fish" countmax="2" chance="25090" />
+		<item name="Mace" chance="5160" />
+		<item name="Pick" chance="1010" />
+		<item name="Bone Shield" chance="910" />
+		<item name="Ice Cube" chance="390" />
+		<item name="Mammoth Whopper" chance="150" />
+		<item name="Rainbow Trout" chance="120" />
+		<item name="Green Perch" chance="90" />
+		<item name="Northern Pike" chance="60" />
+	</loot>
+</monster>

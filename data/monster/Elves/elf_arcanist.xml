@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Elf Arcanist" nameDescription="an elf arcanist" race="blood" experience="175" speed="220">
+	<health now="220" max="220" />
+	<look type="63" corpse="6011" />
+	<targetchange interval="4000" chance="10" />
+	<flags>
+		<flag summonable="0" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="0" />
+		<flag convinceable="0" />
+		<flag pushable="0" />
+		<flag canpushitems="1" />
+		<flag canpushcreatures="0" />
+		<flag targetdistance="4" />
+		<flag staticattack="90" />
+		<flag runonhealth="0" />
+		<flag canwalkonenergy="0" />
+		<flag canwalkonfire="0" />
+		<flag canwalkonpoison="0" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-35" />
+		<attack name="physical" interval="2000" chance="10" range="7" min="-15" max="-45">
+			<attribute key="shootEffect" value="arrow" />
+		</attack>
+		<attack name="energy" interval="2000" chance="10" range="7" min="-30" max="-50">
+			<attribute key="shootEffect" value="energy" />
+			<attribute key="areaEffect" value="energy" />
+		</attack>
+		<attack name="death" interval="2000" chance="10" range="7" min="-60" max="-80">
+			<attribute key="shootEffect" value="suddendeath" />
+			<attribute key="areaEffect" value="mortarea" />
+		</attack>
+	</attacks>
+	<defenses armor="15" defense="15">
+		<defense name="healing" interval="2000" chance="15" min="42" max="68">
+			<attribute key="areaEffect" value="blueshimmer" />
+		</defense>
+	</defenses>
+	<elements>
+		<element deathPercent="20" />
+		<element holyPercent="-10" />
+		<element firePercent="50" />
+		<element energyPercent="20" />
+	</elements>
+	<immunities>
+		<immunity invisible="1" />
+		<immunity paralyze="0" />
+	</immunities>
+	<voices interval="5000" chance="10">
+		<voice sentence="I'll bring balance upon you!" yell="0" />
+		<voice sentence="Tha'shi Cenath!" yell="0" />
+		<voice sentence="Feel my wrath!" yell="0" />
+		<voice sentence="Vihil Ealuel!" yell="0" />
+		<voice sentence="For the Daughter of the Stars!" yell="0" />
+	</voices>
+	<loot>
+		<item name="Gold Coin" countmax="49" chance="37150" />
+		<item name="Scroll" chance="30520" />
+		<item name="Melon" chance="21760" />
+		<item name="Blank Rune" chance="17890" />
+		<item name="Bread" chance="13920" />
+		<item name="Elvish Talisman" chance="10020" />
+		<item name="Elven Astral Observer" chance="7740" />
+		<item name="Green Tunic" chance="7270" />
+		<item name="Arrow" countmax="3" chance="6110" />
+		<item name="Sling Herb" chance="4850" />
+		<item name="Health Potion" chance="4050" />
+		<item name="Strong Mana Potion" chance="2920" />
+		<item name="Candlestick" chance="2180" />
+		<item name="Elven Amulet" chance="2040" />
+		<item name="Holy Orchid" chance="2010" />
+		<item name="Wand of Cosmic Energy" chance="1130" />
+		<item name="Life Crystal" chance="1040" />
+		<item name="Sandals" chance="980" />
+		<item name="Inkwell" chance="950" />
+		<item name="Grave Flower" chance="800" />
+		<item name="Yellow Gem" chance="40" />
+	</loot>
+</monster>

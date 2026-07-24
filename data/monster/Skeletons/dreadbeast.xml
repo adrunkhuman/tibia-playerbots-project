@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Dreadbeast" nameDescription="a dreadbeast" race="undead" experience="250" speed="136" manacost="800">
+	<health now="800" max="800" />
+	<look type="101" corpse="6030" />
+	<targetchange interval="60000" chance="10" />
+	<flags>
+		<flag summonable="0" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="0" />
+		<flag convinceable="1" />
+		<flag pushable="0" />
+		<flag canpushitems="1" />
+		<flag targetdistance="1" />
+		<flag staticattack="80" />
+		<flag runonhealth="0" />
+		<flag canwalkonfire="0" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-50" poison="100" />
+		<attack name="drown" interval="4000" chance="30" range="7" target="1" min="-70" max="-90">
+			<attribute key="areaEffect" value="bluebubble" />
+			<attribute key="shootEffect" value="suddendeath" />
+		</attack>
+		<attack name="lifedrain" interval="2000" chance="20" radius="3" target="0" min="-10" max="-80">
+			<attribute key="areaEffect" value="redshimmer" />
+		</attack>
+		<attack name="poisoncondition" interval="2000" chance="20" radius="3" target="0" min="-40" max="-120">
+			<attribute key="areaEffect" value="poison" />
+		</attack>
+		<attack name="dreadbeast skill reducer" interval="2000" target="1" range="1" chance="5" />
+	</attacks>
+	<defenses armor="40" defense="40">
+		<defense name="healing" interval="2000" chance="15" min="35" max="65">
+			<attribute key="areaEffect" value="greenspark" />
+		</defense>
+	</defenses>
+	<elements>
+		<element physicalPercent="30" />
+		<element holyPercent="-50" />
+		<element icePercent="40" />
+		<element firePercent="55" />
+		<element energyPercent="15" />
+		<element drownPercent="75" />
+	</elements>
+	<immunities>
+		<immunity death="1" />
+		<immunity earth="1" />
+		<immunity invisible="0" />
+		<immunity paralyze="1" />
+	</immunities>
+	<loot>
+		<item name="Gold Coin" countmax="88" chance="13350" />
+		<item name="Bone" chance="10970" />
+		<item name="Plate Armor" chance="3470" />
+		<item name="Skull" chance="3110" />
+		<item name="Big Bone" chance="2190" />
+		<item name="Bone Club" chance="2010" />
+		<item name="Bone Shield" chance="1280" />
+		<item name="Green Mushroom" chance="1280" />
+		<item name="Hardened Bone" chance="730" />
+		<item name="Health Potion" chance="730" />
+	</loot>
+</monster>

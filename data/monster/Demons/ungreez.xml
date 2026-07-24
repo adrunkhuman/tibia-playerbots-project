@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Ungreez" nameDescription="Ungreez" race="fire" experience="500" speed="330">
+	<health now="8200" max="8200" />
+	<look type="35" corpse="5995" />
+	<targetchange interval="5000" chance="8" />
+	<flags>
+		<flag summonable="0" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="0" />
+		<flag convinceable="0" />
+		<flag pushable="0" />
+		<flag canpushitems="1" />
+		<flag canpushcreatures="1" />
+		<flag targetdistance="1" />
+		<flag staticattack="90" />
+		<flag runonhealth="0" />
+		<flag isboss="1" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-480" />
+		<attack name="manadrain" interval="2000" chance="13" range="7" min="-80" max="-140">
+			<attribute key="shootEffect" value="suddendeath" />
+		</attack>
+		<attack name="fire" interval="1000" chance="14" range="7" radius="7" target="1" min="-180" max="-250">
+			<attribute key="shootEffect" value="fire" />
+			<attribute key="areaEffect" value="firearea" />
+		</attack>
+		<attack name="energy" interval="2000" chance="18" min="-200" max="-400">
+			<attribute key="shootEffect" value="energy" />
+			<attribute key="areaEffect" value="purpleenergy" />
+		</attack>
+		<attack name="energy" interval="1000" chance="12" length="8" spread="0" min="-300" max="-380">
+			<attribute key="areaEffect" value="purpleenergy" />
+		</attack>
+	</attacks>
+	<defenses armor="55" defense="55">
+		<defense name="healing" interval="2000" chance="15" min="90" max="150">
+			<attribute key="areaEffect" value="blueshimmer" />
+		</defense>
+	</defenses>
+	<elements>
+		<element physicalPercent="30" />
+		<element deathPercent="20" />
+		<element holyPercent="-5" />
+		<element icePercent="-5" />
+		<element energyPercent="55" />
+		<element earthPercent="60" />
+	</elements>
+	<immunities>
+		<immunity fire="1" />
+		<immunity lifedrain="1" />
+		<immunity paralyze="1" />
+		<immunity outfit="1" />
+		<immunity drunk="1" />
+		<immunity invisible="1" />
+	</immunities>
+	<voices interval="5000" chance="10">
+		<voice sentence="I teach you that even heroes can die!" yell="0" />
+		<voice sentence="You will die begging like the others did!" yell="0" />
+	</voices>
+	<loot>
+		<item name="Gold Coin" countmax="100" chance="40000" />
+		<item name="Fire Mushroom" countmax="6" chance="20000" />
+		<item name="Great Health Potion" chance="8000" />
+		<item name="Great Mana Potion" chance="8000" />
+	</loot>
+</monster>

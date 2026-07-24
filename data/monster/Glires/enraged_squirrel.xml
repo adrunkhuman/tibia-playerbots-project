@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Enraged Squirrel" nameDescription="an enraged squirrel" race="blood" experience="15" speed="300" manacost="220">
+	<health now="35" max="35" />
+	<look type="274" corpse="7628" />
+	<targetchange interval="2000" chance="5" />
+	<flags>
+		<flag summonable="1" />
+		<flag illusionable="1" />
+		<flag convinceable="1" />
+		<flag pushable="0" />
+		<flag canpushitems="0" />
+		<flag canpushcreatures="0" />
+		<flag targetdistance="1" />
+		<flag staticattack="90" />
+		<flag runonhealth="0" />
+		<flag canwalkonenergy="0" />
+		<flag canwalkonfire="0" />
+		<flag canwalkonpoison="0" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="-1" max="-3" />
+		<attack name="physical" interval="2000" range="3" min="0" max="-11">
+			<attribute key="areaEffect" value="energy" />
+		</attack>
+	</attacks>
+	<defenses armor="1" defense="1" />
+	<immunities>
+		<immunity invisible="0" />
+		<immunity paralyze="0" />
+	</immunities>
+	<voices interval="1000" chance="5">
+		<voice sentence="Chchch" yell="0" />
+	</voices>
+	<loot>
+		<item name="Walnut" chance="2330" />
+	</loot>
+</monster>

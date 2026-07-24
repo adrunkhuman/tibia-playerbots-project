@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Lizard Templar" nameDescription="a lizard templar" race="blood" experience="155" speed="174">
+	<health now="410" max="410" />
+	<look type="113" corpse="4251" />
+	<targetchange interval="5000" chance="0" />
+	<flags>
+		<flag summonable="0" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="1" />
+		<flag convinceable="0" />
+		<flag pushable="0" />
+		<flag canpushitems="1" />
+		<flag canpushcreatures="0" />
+		<flag targetdistance="1" />
+		<flag staticattack="90" />
+		<flag runonhealth="0" />
+		<flag canwalkonenergy="0" />
+		<flag canwalkonfire="0" />
+		<flag canwalkonpoison="1" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-70" />
+	</attacks>
+	<defenses armor="26" defense="26" />
+	<elements>
+		<element icePercent="10" />
+		<element firePercent="-10" />
+		<element energyPercent="20" />
+	</elements>
+	<immunities>
+		<immunity earth="1" />
+	</immunities>
+	<voices interval="5000" chance="10">
+		<voice sentence="Hissss!" yell="0" />
+	</voices>
+	<loot>
+		<item name="Gold Coin" countmax="60" chance="83930" />
+		<item name="Short Sword" chance="9840" />
+		<item name="Sword" chance="4910" />
+		<item name="Steel Helmet" chance="1960" />
+		<item name="Morning Star" chance="1920" />
+		<item name="Plate Armor" chance="1020" />
+		<item name="Lizard Scale" chance="980" />
+		<item name="Lizard Leather" chance="900" />
+		<item name="Health Potion" chance="840" />
+		<item name="Templar Scytheblade" chance="530" />
+		<item name="Small Emerald" chance="270" />
+		<item name="Salamander Shield" chance="120" />
+	</loot>
+</monster>

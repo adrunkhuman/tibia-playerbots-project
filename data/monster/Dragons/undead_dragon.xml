@@ -1,0 +1,98 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Undead Dragon" nameDescription="an undead dragon" race="undead" experience="7200" speed="330">
+	<health now="8350" max="8350" />
+	<look type="231" corpse="6306" />
+	<targetchange interval="4000" chance="10" />
+	<flags>
+		<flag summonable="0" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="0" />
+		<flag convinceable="0" />
+		<flag pushable="0" />
+		<flag canpushitems="1" />
+		<flag canpushcreatures="1" />
+		<flag targetdistance="1" />
+		<flag staticattack="70" />
+		<flag runonhealth="0" />
+		<flag canwalkonenergy="0" />
+		<flag canwalkonfire="1" />
+		<flag canwalkonpoison="1" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-480" />
+		<attack name="physical" interval="2000" chance="5" range="7" radius="4" target="1" min="-300" max="-400">
+			<attribute key="areaEffect" value="redspark" />
+		</attack>
+		<attack name="death" interval="2000" chance="10" range="7" min="-125" max="-600">
+			<attribute key="shootEffect" value="suddendeath" />
+			<attribute key="areaEffect" value="mortarea" />
+			<attribute key="areaEffect" value="smallclouds" />
+		</attack>
+		<attack name="earth" interval="2000" chance="5" range="7" radius="4" target="1" min="-100" max="-390">
+			<attribute key="shootEffect" value="poison" />
+			<attribute key="areaEffect" value="poison" />
+		</attack>
+		<attack name="earth" interval="2000" chance="15" target="1" range="7" min="0" max="-600" poison="400">
+			<attribute key="shootEffect" value="poison" />
+			<attribute key="areaEffect" value="poison" />
+		</attack>
+		<attack name="lifedrain" interval="2000" chance="10" length="8" spread="3" min="-300" max="-700">
+			<attribute key="areaEffect" value="redshimmer" />
+		</attack>
+		<attack name="lifedrain" interval="2000" chance="10" radius="3" min="-100" max="-200">
+			<attribute key="areaEffect" value="redshimmer" />
+		</attack>
+		<attack name="undead dragon curse" interval="2000" chance="10" />
+	</attacks>
+	<defenses armor="40" defense="40">
+		<defense name="healing" interval="2000" chance="15" min="200" max="250">
+			<attribute key="areaEffect" value="blueshimmer" />
+		</defense>
+	</defenses>
+	<elements>
+		<element physicalPercent="5" />
+		<element holyPercent="-25" />
+		<element icePercent="10" />
+	</elements>
+	<immunities>
+		<immunity death="1" />
+		<immunity fire="1" />
+		<immunity earth="1" />
+		<immunity paralyze="1" />
+		<immunity invisible="1" />
+		<immunity drown="1" />
+	</immunities>
+	<voices interval="5000" chance="10">
+		<voice sentence="FEEEED MY ETERNAL HUNGER!" yell="1" />
+		<voice sentence="I SENSE LIFE" yell="1" />
+	</voices>
+	<loot>
+		<item name="Gold Coin" countmax="100" chance="100000" />
+		<item name="Gold Coin" countmax="98" chance="100000" />
+		<item name="Platinum Coin" countmax="5" chance="49760" />
+		<item name="Unholy Bone" chance="33850" />
+		<item name="Small Sapphire" countmax="2" chance="27560" />
+		<item name="Assassin Star" countmax="5" chance="25220" />
+		<item name="Great Mana Potion" countmax="3" chance="24680" />
+		<item name="Great Health Potion" countmax="3" chance="24670" />
+		<item name="Black Pearl" countmax="2" chance="22460" />
+		<item name="Demonic Essence" chance="15420" />
+		<item name="Hardened Bone" chance="15200" />
+		<item name="Power Bolt" countmax="15" chance="14660" />
+		<item name="Golden Mug" chance="5190" />
+		<item name="Knight Armor" chance="4870" />
+		<item name="Dragonbone Staff" chance="4110" />
+		<item name="Death Ring" chance="1890" />
+		<item name="Life Crystal" chance="1580" />
+		<item name="War Axe" chance="1320" />
+		<item name="Royal Helmet" chance="1120" />
+		<item name="Blue Gem" chance="1090" />
+		<item name="Gold Ingot" chance="1060" />
+		<item name="Dragon Slayer" chance="970" />
+		<item name="Spellweaver's Robe" chance="900" />
+		<item name="Golden Armor" chance="670" />
+		<item name="Divine Plate" chance="440" />
+		<item name="Skullcracker Armor" chance="310" />
+	</loot>
+</monster>

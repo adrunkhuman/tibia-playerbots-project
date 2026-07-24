@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="The Voice of Ruin" nameDescription="The Voice of Ruin" race="blood" experience="3500" speed="460">
+	<health now="5500" max="5500" />
+	<look type="344" corpse="11288" />
+	<targetchange interval="2000" chance="5" />
+	<flags>
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag summonable="0" />
+		<flag illusionable="0" />
+		<flag convinceable="0" />
+		<flag pushable="0" />
+		<flag canpushitems="0" />
+		<flag canpushcreatures="0" />
+		<flag staticattack="90" />
+		<flag targetdistance="1" />
+		<flag runonhealth="0" />
+		<flag canwalkonenergy="1" />
+		<flag canwalkonfire="1" />
+		<flag canwalkonpoison="0" />
+		<flag isboss="1" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-400" />
+		<attack name="poisoncondition" interval="2000" chance="15" length="3" spread="2" min="-440" max="-820">
+			<attribute key="areaEffect" value="poison" />
+		</attack>
+		<attack name="earth" interval="2000" chance="15" target="0" radius="3" min="-290" max="-540">
+			<attribute key="areaEffect" value="greenspark" />
+		</attack>
+		<attack name="earth" interval="2000" chance="10" length="8" spread="0" min="-190" max="-480">
+			<attribute key="areaEffect" value="greenbubble" />
+		</attack>
+	</attacks>
+	<defenses armor="30" defense="30">
+		<defense name="healing" interval="2000" chance="10" min="475" max="625">
+			<attribute key="areaEffect" value="greenshimmer" />
+		</defense>
+	</defenses>
+	<immunities>
+		<immunity paralyze="1" />
+		<immunity invisible="1" />
+		<immunity drunk="1" />
+	</immunities>
+	<loot>
+		<item name="Gold Coin" countmax="95" chance="100000" />
+		<item name="Corrupted Flag" chance="46670" />
+		<item name="Spiked Iron Ball" chance="40000" />
+		<item name="Platinum Coin" countmax="5" chance="26670" />
+		<item name="Cursed Shoulder Spikes" chance="20000" />
+		<item name="Scale of Corruption" chance="6670" />
+		<item name="Zaoan Shoes" chance="6670" />
+	</loot>
+</monster>

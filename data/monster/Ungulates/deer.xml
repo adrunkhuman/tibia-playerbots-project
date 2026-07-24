@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Deer" nameDescription="a deer" race="blood" experience="0" speed="196" manacost="260">
+	<health now="25" max="25" />
+	<look type="31" corpse="5970" />
+	<targetchange interval="4000" chance="20" />
+	<flags>
+		<flag summonable="1" />
+		<flag attackable="1" />
+		<flag hostile="0" />
+		<flag illusionable="1" />
+		<flag convinceable="1" />
+		<flag pushable="1" />
+		<flag canpushitems="0" />
+		<flag canpushcreatures="0" />
+		<flag targetdistance="1" />
+		<flag staticattack="90" />
+		<flag runonhealth="25" />
+		<flag canwalkonenergy="0" />
+		<flag canwalkonfire="0" />
+		<flag canwalkonpoison="0" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-1" />
+	</attacks>
+	<defenses armor="2" defense="2" />
+	<loot>
+		<item name="Meat" countmax="4" chance="80070" />
+		<item name="Ham" chance="50560" />
+		<item name="Antlers" chance="1090" />
+	</loot>
+</monster>

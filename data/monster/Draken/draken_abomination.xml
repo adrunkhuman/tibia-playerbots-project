@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Draken Abomination" nameDescription="a draken abomination" race="venom" experience="3800" speed="230">
+	<health now="6250" max="6250" />
+	<look type="357" corpse="12623" />
+	<targetchange interval="4000" chance="10" />
+	<flags>
+		<flag summonable="0" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="0" />
+		<flag convinceable="0" />
+		<flag pushable="0" />
+		<flag canpushitems="1" />
+		<flag canpushcreatures="0" />
+		<flag targetdistance="1" />
+		<flag staticattack="70" />
+		<flag runonhealth="0" />
+		<flag canwalkonenergy="0" />
+		<flag canwalkonfire="1" />
+		<flag canwalkonpoison="1" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-420" />
+		<attack name="fire" interval="2000" chance="10" length="4" spread="3" min="-310" max="-630">
+			<attribute key="areaEffect" value="explosion" />
+		</attack>
+		<attack name="draken abomination curse" interval="2000" range="5" chance="10" />
+		<attack name="death" interval="2000" chance="15" length="4" spread="0" min="-170" max="-370">
+			<attribute key="areaEffect" value="mortarea" />
+		</attack>
+		<attack name="drunk" interval="2000" chance="15" range="7" radius="4" target="0" duration="9000">
+			<attribute key="shootEffect" value="poison" />
+			<attribute key="areaEffect" value="poison" />
+		</attack>
+		<attack name="lifedrain" interval="2000" chance="10" length="8" spread="0" min="-170" max="-370">
+			<attribute key="areaEffect" value="mortarea" />
+		</attack>
+	</attacks>
+	<defenses armor="30" defense="30">
+		<defense name="healing" interval="2000" chance="15" min="0" max="100">
+			<attribute key="areaEffect" value="blueshimmer" />
+		</defense>
+	</defenses>
+	<elements>
+		<element holyPercent="-5" />
+		<element energyPercent="-5" />
+		<element icePercent="5" />
+	</elements>
+	<immunities>
+		<immunity death="1" />
+		<immunity fire="1" />
+		<immunity earth="1" />
+		<immunity invisible="1" />
+		<immunity paralyze="0" />
+	</immunities>
+	<summons maxSummons="2">
+		<summon name="Death Blob" interval="2000" chance="10" max="2" />
+	</summons>
+	<voices interval="5000" chance="10">
+		<voice sentence="Uhhhg!" yell="0" />
+		<voice sentence="G" yell="1" />
+		<voice sentence="Hmmnn!" yell="0" />
+		<voice sentence="Aaag!" yell="0" />
+	</voices>
+	<loot>
+		<item name="Gold Coin" countmax="100" chance="97100" />
+		<item name="Gold Coin" countmax="99" chance="97100" />
+		<item name="Meat" countmax="4" chance="50230" />
+		<item name="Platinum Coin" countmax="8" chance="50000" />
+		<item name="Eye of Corruption" chance="12060" />
+		<item name="Scale of Corruption" chance="10960" />
+		<item name="Ultimate Health Potion" countmax="3" chance="9170" />
+		<item name="Great Mana Potion" countmax="3" chance="9060" />
+		<item name="Terra Hood" chance="8310" />
+		<item name="Tail of Corruption" chance="6260" />
+		<item name="Great Spirit Potion" countmax="3" chance="4950" />
+		<item name="Small Topaz" countmax="4" chance="2840" />
+		<item name="Wand of Voodoo" chance="1030" />
+		<item name="Zaoan Legs" chance="820" />
+		<item name="Zaoan Armor" chance="750" />
+		<item name="Zaoan Helmet" chance="630" />
+		<item name="Draken Boots" chance="540" />
+		<item name="Shield of Corruption" chance="10" />
+		<item name="Snake God's Wristguard" chance="10" />
+	</loot>
+</monster>

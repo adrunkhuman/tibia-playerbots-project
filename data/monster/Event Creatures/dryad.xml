@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Dryad" nameDescription="a dryad" race="blood" experience="190" speed="230">
+	<health now="310" max="310" />
+	<look type="137" head="99" body="41" legs="5" feet="102" addons="3" corpse="3058" />
+	<targetchange interval="4000" chance="10" />
+	<flags>
+		<flag summonable="0" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="0" />
+		<flag convinceable="0" />
+		<flag pushable="1" />
+		<flag canpushitems="1" />
+		<flag canpushcreatures="0" />
+		<flag targetdistance="1" />
+		<flag staticattack="90" />
+		<flag runonhealth="30" />
+		<flag canwalkonenergy="0" />
+		<flag canwalkonfire="0" />
+		<flag canwalkonpoison="1" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-90" />
+		<attack name="earth" interval="2500" chance="9" target="0" radius="4" min="-20" max="-30">
+			<attribute key="areaEffect" value="bigplants" />
+		</attack>
+		<attack name="speed" interval="1000" chance="6" range="7" radius="7" target="0" speedchange="-200" duration="20000">
+			<attribute key="areaEffect" value="poff" />
+		</attack>
+		<attack name="drunk" interval="1000" chance="12" range="7" duration="20000">
+			<attribute key="areaEffect" value="hearts" />
+		</attack>
+	</attacks>
+	<defenses armor="15" defense="15">
+		<defense name="healing" interval="2000" chance="15" min="15" max="60">
+			<attribute key="areaEffect" value="blueshimmer" />
+		</defense>
+		<defense name="invisible" interval="2000" chance="10" duration="5000">
+			<attribute key="areaEffect" value="blueshimmer" />
+		</defense>
+	</defenses>
+	<elements>
+		<element icePercent="20" />
+		<element firePercent="-20" />
+		<element energyPercent="30" />
+	</elements>
+	<immunities>
+		<immunity earth="1" />
+		<immunity invisible="1" />
+		<immunity paralyze="1" />
+	</immunities>
+	<voices interval="5000" chance="10">
+		<voice sentence="Defiler of nature!" yell="0" />
+		<voice sentence="Feel the wrath of mother Tibia!" yell="0" />
+	</voices>
+	<loot>
+		<item name="White Mushroom" countmax="2" chance="55200" />
+		<item name="Gold Coin" countmax="30" chance="39880" />
+		<item name="Seeds" countmax="2" chance="3100" />
+		<item name="Leaf Legs" chance="1100" />
+		<item name="Flower Dress" chance="1040" />
+		<item name="Coconut Shoes" chance="1040" />
+		<item name="Flower Wreath" chance="1030" />
+		<item name="Orange Mushroom" countmax="2" chance="790" />
+		<item name="Small Amethyst" chance="90" />
+	</loot>
+</monster>

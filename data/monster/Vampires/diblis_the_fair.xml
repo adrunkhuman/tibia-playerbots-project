@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Diblis the Fair" nameDescription="Diblis The Fair" race="undead" experience="1800" speed="280">
+	<health now="1500" max="1500" />
+	<look type="287" corpse="8937" />
+	<targetchange interval="5000" chance="10" />
+	<flags>
+		<flag summonable="0" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="0" />
+		<flag convinceable="0" />
+		<flag pushable="0" />
+		<flag canpushitems="1" />
+		<flag canpushcreatures="1" />
+		<flag targetdistance="1" />
+		<flag staticattack="90" />
+		<flag runonhealth="700" />
+		<flag canwalkonenergy="1" />
+		<flag canwalkonfire="1" />
+		<flag canwalkonpoison="1" />
+		<flag isboss="1" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-300" />
+		<attack name="death" interval="1000" chance="12" target="1" min="0" max="-200">
+			<attribute key="areaEffect" value="mortarea" />
+			<attribute key="shootEffect" value="suddendeath" />
+		</attack>
+		<attack name="speed" interval="2000" chance="15" range="7" target="1" speedchange="-700" duration="10000">
+			<attribute key="areaEffect" value="redshimmer" />
+		</attack>
+		<attack name="drunk" interval="2000" chance="15" range="7" target="1" duration="10000">
+			<attribute key="areaEffect" value="redshimmer" />
+		</attack>
+	</attacks>
+	<defenses armor="30" defense="30">
+		<defense name="healing" interval="1000" chance="12" min="100" max="235">
+			<attribute key="areaEffect" value="blueshimmer" />
+		</defense>
+		<defense name="invisible" interval="3000" chance="25" duration="6000">
+			<attribute key="areaEffect" value="blueshimmer" />
+		</defense>
+	</defenses>
+	<elements>
+		<element physicalPercent="40" />
+		<element holyPercent="-5" />
+	</elements>
+	<immunities>
+		<immunity lifedrain="1" />
+		<immunity death="1" />
+		<immunity earth="1" />
+		<immunity invisible="1" />
+		<immunity paralyze="1" />
+	</immunities>
+	<summons maxSummons="4">
+		<summon name="Banshee" interval="4500" chance="50" />
+	</summons>
+	<voices interval="5000" chance="10">
+		<voice sentence="I envy you to be slain by someone as beautiful as me." yell="0" />
+		<voice sentence="Not in my face you barbarian!" yell="0" />
+		<voice sentence="I will drain your ugly corpses of the last drop of blood." yell="0" />
+		<voice sentence="My brides will feast on your souls!" yell="0" />
+	</voices>
+	<loot>
+		<item name="Gold Coin" countmax="99" chance="100000" />
+		<item name="Vampire Lord Token" chance="100000" />
+		<item name="Blood Preservation" chance="90630" />
+		<item name="Strong Health Potion" chance="20830" />
+		<item name="Vampire Shield" chance="15630" />
+		<item name="Skull" chance="12500" />
+		<item name="Ring of Healing" chance="11460" />
+		<item name="Platinum Coin" countmax="5" chance="8330" />
+		<item name="Spellbook of Lost Souls" chance="2080" />
+		<item name="Black Pearl" chance="1040" />
+	</loot>
+</monster>

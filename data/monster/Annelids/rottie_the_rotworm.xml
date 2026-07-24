@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Rottie the Rotworm" nameDescription="Rottie the Rotworm" race="blood" experience="40" speed="180">
+	<health now="65" max="65" />
+	<look type="26" corpse="5967" />
+	<targetchange interval="2000" chance="0" />
+	<flags>
+		<flag summonable="0" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="0" />
+		<flag convinceable="0" />
+		<flag pushable="0" />
+		<flag canpushitems="0" />
+		<flag canpushcreatures="0" />
+		<flag targetdistance="1" />
+		<flag staticattack="90" />
+		<flag runonhealth="0" />
+		<flag isboss="1" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-25" />
+	</attacks>
+	<defenses armor="8" defense="11" />
+	<loot>
+		<item name="Lump of Dirt" chance="100000" />
+        	<item name="Gold Coin" countmax="18" chance="84780" />
+        	<item name="Worm" countmax="5" chance="45650" />
+        	<item name="Mace" chance="43480" />
+        	<item name="Sword" chance="28260" />
+        	<item name="Ham" chance="17390" />
+        	<item name="Meat" chance="17390" />
+        	<item name="Copper Shield" chance="15220" />
+        	<item name="Legion Helmet" chance="10870" />
+        	<item name="Katana" chance="8700" />
+	</loot>
+</monster>

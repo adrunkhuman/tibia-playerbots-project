@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Dwarf" nameDescription="a dwarf" race="blood" experience="45" speed="170" manacost="320">
+	<health now="90" max="90" />
+	<look type="69" corpse="6007" />
+	<targetchange interval="4000" chance="0" />
+	<flags>
+		<flag summonable="1" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="1" />
+		<flag convinceable="1" />
+		<flag pushable="1" />
+		<flag canpushitems="0" />
+		<flag canpushcreatures="0" />
+		<flag targetdistance="1" />
+		<flag staticattack="90" />
+		<flag runonhealth="0" />
+		<flag canwalkonenergy="0" />
+		<flag canwalkonfire="0" />
+		<flag canwalkonpoison="0" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-30" />
+	</attacks>
+	<defenses armor="8" defense="8" />
+	<elements>
+		<element deathPercent="-5" />
+		<element firePercent="-5" />
+		<element earthPercent="10" />
+	</elements>
+	<voices interval="5000" chance="10">
+		<voice sentence="Hail Durin!" yell="0" />
+	</voices>
+	<loot>
+		<item name="White Mushroom" chance="50160" />
+		<item name="Gold Coin" countmax="8" chance="35270" />
+		<item name="Hatchet" chance="24760" />
+		<item name="Axe" chance="14600" />
+		<item name="Pick" chance="10140" />
+		<item name="Copper Shield" chance="10090" />
+		<item name="Leather Legs" chance="9700" />
+		<item name="Studded Armor" chance="8050" />
+		<item name="Letter" chance="7960" />
+		<item name="Dwarven Ring" chance="100" />
+		<item name="Iron Ore" chance="80" />
+	</loot>
+</monster>

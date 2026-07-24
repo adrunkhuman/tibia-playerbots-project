@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="The Evil Eye" nameDescription="The Evil Eye" race="blood" experience="750" speed="240">
+	<health now="1200" max="1200" />
+	<look type="210" corpse="6037" />
+	<targetchange interval="5000" chance="8" />
+	<flags>
+		<flag summonable="0" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="0" />
+		<flag convinceable="0" />
+		<flag pushable="0" />
+		<flag canpushitems="1" />
+		<flag canpushcreatures="1" />
+		<flag targetdistance="4" />
+		<flag staticattack="90" />
+		<flag runonhealth="0" />
+		<flag isboss="1" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-91" />
+		<attack name="energy" interval="1000" chance="15" range="7" min="-60" max="-130">
+			<attribute key="shootEffect" value="energy" />
+		</attack>
+		<attack name="fire" interval="1000" chance="13" range="7" min="-85" max="-115">
+			<attribute key="shootEffect" value="fire" />
+		</attack>
+		<attack name="physical" interval="1000" chance="17" range="7" min="-135" max="-175">
+			<attribute key="shootEffect" value="suddendeath" />
+			<attribute key="areaEffect" value="mortarea" />
+		</attack>
+		<attack name="earth" interval="1000" chance="15" range="7" min="-40" max="-120">
+			<attribute key="shootEffect" value="poison" />
+		</attack>
+		<attack name="lifedrain" interval="1000" chance="12" range="7" min="-110" max="-130">
+			<attribute key="areaEffect" value="redshimmer" />
+		</attack>
+		<attack name="speed" interval="1000" chance="10" range="7" speedchange="-850" duration="20000">
+			<attribute key="areaEffect" value="redshimmer" />
+		</attack>
+		<attack name="earth" interval="1000" chance="8" length="8" spread="3" min="-35" max="-85">
+			<attribute key="areaEffect" value="poison" />
+		</attack>
+		<attack name="lifedrain" interval="1000" chance="6" length="8" spread="3" min="-75" max="-85">
+			<attribute key="areaEffect" value="redshimmer" />
+		</attack>
+		<attack name="manadrain" interval="1000" chance="9" length="8" spread="3" min="-150" max="-250">
+			<attribute key="areaEffect" value="bluebubble" />
+		</attack>
+	</attacks>
+	<defenses armor="19" defense="23">
+		<defense name="healing" interval="1000" chance="9" min="1" max="219">
+			<attribute key="areaEffect" value="blueshimmer" />
+		</defense>
+	</defenses>
+	<elements>
+		<element holyPercent="-1" />
+	</elements>
+	<immunities>
+		<immunity earth="1" />
+		<immunity invisible="1" />
+		<immunity paralyze="1" />
+	</immunities>
+	<summons maxSummons="6">
+		<summon name="demon skeleton" interval="1000" chance="13" max="5" />
+		<summon name="ghost" interval="1000" chance="12" max="4" />
+	</summons>
+	<voices interval="5000" chance="10">
+		<voice sentence="Inferior creatures, bow before my power!" yell="0" />
+		<voice sentence="653768764!" yell="0" />
+		<voice sentence="Let me take a look at you!" yell="0" />
+	</voices>
+	<loot>
+		<item name="Beholder Eye" chance="100000" />
+		<item name="Gold Coin" countmax="100" chance="100000" />
+		<item name="Gold Coin" countmax="100" chance="100000" />
+		<item name="Gold Coin" countmax="29" chance="100000" />
+		<item name="Small Flask of Eyedrops" chance="100000" />
+		<item name="Morning Star" chance="48210" />
+		<item name="Steel Shield" chance="41070" />
+		<item name="Spellbook" chance="39290" />
+		<item name="Two Handed Sword" chance="28570" />
+		<item name="Longsword" chance="26790" />
+		<item name="Beholder Shield" chance="17860" />
+		<item name="Great Mana Potion" chance="14290" />
+		<item name="Terra Mantle" chance="14290" />
+	</loot>
+</monster>

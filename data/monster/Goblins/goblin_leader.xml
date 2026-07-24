@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Goblin Leader" nameDescription="a goblin leader" race="blood" experience="75" speed="120" manacost="290">
+	<health now="50" max="50" />
+	<look type="61" corpse="6002" />
+	<targetchange interval="4000" chance="10" />
+	<flags>
+		<flag summonable="1" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="1" />
+		<flag convinceable="1" />
+		<flag pushable="1" />
+		<flag canpushitems="0" />
+		<flag canpushcreatures="0" />
+		<flag targetdistance="1" />
+		<flag staticattack="90" />
+		<flag runonhealth="14" />
+		<flag canwalkonenergy="0" />
+		<flag canwalkonfire="0" />
+		<flag canwalkonpoison="0" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-50" />
+		<attack name="physical" interval="2000" chance="15" range="7" min="0" max="-45">
+			<attribute key="shootEffect" value="smallstone" />
+		</attack>
+	</attacks>
+	<defenses armor="7" defense="7" />
+	<voices interval="1000" chance="5">
+		<voice sentence="Me the greenest and the meanest!" yell="0" />
+		<voice sentence="Go go, Gobo attack!!" yell="0" />
+		<voice sentence="Me have power to crush you!" yell="0" />
+		<voice sentence="Goblinkiller! Catch him !!" yell="0" />
+	</voices>
+	<loot>
+		<item name="Gold Coin" countmax="9" chance="49270" />
+		<item name="Dagger" chance="17410" />
+		<item name="Fish" chance="13000" />
+		<item name="Bone" chance="11610" />
+		<item name="Small Axe" chance="10620" />
+		<item name="Leather Helmet" chance="10330" />
+		<item name="Short Sword" chance="9750" />
+		<item name="Leather Armor" chance="7720" />
+		<item name="Mouldy Cheese" chance="7430" />
+		<item name="Bone Club" chance="4760" />
+	</loot>
+</monster>

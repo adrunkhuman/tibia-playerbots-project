@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Gladiator" nameDescription="a gladiator" race="blood" experience="90" speed="200" manacost="470">
+	<health now="185" max="185" />
+	<look type="131" head="78" body="3" legs="79" feet="114" corpse="3058" />
+	<targetchange interval="4000" chance="0" />
+	<flags>
+		<flag summonable="0" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="0" />
+		<flag convinceable="1" />
+		<flag pushable="1" />
+		<flag canpushitems="0" />
+		<flag canpushcreatures="0" />
+		<flag targetdistance="1" />
+		<flag staticattack="90" />
+		<flag runonhealth="10" />
+		<flag canwalkonenergy="0" />
+		<flag canwalkonfire="0" />
+		<flag canwalkonpoison="0" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-90" />
+	</attacks>
+	<defenses armor="25" defense="25">
+		<defense name="speed" interval="2000" chance="15" speedchange="215" duration="5000">
+			<attribute key="areaEffect" value="redshimmer" />
+		</defense>
+	</defenses>
+	<elements>
+		<element physicalPercent="5" />
+		<element deathPercent="-5" />
+		<element holyPercent="10" />
+	</elements>
+	<voices interval="5000" chance="10">
+		<voice sentence="Fight!" yell="0" />
+		<voice sentence="You are no match for me!" yell="0" />
+		<voice sentence="Feel my prowess." yell="0" />
+		<voice sentence="Take this!" yell="0" />
+	</voices>
+	<loot>
+		<item name="Gold Coin" countmax="30" chance="49440" />
+		<item name="Meat" chance="19360" />
+		<item name="Sword" chance="12160" />
+		<item name="Mace" chance="10130" />
+		<item name="Plate Shield" chance="10000" />
+		<item name="Chain Helmet" chance="5010" />
+		<item name="Brass Armor" chance="2650" />
+		<item name="Steel Shield" chance="870" />
+		<item name="Iron Helmet" chance="600" />
+		<item name="Belted Cape" chance="440" />
+	</loot>
+</monster>

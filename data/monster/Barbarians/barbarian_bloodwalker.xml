@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Barbarian Bloodwalker" nameDescription="a barbarian bloodwalker" race="blood" experience="195" speed="236" manacost="590">
+	<health now="305" max="305" />
+	<look type="255" head="114" body="113" legs="132" feet="94" corpse="3058" />
+	<targetchange interval="4000" chance="10" />
+	<flags>
+		<flag summonable="0" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="1" />
+		<flag convinceable="1" />
+		<flag pushable="0" />
+		<flag canpushitems="1" />
+		<flag staticattack="80" />
+		<flag targetdistance="1" />
+		<flag runonhealth="0" />
+		<flag canwalkonenergy="0" />
+		<flag canwalkonfire="0" />
+		<flag canwalkonpoison="0" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-200" />
+	</attacks>
+	<defenses armor="9" defense="9">
+		<defense name="speed" interval="2000" chance="15" speedchange="240" duration="5000">
+			<attribute key="areaEffect" value="redshimmer" />
+		</defense>
+	</defenses>
+	<elements>
+		<element physicalPercent="10" />
+		<element deathPercent="-10" />
+		<element holyPercent="20" />
+		<element icePercent="50" />
+		<element energyPercent="10" />
+		<element earthPercent="-5" />
+	</elements>
+	<voices interval="5000" chance="10">
+		<voice sentence="YAAAHEEE!" yell="1" />
+		<voice sentence="SLAUGHTER!" yell="1" />
+		<voice sentence="CARNAGE!" yell="1" />
+		<voice sentence="You can run but you can't hide" yell="0" />
+	</voices>
+	<loot>
+		<item name="Gold Coin" countmax="12" chance="55170" />
+		<item name="Chain Helmet" chance="10690" />
+		<item name="Chain Armor" chance="10160" />
+		<item name="Lamp" chance="8150" />
+		<item name="Halberd" chance="6920" />
+		<item name="Battle Axe" chance="5960" />
+		<item name="Ham" chance="4930" />
+		<item name="Health Potion" chance="930" />
+		<item name="Red Piece of Cloth" chance="490" />
+		<item name="Beastslayer Axe" chance="350" />
+		<item name="Shard" chance="310" />
+		<item name="Fur Boots" chance="80" />
+	</loot>
+</monster>

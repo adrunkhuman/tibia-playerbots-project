@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Arachir the Ancient One" nameDescription="Arachir the Ancient One" race="undead" experience="1800" speed="300">
+	<health now="1600" max="1600" />
+	<look type="287" corpse="8937" />
+	<targetchange interval="5000" chance="10" />
+	<flags>
+		<flag summonable="0" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="0" />
+		<flag convinceable="0" />
+		<flag pushable="0" />
+		<flag canpushitems="1" />
+		<flag canpushcreatures="1" />
+		<flag targetdistance="1" />
+		<flag staticattack="90" />
+		<flag runonhealth="200" />
+		<flag isboss="1" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-300" />
+		<attack name="death" interval="9000" chance="100" target="0" radius="3" min="-120" max="-300">
+			<attribute key="areaEffect" value="mortarea" />
+		</attack>
+		<attack name="death" interval="1000" chance="12" target="1" min="0" max="-200">
+			<attribute key="areaEffect" value="mortarea" />
+			<attribute key="shootEffect" value="suddendeath" />
+		</attack>
+		<attack name="speed" interval="2000" chance="15" range="7" target="1" speedchange="-700" duration="10000">
+			<attribute key="areaEffect" value="redshimmer" />
+		</attack>
+		<attack name="drunk" interval="2000" chance="15" range="7" target="1" duration="10000">
+			<attribute key="areaEffect" value="redshimmer" />
+		</attack>
+	</attacks>
+	<defenses armor="30" defense="30">
+		<defense name="healing" interval="1000" chance="12" min="100" max="235">
+			<attribute key="areaEffect" value="blueshimmer" />
+		</defense>
+		<defense name="invisible" interval="3000" chance="25" duration="6000">
+			<attribute key="areaEffect" value="blueshimmer" />
+		</defense>
+		<defense name="outfit" interval="4500" chance="30" monster="Bat" duration="4000" />
+	</defenses>
+	<elements>
+		<element physicalPercent="1" />
+		<element holyPercent="-5" />
+		<element icePercent="5" />
+		<element firePercent="-1" />
+		<element energyPercent="5" />
+	</elements>
+	<immunities>
+		<immunity lifedrain="1" />
+		<immunity death="1" />
+		<immunity earth="1" />
+		<immunity invisible="1" />
+		<immunity paralyze="1" />
+	</immunities>
+	<summons maxSummons="2">
+		<summon name="Lich" interval="4500" chance="100" />
+	</summons>
+	<voices interval="5000" chance="10">
+		<voice sentence="I was the shadow that haunted the cradle of humanity!" yell="0" />
+		<voice sentence="I exist since eons and you want to defy me?" yell="0" />
+		<voice sentence="Can you feel the passage of time, mortal?" yell="0" />
+		<voice sentence="Your worthles existence will nourish something greater!" yell="0" />
+	</voices>
+	<loot>
+		<item name="Blood Preservation" chance="100000" />
+		<item name="Gold Coin" countmax="100" chance="100000" />
+		<item name="Vampire Lord Token" chance="100000" />
+		<item name="Strong Health Potion" chance="19610" />
+		<item name="Ring of Healing" chance="11760" />
+		<item name="Vampire Shield" chance="8820" />
+		<item name="Platinum Coin" countmax="5" chance="7840" />
+		<item name="Skull" chance="6860" />
+		<item name="Black Pearl" chance="980" />
+		<item name="Bloody Edge" chance="980" />
+	</loot>
+</monster>

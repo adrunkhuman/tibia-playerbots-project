@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Damaged Worker Golem" nameDescription="a damaged worker golem" race="energy" experience="95" speed="200">
+	<health now="260" max="260" />
+	<look type="304" corpse="9801" />
+	<targetchange interval="4000" chance="10" />
+	<flags>
+		<flag summonable="0" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="0" />
+		<flag convinceable="0" />
+		<flag pushable="0" />
+		<flag canpushitems="1" />
+		<flag canpushcreatures="1" />
+		<flag targetdistance="1" />
+		<flag staticattack="90" />
+		<flag runonhealth="0" />
+		<flag canwalkonenergy="0" />
+		<flag canwalkonfire="0" />
+		<flag canwalkonpoison="1" />
+		<flag lightlevel="3" />
+		<flag lightcolor="85" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-45" />
+		<attack name="physical" interval="2000" chance="15" range="7" min="0" max="-45">
+			<attribute key="shootEffect" value="smallstone" />
+		</attack>
+	</attacks>
+	<defenses armor="25" defense="25">
+		<defense name="healing" interval="2000" chance="10" min="5" max="11">
+			<attribute key="areaEffect" value="blueshimmer" />
+		</defense>
+	</defenses>
+	<elements>
+		<element physicalPercent="10" />
+		<element deathPercent="10" />
+		<element holyPercent="50" />
+		<element icePercent="10" />
+		<element energyPercent="-5" />
+		<element earthPercent="50" />
+	</elements>
+	<immunities>
+		<immunity invisible="1" />
+		<immunity paralyze="1" />
+	</immunities>
+	<voices interval="5000" chance="10">
+		<voice sentence="Danger will...chrrr! Danger!" yell="0" />
+		<voice sentence="Rrrtttarrrttarrrtta" yell="0" />
+		<voice sentence="Self-diagnosis failed." yell="0" />
+		<voice sentence="Aw... chhhrrr orders." yell="0" />
+		<voice sentence="Target identified: Rat! Termination initiated!" yell="0" />
+		<voice sentence="Good morning citizen. How may I serve you?" yell="0" />
+		<voice sentence="Klonk klonk klonk" yell="0" />
+		<voice sentence="Failure! Failure!" yell="0" />
+	</voices>
+	<loot>
+		<item name="Gold Coin" countmax="89" chance="68240" />
+		<item name="Heavily Rusted Armor" chance="10060" />
+		<item name="Nail" chance="1230" />
+		<item name="Sword Ring" chance="490" />
+		<item name="Iron Ore" chance="410" />
+		<item name="Gear Crystal" chance="210" />
+	</loot>
+</monster>

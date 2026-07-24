@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Wrath of the Emperor" nameDescription="Wrath of the Emperor" race="undead" experience="600" speed="410">
+	<health now="55000" max="55000" />
+	<look type="351" corpse="0" />
+	<targetchange interval="5000" chance="8" />
+	<flags>
+		<flag summonable="0" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="0" />
+		<flag convinceable="0" />
+		<flag pushable="0" />
+		<flag canpushitems="1" />
+		<flag canpushcreatures="1" />
+		<flag targetdistance="1" />
+		<flag staticattack="90" />
+		<flag runonhealth="0" />
+		<flag isboss="1" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-800" />
+		<attack name="fire" interval="3000" chance="17" length="8" spread="0" min="-150" max="-900">
+			<attribute key="areaEffect" value="fire" />
+		</attack>
+		<attack name="lifedrain" interval="3000" chance="17" length="8" spread="3" min="-150" max="-850">
+			<attribute key="areaEffect" value="energy" />
+		</attack>
+		<attack name="physical" interval="3000" chance="10" range="7" min="0" max="-500">
+			<attribute key="areaEffect" value="purplenote" />
+		</attack>
+		<attack name="manadrain" interval="2000" chance="21" radius="6" target="0" min="-200" max="-360">
+			<attribute key="areaEffect" value="poff" />
+		</attack>
+		<attack name="lifedrain" interval="2000" chance="21" radius="1" target="1" min="-200" max="-250">
+			<attribute key="areaEffect" value="poff" />
+		</attack>
+	</attacks>
+	<defenses armor="45" defense="35" />
+	<elements>
+		<element physicalPercent="-5" />
+		<element holyPercent="-15" />
+		<element firePercent="60" />
+		<element energyPercent="-10" />
+	</elements>
+	<immunities>
+		<immunity death="1" />
+		<immunity earth="1" />
+		<immunity invisible="1" />
+		<immunity paralyze="1" />
+	</immunities>
+	<summons maxSummons="2">
+		<summon name="Draken Warmaster" interval="2000" chance="10" max="2" />
+	</summons>
+	<voices interval="2000" chance="9">
+		<voice sentence="YOU DON'T EVEN UNDERSTAND WHOM YOU ARE SERVING!" yell="1" />
+		<voice sentence="FLEE AND NEVER RETURN!" yell="1" />
+		<voice sentence="I WILL STOP YOU ONCE AND FOR ALL!" yell="1" />
+		<voice sentence="YOU HAVE BEEN USED AND FOOLED!" yell="1" />
+	</voices>
+</monster>

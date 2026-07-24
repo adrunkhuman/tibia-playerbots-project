@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Diabolic Imp" nameDescription="a diabolic imp" race="fire" experience="2900" speed="220">
+	<health now="1950" max="1950" />
+	<look type="237" corpse="6364" />
+	<targetchange interval="4000" chance="10" />
+	<flags>
+		<flag summonable="0" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="0" />
+		<flag convinceable="0" />
+		<flag pushable="0" />
+		<flag canpushitems="1" />
+		<flag canpushcreatures="1" />
+		<flag targetdistance="4" />
+		<flag staticattack="90" />
+		<flag runonhealth="584" />
+		<flag canwalkonenergy="0" />
+		<flag canwalkonfire="1" />
+		<flag canwalkonpoison="1" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-240" poison="160" />
+		<attack name="fire" interval="2000" chance="20" range="7" radius="2" target="1" min="-100" max="-240">
+			<attribute key="shootEffect" value="fire" />
+			<attribute key="areaEffect" value="firearea" />
+		</attack>
+		<attack name="fire" interval="2000" chance="10" range="7" radius="4" target="1" min="-300" max="-430">
+			<attribute key="shootEffect" value="fire" />
+			<attribute key="areaEffect" value="fireattack" />
+		</attack>
+		<attack name="diabolic imp skill reducer" range="5" interval="2000" chance="5" />
+	</attacks>
+	<defenses armor="29" defense="29">
+		<defense name="healing" interval="2000" chance="10" min="650" max="800">
+			<attribute key="areaEffect" value="blueshimmer" />
+		</defense>
+		<defense name="speed" interval="2000" chance="15" speedchange="800" duration="2000">
+			<attribute key="areaEffect" value="redshimmer" />
+		</defense>
+		<defense name="invisible" interval="2000" chance="10" duration="1000">
+			<attribute key="areaEffect" value="teleport" />
+		</defense>
+	</defenses>
+	<elements>
+		<element deathPercent="10" />
+		<element holyPercent="-5" />
+		<element icePercent="-10" />
+		<element earthPercent="50" />
+	</elements>
+	<immunities>
+		<immunity fire="1" />
+		<immunity invisible="1" />
+		<immunity paralyze="1" />
+	</immunities>
+	<voices interval="5000" chance="10">
+		<voice sentence="He he he." yell="0" />
+		<voice sentence="Muahaha!" yell="0" />
+	</voices>
+	<loot>
+		<item name="Gold Coin" countmax="100" chance="99390" />
+		<item name="Gold Coin" countmax="100" chance="99390" />
+		<item name="Pitchfork" chance="50600" />
+		<item name="Flask of Demonic Blood" countmax="2" chance="24670" />
+		<item name="Blank Rune" countmax="2" chance="14900" />
+		<item name="Cleaver" chance="8890" />
+		<item name="Guardian Shield" chance="8320" />
+		<item name="Demonic Essence" chance="7760" />
+		<item name="Soul Orb" chance="6930" />
+		<item name="Scimitar" chance="5350" />
+		<item name="Platinum Coin" countmax="7" chance="3380" />
+		<item name="Stealth Ring" chance="2760" />
+		<item name="Small Amethyst" countmax="3" chance="2560" />
+		<item name="Double Axe" chance="1730" />
+		<item name="Necrotic Rod" chance="800" />
+		<item name="Magma Monocle" chance="520" />
+		<item name="Magma Coat" chance="330" />
+		<item name="Death Ring" chance="110" />
+	</loot>
+</monster>

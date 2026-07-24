@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="The Snapper" nameDescription="The Snapper" race="blood" experience="150" speed="240">
+	<health now="300" max="300" />
+	<look type="119" corpse="6046" />
+	<targetchange interval="5000" chance="8" />
+	<flags>
+		<flag summonable="0" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="0" />
+		<flag convinceable="0" />
+		<flag pushable="0" />
+		<flag canpushitems="1" />
+		<flag canpushcreatures="1" />
+		<flag targetdistance="1" />
+		<flag staticattack="90" />
+		<flag runonhealth="30" />
+		<flag isboss="1" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-60" />
+	</attacks>
+	<defenses armor="13" defense="5" />
+	<elements>
+		<element physicalPercent="-5" />
+		<element icePercent="10" />
+		<element firePercent="-10" />
+		<element energyPercent="-5" />
+		<element earthPercent="15" />
+	</elements>
+	<immunities>
+		<immunity invisible="1" />
+		<immunity paralyze="1" />
+	</immunities>
+	<loot>
+		<item name="Gold Coin" countmax="100" chance="100000" />
+		<item name="Gold Coin" countmax="94" chance="100000" />
+		<item name="Life Ring" chance="99360" />
+		<item name="Health Potion" countmax="5" chance="80250" />
+		<item name="Small Emerald" countmax="4" chance="77710" />
+		<item name="Plate Legs" chance="44590" />
+		<item name="Plate Armor" chance="43310" />
+		<item name="Crocodile Boots" chance="10190" />
+		<item name="Knight Armor" chance="3820" />
+	</loot>
+</monster>

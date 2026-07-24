@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<npc name="Malunga" script="Malunga.lua" walkinterval="2000" floorchange="0">
+	<health now="100" max="100" />
+	<look type="149" head="95" body="78" legs="19" feet="0" />
+	<parameters>
+		<parameter key="module_shop" value="1" />
+		<parameter key="shop_sellable" value="
+			boggy dreads,10584,200;
+			centipede leg,11218,28;
+			cobra tongue,10551,15;
+			essence of a bad dream,11223,360;
+			eye of corruption,12627,390;
+			ghastly dragon head,11366,700;
+			ghoul snack,12423,60;
+			gland,8971,500;
+			hair of a banshee,12402,350;
+			half-digested piece of meat,11200,55;
+			half-eaten brain,10576,85;
+			haunted piece of wood,10600,115;
+			hellhound slobber,10554,500;
+			lizard essence,12636,300;
+			mutated flesh,11225,50;
+			mutated rat tail,10585,150;
+			necromantic robe,12431,250;
+			pelvis bone,12437,30;
+			petrified scream,11337,250;
+			piece of dead brain,10580,420;
+			piece of scarab shell,10558,45;
+			pig foot,10610,10;
+			pile of grave earth,12440,25;
+			poison spider shell,12441,10;
+			poisonous slime,10557,50;
+			rotten piece of cloth,11208,30;
+			scale of corruption,12629,680;
+			scorpion tail,10568,25;
+			small pitchfork,12469,70;
+			spider fangs,8859,10;
+			strand of medusa hair,11226,600;
+			tail of corruption,12628,240;
+			tarantula egg,11198,80;
+			tentacle piece,12622,5000;
+			thorn,10560,100;
+			undead heart,11367,200;
+			widows mandibles,11328,110;
+			winged tail,11230,800;" />
+	</parameters>
+</npc>

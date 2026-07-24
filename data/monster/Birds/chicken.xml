@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Chicken" nameDescription="a chicken" race="blood" experience="0" speed="128" manacost="220">
+	<health now="15" max="15" />
+	<look type="111" corpse="6042" />
+	<targetchange interval="4000" chance="0" />
+	<flags>
+		<flag summonable="1" />
+		<flag attackable="1" />
+		<flag hostile="0" />
+		<flag illusionable="1" />
+		<flag convinceable="1" />
+		<flag pushable="1" />
+		<flag canpushitems="0" />
+		<flag canpushcreatures="0" />
+		<flag targetdistance="1" />
+		<flag staticattack="90" />
+		<flag runonhealth="15" />
+		<flag canwalkonenergy="0" />
+		<flag canwalkonfire="0" />
+		<flag canwalkonpoison="0" />
+	</flags>
+    <script>
+		<event name="EasterLoot" />
+	</script>
+	<defenses armor="1" defense="1" />
+	<voices interval="5000" chance="10">
+		<voice sentence="Cluck Cluck" yell="0" />
+		<voice sentence="Gokgoooook" yell="0" />
+	</voices>
+	<loot>
+		<item name="Chicken Feather" chance="17950" />
+		<item name="Worm" chance="8870" />
+		<item name="Meat" countmax="2" chance="1770" />
+		<item name="Egg" chance="860" />
+	</loot>
+</monster>

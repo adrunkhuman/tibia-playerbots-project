@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Hero" nameDescription="a hero" race="blood" experience="1200" speed="280">
+	<health now="1400" max="1400" />
+	<look type="73" corpse="3058" />
+	<targetchange interval="4000" chance="10" />
+	<flags>
+		<flag summonable="0" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="0" />
+		<flag convinceable="0" />
+		<flag pushable="0" />
+		<flag canpushitems="1" />
+		<flag canpushcreatures="1" />
+		<flag targetdistance="1" />
+		<flag staticattack="90" />
+		<flag runonhealth="0" />
+		<flag canwalkonenergy="1" />
+		<flag canwalkonfire="0" />
+		<flag canwalkonpoison="1" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-240" />
+		<attack name="physical" interval="2000" chance="20" range="7" min="0" max="-120">
+			<attribute key="shootEffect" value="arrow" />
+		</attack>
+	</attacks>
+	<defenses armor="35" defense="35">
+		<defense name="healing" interval="2000" chance="20" min="200" max="250">
+			<attribute key="areaEffect" value="blueshimmer" />
+		</defense>
+	</defenses>
+	<elements>
+		<element physicalPercent="10" />
+		<element deathPercent="-20" />
+		<element holyPercent="50" />
+		<element icePercent="10" />
+		<element firePercent="30" />
+		<element energyPercent="40" />
+		<element earthPercent="50" />
+	</elements>
+	<immunities>
+		<immunity invisible="1" />
+		<immunity paralyze="1" />
+	</immunities>
+	<voices interval="5000" chance="10">
+		<voice sentence="Welcome to my battleground!" yell="0" />
+		<voice sentence="Let's have a fight!" yell="0" />
+		<voice sentence="Have you seen princess Lumelia?" yell="0" />
+		<voice sentence="I will sing a tune at your grave." yell="0" />
+	</voices>
+	<loot>
+		<item name="Gold Coin" countmax="100" chance="60390" />
+		<item name="Scroll" chance="45090" />
+		<item name="Arrow" countmax="13" chance="26960" />
+		<item name="Red Rose" chance="20350" />
+		<item name="Grapes" chance="20170" />
+		<item name="Bow" chance="13020" />
+		<item name="Sniper Arrow" countmax="4" chance="11520" />
+		<item name="Meat" chance="8570" />
+		<item name="Green Tunic" chance="7950" />
+		<item name="Wedding Ring" chance="5160" />
+		<item name="Scroll of Heroic Deeds" chance="5030" />
+		<item name="Rope" chance="2050" />
+		<item name="Red Piece of Cloth" chance="2010" />
+		<item name="Two Handed Sword" chance="1590" />
+		<item name="Lyre" chance="1590" />
+		<item name="Scarf" chance="1120" />
+		<item name="War Hammer" chance="960" />
+		<item name="Small Notebook" chance="940" />
+		<item name="Great Health Potion" chance="750" />
+		<item name="Crown Armor" chance="620" />
+		<item name="Crown Legs" chance="590" />
+		<item name="Might Ring" chance="510" />
+		<item name="Fire Sword" chance="470" />
+		<item name="Crown Helmet" chance="430" />
+		<item name="Crown Shield" chance="200" />
+		<item name="Piggy Bank" chance="80" />
+	</loot>
+</monster>

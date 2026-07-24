@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Vashresamun" nameDescription="Vashresamun" race="undead" experience="2950" speed="340">
+	<health now="4000" max="4000" />
+	<look type="90" corpse="6025" />
+	<targetchange interval="5000" chance="8" />
+	<flags>
+		<flag summonable="0" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="0" />
+		<flag convinceable="0" />
+		<flag pushable="0" />
+		<flag canpushitems="1" />
+		<flag canpushcreatures="1" />
+		<flag targetdistance="1" />
+		<flag staticattack="90" />
+		<flag runonhealth="0" />
+		<flag canwalkonenergy="0" />
+		<flag canwalkonfire="0" />
+		<flag canwalkonpoison="0" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-200" poison="65" />
+		<attack name="death" interval="2000" chance="30" radius="5" target="0" min="-200" max="-600">
+			<attribute key="areaEffect" value="purplenote" />
+		</attack>
+		<attack name="speed" interval="1000" chance="6" range="7" speedchange="-800" duration="50000">
+			<attribute key="areaEffect" value="redshimmer" />
+		</attack>
+		<attack name="lifedrain" interval="2000" chance="10" range="1" min="-50" max="-750" />
+	</attacks>
+	<defenses armor="40" defense="40">
+		<defense name="healing" interval="1000" chance="20" min="250" max="450">
+			<attribute key="areaEffect" value="blueshimmer" />
+		</defense>
+	</defenses>
+	<elements>
+		<element holyPercent="-10" />
+		<element icePercent="20" />
+		<element firePercent="20" />
+		<element energyPercent="20" />
+		<element earthPercent="20" />
+	</elements>
+	<immunities>
+		<immunity death="1" />
+		<immunity invisible="1" />
+		<immunity paralyze="1" />
+	</immunities>
+	<summons maxSummons="2">
+		<summon name="Banshee" interval="2000" chance="20" />
+	</summons>
+	<voices interval="5000" chance="10">
+		<voice sentence="Come my maidens, we have visitors!" yell="0" />
+		<voice sentence="Heheheheee!" yell="0" />
+		<voice sentence="Are you enjoying my music?" yell="0" />
+		<voice sentence="Chakka Chakka!" yell="0" />
+		<voice sentence="If music is the food of death, drop dead." yell="0" />
+	</voices>
+	<loot>
+		<item name="Blue Note" chance="100000" />
+		<item name="Gold Coin" countmax="100" chance="91300" />
+		<item name="Gold Coin" countmax="100" chance="91300" />
+		<item name="Gold Coin" countmax="50" chance="91300" />
+		<item name="White Pearl" chance="10140" />
+		<item name="Lute" chance="9310" />
+		<item name="Great Mana Potion" chance="8010" />
+		<item name="Blue Robe" chance="1220" />
+		<item name="Crystal Ring" chance="990" />
+		<item name="Crystal Mace" chance="920" />
+		<item name="Panpipes" chance="380" />
+		<item name="Ancient Tiara" chance="150" />
+		<item name="Mini Mummy" chance="150" />
+	</loot>
+</monster>

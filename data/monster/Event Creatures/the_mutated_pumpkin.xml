@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="The Mutated Pumpkin" nameDescription="The Mutated Pumpkin" race="venom" experience="30000" speed="330">
+	<health now="500000" max="500000" />
+	<look type="292" corpse="8960" />
+	<targetchange interval="5000" chance="25" />
+	<flags>
+		<flag summonable="0" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="0" />
+		<flag convinceable="0" />
+		<flag pushable="0" />
+		<flag canpushitems="1" />
+		<flag canpushcreatures="1" />
+		<flag targetdistance="1" />
+		<flag staticattack="90" />
+		<flag runonhealth="0" />
+		<flag isboss="1" />
+		<flag canwalkonenergy="1" />
+		<flag canwalkonfire="1" />
+		<flag canwalkonpoison="1" />
+		<flag lightlevel="6" />
+		<flag lightcolor="77" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-300" />
+		<attack name="manadrain" interval="2000" chance="10" length="5" spread="2" min="0" max="-12">
+			<attribute key="areaEffect" value="bluefirework" />
+		</attack>
+		<attack name="drunk" interval="2000" chance="10" target="0" radius="7" duration="5000">
+			<attribute key="areaEffect" value="stun" />
+		</attack>
+		<attack name="outfit" interval="4000" chance="10" target="1" range="7" monster="The Mutated Pumpkin" duration="5000">
+			<attribute key="areaEffect" value="groundshaker" />
+		</attack>
+		<attack name="outfit" interval="4000" chance="10" length="5" spread="2" item="2683" duration="5000">
+			<attribute key="areaEffect" value="smallplants" />
+		</attack>
+		<attack name="effect" interval="4000" chance="10" target="0" range="1">
+			<attribute key="areaEffect" value="sleep" />
+		</attack>
+		<attack name="manadrain" interval="2000" chance="10" length="5" spread="2" min="0" max="-125">
+			<attribute key="areaEffect" value="bluefirework" />
+		</attack>
+		<attack name="poison" interval="2000" chance="10" length="5" spread="2" min="-13" max="-15">
+			<attribute key="areaEffect" value="poison" />
+		</attack>
+		<attack name="effect" interval="4000" chance="10" length="5" spread="2">
+			<attribute key="areaEffect" value="rednote" />
+		</attack>
+		<attack name="speed" interval="4000" chance="10" length="5" spread="2" speedchange="400" duration="3000">
+			<attribute key="areaEffect" value="giftwraps" />
+		</attack>
+	</attacks>
+	<defenses armor="30" defense="30">
+		<defense name="healing" interval="2000" chance="15" min="2000" max="2900">
+			<attribute key="areaEffect" value="greenspark" />
+		</defense>
+		<defense name="invisible" interval="2000" chance="20" duration="20000">
+			<attribute key="areaEffect" value="blueshimmer" />
+		</defense>
+		<defense name="outfit" interval="4000" chance="10" monster="Warlock" duration="5000">
+			<attribute key="areaEffect" value="groundshaker" />
+		</defense>
+	</defenses>
+	<immunities>
+		<immunity invisible="1" />
+		<immunity paralyze="1" />
+	</immunities>
+	<voices interval="5000" chance="20">
+		<voice sentence="I had the Halloween Hare for breakfast!" yell="0" />
+		<voice sentence="No wait! Don't kill me! It's me, your friend!" yell="0" />
+		<voice sentence="You, my little mouse, are doomed." yell="0" />
+		<voice sentence="Bunnies, bah! I'm the real thing!" yell="0" />
+		<voice sentence="I've come to avenge all those mutilated pumpkins!" yell="0" />
+		<voice sentence="Your soul will be mine...wait, wrong line" yell="0" />
+		<voice sentence="Fear the spirit of Halloween!" yell="0" />
+		<voice sentence="Muahahahaha!" yell="0" />
+		<voice sentence="Wait until I get you!" yell="0" />
+		<voice sentence="Trick or treat? I saw death!" yell="0" />
+	</voices>
+	<loot>
+		<item name="Yummy Gummy Worm" countmax="10" chance="53330" />
+		<item name="Toy Spider" countmax="50" chance="13330" /> <!-- ID = 9006 -->
+		<item name="Bat Decoration" chance="20000" /> <!-- ID = 6492 -->
+		<item name="Pumpkin" chance="6670" />
+		<item name="Spiderwebs" chance="6670" />
+		<item name="Skeleton Decoration" chance="6670" />
+	</loot>
+</monster>

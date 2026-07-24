@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Minotaur Guard" nameDescription="a minotaur guard" race="blood" experience="160" speed="190" manacost="550">
+	<health now="185" max="185" />
+	<look type="29" corpse="5983" />
+	<targetchange interval="4000" chance="10" />
+	<flags>
+		<flag summonable="1" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="1" />
+		<flag convinceable="1" />
+		<flag pushable="0" />
+		<flag canpushitems="1" />
+		<flag canpushcreatures="1" />
+		<flag targetdistance="1" />
+		<flag staticattack="90" />
+		<flag runonhealth="0" />
+		<flag canwalkonenergy="0" />
+		<flag canwalkonfire="0" />
+		<flag canwalkonpoison="0" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-100" />
+	</attacks>
+	<defenses armor="15" defense="15" />
+	<elements>
+		<element deathPercent="-10" />
+		<element holyPercent="10" />
+		<element icePercent="-10" />
+		<element firePercent="20" />
+	</elements>
+	<voices interval="5000" chance="10">
+		<voice sentence="Kaplar" yell="0" />
+		<voice sentence="Kirrl Karrrl!" yell="0" />
+	</voices>
+	<loot>
+		<item name="Gold Coin" countmax="20" chance="59710" />
+		<item name="Minotaur Horn" countmax="2" chance="8170" />
+		<item name="Piece of Warrior Armor" chance="4990" />
+		<item name="Brass Armor" chance="4150" />
+		<item name="Chain Armor" chance="3000" />
+		<item name="Battle Shield" chance="2100" />
+		<item name="Minotaur Leather" chance="950" />
+		<item name="Fishing Rod" chance="480" />
+		<item name="Double Axe" chance="430" />
+		<item name="Health Potion" chance="410" />
+		<item name="Minotaur Trophy" chance="100" />
+	</loot>
+</monster>

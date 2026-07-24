@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<monster name="Bones" nameDescription="Bones" race="undead" experience="3750" speed="300">
+	<health now="9500" max="9500" />
+	<look type="231" corpse="6306" />
+	<targetchange interval="5000" chance="8" />
+	<flags>
+		<flag summonable="0" />
+		<flag attackable="1" />
+		<flag hostile="1" />
+		<flag illusionable="0" />
+		<flag convinceable="0" />
+		<flag pushable="0" />
+		<flag canpushitems="1" />
+		<flag canpushcreatures="1" />
+		<flag targetdistance="1" />
+		<flag staticattack="90" />
+		<flag runonhealth="2849" />
+		<flag isboss="1" />
+	</flags>
+	<attacks>
+		<attack name="melee" interval="2000" min="0" max="-500" />
+		<attack name="lifedrain" interval="1000" chance="13" length="8" spread="3" min="-441" max="-500">
+			<attribute key="areaEffect" value="redshimmer" />
+		</attack>
+		<attack name="death" interval="3000" chance="34" range="1" radius="1" target="1" min="-220" max="-450">
+			<attribute key="shootEffect" value="death" />
+			<attribute key="areaEffect" value="mortarea" />
+		</attack>
+		<attack name="poison" interval="3000" chance="34" range="7" radius="5" target="1" min="-114" max="-350">
+			<attribute key="shootEffect" value="poison" />
+			<attribute key="areaEffect" value="poison" />
+		</attack>
+		<attack name="physical" interval="3000" chance="34" range="7" radius="5" target="1" min="-249" max="-300">
+			<attribute key="shootEffect" value="poison" />
+			<attribute key="areaEffect" value="redspark" />
+		</attack>
+		<attack name="poison" interval="1000" chance="13" length="8" spread="3" min="-76" max="-450">
+			<attribute key="areaEffect" value="poison" />
+		</attack>
+		<attack name="drowncondition" interval="1000" chance="13" length="8" spread="3" min="-441" max="-500">
+			<attribute key="areaEffect" value="poff" />
+		</attack>
+	</attacks>
+	<defenses armor="50" defense="55">
+		<defense name="healing" interval="5000" chance="25" min="60" max="100">
+			<attribute key="areaEffect" value="blueshimmer" />
+		</defense>
+	</defenses>
+	<immunities>
+		<immunity drunk="1" />
+		<immunity invisible="1" />
+		<immunity paralyze="1" />
+	</immunities>
+	<voices interval="5000" chance="10">
+		<voice sentence="Keep that dog away!" yell="0" />
+		<voice sentence="Out Fluffy! Out! Bad dog!" yell="0" />
+		<voice sentence="Your new name is breakfast." yell="0" />
+		<voice sentence="Ahh, my old bones ..." yell="0" />
+	</voices>
+	<loot>
+		<item name="Gold Coin" countmax="100" chance="100000" />
+		<item name="Gold Coin" countmax="90" chance="50000" />
+		<item name="Platinum Coin" countmax="4" chance="45500" />
+		<item name="Small Sapphire" countmax="2" chance="45500" />
+		<item name="Surprise Bag (Blue)" id="6570" countmax="3" chance="5538" />
+		<item name="Surprise Bag (Red)" id="6571" chance="1538" />
+		<item name="Soul Orb" chance="10000" />
+		<item name="Skull Helmet" chance="50000" />
+		<item name="Demonic Essence" chance="1538" />
+		<item name="Life Crystal" chance="800" />
+		<item name="Magic Plate Armor" chance="2000" />
+		<item name="Death Ring" chance="4000" />
+	</loot>
+</monster>
