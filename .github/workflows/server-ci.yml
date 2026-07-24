@@ -26,10 +26,23 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Validate Compose configuration
         run: docker compose -f server/compose.yaml config --quiet
+
+      - name: Pull runtime images
+        run: |
+          for attempt in 1 2 3; do
+            if docker compose -f server/compose.yaml pull database playerbot-setup; then
+              exit 0
+            fi
+            if [ "$attempt" = "3" ]; then
+              echo "Unable to pull runtime images after three attempts." >&2
+              exit 1
+            fi
+            sleep "$((attempt * 10))"
+          done
 
       - name: Build and start fresh server stack
         run: docker compose -f server/compose.yaml up --build --detach
