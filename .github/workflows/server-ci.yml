@@ -135,6 +135,7 @@ jobs:
           }
 
           wait_for_log "PLAYERBOT_CONNECTIONLESS_TEST PASS mode=interactions"
+          wait_for_log '"action":"eat".*"result":"success".*"inventory_count":1,"food_ticks"'
           docker compose stop server
           test "$(storage_value)" = "86016"
 

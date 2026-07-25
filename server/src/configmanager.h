@@ -73,6 +73,7 @@ class ConfigManager
 			BLOCK_LOGIN,
 			CHECK_DUPLICATE_STORAGE_KEYS,
 			SHOW_PACKETS,
+			PLAYERBOT_ENABLED,
 
 			LAST_BOOLEAN_CONFIG /* this must be the last one */
 		};

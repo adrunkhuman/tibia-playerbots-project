@@ -34,6 +34,17 @@ function login.onLogin(player)
     assert(player:setStorageValue(storageKey, modeValues[mode]))
 
     if mode == "interactions" then
+        assert(player:teleportTo(Position(32099, 32211, 7)), "test position could not be restored")
+        local backpack = player:getSlotItem(CONST_SLOT_BACKPACK)
+        assert(backpack and backpack:getId() == ITEM_BACKPACK, "seeded backpack is missing")
+        player:removeCondition(CONDITION_REGENERATION, CONDITIONID_DEFAULT)
+        local cheeseCount = player:getItemCount(2696)
+        if cheeseCount > 0 then
+            assert(player:removeItem(2696, cheeseCount), "existing cheese could not be removed")
+        end
+        for _ = 1, 12 do
+            assert(backpack:addItem(2696, 1), "test cheese could not be added")
+        end
         assert(player:sendTextMessage(MESSAGE_STATUS_DEFAULT, "connectionless regression"))
         assert(player:sendOutfitWindow())
         assert(player:showTextDialog(1950, "connectionless regression"))
@@ -57,6 +68,9 @@ function login.onLogin(player)
 
     local playerId = player:getId()
     if mode == "death" then
+        local foodCondition = player:getCondition(CONDITION_REGENERATION, CONDITIONID_DEFAULT)
+        assert(foodCondition and foodCondition:getTicks() > 0, "food condition did not persist")
+        assert(player:getItemCount(2696) == 1, "remaining cheese did not persist")
         addEvent(function()
             local bot = getBot(playerId)
             assert(bot:addHealth(-bot:getHealth()), "could not execute player death")

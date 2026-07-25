@@ -54,8 +54,9 @@ cannot take control of the character while the server owns it.
 
 `playerbot-setup` runs before the server on both fresh and existing database
 volumes. It reserves the local-development account `bot-one` and character
-name `Bot One`, records the character in `player_bots`, and seeds a Carlin
-sword and studded shield without replacing existing equipment. Provisioning
+name `Bot One`, records the character in `player_bots`, and seeds a backpack,
+Carlin sword, and studded shield without replacing existing equipment.
+Provisioning
 fails rather than taking over a same-named or deleted character. Diagnose it
 with:
 
@@ -81,7 +82,7 @@ conditional, and `target_id` is `null` when no target exists.
 | `lifecycle` | `status`: `online`, `dead`, or `removed` |
 | `state_transition` | `from`, `to` |
 | `target_changed` | `previous_target_id`, `target_id`, optional target type and position, `reason` |
-| `action_result` | `action`, `result`, `reason` |
+| `action_result` | `action`, `result`, optional reason, and loot item/count fields on success |
 | `stuck` | `reason`, `blocked_steps` |
 | `summary` | current state and target, uptime, decision/pathfinding timing, action, failure, stuck, and suppression counters |
 | `terminal` | `reason` |
@@ -105,7 +106,14 @@ general-purpose or configurable bot system. From the seeded position at
 `(32097, 32219, 7)`, it navigates to `(32099, 32211, 7)`, uses sewer grate item
 `430` at `(32097, 32205, 7)`, searches for visible creatures named `Rat`, and
 fights or explores until it dies, exhausts the reachable frontier, or reaches
-a bounded failure condition.
+a bounded failure condition. After a kill, it opens its rat corpse through the
+normal player action path, moves all gold and up to three total pieces of
+cheese into its backpack, then resumes hunting. Corpse ownership, range,
+capacity, container space, item stacking, and action delays remain enforced.
+When it can eat another cheese, it consumes one through the normal item-use
+path, verifies both the inventory decrease and food-condition increase, and
+repeats until another cheese would exceed the game's fullness limit or it runs
+out of cheese.
 
 Normal shutdown saves the bot through the existing player persistence path.
 Controller routes, targets, and explored frontiers remain in memory only. On
@@ -113,6 +121,19 @@ restart, a saved position on floor 8 resumes sewer behavior; a saved position
 on floor 7 restarts the route to the sewer. Other floors stop the prototype
 controller. Removing the Compose volume resets the bot and all other local
 world state.
+
+To inspect Bot One through the client, first stop the server cleanly so its
+inventory is saved, then restart without the server-controlled bot:
+
+```powershell
+docker compose -f server/compose.yaml stop server
+$env:PLAYERBOT_ENABLED = "false"
+docker compose -f server/compose.yaml up --detach --force-recreate server
+```
+
+Log in with `bot-one` / `bot-one`. Log the character out before restoring the
+normal startup mode with `Remove-Item Env:PLAYERBOT_ENABLED` and recreating the
+server. Live ownership transfer remains intentionally unsupported.
 
 Server CI mounts `server/tests/playerbot_connectionless.lua` through
 `server/compose.playerbot-regression.yaml`; the normal Compose stack never

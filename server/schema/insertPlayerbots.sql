@@ -48,6 +48,19 @@ WHERE `players`.`deletion` = 0 AND `accounts`.`name` = 'bot-one'
 );
 
 INSERT INTO `player_items` (`player_id`, `pid`, `sid`, `itemtype`, `count`, `attributes`)
+SELECT `player_bots`.`player_id`, 3,
+       (SELECT COALESCE(MAX(`sid`), 100) + 1 FROM `player_items` WHERE `player_id` = `player_bots`.`player_id`),
+       1988, 1, ''
+FROM `player_bots`
+JOIN `players` ON `players`.`id` = `player_bots`.`player_id`
+JOIN `accounts` ON `accounts`.`id` = `players`.`account_id`
+WHERE `players`.`deletion` = 0 AND `accounts`.`name` = 'bot-one'
+  AND NOT EXISTS (
+    SELECT 1 FROM `player_items`
+    WHERE `player_id` = `player_bots`.`player_id` AND `pid` = 3
+);
+
+INSERT INTO `player_items` (`player_id`, `pid`, `sid`, `itemtype`, `count`, `attributes`)
 SELECT `player_bots`.`player_id`, 6,
        (SELECT COALESCE(MAX(`sid`), 100) + 1 FROM `player_items` WHERE `player_id` = `player_bots`.`player_id`),
        2526, 1, ''

@@ -4,6 +4,7 @@ npcsUsingBankMoney = false
 blockLogin = false
 blockLoginText = "Server is closed for bug fixing."
 showPackets = false
+playerbotEnabled = os.getenv("PLAYERBOT_ENABLED") ~= "false"
 
 -- Combat settings
 -- NOTE: valid values for worldType are: "pvp", "no-pvp" and "pvp-enforced"
