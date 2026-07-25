@@ -14,7 +14,6 @@
 
 #include "container.h"
 #include "condition.h"
-#include "configmanager.h"
 #include "database.h"
 #include "game.h"
 #include "iologindata.h"
@@ -24,12 +23,10 @@
 #include "scheduler.h"
 #include "tile.h"
 
-#include <array>
 #include <ctime>
 #include <set>
 
 extern Game g_game;
-extern ConfigManager g_config;
 
 namespace {
 	constexpr uint32_t navigationInterval = 1000;
@@ -47,47 +44,7 @@ namespace {
 	constexpr uint8_t corpseContainerId = 0;
 	constexpr uint8_t backpackContainerId = 1;
 	constexpr uint32_t maxCorpseSearchAttempts = 4;
-	constexpr uint16_t ropeItemId = 2120;
-	constexpr uint16_t ladderItemId = 1386;
-	constexpr uint16_t ropeSpotItemId = 384;
-	constexpr uint32_t maxBlockedTraversalSteps = 10;
-	constexpr int32_t traversalCheckpointStorage = 45017;
-	constexpr int32_t traversalTripStorage = 45018;
-	constexpr size_t traversalLoopStart = 1;
-	constexpr size_t traversalForwardEnd = 6;
-	constexpr size_t traversalReverseEnd = 12;
-	constexpr std::chrono::seconds traversalCombatTimeout(60);
-	constexpr std::chrono::seconds traversalTargetSuppression(120);
 	constexpr const char* botAccountName = "bot-one";
-
-	enum class TraversalAction : uint8_t {
-		Walk,
-		UseRope,
-		UseLadder,
-	};
-
-	struct TraversalCheckpoint {
-		Position target;
-		TraversalAction action;
-		uint8_t expectedFloor;
-		const char* name;
-	};
-
-	constexpr std::array<TraversalCheckpoint, 13> traversalCheckpoints = {{
-		{Position(32091, 32179, 7), TraversalAction::Walk, 6, "temple_stairs_up"},
-		{Position(32091, 32169, 6), TraversalAction::Walk, 7, "north_stairs_down"},
-		{Position(32094, 32138, 7), TraversalAction::Walk, 8, "cave_stairs_down"},
-		{Position(32101, 32130, 8), TraversalAction::UseRope, 7, "rope_up"},
-		{Position(32096, 32119, 7), TraversalAction::UseLadder, 6, "first_ladder_up"},
-		{Position(32092, 32127, 6), TraversalAction::UseLadder, 5, "second_ladder_up"},
-		{Position(32101, 32128, 5), TraversalAction::UseLadder, 4, "third_ladder_up"},
-		{Position(32101, 32129, 4), TraversalAction::Walk, 5, "third_ladder_down"},
-		{Position(32092, 32128, 5), TraversalAction::Walk, 6, "second_ladder_down"},
-		{Position(32096, 32120, 6), TraversalAction::Walk, 7, "first_ladder_down"},
-		{Position(32101, 32131, 7), TraversalAction::Walk, 8, "rope_hole_down"},
-		{Position(32094, 32138, 8), TraversalAction::Walk, 7, "cave_stairs_up"},
-		{Position(32091, 32169, 7), TraversalAction::Walk, 6, "north_stairs_up"},
-	}};
 
 	std::string jsonString(const std::string& value)
 	{
@@ -137,50 +94,19 @@ class PlayerBotController
 {
 	public:
 		explicit PlayerBotController(const Player& player) :
-			playerId(player.getID()), playerGuid(player.getGUID()), playerName(player.getName())
-		{
-			int32_t storedCheckpoint;
-			int32_t storedTrips;
-			if (player.getStorageValue(traversalCheckpointStorage, storedCheckpoint) && storedCheckpoint >= 0 &&
-			    static_cast<size_t>(storedCheckpoint) < traversalCheckpoints.size()) {
-				traversalCheckpoint = static_cast<size_t>(storedCheckpoint);
-				restoredTraversalState = true;
-			}
-			if (player.getStorageValue(traversalTripStorage, storedTrips) && storedTrips >= 0) {
-				completedTrips = static_cast<uint32_t>(storedTrips);
-			}
-		}
+			playerId(player.getID()), playerGuid(player.getGUID()), playerName(player.getName()) {}
 
 		void start(const Position& position)
 		{
 			previousPosition = position;
 			lastPosition = position;
-			if (!restoredTraversalState) {
-				for (size_t index = 0; index < traversalCheckpoints.size(); ++index) {
-					if (position == traversalCheckpoints[index].target) {
-						traversalCheckpoint = index;
-						break;
-					}
-				}
-				if (position == Position(32091, 32169, 7)) {
-					traversalCheckpoint = 2;
-				}
-			}
 			emit("lifecycle", position, "\"status\":\"online\",\"message\":\"Playerbot online\"");
-			const uint32_t requiredTrips = std::max<int32_t>(1, g_config.getNumber(ConfigManager::PLAYERBOT_TRAVERSAL_TRIPS));
-			if (completedTrips >= requiredTrips && position == Position(32101, 32129, 4)) {
-				setStage(ScenarioStage::Complete, position);
-				schedule(navigationInterval);
+			if (position.z == sewerGratePosition.z + 1) {
+				setStage(ScenarioStage::FindRat, position);
+			} else if (position.z != scenarioStart.z) {
+				stop("unsupported_saved_floor", position);
 				return;
 			}
-			if (restoredTraversalState && traversalCheckpoint == traversalForwardEnd &&
-			    position == Position(32101, 32129, 4)) {
-				traversalCheckpoint = traversalForwardEnd + 1;
-				if (Player* player = g_game.getPlayerByID(playerId)) {
-					persistTraversalState(player);
-				}
-			}
-			setStage(ScenarioStage::Traverse, position);
 			schedule(navigationInterval);
 		}
 
@@ -194,9 +120,6 @@ class PlayerBotController
 			Combat,
 			LootCorpse,
 			Explore,
-			Traverse,
-			TraversalCombat,
-			Complete,
 			Stopped,
 		};
 
@@ -254,9 +177,6 @@ class PlayerBotController
 				case ScenarioStage::Combat: return "combat";
 				case ScenarioStage::LootCorpse: return "loot_corpse";
 				case ScenarioStage::Explore: return "explore";
-				case ScenarioStage::Traverse: return "traverse";
-				case ScenarioStage::TraversalCombat: return "traversal_combat";
-				case ScenarioStage::Complete: return "complete";
 				case ScenarioStage::Stopped: return "stopped";
 			}
 			return "unknown";
@@ -501,357 +421,6 @@ class PlayerBotController
 			return found;
 		}
 
-		void logTraversalSuccess(const TraversalCheckpoint& checkpoint, const Position& position)
-		{
-			std::ostringstream fields;
-			fields << "\"action\":\"transition\",\"result\":\"success\",\"checkpoint\":"
-			       << jsonString(checkpoint.name) << ",\"trip\":" << completedTrips;
-			emit("action_result", position, fields.str());
-		}
-
-		void setTraversalTarget(Creature* target, const Position& position)
-		{
-			ratId = target->getID();
-			ratPosition = target->getPosition();
-			std::ostringstream fields;
-			fields << "\"previous_target_id\":null,\"target_id\":" << ratId
-			       << ",\"target_type\":\"monster\",\"target_name\":" << jsonString(target->getName())
-			       << ",\"target_position\":{\"x\":" << ratPosition.x << ",\"y\":" << ratPosition.y
-			       << ",\"z\":" << static_cast<uint16_t>(ratPosition.z) << "},\"reason\":\"visible_monster\"";
-			emit("target_changed", position, fields.str());
-		}
-
-		bool attackVisibleMonster(Player* player, const Position& currentPosition)
-		{
-			SpectatorVec spectators;
-			g_game.map.getSpectators(spectators, currentPosition);
-			std::sort(spectators.begin(), spectators.end(), [&currentPosition](Creature* left, Creature* right) {
-				const int32_t leftDistance = std::max(std::abs(currentPosition.getX() - left->getPosition().getX()),
-				                                             std::abs(currentPosition.getY() - left->getPosition().getY()));
-				const int32_t rightDistance = std::max(std::abs(currentPosition.getX() - right->getPosition().getX()),
-				                                              std::abs(currentPosition.getY() - right->getPosition().getY()));
-				return leftDistance == rightDistance ? left->getID() < right->getID() : leftDistance < rightDistance;
-			});
-
-			for (Creature* creature : spectators) {
-				if (!creature->getMonster() || creature->isRemoved() || creature->isDead() || !player->canSee(creature->getPosition())) {
-					continue;
-				}
-				auto suppressed = suppressedTraversalTargets.find(creature->getID());
-				if (suppressed != suppressedTraversalTargets.end()) {
-					if (std::chrono::steady_clock::now() < suppressed->second) {
-						continue;
-					}
-					suppressedTraversalTargets.erase(suppressed);
-				}
-				++counters.actionsAttempted;
-				g_game.playerSetFightModes(playerId, FIGHTMODE_ATTACK, true, false);
-				g_game.playerSetAttackedCreature(playerId, creature->getID());
-				if (player->getAttackedCreature() != creature) {
-					continue;
-				}
-
-				setTraversalTarget(creature, currentPosition);
-				combatStarted = std::chrono::steady_clock::now();
-				route.clear();
-				setStage(ScenarioStage::TraversalCombat, currentPosition);
-				return true;
-			}
-			return false;
-		}
-
-		void finishTraversalCombat(Player* player, const Position& currentPosition, const char* reason)
-		{
-			g_game.playerSetAttackedCreature(playerId, 0);
-			clearRatTarget(currentPosition, reason);
-			route.clear();
-			setStage(ScenarioStage::Traverse, currentPosition);
-		}
-
-		void processTraversalCombat(Player* player, const Position& currentPosition)
-		{
-			Creature* target = g_game.getCreatureByID(ratId);
-			if (!target || target->isRemoved() || target->isDead()) {
-				finishTraversalCombat(player, currentPosition, "target_defeated");
-			} else if (!player->canSee(target->getPosition()) || player->getAttackedCreature() != target) {
-				finishTraversalCombat(player, currentPosition, "target_lost");
-			} else if (std::chrono::steady_clock::now() - combatStarted >= traversalCombatTimeout) {
-				logActionFailure("attack", "combat_timeout", currentPosition);
-				suppressedTraversalTargets[target->getID()] = std::chrono::steady_clock::now() + traversalTargetSuppression;
-				finishTraversalCombat(player, currentPosition, "combat_timeout");
-			} else {
-				ratPosition = target->getPosition();
-			}
-			schedule(navigationInterval);
-		}
-
-		bool planTraversalRoute(Player* player, const TraversalCheckpoint& checkpoint)
-		{
-			const int32_t targetDistance = checkpoint.action == TraversalAction::Walk ? 0 : 1;
-			if (targetDistance == 1 && Position::areInRange<1, 1, 0>(player->getPosition(), checkpoint.target)) {
-				return true;
-			}
-
-			FindPathParams pathParams;
-			pathParams.maxSearchDist = 128;
-			pathParams.clearSight = false;
-			pathParams.minTargetDist = targetDistance;
-			pathParams.maxTargetDist = targetDistance;
-			if (findPath(player, checkpoint.target, route, pathParams) && !route.empty()) {
-				fixedTargetRouteFailureCount = 0;
-				return true;
-			}
-
-			const Position currentPosition = player->getPosition();
-			const int32_t offsetX = checkpoint.target.x - currentPosition.x;
-			const int32_t offsetY = checkpoint.target.y - currentPosition.y;
-			const int32_t distance = std::max(std::abs(offsetX), std::abs(offsetY));
-			if (distance > 8) {
-				const int32_t stepX = offsetX * 8 / distance;
-				const int32_t stepY = offsetY * 8 / distance;
-				const bool mostlyVertical = std::abs(offsetY) >= std::abs(offsetX);
-				for (int32_t lateral = 0; lateral <= 8; ++lateral) {
-					for (int32_t sign : {-1, 1}) {
-						if (lateral == 0 && sign == 1) {
-							continue;
-						}
-						Position intermediate(currentPosition.x + stepX + (mostlyVertical ? lateral * sign : 0),
-						                      currentPosition.y + stepY + (mostlyVertical ? 0 : lateral * sign),
-						                      currentPosition.z);
-						std::vector<Direction> intermediateRoute;
-						FindPathParams intermediateParams = pathParams;
-						intermediateParams.maxSearchDist = 32;
-						if (findPath(player, intermediate, intermediateRoute, intermediateParams) && !intermediateRoute.empty()) {
-							route = std::move(intermediateRoute);
-							fixedTargetRouteFailureCount = 0;
-							return true;
-						}
-					}
-				}
-			}
-
-			if (++fixedTargetRouteFailureCount >= 20) {
-				stop("traversal_route_unavailable", player->getPosition());
-			}
-			return false;
-		}
-
-		Item* getCheckpointItem(const TraversalCheckpoint& checkpoint) const
-		{
-			Tile* tile = g_game.map.getTile(checkpoint.target);
-			if (!tile) {
-				return nullptr;
-			}
-			if (checkpoint.action == TraversalAction::UseRope) {
-				Item* ground = tile->getGround();
-				return ground && ground->getID() == ropeSpotItemId ? ground : nullptr;
-			}
-
-			TileItemVector* items = tile->getItemList();
-			if (items) {
-				for (Item* item : *items) {
-					if (item->getID() == ladderItemId) {
-						return item;
-					}
-				}
-			}
-			return nullptr;
-		}
-
-		bool useTraversalCheckpoint(Player* player, const TraversalCheckpoint& checkpoint)
-		{
-			if (!player->canDoAction()) {
-				return false;
-			}
-
-			Item* target = getCheckpointItem(checkpoint);
-			Tile* tile = g_game.map.getTile(checkpoint.target);
-			const int32_t stackPosition = target && tile ? tile->getThingIndex(target) : -1;
-			if (!target || stackPosition < 0 || stackPosition > UINT8_MAX) {
-				logActionFailure("transition", "target_item_unavailable", player->getPosition());
-				return false;
-			}
-
-			++counters.actionsAttempted;
-			if (checkpoint.action == TraversalAction::UseLadder) {
-				g_game.playerUseItem(playerId, checkpoint.target, static_cast<uint8_t>(stackPosition), 0, target->getClientID());
-				return true;
-			}
-
-			Item* rope = g_game.findItemOfType(player, ropeItemId, true);
-			if (!rope) {
-				logActionFailure("transition", "rope_unavailable", player->getPosition());
-				return false;
-			}
-			g_game.playerUseItemEx(playerId, Position(0xFFFF, 0, 0), 0, rope->getClientID(), checkpoint.target,
-			                         static_cast<uint8_t>(stackPosition), target->getClientID());
-			return true;
-		}
-
-		void completeTraversal(Player* player, const Position& currentPosition)
-		{
-			setStage(ScenarioStage::Complete, currentPosition);
-			g_game.internalCreatureSay(player, TALKTYPE_SAY, "trip completed", false);
-			logSummary(currentPosition, true);
-			std::ostringstream fields;
-			fields << "\"reason\":\"trips_completed\",\"trips\":" << completedTrips;
-			emit("terminal", currentPosition, fields.str());
-			terminalLogged = true;
-		}
-
-		void persistTraversalState(Player* player)
-		{
-			player->addStorageValue(traversalCheckpointStorage, static_cast<int32_t>(traversalCheckpoint));
-			player->addStorageValue(traversalTripStorage, static_cast<int32_t>(completedTrips));
-		}
-
-		void advanceTraversal(Player* player, const Position& currentPosition)
-		{
-			const TraversalCheckpoint& checkpoint = traversalCheckpoints[traversalCheckpoint];
-			transitionPending = false;
-			transitionAttempts = 0;
-			fixedTargetRouteFailureCount = 0;
-			route.clear();
-
-			if (traversalCheckpoint == traversalForwardEnd) {
-				if (currentPosition != Position(32101, 32129, 4)) {
-					stop("unexpected_trip_end_position", currentPosition);
-					return;
-				}
-				++completedTrips;
-				logTraversalSuccess(checkpoint, currentPosition);
-				const uint32_t requiredTrips = std::max<int32_t>(1, g_config.getNumber(ConfigManager::PLAYERBOT_TRAVERSAL_TRIPS));
-				if (completedTrips >= requiredTrips) {
-					persistTraversalState(player);
-					completeTraversal(player, currentPosition);
-					return;
-				}
-				traversalCheckpoint = traversalForwardEnd + 1;
-				persistTraversalState(player);
-				return;
-			}
-
-			logTraversalSuccess(checkpoint, currentPosition);
-			if (traversalCheckpoint == traversalReverseEnd) {
-				traversalCheckpoint = traversalLoopStart;
-			} else {
-				++traversalCheckpoint;
-			}
-			persistTraversalState(player);
-		}
-
-		void processTraversal(Player* player, const Position& currentPosition)
-		{
-			if (scenarioStage == ScenarioStage::Complete) {
-				return;
-			}
-			if (scenarioStage == ScenarioStage::TraversalCombat) {
-				processTraversalCombat(player, currentPosition);
-				return;
-			}
-
-			if (stepPending) {
-				if (currentPosition == previousPosition) {
-					const int32_t walkDelay = player->getWalkDelay();
-					if (walkDelay > 0) {
-						schedule(static_cast<uint32_t>(walkDelay) + SCHEDULER_MINTICKS);
-						return;
-					}
-					route.clear();
-					logActionFailure("move", "position_unchanged", currentPosition);
-					++blockedStepCount;
-					if (blockedStepCount == 3) {
-						++counters.stuckEvents;
-						emit("stuck", currentPosition, "\"reason\":\"repeated_blocked_movement\",\"blocked_steps\":3");
-					}
-					if (blockedStepCount >= maxBlockedTraversalSteps) {
-						stop("traversal_movement_blocked", currentPosition);
-						return;
-					}
-				} else {
-					blockedStepCount = 0;
-				}
-				stepPending = false;
-			}
-
-			const TraversalCheckpoint& checkpoint = traversalCheckpoints[traversalCheckpoint];
-			if (transitionPending) {
-				if (currentPosition.z == checkpoint.expectedFloor) {
-					advanceTraversal(player, currentPosition);
-					if (scenarioStage == ScenarioStage::Complete || scenarioStage == ScenarioStage::Stopped) {
-						return;
-					}
-				} else if (player->getWalkDelay() > 0 || !player->canDoAction()) {
-					schedule(blockedRouteRetryInterval);
-					return;
-				} else {
-					transitionPending = false;
-					route.clear();
-					logActionFailure("transition", "floor_change_not_verified", currentPosition);
-					if (++transitionAttempts >= 5) {
-						stop("traversal_transition_failed", currentPosition);
-						return;
-					}
-				}
-			}
-
-			if (attackVisibleMonster(player, currentPosition)) {
-				schedule(navigationInterval);
-				return;
-			}
-
-			const TraversalCheckpoint& currentCheckpoint = traversalCheckpoints[traversalCheckpoint];
-			if (currentCheckpoint.action == TraversalAction::Walk && currentPosition == currentCheckpoint.target) {
-				if (player->getWalkDelay() > 0) {
-					schedule(blockedRouteRetryInterval);
-					return;
-				}
-				previousPosition = currentPosition;
-				stepPending = true;
-				transitionPending = true;
-				++counters.actionsAttempted;
-				g_game.playerMove(playerId, DIRECTION_NORTH);
-				schedule(navigationInterval);
-				return;
-			}
-			if (!planTraversalRoute(player, currentCheckpoint)) {
-				if (scenarioStage != ScenarioStage::Stopped) {
-					schedule(blockedRouteRetryInterval);
-				}
-				return;
-			}
-
-			if (currentCheckpoint.action != TraversalAction::Walk &&
-			    Position::areInRange<1, 1, 0>(currentPosition, currentCheckpoint.target)) {
-				if (!player->canDoAction()) {
-					schedule(blockedRouteRetryInterval);
-					return;
-				}
-				if (useTraversalCheckpoint(player, currentCheckpoint)) {
-					transitionPending = true;
-					schedule(blockedRouteRetryInterval);
-				} else {
-					if (++transitionAttempts >= 5) {
-						stop("traversal_transition_unavailable", currentPosition);
-						return;
-					}
-					schedule(blockedRouteRetryInterval);
-				}
-				return;
-			}
-
-			if (route.empty()) {
-				schedule(blockedRouteRetryInterval);
-				return;
-			}
-			previousPosition = currentPosition;
-			stepPending = true;
-			++counters.actionsAttempted;
-			g_game.playerMove(playerId, route.back());
-			route.pop_back();
-			schedule(navigationInterval);
-		}
-
 		void navigate()
 		{
 			DecisionTimer decisionTimer(*this);
@@ -880,11 +449,6 @@ class PlayerBotController
 			maybeLogSummary(currentPosition);
 			if (handleFood(player, currentPosition)) {
 				schedule(blockedRouteRetryInterval);
-				return;
-			}
-			if (scenarioStage == ScenarioStage::Traverse || scenarioStage == ScenarioStage::TraversalCombat ||
-			    scenarioStage == ScenarioStage::Complete) {
-				processTraversal(player, currentPosition);
 				return;
 			}
 			if (currentPosition.z == sewerGratePosition.z + 1) {
@@ -1010,10 +574,6 @@ class PlayerBotController
 						stop("no_reachable_exploration_frontier", currentPosition);
 					}
 					break;
-				case ScenarioStage::Traverse:
-				case ScenarioStage::TraversalCombat:
-				case ScenarioStage::Complete:
-					return;
 				case ScenarioStage::Stopped:
 					return;
 			}
@@ -1404,13 +964,6 @@ class PlayerBotController
 		uint32_t pendingEatInventoryCount = 0;
 		int32_t pendingEatFoodTicks = 0;
 		std::chrono::steady_clock::time_point eatRetryAfter;
-		size_t traversalCheckpoint = 0;
-		uint32_t completedTrips = 0;
-		uint32_t transitionAttempts = 0;
-		bool transitionPending = false;
-		std::chrono::steady_clock::time_point combatStarted;
-		std::unordered_map<uint32_t, std::chrono::steady_clock::time_point> suppressedTraversalTargets;
-		bool restoredTraversalState = false;
 		Counters counters;
 		std::unordered_map<std::string, std::chrono::steady_clock::time_point> repeatedEventTimes;
 		const std::chrono::steady_clock::time_point started = std::chrono::steady_clock::now();
