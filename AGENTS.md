@@ -131,7 +131,8 @@ docker compose -f server/compose.yaml logs playerbot-setup server
 Confirm that MariaDB is healthy, the map loads, the server reports online, and
 ports `7171` and `7172` accept local connections. Confirm that
 `playerbot-setup` exits successfully, exactly one valid `Bot One` registration
-exists, and server logs report `Playerbot online`.
+exists, and the server emits a valid JSONL `playerbot` `lifecycle` event with
+status `online` for `Bot One`.
 
 For protocol or gameplay-facing client changes, also test:
 

@@ -63,6 +63,43 @@ with:
 docker compose -f server/compose.yaml logs playerbot-setup server
 ```
 
+Playerbot events are JSON Lines on server stdout. Retrieve records for AI or
+scripted analysis without the Compose prefix with:
+
+```powershell
+docker compose -f server/compose.yaml logs --no-log-prefix --since 30m server | Where-Object { $_ -match '"component":"playerbot"' }
+```
+
+Every record has `schema: 1`, a UTC RFC 3339 `ts`,
+`component: "playerbot"`, `event`, `bot`, persistent `player_id`, and
+`position`. Event types are `lifecycle`, `state_transition`, `target_changed`,
+`action_result`, `stuck`, `summary`, and `terminal`. Event-specific fields are
+conditional, and `target_id` is `null` when no target exists.
+
+| Event | Distinguishing fields |
+| ----- | --------------------- |
+| `lifecycle` | `status`: `online`, `dead`, or `removed` |
+| `state_transition` | `from`, `to` |
+| `target_changed` | `previous_target_id`, `target_id`, optional target type and position, `reason` |
+| `action_result` | `action`, `result`, `reason` |
+| `stuck` | `reason`, `blocked_steps` |
+| `summary` | current state and target, uptime, decision/pathfinding timing, action, failure, stuck, and suppression counters |
+| `terminal` | `reason` |
+
+States, actions, results, statuses, and reasons are stable lowercase strings
+intended for machine consumption.
+
+The controller logs lifecycle and state changes, target changes, failures,
+stuck detection, terminal reasons, and a cumulative summary every 60 seconds.
+Successful movement does not produce one record per tile. Repeated identical
+transitions, target changes, and action failures are emitted at most once per
+60 seconds; `summary.suppressed_events` counts omitted repetitions. Server
+container logs use Docker's local driver with three 10 MiB files, retaining
+roughly 30 MiB; older records are discarded. Summary `uptime_ms` is in
+milliseconds, timing fields ending in `_us` are in microseconds, and counters
+cover one in-memory controller lifetime. They reset when the server or
+controller restarts.
+
 The current implementation is a fixed Rookgaard sewer demonstration, not a
 general-purpose or configurable bot system. From the seeded position at
 `(32097, 32219, 7)`, it navigates to `(32099, 32211, 7)`, uses sewer grate item
@@ -86,7 +123,10 @@ docker compose -f server/compose.yaml logs --follow playerbot-setup server
 ```
 
 Confirm MariaDB is healthy, `playerbot-setup` succeeds, the map and server come
-online, and logs report `Playerbot online` followed by sewer and combat events.
+online, and JSONL logs report a `lifecycle` event with status `online`.
+`state_transition` and `target_changed` events follow when the scenario
+progresses; failure, stuck, summary, and terminal events occur only under their
+respective conditions.
 Log in as `Rook Tester` with `admin` / `admin` to observe the bot and smoke-test
 normal client movement, inventory, item use, combat, and logout. Ports 7171 and
 7172 remain bound to localhost.
