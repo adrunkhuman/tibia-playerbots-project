@@ -100,7 +100,7 @@ pwsh -File scripts/bootstrap-client.ps1
   mechanism.
 - Keep bot-facing UI and network notifications behind null-safe `Player`
   methods; playerbot code and datapack scripts must not dereference `client`.
-- The hardcoded Rookgaard traversal route and combat behavior are a bounded
+- The hardcoded Rookgaard sewer route and combat behavior are a bounded
   prototype, not the settled bot architecture or product goal. Discuss and
   document broader goals before generalizing the prototype.
 - The intended scale is eventually hundreds of bots. Do not introduce one OS
