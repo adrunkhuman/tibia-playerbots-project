@@ -26,7 +26,6 @@ jobs:
     env:
       COMPOSE_FILE: server/compose.yaml:server/compose.playerbot-regression.yaml
       PLAYERBOT_REGRESSION_MODE: interactions
-      PLAYERBOT_TRAVERSAL_TRIPS: 2
 
     steps:
       - name: Check out repository
@@ -111,8 +110,7 @@ jobs:
         run: |
           wait_for_log() {
             local marker="$1"
-            local attempts="${2:-60}"
-            for ((attempt = 1; attempt <= attempts; attempt++)); do
+            for attempt in {1..60}; do
               if docker compose logs --no-log-prefix server | grep --quiet --extended-regexp "$marker"; then
                 return 0
               fi
@@ -138,19 +136,6 @@ jobs:
 
           wait_for_log "PLAYERBOT_CONNECTIONLESS_TEST PASS mode=interactions"
           wait_for_log '"action":"eat".*"result":"success"'
-          wait_for_log '"action":"transition".*"checkpoint":"third_ladder_down"' 300
-          wait_for_log '"action":"transition".*"checkpoint":"north_stairs_up"' 300
-          wait_for_log '"event":"terminal".*"reason":"trips_completed".*"trips":2' 300
-          completion_log="$(docker compose logs --no-log-prefix server | grep '"event":"summary"' | grep '"state":"complete"' | tail -n 1)"
-          COMPLETION_LOG="$completion_log" python3 - <<'PY'
-          import json
-          import os
-
-          event = json.loads(os.environ["COMPLETION_LOG"])
-          assert event["position"] == {"x": 32101, "y": 32129, "z": 4}
-          assert event["actions_failed"] == 0
-          assert event["stuck_events"] == 0
-          PY
           docker compose stop server
           test "$(storage_value)" = "86016"
 

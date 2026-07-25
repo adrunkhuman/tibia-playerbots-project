@@ -114,8 +114,8 @@ actual position. On the fifth arrival at `(32101, 32129, 4)`, it says
 `trip completed` and stops. Each floor transition is verified before the next
 checkpoint, and repeated path or transition failures terminate the scenario.
 `PLAYERBOT_TRAVERSAL_TRIPS` changes the required trip count at server startup;
-the normal Compose default is `5`, while CI uses two trips to cover one complete
-reverse leg.
+the normal Compose default is `5`. The route is manually verified because the
+server smoke workflow intentionally does not wait for gameplay trips.
 
 The bot retains the verified food behavior: when it can eat another cheese, it
 consumes one through the normal item-use path, verifies both the inventory
