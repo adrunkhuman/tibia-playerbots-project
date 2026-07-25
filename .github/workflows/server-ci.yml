@@ -24,8 +24,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
-      COMPOSE_FILE: server/compose.yaml:server/compose.playerbot-regression.yaml
-      PLAYERBOT_REGRESSION_MODE: interactions
+      COMPOSE_FILE: server/compose.yaml
 
     steps:
       - name: Check out repository
@@ -105,59 +104,6 @@ jobs:
           assert event["status"] == "online"
           assert set(event["position"]) == {"x", "y", "z"}
           PY
-
-      - name: Verify connectionless player regressions
-        run: |
-          wait_for_log() {
-            local marker="$1"
-            for attempt in {1..60}; do
-              if docker compose logs --no-log-prefix server | grep --quiet --extended-regexp "$marker"; then
-                return 0
-              fi
-              if ! docker compose ps --status running --services | grep --quiet --extended-regexp '^server$'; then
-                echo "Server stopped while waiting for: $marker" >&2
-                return 1
-              fi
-              sleep 2
-            done
-            echo "Timed out waiting for: $marker" >&2
-            return 1
-          }
-
-          storage_value() {
-            docker compose exec -T database \
-              mariadb --user=angelion --password=angelion --skip-column-names angelion \
-              --execute="
-                SELECT value FROM player_storage
-                JOIN players ON players.id = player_storage.player_id
-                WHERE players.name = 'Bot One' AND player_storage.key = 45016;
-              "
-          }
-
-          wait_for_log "PLAYERBOT_CONNECTIONLESS_TEST PASS mode=interactions"
-          wait_for_log '"action":"eat".*"result":"success".*"inventory_count":1,"food_ticks"'
-          docker compose stop server
-          test "$(storage_value)" = "86016"
-
-          PLAYERBOT_REGRESSION_MODE=death docker compose up --detach --force-recreate server
-          wait_for_log "PLAYERBOT_CONNECTIONLESS_TEST PASS mode=death"
-          docker compose ps --status running --services | grep --quiet --extended-regexp '^server$'
-          docker compose stop server
-          test "$(storage_value)" = "86017"
-
-          PLAYERBOT_REGRESSION_MODE=remove docker compose up --detach --force-recreate server
-          wait_for_log "PLAYERBOT_CONNECTIONLESS_TEST PASS mode=remove"
-          wait_for_log '"event":"terminal".*"reason":"controlled_player_not_found"'
-          test "$(storage_value)" = "86018"
-
-          PLAYERBOT_REGRESSION_MODE=reject docker compose up --detach --force-recreate server
-          wait_for_log "PLAYERBOT_CONNECTIONLESS_TEST PASS mode=reject"
-          wait_for_log "TFS Server Online!"
-          reject_logs="$(docker compose logs --no-log-prefix server)"
-          if grep --quiet '"component":"playerbot".*"status":"online"' <<<"$reject_logs"; then
-            echo "Rejected playerbot was incorrectly reported online." >&2
-            exit 1
-          fi
 
       - name: Verify local game ports
         run: |

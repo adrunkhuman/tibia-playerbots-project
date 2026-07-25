@@ -39,6 +39,10 @@ Local accounts:
 | `admin` | `admin` | `GOD Admin`, `Rook Tester` |
 | `bot-one` | `bot-one` | `Bot One` (server-controlled) |
 
+`Rook Tester` is a reproducible level-50 traversal test character with sword
+and shielding skills, a backpack, plate armor, dark shield, fire sword, Boots
+of Haste, rope, and shovel. The loadout is recreated with every fresh database.
+
 The services bind only to `127.0.0.1`. Reset the disposable database with:
 
 ```powershell
@@ -54,11 +58,11 @@ cannot take control of the character while the server owns it.
 
 `playerbot-setup` runs before the server on both fresh and existing database
 volumes. It reserves the local-development account `bot-one` and character
-name `Bot One`, records the character in `player_bots`, and inserts a backpack,
-Carlin sword, and studded shield only when their respective equipment slots are
-empty. Existing slot contents are never replaced; provisioning does not repair
-an occupied slot. It fails rather than taking over a same-named or deleted
-character. Diagnose it with:
+name `Bot One`, records the character in `player_bots`, and provisions the same
+level-50 traversal loadout as `Rook Tester`. Equipment is inserted only when
+its slot is empty. Existing slot contents are never replaced; provisioning does
+not repair an occupied slot. It fails rather than taking over a same-named or
+deleted character. Diagnose it with:
 
 ```powershell
 docker compose -f server/compose.yaml logs playerbot-setup server
@@ -82,10 +86,15 @@ conditional, and `target_id` is `null` when no target exists.
 | `lifecycle` | `status`: `online`, `dead`, or `removed` |
 | `state_transition` | `from`, `to` |
 | `target_changed` | `previous_target_id`, `target_id`, optional target type and position, `reason` |
-| `action_result` | Always has `action` and `result`; failures also have `reason`. Successful `loot` records have `item_id`, `count`, and post-action `inventory_count`. Successful `eat` records additionally have `food_ticks`, the post-action regeneration duration in milliseconds. |
+| `action_result` | Always has `action` and `result`; failures also have `reason`. Successful `transition` records have `checkpoint` and `trip`. Successful `eat` records have `item_id`, `count`, post-action `inventory_count`, and `food_ticks`, the post-action regeneration duration in milliseconds. |
 | `stuck` | `reason`, `blocked_steps` |
 | `summary` | current state and target, uptime, decision/pathfinding timing, action, failure, stuck, and suppression counters |
 | `terminal` | `reason` |
+
+For a successful `transition`, `trip` is the number of completed forward trips
+when the record is emitted. The first outbound checkpoints therefore report
+`0`; `third_ladder_up` completes the forward trip and reports `1`, and the
+following reverse checkpoints continue to report `1`.
 
 States, actions, results, statuses, and reasons are stable lowercase strings
 intended for machine consumption.
@@ -101,29 +110,30 @@ milliseconds, timing fields ending in `_us` are in microseconds, and counters
 cover one in-memory controller lifetime. They reset when the server or
 controller restarts.
 
-The current implementation is a fixed Rookgaard sewer demonstration, not a
-general-purpose or configurable bot system. From the seeded position at
-`(32097, 32219, 7)`, it navigates to `(32099, 32211, 7)`, uses sewer grate item
-`430` at `(32097, 32205, 7)`, searches for visible creatures named `Rat`, and
-fights or explores until it dies, exhausts the reachable frontier, or reaches
-a bounded failure condition. After a kill, it attempts to find an owned rat
-corpse within one tile, open it through the normal player action path, and move
-available gold plus up to three total pieces of cheese into the backpack.
-Corpse ownership, range, capacity, container space, item stacking, action
-delays, and bounded corpse-search/open retries remain enforced. If the corpse
-or an item cannot be accessed, the controller records a failed `loot` action
-and resumes hunting; it does not guarantee that every drop is transferred.
-When it can eat another cheese, it consumes one through the normal item-use
-path, verifies both the inventory decrease and food-condition increase, and
-repeats until another cheese would exceed the game's fullness limit or it runs
-out of cheese.
+The current implementation is a fixed-route Rookgaard traversal demonstration,
+not a general-purpose bot system. From the temple position at
+`(32097, 32219, 7)`, it follows short replanned route segments through walk-on
+stairs, a rope spot, three ladders, and the paired reverse openings. It attacks
+and chases visible monsters, then resumes from its actual position. At the
+configured final arrival at `(32101, 32129, 4)`, it says `trip completed` and
+stops. Each floor transition is verified before the next checkpoint, and
+repeated path or transition failures terminate the scenario.
+
+`PLAYERBOT_TRAVERSAL_TRIPS` sets the required trip count at server startup. An
+unset or non-numeric value uses the normal Compose default of `5`; values below
+`1` are clamped to `1`. The route is manually verified because the server smoke
+workflow intentionally does not wait for gameplay trips.
+
+The bot retains the verified food behavior: when it can eat another cheese, it
+consumes one through the normal item-use path, verifies both the inventory
+decrease and food-condition increase, and repeats until another cheese would
+exceed the game's fullness limit or it runs out of cheese.
 
 Normal shutdown saves the bot through the existing player persistence path.
-Controller routes, targets, and explored frontiers remain in memory only. On
-restart, a saved position on floor 8 resumes sewer behavior; a saved position
-on floor 7 restarts the route to the sewer. Other floors stop the prototype
-controller. Removing the Compose volume resets the bot and all other local
-world state.
+Checkpoint progress and completed-trip count use normal player storage and
+survive a clean restart. Routes, targets, action attempts, and transient combat
+suppression remain in memory only. Removing the Compose volume resets the bot
+and all other local world state.
 
 To inspect Bot One through the client, first stop the server cleanly so its
 inventory is saved, then restart without the server-controlled bot:
@@ -144,11 +154,12 @@ enables it. Disabling the controller does not remove `Bot One` or skip
 `playerbot-setup`; the character remains reserved and can be inspected through
 the client. Recreate the server after changing the variable.
 
-Server CI mounts `server/tests/playerbot_connectionless.lua` through
-`server/compose.playerbot-regression.yaml`; the normal Compose stack never
-loads it. The probe covers representative Lua UI and network sends, temporary
-inventory/container mutation, death, explicit removal, rejected login, and
-clean-shutdown persistence for the connectionless bot.
+The smoke workflow runs only the normal Compose stack and checks fresh
+provisioning, server startup, structured lifecycle output, and local ports. It
+does not execute gameplay actions. The optional manual regression overlay
+mounts `server/tests/playerbot_connectionless.lua` and covers representative
+Lua UI and network sends, temporary inventory/container mutation, death,
+explicit removal, rejected login, and clean-shutdown persistence.
 
 Run the connectionless interaction probe locally with the regression overlay:
 
@@ -157,12 +168,37 @@ $env:PLAYERBOT_REGRESSION_MODE = "interactions"
 docker compose -f server/compose.yaml -f server/compose.playerbot-regression.yaml up --build --detach --force-recreate server
 ```
 
-After the interaction mode reaches its food-consumption assertion, stop the
-server cleanly before recreating it with mode `death`; that mode verifies the
-saved food condition and remaining cheese before killing the bot. Modes
+After observing the desired interaction or traversal behavior, stop the server
+cleanly before recreating it with mode `death`; that mode verifies the saved
+food condition and inventory state before killing the bot. Modes
 `remove` and `reject` cover explicit removal and rejected login. Remove
 `PLAYERBOT_REGRESSION_MODE` and the regression overlay before returning to the
 normal stack.
+
+Run each follow-up mode separately, waiting for its `PASS` marker before
+stopping or recreating the server:
+
+```powershell
+docker compose -f server/compose.yaml -f server/compose.playerbot-regression.yaml stop server
+$env:PLAYERBOT_REGRESSION_MODE = "death"
+docker compose -f server/compose.yaml -f server/compose.playerbot-regression.yaml up --detach --force-recreate server
+
+docker compose -f server/compose.yaml -f server/compose.playerbot-regression.yaml stop server
+$env:PLAYERBOT_REGRESSION_MODE = "remove"
+docker compose -f server/compose.yaml -f server/compose.playerbot-regression.yaml up --detach --force-recreate server
+
+docker compose -f server/compose.yaml -f server/compose.playerbot-regression.yaml stop server
+$env:PLAYERBOT_REGRESSION_MODE = "reject"
+docker compose -f server/compose.yaml -f server/compose.playerbot-regression.yaml up --detach --force-recreate server
+```
+
+Return to the normal stack with:
+
+```powershell
+docker compose -f server/compose.yaml -f server/compose.playerbot-regression.yaml stop server
+Remove-Item Env:PLAYERBOT_REGRESSION_MODE
+docker compose -f server/compose.yaml up --detach --force-recreate server
+```
 
 Verify the prototype with:
 
