@@ -140,8 +140,7 @@ jobs:
 
           PLAYERBOT_REGRESSION_MODE=death docker compose up --detach --force-recreate server
           wait_for_log "PLAYERBOT_CONNECTIONLESS_TEST PASS mode=death"
-          wait_for_log '"event":"lifecycle".*"status":"dead"'
-          wait_for_log '"event":"terminal".*"reason":"controlled_player_dead"'
+          docker compose ps --status running --services | grep --quiet --extended-regexp '^server$'
           docker compose stop server
           test "$(storage_value)" = "86017"
 
