@@ -131,9 +131,10 @@ exceed the game's fullness limit or it runs out of cheese.
 
 Normal shutdown saves the bot through the existing player persistence path.
 Checkpoint progress and completed-trip count use normal player storage and
-survive a clean restart. Routes, targets, action attempts, and transient combat
-suppression remain in memory only. Removing the Compose volume resets the bot
-and all other local world state.
+survive a clean restart. On startup, the bot reconciles a floor transition that
+completed before its checkpoint was saved. Routes, targets, action attempts,
+and transient combat suppression remain in memory only. Removing the Compose
+volume resets the bot and all other local world state.
 
 To inspect Bot One through the client, first stop the server cleanly so its
 inventory is saved, then restart without the server-controlled bot:
@@ -160,6 +161,19 @@ does not execute gameplay actions. The optional manual regression overlay
 mounts `server/tests/playerbot_connectionless.lua` and covers representative
 Lua UI and network sends, temporary inventory/container mutation, death,
 explicit removal, rejected login, and clean-shutdown persistence.
+
+The local-only gameplay suite verifies one complete trip and its ordered floor
+transitions. It then injects an interrupted-transition state and verifies that
+startup reconciles progress exactly once:
+
+```powershell
+pwsh -File scripts/test-playerbot-gameplay.ps1
+```
+
+The suite rebuilds the server and resets the disposable Compose stack and
+database volume. It removes them afterward; `-KeepStack` leaves the final stack
+running. The default timeout is 900 seconds and can be changed with
+`-TimeoutSeconds` (60-3600).
 
 Run the connectionless interaction probe locally with the regression overlay:
 
