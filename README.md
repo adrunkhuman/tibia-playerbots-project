@@ -91,6 +91,11 @@ conditional, and `target_id` is `null` when no target exists.
 | `summary` | current state and target, uptime, decision/pathfinding timing, action, failure, stuck, and suppression counters |
 | `terminal` | `reason` |
 
+For a successful `transition`, `trip` is the number of completed forward trips
+when the record is emitted. The first outbound checkpoints therefore report
+`0`; `third_ladder_up` completes the forward trip and reports `1`, and the
+following reverse checkpoints continue to report `1`.
+
 States, actions, results, statuses, and reasons are stable lowercase strings
 intended for machine consumption.
 
@@ -105,17 +110,19 @@ milliseconds, timing fields ending in `_us` are in microseconds, and counters
 cover one in-memory controller lifetime. They reset when the server or
 controller restarts.
 
-The current implementation is a fixed five-trip Rookgaard traversal
-demonstration, not a general-purpose or configurable bot system. From the
-temple position at `(32097, 32219, 7)`, it follows short replanned route
-segments through walk-on stairs, a rope spot, three ladders, and the paired
-reverse openings. It attacks and chases visible monsters, then resumes from its
-actual position. On the fifth arrival at `(32101, 32129, 4)`, it says
-`trip completed` and stops. Each floor transition is verified before the next
-checkpoint, and repeated path or transition failures terminate the scenario.
-`PLAYERBOT_TRAVERSAL_TRIPS` changes the required trip count at server startup;
-the normal Compose default is `5`. The route is manually verified because the
-server smoke workflow intentionally does not wait for gameplay trips.
+The current implementation is a fixed-route Rookgaard traversal demonstration,
+not a general-purpose bot system. From the temple position at
+`(32097, 32219, 7)`, it follows short replanned route segments through walk-on
+stairs, a rope spot, three ladders, and the paired reverse openings. It attacks
+and chases visible monsters, then resumes from its actual position. At the
+configured final arrival at `(32101, 32129, 4)`, it says `trip completed` and
+stops. Each floor transition is verified before the next checkpoint, and
+repeated path or transition failures terminate the scenario.
+
+`PLAYERBOT_TRAVERSAL_TRIPS` sets the required trip count at server startup. An
+unset or non-numeric value uses the normal Compose default of `5`; values below
+`1` are clamped to `1`. The route is manually verified because the server smoke
+workflow intentionally does not wait for gameplay trips.
 
 The bot retains the verified food behavior: when it can eat another cheese, it
 consumes one through the normal item-use path, verifies both the inventory
@@ -167,6 +174,31 @@ food condition and inventory state before killing the bot. Modes
 `remove` and `reject` cover explicit removal and rejected login. Remove
 `PLAYERBOT_REGRESSION_MODE` and the regression overlay before returning to the
 normal stack.
+
+Run each follow-up mode separately, waiting for its `PASS` marker before
+stopping or recreating the server:
+
+```powershell
+docker compose -f server/compose.yaml -f server/compose.playerbot-regression.yaml stop server
+$env:PLAYERBOT_REGRESSION_MODE = "death"
+docker compose -f server/compose.yaml -f server/compose.playerbot-regression.yaml up --detach --force-recreate server
+
+docker compose -f server/compose.yaml -f server/compose.playerbot-regression.yaml stop server
+$env:PLAYERBOT_REGRESSION_MODE = "remove"
+docker compose -f server/compose.yaml -f server/compose.playerbot-regression.yaml up --detach --force-recreate server
+
+docker compose -f server/compose.yaml -f server/compose.playerbot-regression.yaml stop server
+$env:PLAYERBOT_REGRESSION_MODE = "reject"
+docker compose -f server/compose.yaml -f server/compose.playerbot-regression.yaml up --detach --force-recreate server
+```
+
+Return to the normal stack with:
+
+```powershell
+docker compose -f server/compose.yaml -f server/compose.playerbot-regression.yaml stop server
+Remove-Item Env:PLAYERBOT_REGRESSION_MODE
+docker compose -f server/compose.yaml up --detach --force-recreate server
+```
 
 Verify the prototype with:
 
