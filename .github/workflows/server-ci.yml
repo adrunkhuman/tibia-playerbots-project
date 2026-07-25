@@ -82,6 +82,27 @@ jobs:
           )"
           test "$bot_count" = "1"
 
+      - name: Verify structured playerbot log
+        run: |
+          bot_log="$(
+            docker compose -f server/compose.yaml logs --no-log-prefix server \
+              | grep '"component":"playerbot"' \
+              | grep '"event":"lifecycle"' \
+              | tail -n 1
+          )"
+          BOT_LOG="$bot_log" python3 - <<'PY'
+          import json
+          import os
+
+          event = json.loads(os.environ["BOT_LOG"])
+          assert event["schema"] == 1
+          assert event["component"] == "playerbot"
+          assert event["event"] == "lifecycle"
+          assert event["bot"] == "Bot One"
+          assert event["status"] == "online"
+          assert set(event["position"]) == {"x", "y", "z"}
+          PY
+
       - name: Verify local game ports
         run: |
           timeout 5 bash -c 'exec 3<>/dev/tcp/127.0.0.1/7171'

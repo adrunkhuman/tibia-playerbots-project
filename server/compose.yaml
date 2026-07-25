@@ -57,6 +57,11 @@ services:
       - "127.0.0.1:7172:7172"
     restart: unless-stopped
     stop_grace_period: 1m
+    logging:
+      driver: local
+      options:
+        max-size: "10m"
+        max-file: "3"
     volumes:
       - ./config.lua:/app/config.lua:ro
       - ./data:/app/data
