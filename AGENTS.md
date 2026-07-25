@@ -98,6 +98,8 @@ pwsh -File scripts/bootstrap-client.ps1
 - Preserve normal player persistence for bots. A clean shutdown must save them
   through the existing player save path rather than a parallel persistence
   mechanism.
+- Keep bot-facing UI and network notifications behind null-safe `Player`
+  methods; playerbot code and datapack scripts must not dereference `client`.
 - The hardcoded Rookgaard sewer route and combat behavior are a bounded
   prototype, not the settled bot architecture or product goal. Discuss and
   document broader goals before generalizing the prototype.

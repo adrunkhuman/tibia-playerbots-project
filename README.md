@@ -114,6 +114,12 @@ on floor 7 restarts the route to the sewer. Other floors stop the prototype
 controller. Removing the Compose volume resets the bot and all other local
 world state.
 
+Server CI mounts `server/tests/playerbot_connectionless.lua` through
+`server/compose.playerbot-regression.yaml`; the normal Compose stack never
+loads it. The probe covers representative Lua UI and network sends, temporary
+inventory/container mutation, death, explicit removal, rejected login, and
+clean-shutdown persistence for the connectionless bot.
+
 Verify the prototype with:
 
 ```powershell

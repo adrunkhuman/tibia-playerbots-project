@@ -716,6 +716,9 @@ bool PlayerBotManager::spawn(const std::string& name)
 		delete player;
 		return false;
 	}
+	if (player->isRemoved() || g_game.getPlayerByID(player->getID()) != player) {
+		return false;
+	}
 
 	controller = std::make_unique<PlayerBotController>(*player);
 	controller->start(player->getPosition());

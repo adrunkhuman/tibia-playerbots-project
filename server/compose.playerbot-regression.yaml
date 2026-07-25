@@ -1,0 +1,6 @@
+services:
+  server:
+    environment:
+      PLAYERBOT_REGRESSION_MODE: "${PLAYERBOT_REGRESSION_MODE:-interactions}"
+    volumes:
+      - ./tests:/app/data/scripts/playerbot-regression:ro
