@@ -23,18 +23,21 @@ jobs:
   server-smoke:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    env:
+      COMPOSE_FILE: server/compose.yaml:server/compose.playerbot-regression.yaml
+      PLAYERBOT_REGRESSION_MODE: interactions
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
 
       - name: Validate Compose configuration
-        run: docker compose -f server/compose.yaml config --quiet
+        run: docker compose config --quiet
 
       - name: Pull runtime images
         run: |
           for attempt in 1 2 3; do
-            if docker compose -f server/compose.yaml pull database playerbot-setup; then
+            if docker compose pull database playerbot-setup; then
               exit 0
             fi
             if [ "$attempt" = "3" ]; then
@@ -45,16 +48,16 @@ jobs:
           done
 
       - name: Build and start fresh server stack
-        run: docker compose -f server/compose.yaml up --build --detach
+        run: docker compose up --build --detach
 
       - name: Wait for server startup
         run: |
           for attempt in {1..60}; do
-            server_logs="$(docker compose -f server/compose.yaml logs server)"
+            server_logs="$(docker compose logs server)"
             if grep --quiet "TFS Server Online!" <<<"$server_logs"; then
               exit 0
             fi
-            running_services="$(docker compose -f server/compose.yaml ps --status running --services)"
+            running_services="$(docker compose ps --status running --services)"
             if ! grep --quiet --extended-regexp '^server$' <<<"$running_services"; then
               echo "Server container stopped before reaching online state." >&2
               exit 1
@@ -69,7 +72,7 @@ jobs:
           test "$(docker inspect --format '{{.State.Health.Status}}' angelion-database-1)" = "healthy"
           test "$(docker inspect --format '{{.State.ExitCode}}' angelion-playerbot-setup-1)" = "0"
           bot_count="$(
-            docker compose -f server/compose.yaml exec -T database \
+            docker compose exec -T database \
               mariadb --user=angelion --password=angelion --skip-column-names angelion \
               --execute="
                 SELECT COUNT(*) FROM player_bots
@@ -85,7 +88,7 @@ jobs:
       - name: Verify structured playerbot log
         run: |
           bot_log="$(
-            docker compose -f server/compose.yaml logs --no-log-prefix server \
+            docker compose logs --no-log-prefix server \
               | grep '"component":"playerbot"' \
               | grep '"event":"lifecycle"' \
               | tail -n 1
@@ -103,6 +106,59 @@ jobs:
           assert set(event["position"]) == {"x", "y", "z"}
           PY
 
+      - name: Verify connectionless player regressions
+        run: |
+          wait_for_log() {
+            local marker="$1"
+            for attempt in {1..60}; do
+              if docker compose logs --no-log-prefix server | grep --quiet --extended-regexp "$marker"; then
+                return 0
+              fi
+              if ! docker compose ps --status running --services | grep --quiet --extended-regexp '^server$'; then
+                echo "Server stopped while waiting for: $marker" >&2
+                return 1
+              fi
+              sleep 2
+            done
+            echo "Timed out waiting for: $marker" >&2
+            return 1
+          }
+
+          storage_value() {
+            docker compose exec -T database \
+              mariadb --user=angelion --password=angelion --skip-column-names angelion \
+              --execute="
+                SELECT value FROM player_storage
+                JOIN players ON players.id = player_storage.player_id
+                WHERE players.name = 'Bot One' AND player_storage.key = 45016;
+              "
+          }
+
+          wait_for_log "PLAYERBOT_CONNECTIONLESS_TEST PASS mode=interactions"
+          docker compose stop server
+          test "$(storage_value)" = "86016"
+
+          PLAYERBOT_REGRESSION_MODE=death docker compose up --detach --force-recreate server
+          wait_for_log "PLAYERBOT_CONNECTIONLESS_TEST PASS mode=death"
+          wait_for_log '"event":"lifecycle".*"status":"dead"'
+          wait_for_log '"event":"terminal".*"reason":"controlled_player_dead"'
+          docker compose stop server
+          test "$(storage_value)" = "86017"
+
+          PLAYERBOT_REGRESSION_MODE=remove docker compose up --detach --force-recreate server
+          wait_for_log "PLAYERBOT_CONNECTIONLESS_TEST PASS mode=remove"
+          wait_for_log '"event":"terminal".*"reason":"controlled_player_not_found"'
+          test "$(storage_value)" = "86018"
+
+          PLAYERBOT_REGRESSION_MODE=reject docker compose up --detach --force-recreate server
+          wait_for_log "PLAYERBOT_CONNECTIONLESS_TEST PASS mode=reject"
+          wait_for_log "TFS Server Online!"
+          reject_logs="$(docker compose logs --no-log-prefix server)"
+          if grep --quiet '"component":"playerbot".*"status":"online"' <<<"$reject_logs"; then
+            echo "Rejected playerbot was incorrectly reported online." >&2
+            exit 1
+          fi
+
       - name: Verify local game ports
         run: |
           timeout 5 bash -c 'exec 3<>/dev/tcp/127.0.0.1/7171'
@@ -110,8 +166,8 @@ jobs:
 
       - name: Print service logs
         if: always()
-        run: docker compose -f server/compose.yaml logs
+        run: docker compose logs
 
       - name: Remove disposable stack
         if: always()
-        run: docker compose -f server/compose.yaml down --volumes --remove-orphans
+        run: docker compose down --volumes --remove-orphans
