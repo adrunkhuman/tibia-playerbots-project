@@ -5,6 +5,7 @@ blockLogin = false
 blockLoginText = "Server is closed for bug fixing."
 showPackets = false
 playerbotEnabled = os.getenv("PLAYERBOT_ENABLED") ~= "false"
+playerbotTraversalTrips = tonumber(os.getenv("PLAYERBOT_TRAVERSAL_TRIPS")) or 5
 
 -- Combat settings
 -- NOTE: valid values for worldType are: "pvp", "no-pvp" and "pvp-enforced"

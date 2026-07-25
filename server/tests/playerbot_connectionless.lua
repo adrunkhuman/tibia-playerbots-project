@@ -34,16 +34,26 @@ function login.onLogin(player)
     assert(player:setStorageValue(storageKey, modeValues[mode]))
 
     if mode == "interactions" then
-        assert(player:teleportTo(Position(32099, 32211, 7)), "test position could not be restored")
+        assert(player:setStorageValue(45017, 0), "traversal checkpoint could not be reset")
+        assert(player:setStorageValue(45018, 0), "traversal trip count could not be reset")
+        assert(player:teleportTo(Position(32097, 32219, 7)), "test position could not be restored")
         local backpack = player:getSlotItem(CONST_SLOT_BACKPACK)
         assert(backpack and backpack:getId() == ITEM_BACKPACK, "seeded backpack is missing")
+        assert(player:getSlotItem(CONST_SLOT_ARMOR):getId() == 2463, "seeded plate armor is missing")
+        assert(player:getSlotItem(CONST_SLOT_RIGHT):getId() == 2521, "seeded dark shield is missing")
+        assert(player:getSlotItem(CONST_SLOT_LEFT):getId() == 2392, "seeded fire sword is missing")
+        assert(player:getSlotItem(CONST_SLOT_FEET):getId() == 2195, "seeded Boots of Haste are missing")
+        assert(player:getItemCount(2120) == 1, "seeded rope is missing")
+        assert(player:getItemCount(2554) == 1, "seeded shovel is missing")
         player:removeCondition(CONDITION_REGENERATION, CONDITIONID_DEFAULT)
         local cheeseCount = player:getItemCount(2696)
         if cheeseCount > 0 then
             assert(player:removeItem(2696, cheeseCount), "existing cheese could not be removed")
         end
-        for _ = 1, 12 do
-            assert(backpack:addItem(2696, 1), "test cheese could not be added")
+        local foodContainer = backpack:addItem(ITEM_BACKPACK, 1)
+        assert(foodContainer, "test food container could not be added")
+        for _ = 1, 20 do
+            assert(foodContainer:addItem(2696, 1), "test cheese could not be added")
         end
         assert(player:sendTextMessage(MESSAGE_STATUS_DEFAULT, "connectionless regression"))
         assert(player:sendOutfitWindow())
@@ -70,7 +80,7 @@ function login.onLogin(player)
     if mode == "death" then
         local foodCondition = player:getCondition(CONDITION_REGENERATION, CONDITIONID_DEFAULT)
         assert(foodCondition and foodCondition:getTicks() > 0, "food condition did not persist")
-        assert(player:getItemCount(2696) == 1, "remaining cheese did not persist")
+        assert(player:getItemCount(2696) > 0, "nested cheese did not persist")
         addEvent(function()
             local bot = getBot(playerId)
             assert(bot:addHealth(-bot:getHealth()), "could not execute player death")

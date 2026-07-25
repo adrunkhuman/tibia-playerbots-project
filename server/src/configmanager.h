@@ -143,6 +143,7 @@ class ConfigManager
 			STATS_DUMP_INTERVAL,
 			STATS_SLOW_LOG_TIME,
 			STATS_VERY_SLOW_LOG_TIME,
+			PLAYERBOT_TRAVERSAL_TRIPS,
 
 			LAST_INTEGER_CONFIG /* this must be the last one */
 		};
