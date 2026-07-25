@@ -312,7 +312,7 @@ void mainLoader(int, char*[], ServiceManager* services)
 	std::cout << ">> Initializing gamestate" << std::endl;
 	g_game.setGameState(GAME_STATE_INIT);
 	// Server-controlled players need the loaded map but do not wait for protocol services.
-	if (!g_playerBots.spawn("Bot One")) {
+	if (g_config.getBoolean(ConfigManager::PLAYERBOT_ENABLED) && !g_playerBots.spawn("Bot One")) {
 		std::cout << "[Warning - mainLoader] Unable to log in playerbot Bot One; continuing without it." << std::endl;
 	}
 

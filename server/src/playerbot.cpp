@@ -12,6 +12,8 @@
 
 #include "playerbot.h"
 
+#include "container.h"
+#include "condition.h"
 #include "database.h"
 #include "game.h"
 #include "iologindata.h"
@@ -34,6 +36,14 @@ namespace {
 	constexpr Position scenarioStart(32099, 32211, 7);
 	constexpr Position sewerGratePosition(32097, 32205, 7);
 	constexpr uint16_t sewerGrateItemId = 430;
+	constexpr uint16_t ratCorpseItemId = 5964;
+	constexpr uint16_t cheeseItemId = 2696;
+	constexpr uint32_t cheeseLimit = 3;
+	constexpr int32_t cheeseFoodTicks = 108000;
+	constexpr int32_t maximumFoodSeconds = 1200;
+	constexpr uint8_t corpseContainerId = 0;
+	constexpr uint8_t backpackContainerId = 1;
+	constexpr uint32_t maxCorpseSearchAttempts = 4;
 	constexpr const char* botAccountName = "bot-one";
 
 	std::string jsonString(const std::string& value)
@@ -108,6 +118,7 @@ class PlayerBotController
 			FindRat,
 			ApproachRat,
 			Combat,
+			LootCorpse,
 			Explore,
 			Stopped,
 		};
@@ -164,6 +175,7 @@ class PlayerBotController
 				case ScenarioStage::FindRat: return "find_rat";
 				case ScenarioStage::ApproachRat: return "approach_rat";
 				case ScenarioStage::Combat: return "combat";
+				case ScenarioStage::LootCorpse: return "loot_corpse";
 				case ScenarioStage::Explore: return "explore";
 				case ScenarioStage::Stopped: return "stopped";
 			}
@@ -267,6 +279,79 @@ class PlayerBotController
 			     ",\"result\":\"failed\",\"reason\":" + jsonString(reason));
 		}
 
+		void logLootSuccess(uint16_t itemId, uint32_t count, uint32_t inventoryCount, const Position& position)
+		{
+			std::ostringstream fields;
+			fields << "\"action\":\"loot\",\"result\":\"success\",\"item_id\":" << itemId
+			       << ",\"count\":" << count << ",\"inventory_count\":" << inventoryCount;
+			emit("action_result", position, fields.str());
+		}
+
+		uint32_t getInventoryItemCount(const Player& player, uint16_t itemId) const
+		{
+			return static_cast<const Cylinder&>(player).getItemTypeCount(itemId);
+		}
+
+		int32_t getFoodTicks(const Player& player) const
+		{
+			Condition* condition = player.getCondition(CONDITION_REGENERATION, CONDITIONID_DEFAULT, 0);
+			return condition ? condition->getTicks() : 0;
+		}
+
+		bool canEatCheese(const Player& player) const
+		{
+			return getFoodTicks(player) / 1000 + cheeseFoodTicks / 1000 < maximumFoodSeconds;
+		}
+
+		void logEatSuccess(uint32_t inventoryCount, int32_t foodTicks, const Position& position)
+		{
+			std::ostringstream fields;
+			fields << "\"action\":\"eat\",\"result\":\"success\",\"item_id\":" << cheeseItemId
+			       << ",\"count\":1,\"inventory_count\":" << inventoryCount << ",\"food_ticks\":" << foodTicks;
+			emit("action_result", position, fields.str());
+		}
+
+		bool handleFood(Player* player, const Position& currentPosition)
+		{
+			if (pendingLootItemId != 0) {
+				return false;
+			}
+
+			const auto now = std::chrono::steady_clock::now();
+			if (pendingEat) {
+				const uint32_t inventoryCount = getInventoryItemCount(*player, cheeseItemId);
+				const int32_t foodTicks = getFoodTicks(*player);
+				if (inventoryCount + 1 == pendingEatInventoryCount && foodTicks > pendingEatFoodTicks) {
+					logEatSuccess(inventoryCount, foodTicks, currentPosition);
+				} else if (inventoryCount == pendingEatInventoryCount && !canEatCheese(*player)) {
+					// The normal food action leaves the item untouched when the player is full.
+				} else {
+					logActionFailure("eat", "consumption_not_verified", currentPosition);
+					eatRetryAfter = now + std::chrono::seconds(5);
+				}
+				pendingEat = false;
+			}
+
+			if (now < eatRetryAfter || !canEatCheese(*player)) {
+				return false;
+			}
+
+			Item* cheese = g_game.findItemOfType(player, cheeseItemId, true);
+			if (!cheese) {
+				return false;
+			}
+			if (!player->canDoAction()) {
+				return true;
+			}
+
+			pendingEatInventoryCount = getInventoryItemCount(*player, cheeseItemId);
+			pendingEatFoodTicks = getFoodTicks(*player);
+			pendingEat = true;
+			++counters.actionsAttempted;
+			g_game.playerUseItem(playerId, Position(0xFFFF, 0, 0), 0, 0, cheese->getClientID());
+			return true;
+		}
+
 		void logSummary(const Position& position, bool final)
 		{
 			const auto uptimeMs = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -362,6 +447,10 @@ class PlayerBotController
 			const Position currentPosition = player->getPosition();
 			lastPosition = currentPosition;
 			maybeLogSummary(currentPosition);
+			if (handleFood(player, currentPosition)) {
+				schedule(blockedRouteRetryInterval);
+				return;
+			}
 			if (currentPosition.z == sewerGratePosition.z + 1) {
 				visitedPositions.insert(currentPosition);
 				frontierPositions.erase(currentPosition);
@@ -433,8 +522,12 @@ class PlayerBotController
 				case ScenarioStage::FindRat:
 				case ScenarioStage::ApproachRat: {
 					Creature* rat = g_game.getCreatureByID(ratId);
-					if (!rat || rat->isRemoved() || rat->isDead() || rat->getName() != "Rat" ||
-					    !player->canSee(rat->getPosition())) {
+					if (!rat || rat->isRemoved() || rat->isDead()) {
+						if (ratId != 0) {
+							beginLoot(currentPosition);
+							break;
+						}
+					} else if (rat->getName() != "Rat" || !player->canSee(rat->getPosition())) {
 						clearRatTarget(currentPosition, "target_invalid");
 						route.clear();
 					} else if (rat->getPosition() != ratPosition) {
@@ -454,18 +547,24 @@ class PlayerBotController
 				case ScenarioStage::Combat: {
 					Creature* rat = g_game.getCreatureByID(ratId);
 					if (!rat || rat->isRemoved() || rat->isDead()) {
+						if (rat) {
+							ratPosition = rat->getPosition();
+						}
 						g_game.playerSetAttackedCreature(playerId, 0);
-						clearRatTarget(currentPosition, "target_unavailable");
-						route.clear();
-						setStage(ScenarioStage::FindRat, currentPosition);
+						beginLoot(currentPosition);
 					} else if (player->getAttackedCreature() != rat || !player->canSee(rat->getPosition())) {
 						g_game.playerSetAttackedCreature(playerId, 0);
 						clearRatTarget(currentPosition, "target_lost");
 						route.clear();
 						setStage(ScenarioStage::FindRat, currentPosition);
+					} else {
+						ratPosition = rat->getPosition();
 					}
 					break;
 				}
+				case ScenarioStage::LootCorpse:
+					lootCorpse(player, currentPosition);
+					break;
 				case ScenarioStage::Explore:
 					if (planRatRoute(player)) {
 						if (scenarioStage != ScenarioStage::Combat) {
@@ -587,6 +686,190 @@ class PlayerBotController
 			return true;
 		}
 
+		void beginLoot(const Position& currentPosition)
+		{
+			clearRatTarget(currentPosition, "target_defeated");
+			route.clear();
+			lootPosition = ratPosition;
+			corpseSearchAttempts = 0;
+			corpseOpenAttempts = 0;
+			pendingLootItemId = 0;
+			unavailableLootItemIds.clear();
+			setStage(ScenarioStage::LootCorpse, currentPosition);
+		}
+
+		void finishLoot(Player* player, const Position& currentPosition)
+		{
+			player->closeContainer(corpseContainerId);
+			route.clear();
+			pendingLootItemId = 0;
+			setStage(ScenarioStage::FindRat, currentPosition);
+		}
+
+		bool hasDesiredLoot(const Player& player, const Container& corpse) const
+		{
+			for (Item* item : corpse.getItemList()) {
+				if (item->getID() == ITEM_GOLD_COIN ||
+				    (item->getID() == cheeseItemId && getInventoryItemCount(player, cheeseItemId) < cheeseLimit)) {
+					return true;
+				}
+			}
+			return false;
+		}
+
+		Container* findRatCorpse(Player* player, const Position& currentPosition)
+		{
+			Container* fallback = nullptr;
+			Position fallbackPosition;
+			for (int32_t offsetX = -1; offsetX <= 1; ++offsetX) {
+				for (int32_t offsetY = -1; offsetY <= 1; ++offsetY) {
+					Position position(currentPosition.x + offsetX, currentPosition.y + offsetY, currentPosition.z);
+					Tile* tile = g_game.map.getTile(position);
+					TileItemVector* items = tile ? tile->getItemList() : nullptr;
+					if (!items) {
+						continue;
+					}
+
+					for (auto it = items->rbegin(); it != items->rend(); ++it) {
+						Container* corpse = (*it)->getContainer();
+						if (!corpse || corpse->getID() != ratCorpseItemId || !player->canOpenCorpse(corpse->getCorpseOwner())) {
+							continue;
+						}
+						if (hasDesiredLoot(*player, *corpse)) {
+							lootPosition = position;
+							return corpse;
+						}
+						if (!fallback) {
+							fallback = corpse;
+							fallbackPosition = position;
+						}
+					}
+				}
+			}
+			if (fallback) {
+				lootPosition = fallbackPosition;
+			}
+			return fallback;
+		}
+
+		uint8_t backpackDestinationIndex(const Container& backpack, const Item& item) const
+		{
+			if (item.isStackable()) {
+				const ItemDeque& items = backpack.getItemList();
+				for (size_t index = 0; index < items.size(); ++index) {
+					if (items[index]->getID() == item.getID() && items[index]->getItemCount() < 100) {
+						return static_cast<uint8_t>(index);
+					}
+				}
+			}
+			return static_cast<uint8_t>(backpack.size());
+		}
+
+		void lootCorpse(Player* player, const Position& currentPosition)
+		{
+			if (!Position::areInRange<1, 1, 0>(currentPosition, lootPosition)) {
+				if (route.empty()) {
+					planRoute(player, lootPosition, 1);
+				}
+				return;
+			}
+
+			Container* corpse = findRatCorpse(player, currentPosition);
+			if (!corpse) {
+				if (++corpseSearchAttempts >= maxCorpseSearchAttempts) {
+					logActionFailure("loot", "owned_rat_corpse_unavailable", currentPosition);
+					finishLoot(player, currentPosition);
+				}
+				return;
+			}
+
+			if (pendingLootItemId != 0) {
+				const uint32_t inventoryCount = getInventoryItemCount(*player, pendingLootItemId);
+				if (inventoryCount > pendingLootInventoryCount) {
+					logLootSuccess(pendingLootItemId, inventoryCount - pendingLootInventoryCount, inventoryCount, currentPosition);
+				} else {
+					unavailableLootItemIds.insert(pendingLootItemId);
+					logActionFailure("loot", "item_move_failed", currentPosition);
+				}
+				pendingLootItemId = 0;
+			}
+
+			Item* backpackItem = player->getInventoryItem(CONST_SLOT_BACKPACK);
+			Container* backpack = backpackItem ? backpackItem->getContainer() : nullptr;
+			if (!backpack) {
+				logActionFailure("loot", "backpack_unavailable", currentPosition);
+				finishLoot(player, currentPosition);
+				return;
+			}
+
+			if (player->getContainerByID(corpseContainerId) != corpse) {
+				if (!player->canDoAction()) {
+					return;
+				}
+				if (++corpseOpenAttempts > 2) {
+					logActionFailure("loot", "corpse_open_failed", currentPosition);
+					finishLoot(player, currentPosition);
+					return;
+				}
+				player->closeContainer(corpseContainerId);
+				Tile* tile = g_game.map.getTile(lootPosition);
+				const int32_t stackPosition = tile ? tile->getThingIndex(corpse) : -1;
+				if (stackPosition < 0 || stackPosition > UINT8_MAX) {
+					return;
+				}
+				++counters.actionsAttempted;
+				g_game.playerUseItem(playerId, lootPosition, static_cast<uint8_t>(stackPosition), corpseContainerId, corpse->getClientID());
+				return;
+			}
+
+			if (player->getContainerByID(backpackContainerId) != backpack) {
+				if (!player->canDoAction()) {
+					return;
+				}
+				const int8_t existingContainerId = player->getContainerID(backpack);
+				if (existingContainerId >= 0) {
+					player->closeContainer(static_cast<uint8_t>(existingContainerId));
+				}
+				const Position backpackPosition(0xFFFF, CONST_SLOT_BACKPACK, 0);
+				++counters.actionsAttempted;
+				g_game.playerUseItem(playerId, backpackPosition, 0, backpackContainerId, backpack->getClientID());
+				return;
+			}
+
+			Item* lootItem = nullptr;
+			uint8_t lootIndex = 0;
+			const ItemDeque& corpseItems = corpse->getItemList();
+			for (size_t index = 0; index < corpseItems.size(); ++index) {
+				Item* candidate = corpseItems[index];
+				if (unavailableLootItemIds.find(candidate->getID()) != unavailableLootItemIds.end()) {
+					continue;
+				}
+				if (candidate->getID() == ITEM_GOLD_COIN ||
+				    (candidate->getID() == cheeseItemId && getInventoryItemCount(*player, cheeseItemId) < cheeseLimit)) {
+					lootItem = candidate;
+					lootIndex = static_cast<uint8_t>(index);
+					break;
+				}
+			}
+
+			if (!lootItem) {
+				finishLoot(player, currentPosition);
+				return;
+			}
+
+			const uint32_t inventoryCount = getInventoryItemCount(*player, lootItem->getID());
+			const uint8_t moveCount = static_cast<uint8_t>(lootItem->getItemCount());
+			const Position fromPosition(0xFFFF, 0x40 | corpseContainerId, lootIndex);
+			const Position toPosition(0xFFFF, 0x40 | backpackContainerId, backpackDestinationIndex(*backpack, *lootItem));
+			if (!player->canDoAction()) {
+				return;
+			}
+			pendingLootItemId = lootItem->getID();
+			pendingLootInventoryCount = inventoryCount;
+			++counters.actionsAttempted;
+			g_game.playerMoveItem(player, fromPosition, lootItem->getClientID(), lootIndex, toPosition, moveCount, lootItem, backpack);
+		}
+
 		bool planRatRoute(Player* player)
 		{
 			SpectatorVec spectators;
@@ -664,6 +947,7 @@ class PlayerBotController
 		Position previousPosition;
 		Position lastPosition;
 		Position ratPosition;
+		Position lootPosition;
 		std::vector<Direction> route;
 		std::set<Position> visitedPositions;
 		std::set<Position> frontierPositions;
@@ -671,6 +955,15 @@ class PlayerBotController
 		uint32_t fixedTargetRouteFailureCount = 0;
 		uint32_t grateUseAttempts = 0;
 		uint32_t blockedStepCount = 0;
+		uint32_t corpseSearchAttempts = 0;
+		uint32_t corpseOpenAttempts = 0;
+		uint16_t pendingLootItemId = 0;
+		uint32_t pendingLootInventoryCount = 0;
+		std::set<uint16_t> unavailableLootItemIds;
+		bool pendingEat = false;
+		uint32_t pendingEatInventoryCount = 0;
+		int32_t pendingEatFoodTicks = 0;
+		std::chrono::steady_clock::time_point eatRetryAfter;
 		Counters counters;
 		std::unordered_map<std::string, std::chrono::steady_clock::time_point> repeatedEventTimes;
 		const std::chrono::steady_clock::time_point started = std::chrono::steady_clock::now();

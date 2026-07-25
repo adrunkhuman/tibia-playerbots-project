@@ -54,10 +54,11 @@ cannot take control of the character while the server owns it.
 
 `playerbot-setup` runs before the server on both fresh and existing database
 volumes. It reserves the local-development account `bot-one` and character
-name `Bot One`, records the character in `player_bots`, and seeds a Carlin
-sword and studded shield without replacing existing equipment. Provisioning
-fails rather than taking over a same-named or deleted character. Diagnose it
-with:
+name `Bot One`, records the character in `player_bots`, and inserts a backpack,
+Carlin sword, and studded shield only when their respective equipment slots are
+empty. Existing slot contents are never replaced; provisioning does not repair
+an occupied slot. It fails rather than taking over a same-named or deleted
+character. Diagnose it with:
 
 ```powershell
 docker compose -f server/compose.yaml logs playerbot-setup server
@@ -81,7 +82,7 @@ conditional, and `target_id` is `null` when no target exists.
 | `lifecycle` | `status`: `online`, `dead`, or `removed` |
 | `state_transition` | `from`, `to` |
 | `target_changed` | `previous_target_id`, `target_id`, optional target type and position, `reason` |
-| `action_result` | `action`, `result`, `reason` |
+| `action_result` | Always has `action` and `result`; failures also have `reason`. Successful `loot` records have `item_id`, `count`, and post-action `inventory_count`. Successful `eat` records additionally have `food_ticks`, the post-action regeneration duration in milliseconds. |
 | `stuck` | `reason`, `blocked_steps` |
 | `summary` | current state and target, uptime, decision/pathfinding timing, action, failure, stuck, and suppression counters |
 | `terminal` | `reason` |
@@ -105,7 +106,17 @@ general-purpose or configurable bot system. From the seeded position at
 `(32097, 32219, 7)`, it navigates to `(32099, 32211, 7)`, uses sewer grate item
 `430` at `(32097, 32205, 7)`, searches for visible creatures named `Rat`, and
 fights or explores until it dies, exhausts the reachable frontier, or reaches
-a bounded failure condition.
+a bounded failure condition. After a kill, it attempts to find an owned rat
+corpse within one tile, open it through the normal player action path, and move
+available gold plus up to three total pieces of cheese into the backpack.
+Corpse ownership, range, capacity, container space, item stacking, action
+delays, and bounded corpse-search/open retries remain enforced. If the corpse
+or an item cannot be accessed, the controller records a failed `loot` action
+and resumes hunting; it does not guarantee that every drop is transferred.
+When it can eat another cheese, it consumes one through the normal item-use
+path, verifies both the inventory decrease and food-condition increase, and
+repeats until another cheese would exceed the game's fullness limit or it runs
+out of cheese.
 
 Normal shutdown saves the bot through the existing player persistence path.
 Controller routes, targets, and explored frontiers remain in memory only. On
@@ -114,11 +125,44 @@ on floor 7 restarts the route to the sewer. Other floors stop the prototype
 controller. Removing the Compose volume resets the bot and all other local
 world state.
 
+To inspect Bot One through the client, first stop the server cleanly so its
+inventory is saved, then restart without the server-controlled bot:
+
+```powershell
+docker compose -f server/compose.yaml stop server
+$env:PLAYERBOT_ENABLED = "false"
+docker compose -f server/compose.yaml up --detach --force-recreate server
+```
+
+Log in with `bot-one` / `bot-one`. Log the character out before restoring the
+normal startup mode with `Remove-Item Env:PLAYERBOT_ENABLED` and recreating the
+server. Live ownership transfer remains intentionally unsupported.
+
+`PLAYERBOT_ENABLED` is evaluated when the server starts. The exact value
+`"false"` disables controller startup; an unset variable or any other value
+enables it. Disabling the controller does not remove `Bot One` or skip
+`playerbot-setup`; the character remains reserved and can be inspected through
+the client. Recreate the server after changing the variable.
+
 Server CI mounts `server/tests/playerbot_connectionless.lua` through
 `server/compose.playerbot-regression.yaml`; the normal Compose stack never
 loads it. The probe covers representative Lua UI and network sends, temporary
 inventory/container mutation, death, explicit removal, rejected login, and
 clean-shutdown persistence for the connectionless bot.
+
+Run the connectionless interaction probe locally with the regression overlay:
+
+```powershell
+$env:PLAYERBOT_REGRESSION_MODE = "interactions"
+docker compose -f server/compose.yaml -f server/compose.playerbot-regression.yaml up --build --detach --force-recreate server
+```
+
+After the interaction mode reaches its food-consumption assertion, stop the
+server cleanly before recreating it with mode `death`; that mode verifies the
+saved food condition and remaining cheese before killing the bot. Modes
+`remove` and `reject` cover explicit removal and rejected login. Remove
+`PLAYERBOT_REGRESSION_MODE` and the regression overlay before returning to the
+normal stack.
 
 Verify the prototype with:
 
