@@ -147,11 +147,12 @@ enables it. Disabling the controller does not remove `Bot One` or skip
 `playerbot-setup`; the character remains reserved and can be inspected through
 the client. Recreate the server after changing the variable.
 
-Server CI mounts `server/tests/playerbot_connectionless.lua` through
-`server/compose.playerbot-regression.yaml`; the normal Compose stack never
-loads it. The probe covers representative Lua UI and network sends, temporary
-inventory/container mutation, death, explicit removal, rejected login, and
-clean-shutdown persistence for the connectionless bot.
+The smoke workflow runs only the normal Compose stack and checks fresh
+provisioning, server startup, structured lifecycle output, and local ports. It
+does not execute gameplay actions. The optional manual regression overlay
+mounts `server/tests/playerbot_connectionless.lua` and covers representative
+Lua UI and network sends, temporary inventory/container mutation, death,
+explicit removal, rejected login, and clean-shutdown persistence.
 
 Run the connectionless interaction probe locally with the regression overlay:
 
@@ -160,10 +161,9 @@ $env:PLAYERBOT_REGRESSION_MODE = "interactions"
 docker compose -f server/compose.yaml -f server/compose.playerbot-regression.yaml up --build --detach --force-recreate server
 ```
 
-After the interaction mode reaches its food-consumption and traversal
-assertions, stop the server cleanly before recreating it with mode `death`;
-that mode verifies the saved food condition and inventory state before killing
-the bot. Modes
+After observing the desired interaction or traversal behavior, stop the server
+cleanly before recreating it with mode `death`; that mode verifies the saved
+food condition and inventory state before killing the bot. Modes
 `remove` and `reject` cover explicit removal and rejected login. Remove
 `PLAYERBOT_REGRESSION_MODE` and the regression overlay before returning to the
 normal stack.
