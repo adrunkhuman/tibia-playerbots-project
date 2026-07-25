@@ -1,0 +1,6 @@
+services:
+  server:
+    environment:
+      PLAYERBOT_GAMEPLAY_MODE: "${PLAYERBOT_GAMEPLAY_MODE:-traversal}"
+    volumes:
+      - ./tests/playerbot-gameplay:/app/data/scripts/playerbot-gameplay:ro

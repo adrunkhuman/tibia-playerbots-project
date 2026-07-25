@@ -173,11 +173,12 @@ class PlayerBotController
 				schedule(navigationInterval);
 				return;
 			}
-			if (restoredTraversalState && traversalCheckpoint == traversalForwardEnd &&
-			    position == Position(32101, 32129, 4)) {
-				traversalCheckpoint = traversalForwardEnd + 1;
+			if (restoredTraversalState && position.z == traversalCheckpoints[traversalCheckpoint].expectedFloor) {
 				if (Player* player = g_game.getPlayerByID(playerId)) {
-					persistTraversalState(player);
+					advanceTraversal(player, position);
+					if (scenarioStage == ScenarioStage::Complete || scenarioStage == ScenarioStage::Stopped) {
+						return;
+					}
 				}
 			}
 			setStage(ScenarioStage::Traverse, position);
@@ -591,13 +592,18 @@ class PlayerBotController
 			if (targetDistance == 1 && Position::areInRange<1, 1, 0>(player->getPosition(), checkpoint.target)) {
 				return true;
 			}
+			if (!route.empty()) {
+				return true;
+			}
 
 			FindPathParams pathParams;
 			pathParams.maxSearchDist = 128;
 			pathParams.clearSight = false;
 			pathParams.minTargetDist = targetDistance;
 			pathParams.maxTargetDist = targetDistance;
-			if (findPath(player, checkpoint.target, route, pathParams) && !route.empty()) {
+			std::vector<Direction> plannedRoute;
+			if (findPath(player, checkpoint.target, plannedRoute, pathParams) && !plannedRoute.empty()) {
+				route = std::move(plannedRoute);
 				fixedTargetRouteFailureCount = 0;
 				return true;
 			}
@@ -720,13 +726,13 @@ class PlayerBotController
 				}
 				++completedTrips;
 				logTraversalSuccess(checkpoint, currentPosition);
+				traversalCheckpoint = traversalForwardEnd + 1;
 				const uint32_t requiredTrips = std::max<int32_t>(1, g_config.getNumber(ConfigManager::PLAYERBOT_TRAVERSAL_TRIPS));
 				if (completedTrips >= requiredTrips) {
 					persistTraversalState(player);
 					completeTraversal(player, currentPosition);
 					return;
 				}
-				traversalCheckpoint = traversalForwardEnd + 1;
 				persistTraversalState(player);
 				return;
 			}
