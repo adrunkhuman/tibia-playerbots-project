@@ -169,6 +169,22 @@ function Assert-CorpseEvents {
     param([string]$Logs)
 
     $events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
+    $nonlootableTarget = @($events | Where-Object {
+        $_.event -eq "target_changed" -and $_.target_name -eq "Playerbot Nonlootable Corpse"
+    })
+    $nonlootableResult = @($events | Where-Object {
+        $_.event -eq "action_result" -and $_.action -eq "loot" -and
+        $_.result -eq "skipped" -and $_.reason -eq "corpse_not_lootable" -and
+        $_.expected_corpse_item_id -eq 2148
+    })
+    $containerDeathItemTarget = @($events | Where-Object {
+        $_.event -eq "target_changed" -and $_.target_name -eq "Playerbot Container Death Item"
+    })
+    $containerDeathItemResult = @($events | Where-Object {
+        $_.event -eq "action_result" -and $_.action -eq "loot" -and
+        $_.result -eq "skipped" -and $_.reason -eq "corpse_not_lootable" -and
+        $_.expected_corpse_item_id -eq 1987
+    })
     $emptyTarget = @($events | Where-Object {
         $_.event -eq "target_changed" -and $_.target_name -eq "Playerbot Empty Corpse"
     })
@@ -189,6 +205,12 @@ function Assert-CorpseEvents {
     })
     $terminal = @($events | Where-Object { $_.event -eq "terminal" })
 
+    if ($nonlootableTarget.Count -lt 1 -or $nonlootableResult.Count -ne 1) {
+        throw "The non-lootable corpse was not skipped exactly once."
+    }
+    if ($containerDeathItemTarget.Count -lt 1 -or $containerDeathItemResult.Count -ne 1) {
+        throw "The container-only death item was not skipped exactly once."
+    }
     if ($emptyTarget.Count -lt 1 -or $emptyResult.Count -ne 1) {
         throw "The empty corpse was not opened and classified exactly once."
     }
@@ -236,7 +258,7 @@ try {
         $env:PLAYERBOT_GAMEPLAY_MODE = "corpse"
         $env:PLAYERBOT_HUNT_DURATION_SECONDS = "900"
         Invoke-Compose up --detach
-        $corpseLogs = Wait-ForLog -Pattern '"action":"loot","result":"success","item_id":2148'
+        $corpseLogs = Wait-ForLog -Pattern '"reason":"corpse_not_lootable","expected_corpse_item_id":1987'
         Assert-CorpseEvents -Logs $corpseLogs
     }
     "PLAYERBOT_GAMEPLAY_TEST PASS"

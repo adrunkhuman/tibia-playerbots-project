@@ -337,6 +337,18 @@ class PlayerBotController
 			     ",\"to\":" + jsonString(stageName(stage)));
 		}
 
+		void setExpectedCorpse(const Creature& target)
+		{
+			const Monster* monster = target.getMonster();
+			expectedCorpseItemId = monster ? monster->getCorpseItemId() : 0;
+			if (expectedCorpseItemId == 0) {
+				expectedCorpseLootable = false;
+				return;
+			}
+			const ItemType& corpseType = Item::items[expectedCorpseItemId];
+			expectedCorpseLootable = corpseType.corpseType != RACE_NONE && corpseType.isContainer();
+		}
+
 		void setRatTarget(uint32_t targetId, const Position& targetPosition, const Position& position, const char* reason)
 		{
 			if (ratId == targetId) {
@@ -347,6 +359,9 @@ class PlayerBotController
 			const uint32_t previousTargetId = ratId;
 			ratId = targetId;
 			ratPosition = targetPosition;
+			if (Creature* target = g_game.getCreatureByID(targetId)) {
+				setExpectedCorpse(*target);
+			}
 			if (!shouldEmitRepeated(std::string("target:set:") + reason)) {
 				return;
 			}
@@ -546,6 +561,7 @@ class PlayerBotController
 		{
 			ratId = target->getID();
 			ratPosition = target->getPosition();
+			setExpectedCorpse(*target);
 			std::ostringstream fields;
 			fields << "\"previous_target_id\":null,\"target_id\":" << ratId
 			       << ",\"target_type\":\"monster\",\"target_name\":" << jsonString(target->getName())
@@ -616,7 +632,7 @@ class PlayerBotController
 		{
 			Creature* target = g_game.getCreatureByID(ratId);
 			if (!target || target->isRemoved() || target->isDead()) {
-				beginLoot(currentPosition);
+				beginLoot(player, currentPosition);
 			} else if (!player->canSee(target->getPosition()) || player->getAttackedCreature() != target) {
 				finishTraversalCombat(player, currentPosition, "target_lost");
 			} else if (std::chrono::steady_clock::now() - combatStarted >= traversalCombatTimeout) {
@@ -1753,7 +1769,7 @@ class PlayerBotController
 					Creature* rat = g_game.getCreatureByID(ratId);
 					if (!rat || rat->isRemoved() || rat->isDead()) {
 						if (ratId != 0) {
-							beginLoot(currentPosition);
+							beginLoot(player, currentPosition);
 							break;
 						}
 					} else if (rat->getName() != "Rat" || !player->canSee(rat->getPosition())) {
@@ -1780,7 +1796,7 @@ class PlayerBotController
 							ratPosition = rat->getPosition();
 						}
 						g_game.playerSetAttackedCreature(playerId, 0);
-						beginLoot(currentPosition);
+						beginLoot(player, currentPosition);
 					} else if (player->getAttackedCreature() != rat || !player->canSee(rat->getPosition())) {
 						g_game.playerSetAttackedCreature(playerId, 0);
 						clearRatTarget(currentPosition, "target_lost");
@@ -1919,7 +1935,7 @@ class PlayerBotController
 			return true;
 		}
 
-		void beginLoot(const Position& currentPosition)
+		void beginLoot(Player* player, const Position& currentPosition)
 		{
 			clearRatTarget(currentPosition, "target_defeated");
 			route.clear();
@@ -1929,6 +1945,14 @@ class PlayerBotController
 			pendingLootItemId = 0;
 			lootedCurrentCorpse = false;
 			unavailableLootItemIds.clear();
+			if (!expectedCorpseLootable) {
+				std::ostringstream fields;
+				fields << "\"action\":\"loot\",\"result\":\"skipped\",\"reason\":\"corpse_not_lootable\""
+				       << ",\"expected_corpse_item_id\":" << expectedCorpseItemId;
+				emit("action_result", currentPosition, fields.str());
+				finishLoot(player, currentPosition);
+				return;
+			}
 			setStage(ScenarioStage::LootCorpse, currentPosition);
 		}
 
@@ -1937,6 +1961,8 @@ class PlayerBotController
 			player->closeContainer(corpseContainerId);
 			route.clear();
 			pendingLootItemId = 0;
+			expectedCorpseItemId = 0;
+			expectedCorpseLootable = false;
 			setStage(ScenarioStage::Traverse, currentPosition);
 		}
 
@@ -2199,6 +2225,8 @@ class PlayerBotController
 		uint32_t corpseSearchAttempts = 0;
 		uint32_t corpseOpenAttempts = 0;
 		uint16_t pendingLootItemId = 0;
+		uint16_t expectedCorpseItemId = 0;
+		bool expectedCorpseLootable = false;
 		bool lootedCurrentCorpse = false;
 		uint16_t pendingDepositItemId = 0;
 		uint32_t pendingLootInventoryCount = 0;

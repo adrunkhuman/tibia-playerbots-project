@@ -157,6 +157,14 @@ The bot approaches and opens the corpse through normal item use before checking
 contents. It prefers the newest corpse when several occupy one tile and retains
 the selected opened container throughout looting.
 
+When selecting a monster, the controller records its configured corpse item
+from the loaded `MonsterType`. A corpse is binary-lootable only when that loaded
+item is both a server-identified corpse and a container. After death, any other
+configuration emits `corpse_not_lootable` as a skipped result and resumes the
+interrupted objective without searching for or opening the death item. This
+classification does not cover skinning, special-use corpses, or other secondary
+corpse actions.
+
 Opening an eligible but empty corpse emits `corpse_empty` as a skipped result,
 not an action failure. A bounded search that finds no eligible corpse emits
 `owned_corpse_unavailable`; the name also currently covers stale, moved, or
