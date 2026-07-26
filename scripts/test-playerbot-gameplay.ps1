@@ -1,6 +1,7 @@
 param(
     [ValidateRange(60, 3600)]
-    [int]$TimeoutSeconds = 900,
+    [int]$TimeoutSeconds = 300,
+    [switch]$FullNavigation,
     [switch]$KeepStack
 )
 
@@ -10,8 +11,8 @@ $projectRoot = Split-Path -Parent $PSScriptRoot
 $composeFile = Join-Path $projectRoot "server\compose.yaml"
 $gameplayComposeFile = Join-Path $projectRoot "server\compose.playerbot-gameplay.yaml"
 $composeArguments = @("compose", "-f", $composeFile, "-f", $gameplayComposeFile)
+$previousDuration = $env:PLAYERBOT_HUNT_DURATION_SECONDS
 $previousMode = $env:PLAYERBOT_GAMEPLAY_MODE
-$previousTrips = $env:PLAYERBOT_TRAVERSAL_TRIPS
 
 function Invoke-Compose {
     param([Parameter(ValueFromRemainingArguments)][string[]]$Arguments)
@@ -44,6 +45,26 @@ function Wait-ForLog {
     throw "Timed out after $TimeoutSeconds seconds waiting for server log pattern: $Pattern"
 }
 
+function Wait-ForPlayerbotEventCount {
+    param(
+        [string]$Action,
+        [int]$Count
+    )
+
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    while ([DateTime]::UtcNow -lt $deadline) {
+        $logs = Get-ServerLogs
+        $events = @(ConvertFrom-PlayerbotLogs -Logs $logs | Where-Object {
+            $_.event -eq "action_result" -and $_.action -eq $Action -and $_.result -eq "reached"
+        })
+        if ($events.Count -ge $Count) {
+            return $logs
+        }
+        Start-Sleep -Seconds 2
+    }
+    throw "Timed out after $TimeoutSeconds seconds waiting for $Count '$Action' events."
+}
+
 function ConvertFrom-PlayerbotLogs {
     param([string]$Logs)
 
@@ -63,45 +84,66 @@ function ConvertFrom-PlayerbotLogs {
     }
 }
 
-function Assert-TripEvents {
+function Assert-CycleEvents {
     param([string]$Logs)
 
     $events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
-    $actualCheckpoints = @($events |
-        Where-Object { $_.event -eq "action_result" -and $_.action -eq "transition" -and $_.result -eq "success" } |
-        ForEach-Object checkpoint)
-    $expectedCheckpoints = @(
-        "temple_stairs_up",
-        "north_stairs_down",
-        "cave_stairs_down",
-        "rope_up",
-        "first_ladder_up",
-        "second_ladder_up",
-        "third_ladder_up"
-    )
-    if (($actualCheckpoints -join ',') -ne ($expectedCheckpoints -join ',')) {
-        throw "Unexpected traversal checkpoint sequence: $($actualCheckpoints -join ', ')"
-    }
+    $deposit = @($events | Where-Object {
+        $_.event -eq "action_result" -and $_.action -eq "deposit" -and
+        $_.result -eq "success" -and $_.item_id -eq 1987 -and $_.count -eq 1
+    })
+    $return = @($events | Where-Object {
+        $_.event -eq "action_result" -and $_.action -eq "return" -and
+        $_.result -eq "started" -and $_.reason -eq "hunt_deadline"
+    })
+    $cycles = @($events | Where-Object {
+        $_.event -eq "action_result" -and $_.action -eq "hunt_cycle" -and $_.result -eq "started"
+    })
+    $huntPlan = @($events | Where-Object {
+        $_.event -eq "action_result" -and $_.action -eq "plan" -and $_.result -eq "success" -and
+        $_.destination.x -eq 32084 -and $_.destination.y -eq 32144 -and $_.destination.z -eq 5
+    })
+    $terminal = @($events | Where-Object { $_.event -eq "terminal" })
 
-    $terminal = @($events | Where-Object { $_.event -eq "terminal" -and $_.reason -eq "trips_completed" })
-    if ($terminal.Count -ne 1 -or $terminal[0].trips -ne 1) {
-        throw "The one-trip traversal did not emit exactly one successful terminal event."
+    if ($deposit.Count -ne 1) {
+        throw "Expected exactly one injected-loot deposit event, found $($deposit.Count)."
+    }
+    if ($return.Count -lt 1) {
+        throw "The hunt deadline did not initiate a return."
+    }
+    if ($cycles.Count -lt 2) {
+        throw "The bot did not begin a second hunt cycle."
+    }
+    if ($huntPlan.Count -lt 1) {
+        throw "The bot did not plan a map-derived route to hunting point A."
+    }
+    if ($terminal.Count -ne 0) {
+        throw "The playerbot emitted a terminal event during the gameplay cycle."
     }
 }
 
-function Assert-RecoveryEvents {
+function Assert-NavigationEvents {
     param([string]$Logs)
 
     $events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
-    $transition = @($events | Where-Object {
-        $_.event -eq "action_result" -and $_.action -eq "transition" -and
-        $_.result -eq "success" -and $_.checkpoint -eq "third_ladder_up" -and $_.trip -eq 1
+    $waypoints = @($events | Where-Object {
+        $_.event -eq "action_result" -and $_.action -eq "hunt_waypoint" -and $_.result -eq "reached"
     })
-    $terminal = @($events | Where-Object {
-        $_.event -eq "terminal" -and $_.reason -eq "trips_completed" -and $_.trips -eq 1
+    $actual = @($waypoints[0..4] | ForEach-Object { "$($_.position.x),$($_.position.y),$($_.position.z)" })
+    $expected = @("32084,32144,5", "32103,32124,8", "32117,32090,9", "32103,32124,8", "32084,32144,5")
+    if (($actual -join '|') -ne ($expected -join '|')) {
+        throw "Unexpected hunting waypoint sequence: $($actual -join ' -> ')"
+    }
+    $terminal = @($events | Where-Object { $_.event -eq "terminal" })
+    $blockedRecovery = @($events | Where-Object {
+        $_.event -eq "action_result" -and $_.action -eq "navigate" -and
+        $_.result -eq "failed" -and $_.reason -eq "step_result_mismatch"
     })
-    if ($transition.Count -ne 1 -or $terminal.Count -ne 1) {
-        throw "The interrupted transition was not reconciled exactly once."
+    if ($blockedRecovery.Count -lt 1) {
+        throw "The full navigation test did not exercise temporary blockage recovery."
+    }
+    if ($terminal.Count -ne 0) {
+        throw "The playerbot emitted a terminal event during full navigation."
     }
 }
 
@@ -116,20 +158,22 @@ try {
     }
 
     Invoke-Compose down --volumes --remove-orphans
-    $env:PLAYERBOT_TRAVERSAL_TRIPS = "1"
-    $env:PLAYERBOT_GAMEPLAY_MODE = "traversal"
+    $env:PLAYERBOT_GAMEPLAY_MODE = "cycle"
+    $env:PLAYERBOT_HUNT_DURATION_SECONDS = "10"
     Invoke-Compose up --build --detach
 
-    $traversalLogs = Wait-ForLog -Pattern '"reason":"trips_completed","trips":1'
-    Assert-TripEvents -Logs $traversalLogs
+    Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST DEPOSIT_PASS' | Out-Null
+    $cycleLogs = Wait-ForLog -Pattern '"action":"hunt_cycle","result":"started","cycle":2'
+    Assert-CycleEvents -Logs $cycleLogs
 
-    Invoke-Compose stop server
-    $env:PLAYERBOT_GAMEPLAY_MODE = "transition_recovery"
-    Invoke-Compose up --detach --force-recreate server
-
-    $recoveryLogs = Wait-ForLog -Pattern '"reason":"trips_completed","trips":1'
-    Assert-RecoveryEvents -Logs $recoveryLogs
-
+    if ($FullNavigation) {
+        Invoke-Compose down --volumes --remove-orphans
+        $env:PLAYERBOT_GAMEPLAY_MODE = "navigation"
+        $env:PLAYERBOT_HUNT_DURATION_SECONDS = "900"
+        Invoke-Compose up --detach
+        $navigationLogs = Wait-ForPlayerbotEventCount -Action "hunt_waypoint" -Count 5
+        Assert-NavigationEvents -Logs $navigationLogs
+    }
     "PLAYERBOT_GAMEPLAY_TEST PASS"
 }
 finally {
@@ -142,7 +186,7 @@ finally {
         }
     }
     finally {
+        $env:PLAYERBOT_HUNT_DURATION_SECONDS = $previousDuration
         $env:PLAYERBOT_GAMEPLAY_MODE = $previousMode
-        $env:PLAYERBOT_TRAVERSAL_TRIPS = $previousTrips
     }
 }

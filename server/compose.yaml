@@ -51,7 +51,7 @@ services:
     build: .
     environment:
       PLAYERBOT_ENABLED: ${PLAYERBOT_ENABLED:-true}
-      PLAYERBOT_TRAVERSAL_TRIPS: ${PLAYERBOT_TRAVERSAL_TRIPS:-5}
+      PLAYERBOT_HUNT_DURATION_SECONDS: ${PLAYERBOT_HUNT_DURATION_SECONDS:-300}
     depends_on:
       playerbot-setup:
         condition: service_completed_successfully
