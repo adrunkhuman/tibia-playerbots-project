@@ -3,6 +3,9 @@ local depotPosition = Position(32105, 32195, 8)
 local depotTilePosition = Position(32105, 32196, 8)
 local lootItemId = ITEM_GOLD_COIN
 local lootCount = 37
+local saleItemId = 2813
+local potionItemId = 8704
+local meatItemId = 2666
 local emptyMonsterName = "Playerbot Empty Corpse"
 local lootMonsterName = "Playerbot Loot Corpse"
 
@@ -67,27 +70,34 @@ local function createTemporaryBlockers()
     addEvent(removeBlockers, 3000, blockerIds[1], blockerIds[2], blockerIds[3])
 end
 
-local function verifyDeposit(playerId, initialDepotBagCount, attempts)
+local function verifyService(playerId, initialDepotBagCount, attempts)
     local player = Player(playerId)
     assert(player and not player:isRemoved(), "Bot One disappeared during the gameplay test")
 
     local depotTile = Tile(depotTilePosition)
     assert(depotTile, "fake depot tile is unavailable")
     local depositedBags = depotTile:getItemCountById(ITEM_BAG) - initialDepotBagCount
-    if depositedBags < 1 and attempts > 0 then
-        addEvent(verifyDeposit, 500, playerId, initialDepotBagCount, attempts - 1)
+    local complete = depositedBags == 1 and player:getItemCount(saleItemId) == 0 and
+        player:getItemCount(potionItemId) >= 5 and player:getItemCount(meatItemId) >= 1 and
+        player:getMoney() == 100 and player:getBankBalance() == 10034
+    if not complete and attempts > 0 then
+        addEvent(verifyService, 500, playerId, initialDepotBagCount, attempts - 1)
         return
     end
 
     assert(depositedBags == 1, "unexpected deposited loot-bag count: " .. depositedBags)
-    assert(player:getItemCount(lootItemId) == 0, "deposited loot remained in inventory")
+    assert(player:getItemCount(saleItemId) == 0, "policy-approved loot was not sold")
+    assert(player:getItemCount(potionItemId) >= 5, "small health potion reserve was not purchased")
+    assert(player:getItemCount(meatItemId) >= 1, "meat reserve was not purchased")
+    assert(player:getMoney() == 100, "banker did not leave the carried gold reserve")
+    assert(player:getBankBalance() == 10034, "shop purchases and bank transactions produced the wrong balance")
     assert(player:getSlotItem(CONST_SLOT_ARMOR):getId() == 2463, "plate armor was deposited")
     assert(player:getSlotItem(CONST_SLOT_RIGHT):getId() == 2521, "dark shield was deposited")
     assert(player:getSlotItem(CONST_SLOT_LEFT):getId() == 2392, "fire sword was deposited")
     assert(player:getSlotItem(CONST_SLOT_FEET):getId() == 2195, "Boots of Haste were deposited")
     assert(player:getItemCount(2120) == 1, "rope was deposited")
     assert(player:getItemCount(2554) == 1, "shovel was deposited")
-    print("PLAYERBOT_GAMEPLAY_TEST DEPOSIT_PASS")
+    print("PLAYERBOT_GAMEPLAY_TEST SERVICE_PASS")
 end
 
 local login = CreatureEvent("zzPlayerbotGameplayRegression")
@@ -114,20 +124,19 @@ function login.onLogin(player)
         return true
     end
 
-    local existingGold = player:getItemCount(lootItemId)
-    if existingGold > 0 then
-        assert(player:removeItem(lootItemId, existingGold), "existing gold could not be removed")
-    end
+    assert(player:getMoney() == 200, "Bot One initial backpack purse was not 200 gp")
+    assert(player:getBankBalance() == 10000, "Bot One initial bank balance was not 10000 gp")
     local backpack = player:getSlotItem(CONST_SLOT_BACKPACK)
     assert(backpack and backpack:getId() == ITEM_BACKPACK, "seeded backpack is missing")
     local lootBag = backpack:addItem(ITEM_BAG, 1)
     assert(lootBag, "test loot bag could not be added")
     assert(lootBag:addItem(lootItemId, lootCount), "test loot could not be added")
+    assert(backpack:addItem(saleItemId, 1), "test policy-approved loot could not be added")
 
     local depotTile = Tile(depotTilePosition)
     assert(depotTile, "fake depot tile is unavailable")
     local initialDepotBagCount = depotTile:getItemCountById(ITEM_BAG)
-    addEvent(verifyDeposit, 500, player:getId(), initialDepotBagCount, 40)
+    addEvent(verifyService, 500, player:getId(), initialDepotBagCount, 500)
     print("PLAYERBOT_GAMEPLAY_TEST START")
     return true
 end

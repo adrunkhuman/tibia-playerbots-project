@@ -23,9 +23,14 @@ local game ports. It does not execute gameplay actions.
 
 ## Playerbot Gameplay Suite
 
-The baseline suite injects nested loot, verifies the fake-depot drop and
-protected equipment/tools, triggers a shortened deadline return, and requires
-a second hunt cycle:
+The baseline suite seeds policy-approved rat loot and an unsellable nested bag.
+It verifies tagged live-NPC discovery and runtime offer registration without
+physical shop probing, NPC greeting acknowledgement before trade, normal sale
+and reserve purchases, carried-money-first purchase deductions, banker
+deposit/100 gp withdrawal, fake-depot drop, protected equipment/tools, and a
+resumed hunt cycle. It starts with no potion or meat reserve and therefore
+exercises purchases to five potions and one meat. It exercises startup service,
+not a return triggered by the 30 oz capacity threshold:
 
 ```powershell
 pwsh -File scripts/test-playerbot-gameplay.ps1
@@ -56,6 +61,13 @@ The suite rebuilds the server and resets the disposable Compose stack and
 database volume. It removes them afterward; `-KeepStack` leaves the final stack
 running. The default timeout is 300 seconds and can be changed with
 `-TimeoutSeconds` from 60 to 3600 seconds.
+
+The overlay's `PLAYERBOT_GAMEPLAY_MODE` accepts `cycle`, `navigation`, or
+`corpse`. The script selects these modes automatically: the baseline uses
+`cycle`, `-FullNavigation` uses `navigation`, and `-CorpseLoot` uses `corpse`.
+Navigation and corpse modes skip the economic provisioning assertions and start
+the controller directly in hunt mode so their fixtures do not interfere with
+startup service.
 
 ## Connectionless Regression Overlay
 

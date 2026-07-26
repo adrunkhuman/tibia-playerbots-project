@@ -23,6 +23,7 @@ class PlayerBotManager
 		~PlayerBotManager();
 
 		bool spawn(const std::string& name);
+		void onNpcReply(uint32_t playerId, uint32_t npcId, uint8_t type, const std::string& text);
 
 	private:
 		std::unique_ptr<PlayerBotController> controller;

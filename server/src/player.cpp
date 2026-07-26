@@ -28,6 +28,7 @@
 #include "game.h"
 #include "iologindata.h"
 #include "monster.h"
+#include "playerbot.h"
 #include "movement.h"
 #include "scheduler.h"
 #include "weapons.h"
@@ -4503,5 +4504,11 @@ void Player::updateRegeneration()
 		condition->setParam(CONDITION_PARAM_HEALTHTICKS, vocation->getHealthGainTicks() * 1000);
 		condition->setParam(CONDITION_PARAM_MANAGAIN, vocation->getManaGainAmount());
 		condition->setParam(CONDITION_PARAM_MANATICKS, vocation->getManaGainTicks() * 1000);
+	}
+}
+void Player::onCreatureSay(Creature* creature, SpeakClasses type, const std::string& text)
+{
+	if (playerBot && creature && creature->getNpc()) {
+		g_playerBots.onNpcReply(getID(), creature->getID(), static_cast<uint8_t>(type), text);
 	}
 }

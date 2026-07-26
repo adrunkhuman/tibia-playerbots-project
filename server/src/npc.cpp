@@ -21,6 +21,7 @@
 
 #include "npc.h"
 #include "game.h"
+#include "item.h"
 #include "pugicast.h"
 
 extern Game g_game;
@@ -110,6 +111,7 @@ void Npc::reset()
 	npcEventHandler = nullptr;
 
 	parameters.clear();
+	shopOffers.clear();
 	shopPlayerSet.clear();
 	spectators.clear();
 }
@@ -377,6 +379,21 @@ void Npc::doSayToPlayer(Player* player, const std::string& text)
 	}
 }
 
+void Npc::addShopOffer(uint16_t itemId, int32_t subType, uint32_t buyPrice, uint32_t sellPrice)
+{
+	auto it = std::find_if(shopOffers.begin(), shopOffers.end(), [itemId, subType](const ShopInfo& offer) {
+		return offer.itemId == itemId && (!Item::items[itemId].isFluidContainer() || offer.subType == subType);
+	});
+	if (it == shopOffers.end()) {
+		shopOffers.emplace_back(itemId, subType, buyPrice, sellPrice);
+		return;
+	}
+
+	it->subType = subType;
+	it->buyPrice = buyPrice;
+	it->sellPrice = sellPrice;
+}
+
 void Npc::onPlayerTrade(Player* player, int32_t callback, uint16_t itemId, uint8_t count,
                         uint8_t amount, bool ignore/* = false*/, bool inBackpacks/* = false*/)
 {
@@ -640,6 +657,7 @@ void NpcScriptInterface::registerFunctions()
 	// metatable
 	registerMethod("Npc", "getParameter", NpcScriptInterface::luaNpcGetParameter);
 	registerMethod("Npc", "setFocus", NpcScriptInterface::luaNpcSetFocus);
+	registerMethod("Npc", "addShopOffer", NpcScriptInterface::luaNpcAddShopOffer);
 
 	registerMethod("Npc", "openShopWindow", NpcScriptInterface::luaNpcOpenShopWindow);
 	registerMethod("Npc", "closeShopWindow", NpcScriptInterface::luaNpcCloseShopWindow);
@@ -1013,6 +1031,17 @@ int NpcScriptInterface::luaNpcSetFocus(lua_State* L)
 		lua_pushnil(L);
 	}
 	return 1;
+}
+
+int NpcScriptInterface::luaNpcAddShopOffer(lua_State* L)
+{
+	// npc:addShopOffer(itemId, subType, buyPrice, sellPrice)
+	Npc* npc = getUserdata<Npc>(L, 1);
+	if (npc) {
+		npc->addShopOffer(getNumber<uint16_t>(L, 2), getNumber<int32_t>(L, 3),
+		                  getNumber<uint32_t>(L, 4), getNumber<uint32_t>(L, 5));
+	}
+	return 0;
 }
 
 int NpcScriptInterface::luaNpcOpenShopWindow(lua_State* L)

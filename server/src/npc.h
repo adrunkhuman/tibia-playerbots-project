@@ -24,6 +24,7 @@
 #include "luascript.h"
 
 #include <set>
+#include <vector>
 
 class Npc;
 class Player;
@@ -60,6 +61,7 @@ class NpcScriptInterface final : public LuaScriptInterface
 		// metatable
 		static int luaNpcGetParameter(lua_State* L);
 		static int luaNpcSetFocus(lua_State* L);
+		static int luaNpcAddShopOffer(lua_State* L);
 
 		static int luaNpcOpenShopWindow(lua_State* L);
 		static int luaNpcCloseShopWindow(lua_State* L);
@@ -150,6 +152,10 @@ class Npc final : public Creature
 
 		void doSay(const std::string& text);
 		void doSayToPlayer(Player* player, const std::string& text);
+		void receiveSpeech(Creature* creature, SpeakClasses type, const std::string& text) {
+			onCreatureSay(creature, type, text);
+		}
+		void addShopOffer(uint16_t itemId, int32_t subType, uint32_t buyPrice, uint32_t sellPrice);
 
 		bool doMoveTo(const Position& pos, int32_t minTargetDist = 1, int32_t maxTargetDist = 1,
 		              bool fullPathSearch = true, bool clearSight = true, int32_t maxSearchDist = 0);
@@ -180,6 +186,11 @@ class Npc final : public Creature
 		static uint32_t npcAutoID;
 
 		const auto& getSpectators() { return spectators; }
+		const std::vector<ShopInfo>& getShopOffers() const { return shopOffers; }
+		const std::string* getParameter(const std::string& key) const {
+			auto it = parameters.find(key);
+			return it == parameters.end() ? nullptr : &it->second;
+		}
 
 	private:
 		explicit Npc(const std::string& name);
@@ -217,6 +228,7 @@ class Npc final : public Creature
 		void closeAllShopWindows();
 
 		std::map<std::string, std::string> parameters;
+		std::vector<ShopInfo> shopOffers;
 
 		std::set<Player*> shopPlayerSet;
 		std::set<Player*> spectators;
