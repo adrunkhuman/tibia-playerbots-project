@@ -3,14 +3,14 @@ INSERT INTO `players` (
     `healthmax`, `experience`, `lookbody`, `lookfeet`, `lookhead`,
     `looklegs`, `looktype`, `lookaddons`, `direction`, `maglevel`, `mana`,
     `manamax`, `manaspent`, `soul`, `town_id`, `posx`, `posy`, `posz`,
-    `cap`, `sex`, `stamina`, `skill_sword`, `skill_shielding`
+    `cap`, `sex`, `stamina`, `skill_sword`, `skill_shielding`, `balance`
 )
 SELECT
     'Rook Tester', 1, `id`, 50, 0, 395,
     395, 1847300, 68, 76, 78,
     39, 128, 0, 2, 0, 245,
     245, 0, 100, 6, 32097, 32219, 7,
-    890, 1, 2520, 70, 60
+    890, 1, 2520, 70, 60, 10000
 FROM `accounts`
 WHERE `name` = 'admin'
   AND NOT EXISTS (SELECT 1 FROM `players` WHERE `name` = 'Rook Tester');

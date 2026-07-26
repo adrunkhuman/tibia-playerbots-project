@@ -526,6 +526,7 @@ class Player final : public Creature, public Cylinder
 
 		void stopWalk();
 		void openShopWindow(const std::list<ShopInfo>& shop);
+		const std::list<ShopInfo>& getShopItemList() const { return shopItemList; }
 		bool closeShopWindow(bool sendCloseShopWindow = true);
 		bool updateSaleShopList(const Item* item);
 		bool hasShopItemForSale(uint32_t itemId, uint8_t subType) const;
@@ -719,6 +720,7 @@ class Player final : public Creature, public Cylinder
 				client->sendCreatureSay(creature, type, text, pos);
 			}
 		}
+		void onCreatureSay(Creature* creature, SpeakClasses type, const std::string& text) override;
 		void sendPrivateMessage(const Player* speaker, SpeakClasses type, const std::string& text) {
 			if (client) {
 				client->sendPrivateMessage(speaker, type, text);

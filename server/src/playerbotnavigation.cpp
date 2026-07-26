@@ -319,7 +319,8 @@ bool PlayerBotNavigator::plan(Player& player, const Position& destination, const
 				} else if (contains(downUseIds, itemId) && target.z < MAP_MAX_LAYERS - 1) {
 					addDirectUse(itemId, PlayerBotNavigationAction::Use,
 					             Position(target.x, target.y, target.z + 1));
-				} else if (Item::items[itemId].isDoor() && Item::items[itemId].blockSolid && item->getActionId() == 0 &&
+				} else if (Item::items[itemId].isDoor() && Item::items[itemId].name.find("window") == std::string::npos &&
+				           Item::items[itemId].blockSolid && item->getActionId() == 0 &&
 				           (!item->getDoor() || item->getDoor()->canUse(&player))) {
 					addDirectUse(itemId, PlayerBotNavigationAction::UseDoor, target);
 				}

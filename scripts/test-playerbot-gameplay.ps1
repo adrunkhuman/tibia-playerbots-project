@@ -93,9 +93,17 @@ function Assert-CycleEvents {
         $_.event -eq "action_result" -and $_.action -eq "deposit" -and
         $_.result -eq "success" -and $_.item_id -eq 1987 -and $_.count -eq 1
     })
-    $return = @($events | Where-Object {
-        $_.event -eq "action_result" -and $_.action -eq "return" -and
-        $_.result -eq "started" -and $_.reason -eq "hunt_deadline"
+    $serviceDiscovery = @($events | Where-Object {
+        $_.event -eq "service_discovered" -and $_.capability -in @("shop", "banker")
+    })
+    $shopCatalog = @($serviceDiscovery | Where-Object { $_.capability -eq "shop" -and $_.offers -gt 0 })
+    $bankerDiscovery = @($serviceDiscovery | Where-Object { $_.capability -eq "banker" })
+    $npcReplies = @($events | Where-Object { $_.event -eq "npc_reply" -and $_.npc_name })
+    $bankDeposit = @($events | Where-Object {
+        $_.event -eq "action_result" -and $_.action -eq "bank_deposit" -and $_.result -eq "success"
+    })
+    $bankWithdraw = @($events | Where-Object {
+        $_.event -eq "action_result" -and $_.action -eq "bank_withdraw" -and $_.result -eq "success"
     })
     $cycles = @($events | Where-Object {
         $_.event -eq "action_result" -and $_.action -eq "hunt_cycle" -and $_.result -eq "started"
@@ -109,8 +117,17 @@ function Assert-CycleEvents {
     if ($deposit.Count -ne 1) {
         throw "Expected exactly one injected-loot deposit event, found $($deposit.Count)."
     }
-    if ($return.Count -lt 1) {
-        throw "The hunt deadline did not initiate a return."
+    if ($shopCatalog.Count -lt 1 -or $bankerDiscovery.Count -lt 1) {
+        throw "The bot did not discover the tagged live service NPC catalogues."
+    }
+    if ($npcReplies.Count -lt 3) {
+        throw "The bot did not acknowledge the selected NPCs before requesting services."
+    }
+    if (@($events | Where-Object { $_.event -eq "service_catalog" }).Count -ne 0) {
+        throw "The bot probed a shop window instead of using the live NPC offer catalog."
+    }
+    if ($bankDeposit.Count -lt 1 -or $bankWithdraw.Count -lt 1) {
+        throw "The bot did not produce the expected purchase, sale, and bank balance result."
     }
     if ($cycles.Count -lt 2) {
         throw "The bot did not begin a second hunt cycle."
@@ -201,7 +218,7 @@ try {
     $env:PLAYERBOT_HUNT_DURATION_SECONDS = "10"
     Invoke-Compose up --build --detach
 
-    Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST DEPOSIT_PASS' | Out-Null
+    Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST SERVICE_PASS' | Out-Null
     $cycleLogs = Wait-ForLog -Pattern '"action":"hunt_cycle","result":"started","cycle":2'
     Assert-CycleEvents -Logs $cycleLogs
 

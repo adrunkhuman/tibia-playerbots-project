@@ -21,6 +21,7 @@
 #include "iologindata.h"
 #include "item.h"
 #include "monster.h"
+#include "npc.h"
 #include "player.h"
 #include "scheduler.h"
 #include "tile.h"
@@ -41,9 +42,11 @@ namespace {
 	constexpr Position sewerGratePosition(32097, 32205, 7);
 	constexpr uint16_t sewerGrateItemId = 430;
 	constexpr uint16_t ratCorpseItemId = 5964;
-	constexpr uint16_t cheeseItemId = 2696;
-	constexpr uint32_t cheeseLimit = 3;
-	constexpr int32_t cheeseFoodTicks = 108000;
+	constexpr uint16_t meatItemId = 2666;
+	constexpr uint16_t smallHealthPotionItemId = 8704;
+	constexpr uint32_t minimumSmallHealthPotions = 5;
+	constexpr uint32_t minimumMeat = 1;
+	constexpr int32_t meatFoodTicks = 108000;
 	constexpr int32_t maximumFoodSeconds = 1200;
 	constexpr uint8_t corpseContainerId = 0;
 	constexpr uint8_t backpackContainerId = 1;
@@ -60,7 +63,10 @@ namespace {
 	constexpr std::chrono::seconds traversalCombatTimeout(60);
 	constexpr std::chrono::seconds traversalTargetSuppression(120);
 	constexpr std::chrono::seconds navigationBlockSuppression(10);
-	constexpr uint32_t returnCapacityThreshold = 20 * 100;
+	constexpr std::chrono::seconds navigationStepTimeout(2);
+	constexpr uint32_t returnCapacityThreshold = 30 * 100;
+	constexpr uint32_t carriedGoldReserve = 100;
+	constexpr uint32_t maximumServiceAttempts = 3;
 	constexpr Position fakeDepotPosition(32105, 32195, 8);
 	constexpr Position fakeDepotTilePosition(32105, 32196, 8);
 	constexpr std::array<Position, 4> huntingLoop = {{
@@ -146,6 +152,8 @@ namespace {
 
 class PlayerBotController
 {
+	friend class PlayerBotManager;
+
 	public:
 		explicit PlayerBotController(const Player& player) :
 			playerId(player.getID()), playerGuid(player.getGUID()), playerName(player.getName())
@@ -167,16 +175,44 @@ class PlayerBotController
 			previousPosition = position;
 			lastPosition = position;
 			emit("lifecycle", position, "\"status\":\"online\",\"message\":\"Playerbot online\"");
-			cyclePhase = CyclePhase::ReturnToDepot;
+			const char* gameplayMode = std::getenv("PLAYERBOT_GAMEPLAY_MODE");
+			if (gameplayMode && (std::strcmp(gameplayMode, "navigation") == 0 || std::strcmp(gameplayMode, "corpse") == 0)) {
+				startHunt(position);
+			} else {
+				cyclePhase = CyclePhase::Service;
+			}
 			setStage(ScenarioStage::Traverse, position);
 			schedule(navigationInterval);
 		}
 
 	private:
 		enum class CyclePhase : uint8_t {
+			Service,
 			ReturnToDepot,
 			DepositLoot,
 			Hunt,
+		};
+
+		enum class ServiceStage : uint8_t {
+			Discover,
+			SellLoot,
+			BuyPotions,
+			BuyMeat,
+			Bank,
+			Complete,
+		};
+
+		enum class ConversationStep : uint8_t {
+			Greet,
+			Request,
+			Ready,
+			Confirm,
+			Verify,
+		};
+
+		struct ServiceNpc {
+			uint32_t id;
+			Position position;
 		};
 
 		enum class ScenarioStage : uint8_t {
@@ -374,13 +410,13 @@ class PlayerBotController
 
 		bool canEatCheese(const Player& player) const
 		{
-			return getFoodTicks(player) / 1000 + cheeseFoodTicks / 1000 < maximumFoodSeconds;
+			return getFoodTicks(player) / 1000 + meatFoodTicks / 1000 < maximumFoodSeconds;
 		}
 
 		void logEatSuccess(uint32_t inventoryCount, int32_t foodTicks, const Position& position)
 		{
 			std::ostringstream fields;
-			fields << "\"action\":\"eat\",\"result\":\"success\",\"item_id\":" << cheeseItemId
+			fields << "\"action\":\"eat\",\"result\":\"success\",\"item_id\":" << meatItemId
 			       << ",\"count\":1,\"inventory_count\":" << inventoryCount << ",\"food_ticks\":" << foodTicks;
 			emit("action_result", position, fields.str());
 		}
@@ -393,7 +429,7 @@ class PlayerBotController
 
 			const auto now = std::chrono::steady_clock::now();
 			if (pendingEat) {
-				const uint32_t inventoryCount = getInventoryItemCount(*player, cheeseItemId);
+				const uint32_t inventoryCount = getInventoryItemCount(*player, meatItemId);
 				const int32_t foodTicks = getFoodTicks(*player);
 				if (inventoryCount + 1 == pendingEatInventoryCount && foodTicks > pendingEatFoodTicks) {
 					logEatSuccess(inventoryCount, foodTicks, currentPosition);
@@ -410,19 +446,22 @@ class PlayerBotController
 				return false;
 			}
 
-			Item* cheese = g_game.findItemOfType(player, cheeseItemId, true);
-			if (!cheese) {
+			if (getInventoryItemCount(*player, meatItemId) <= minimumMeat) {
+				return false;
+			}
+			Item* meat = g_game.findItemOfType(player, meatItemId, true);
+			if (!meat) {
 				return false;
 			}
 			if (!player->canDoAction()) {
 				return true;
 			}
 
-			pendingEatInventoryCount = getInventoryItemCount(*player, cheeseItemId);
+			pendingEatInventoryCount = getInventoryItemCount(*player, meatItemId);
 			pendingEatFoodTicks = getFoodTicks(*player);
 			pendingEat = true;
 			++counters.actionsAttempted;
-			g_game.playerUseItem(playerId, Position(0xFFFF, 0, 0), 0, 0, cheese->getClientID());
+			g_game.playerUseItem(playerId, Position(0xFFFF, 0, 0), 0, 0, meat->getClientID());
 			return true;
 		}
 
@@ -753,6 +792,7 @@ class PlayerBotController
 		const char* cyclePhaseName() const
 		{
 			switch (cyclePhase) {
+				case CyclePhase::Service: return "service";
 				case CyclePhase::ReturnToDepot: return "return_to_depot";
 				case CyclePhase::DepositLoot: return "deposit_loot";
 				case CyclePhase::Hunt: return "hunt";
@@ -798,6 +838,474 @@ class PlayerBotController
 			       << ",\"destination\":{\"x\":" << fakeDepotPosition.x << ",\"y\":" << fakeDepotPosition.y
 			       << ",\"z\":" << static_cast<uint16_t>(fakeDepotPosition.z) << '}';
 			emit("action_result", position, fields.str());
+			schedule(navigationInterval);
+		}
+
+		void onNpcReply(uint32_t replyingPlayerId, uint32_t npcId, uint8_t type, const std::string& text)
+		{
+			if (replyingPlayerId != playerId || npcId != serviceTargetId || type != TALKTYPE_PRIVATE_NP) {
+				return;
+			}
+			serviceGreetingAcknowledged = true;
+			Npc* npc = g_game.getNpcByID(npcId);
+			emit("npc_reply", lastPosition, "\"npc_id\":" + std::to_string(npcId) +
+			     ",\"npc_name\":" + jsonString(npc ? npc->getName() : "") + ",\"text\":" + jsonString(text));
+		}
+
+		void beginService(Player* player, const Position& position, const char* reason)
+		{
+			g_game.playerCancelAttackAndFollow(playerId);
+			clearRatTarget(position, reason);
+			route.clear();
+			clearNavigation();
+			pendingLootItemId = 0;
+			player->closeContainer(corpseContainerId);
+			serviceShops.clear();
+			serviceBankers.clear();
+			serviceTargetId = 0;
+			serviceApproachTarget = Position();
+			serviceStage = ServiceStage::Discover;
+			conversationStep = ConversationStep::Greet;
+			serviceAttempts = 0;
+			setCyclePhase(CyclePhase::Service, position, reason);
+		}
+
+		void discoverServices(const Position& position)
+		{
+			for (const auto& entry : g_game.getNpcs()) {
+				Npc* npc = entry.second;
+				const std::string* capability = npc && !npc->isRemoved() ? npc->getParameter("playerbot_service") : nullptr;
+				if (!capability) {
+					continue;
+				}
+				std::vector<ServiceNpc>* services = *capability == "shop" ? &serviceShops :
+				                                    (*capability == "banker" ? &serviceBankers : nullptr);
+				if (!services) {
+					continue;
+				}
+				services->push_back({npc->getID(), npc->getPosition()});
+				emit("service_discovered", position, "\"capability\":" + jsonString(*capability) +
+				     ",\"npc_id\":" + std::to_string(npc->getID()) + ",\"npc_name\":" + jsonString(npc->getName()) +
+				     ",\"offers\":" + std::to_string(npc->getShopOffers().size()));
+			}
+			if (serviceShops.empty() || serviceBankers.empty()) {
+				stop("service_npc_unavailable", position);
+				return;
+			}
+			std::sort(serviceShops.begin(), serviceShops.end(), [](const ServiceNpc& left, const ServiceNpc& right) {
+				return left.id < right.id;
+			});
+			serviceStage = ServiceStage::SellLoot;
+		}
+
+		bool approachServiceNpc(Player* player, ServiceNpc& service, const Position& currentPosition)
+		{
+			Npc* npc = g_game.getNpcByID(service.id);
+			if (!npc || npc->isRemoved()) {
+				stop("service_npc_unavailable", currentPosition);
+				return false;
+			}
+			service.position = npc->getPosition();
+			if (Position::areInRange<3, 3, 0>(currentPosition, service.position)) {
+				serviceApproachTarget = Position();
+				return true;
+			}
+			if (serviceApproachTarget != Position()) {
+				if (currentPosition == serviceApproachTarget) {
+					serviceApproachTarget = Position();
+					clearNavigation();
+					schedule(SCHEDULER_MINTICKS);
+					return false;
+				}
+				return processNavigation(player, currentPosition, serviceApproachTarget);
+			}
+
+			std::vector<Position> candidates;
+			candidates.reserve(48);
+			for (int32_t xOffset = -3; xOffset <= 3; ++xOffset) {
+				for (int32_t yOffset = -3; yOffset <= 3; ++yOffset) {
+					if (xOffset != 0 || yOffset != 0) {
+						candidates.emplace_back(service.position.x + xOffset, service.position.y + yOffset, service.position.z);
+					}
+				}
+			}
+			std::sort(candidates.begin(), candidates.end(), [&currentPosition](const Position& left, const Position& right) {
+				const int32_t leftDistance = std::max(Position::getDistanceX(currentPosition, left), Position::getDistanceY(currentPosition, left));
+				const int32_t rightDistance = std::max(Position::getDistanceX(currentPosition, right), Position::getDistanceY(currentPosition, right));
+				return leftDistance == rightDistance ? left < right : leftDistance < rightDistance;
+			});
+			for (const Position& candidate : candidates) {
+				if (serviceRejectedApproaches.find(candidate) != serviceRejectedApproaches.end()) {
+					continue;
+				}
+				Tile* tile = g_game.map.getTile(candidate);
+				if (!tile || tile->queryAdd(0, *player, 1, 0) != RETURNVALUE_NOERROR) {
+					continue;
+				}
+				std::deque<PlayerBotNavigationStep> candidateSteps;
+				uint64_t expandedNodes = 0;
+				++counters.pathfindingCalls;
+				const auto startedAt = std::chrono::steady_clock::now();
+				const bool planned = navigator.plan(*player, candidate, {}, candidateSteps, expandedNodes);
+				counters.pathfindingTimeUs += std::chrono::duration_cast<std::chrono::microseconds>(
+					std::chrono::steady_clock::now() - startedAt).count();
+				if (!planned || candidateSteps.empty()) {
+					++counters.pathfindingFailures;
+					serviceRejectedApproaches.insert(candidate);
+					schedule(SCHEDULER_MINTICKS);
+					return false;
+				}
+				serviceApproachTarget = candidate;
+				navigationTarget = candidate;
+				navigationSteps = std::move(candidateSteps);
+				std::ostringstream fields;
+				fields << "\"action\":\"plan\",\"result\":\"success\",\"steps\":" << navigationSteps.size()
+				       << ",\"expanded_nodes\":" << expandedNodes << ",\"destination\":{\"x\":" << candidate.x
+				       << ",\"y\":" << candidate.y << ",\"z\":" << static_cast<uint16_t>(candidate.z) << '}';
+				emit("action_result", currentPosition, fields.str());
+				return processNavigation(player, currentPosition, candidate);
+			}
+			stop("service_approach_unavailable", currentPosition);
+			return false;
+		}
+
+		void resetConversation(uint32_t targetId)
+		{
+			serviceTargetId = targetId;
+			conversationStep = ConversationStep::Greet;
+			serviceAttempts = 0;
+			serviceApproachTarget = Position();
+			serviceRejectedApproaches.clear();
+			clearNavigation();
+		}
+
+		bool openServiceShop(Player* player, ServiceNpc& service, const Position& position)
+		{
+			Npc* npc = g_game.getNpcByID(service.id);
+			if (!npc || npc->isRemoved()) {
+				stop("service_npc_unavailable", position);
+				return false;
+			}
+			if (conversationStep == ConversationStep::Greet) {
+				serviceGreetingAcknowledged = false;
+				++counters.actionsAttempted;
+				npc->receiveSpeech(player, TALKTYPE_PRIVATE_PN, "hi");
+				conversationStep = ConversationStep::Request;
+				schedule(1000);
+				return false;
+			}
+			if (conversationStep == ConversationStep::Request) {
+				if (!serviceGreetingAcknowledged) {
+					if (++serviceAttempts >= maximumServiceAttempts) {
+						logActionFailure("shop", "npc_focus_unconfirmed", position);
+						return false;
+					}
+					conversationStep = ConversationStep::Greet;
+					schedule(1000);
+					return false;
+				}
+				++counters.actionsAttempted;
+				npc->receiveSpeech(player, TALKTYPE_PRIVATE_PN, "trade");
+				conversationStep = ConversationStep::Ready;
+				schedule(1000);
+				return false;
+			}
+			int32_t onBuy;
+			int32_t onSell;
+			if (player->getShopOwner(onBuy, onSell) == npc && !player->getShopItemList().empty()) {
+				return true;
+			}
+			if (++serviceAttempts >= maximumServiceAttempts) {
+				logActionFailure("shop", "shop_window_unavailable", position);
+				return false;
+			}
+			conversationStep = ConversationStep::Greet;
+			schedule(SCHEDULER_MINTICKS);
+			return false;
+		}
+
+		bool isApprovedSaleItem(uint16_t itemId) const
+		{
+			return itemId == 2813 || itemId == 5896 || itemId == 5897 || itemId == 5878;
+		}
+
+		const ShopInfo* findOffer(const ServiceNpc& service, uint16_t itemId, bool buying) const
+		{
+			Npc* npc = g_game.getNpcByID(service.id);
+			if (!npc || npc->isRemoved()) {
+				return nullptr;
+			}
+			const std::vector<ShopInfo>& offers = npc->getShopOffers();
+			auto it = std::find_if(offers.begin(), offers.end(), [itemId, buying](const ShopInfo& offer) {
+				return offer.itemId == itemId && (buying ? offer.buyPrice != 0 : offer.sellPrice != 0);
+			});
+			return it == offers.end() ? nullptr : &*it;
+		}
+
+		uint32_t serviceDistance(const Position& from, const ServiceNpc& service) const
+		{
+			return std::max(Position::getDistanceX(from, service.position), Position::getDistanceY(from, service.position)) +
+			       (from.z == service.position.z ? 0 : 32 * Position::getDistanceZ(from, service.position));
+		}
+
+		ServiceNpc* findNearestService(std::vector<ServiceNpc>& services, const Position& position)
+		{
+			auto it = std::min_element(services.begin(), services.end(), [this, &position](const ServiceNpc& left, const ServiceNpc& right) {
+				return serviceDistance(position, left) < serviceDistance(position, right);
+			});
+			return it == services.end() ? nullptr : &*it;
+		}
+
+		ServiceNpc* findShopFor(uint16_t itemId, bool buying, const Position& position)
+		{
+			ServiceNpc* nearest = nullptr;
+			for (ServiceNpc& service : serviceShops) {
+				if (findOffer(service, itemId, buying) && (!nearest || serviceDistance(position, service) < serviceDistance(position, *nearest))) {
+					nearest = &service;
+				}
+			}
+			return nearest;
+		}
+
+		ServiceNpc* findLootSeller(Player* player, const Position& position, uint16_t& itemId)
+		{
+			ServiceNpc* nearest = nullptr;
+			for (ServiceNpc& service : serviceShops) {
+				Npc* npc = g_game.getNpcByID(service.id);
+				if (!npc || npc->isRemoved()) {
+					continue;
+				}
+				for (const ShopInfo& offer : npc->getShopOffers()) {
+					if (offer.sellPrice != 0 && isApprovedSaleItem(offer.itemId) && getInventoryItemCount(*player, offer.itemId) > 0 &&
+					    (!nearest || serviceDistance(position, service) < serviceDistance(position, *nearest))) {
+						itemId = offer.itemId;
+						nearest = &service;
+					}
+				}
+			}
+			return nearest;
+		}
+
+		void completeServiceAction(Player* player, const char* action, uint16_t itemId, uint32_t amount, const Position& position)
+		{
+			std::ostringstream fields;
+			fields << "\"action\":" << jsonString(action) << ",\"result\":\"success\",\"item_id\":" << itemId
+			       << ",\"count\":" << amount << ",\"carried_before\":" << serviceBeforeMoney
+			       << ",\"carried_after\":" << player->getMoney() << ",\"bank_before\":" << serviceBeforeBalance
+			       << ",\"bank_after\":" << player->getBankBalance();
+			emit("action_result", position, fields.str());
+			conversationStep = ConversationStep::Greet;
+			serviceAttempts = 0;
+		}
+
+		void processServiceShop(Player* player, const Position& currentPosition, ServiceNpc& service, const char* action,
+		                        uint16_t itemId, uint32_t amount, bool purchase)
+		{
+			if (!approachServiceNpc(player, service, currentPosition)) {
+				return;
+			}
+			if (!openServiceShop(player, service, currentPosition)) {
+				if (serviceAttempts >= maximumServiceAttempts) {
+					stop("shop_transaction_unavailable", currentPosition);
+				}
+				return;
+			}
+			const ShopInfo* offer = findOffer(service, itemId, purchase);
+			if (!offer || amount == 0 || amount > 100) {
+				stop("shop_offer_unavailable", currentPosition);
+				return;
+			}
+			if (conversationStep == ConversationStep::Ready) {
+				serviceBeforeItemCount = getInventoryItemCount(*player, itemId);
+				serviceBeforeMoney = player->getMoney();
+				serviceBeforeBalance = player->getBankBalance();
+				serviceItemId = itemId;
+				serviceAmount = amount;
+				conversationStep = ConversationStep::Verify;
+				++counters.actionsAttempted;
+				if (purchase) {
+					g_game.playerPurchaseItem(playerId, Item::items[itemId].clientId, static_cast<uint8_t>(offer->subType),
+					                         static_cast<uint8_t>(amount), false, false);
+				} else {
+					g_game.playerSellItem(playerId, Item::items[itemId].clientId, static_cast<uint8_t>(offer->subType),
+					                     static_cast<uint8_t>(amount), false);
+				}
+				schedule(navigationDecisionDelay(*player));
+				return;
+			}
+
+			const uint32_t currentCount = getInventoryItemCount(*player, serviceItemId);
+			const bool changed = purchase ? currentCount >= serviceBeforeItemCount + serviceAmount :
+			                              currentCount + serviceAmount <= serviceBeforeItemCount;
+			if (changed) {
+				completeServiceAction(player, action, serviceItemId, serviceAmount, currentPosition);
+				return;
+			}
+			if (++serviceAttempts >= maximumServiceAttempts) {
+				logActionFailure(action, "transaction_not_verified", currentPosition);
+				stop("shop_transaction_not_verified", currentPosition);
+				return;
+			}
+			conversationStep = ConversationStep::Ready;
+			schedule(navigationDecisionDelay(*player));
+		}
+
+		void processBank(Player* player, const Position& currentPosition, ServiceNpc& banker)
+		{
+			if (!approachServiceNpc(player, banker, currentPosition)) {
+				return;
+			}
+			Npc* npc = g_game.getNpcByID(banker.id);
+			if (!npc || npc->isRemoved()) {
+				stop("banker_unavailable", currentPosition);
+				return;
+			}
+			if (conversationStep == ConversationStep::Greet) {
+				serviceGreetingAcknowledged = false;
+				++counters.actionsAttempted;
+				npc->receiveSpeech(player, TALKTYPE_PRIVATE_PN, "hi");
+				conversationStep = ConversationStep::Request;
+				schedule(1000);
+				return;
+			}
+			if (conversationStep == ConversationStep::Request) {
+				if (!serviceGreetingAcknowledged) {
+					if (++serviceAttempts >= maximumServiceAttempts) {
+						logActionFailure("bank", "npc_focus_unconfirmed", currentPosition);
+						stop("banker_focus_unconfirmed", currentPosition);
+						return;
+					}
+					conversationStep = ConversationStep::Greet;
+					schedule(1000);
+					return;
+				}
+				serviceBeforeMoney = player->getMoney();
+				serviceBeforeBalance = player->getBankBalance();
+				if (serviceBeforeMoney == 0) {
+					bankDepositComplete = true;
+					conversationStep = ConversationStep::Ready;
+					return;
+				}
+				++counters.actionsAttempted;
+				npc->receiveSpeech(player, TALKTYPE_PRIVATE_PN, "deposit all");
+				conversationStep = ConversationStep::Confirm;
+				schedule(SCHEDULER_MINTICKS);
+				return;
+			}
+			if (conversationStep == ConversationStep::Confirm) {
+				++counters.actionsAttempted;
+				npc->receiveSpeech(player, TALKTYPE_PRIVATE_PN, "yes");
+				conversationStep = ConversationStep::Verify;
+				schedule(SCHEDULER_MINTICKS);
+				return;
+			}
+			if (conversationStep == ConversationStep::Verify && !bankDepositComplete) {
+				if (player->getMoney() != 0 || player->getBankBalance() < serviceBeforeBalance + serviceBeforeMoney) {
+					if (++serviceAttempts >= maximumServiceAttempts) {
+						logActionFailure("bank_deposit", "transaction_not_verified", currentPosition);
+						stop("bank_deposit_not_verified", currentPosition);
+						return;
+					}
+					conversationStep = ConversationStep::Request;
+					schedule(SCHEDULER_MINTICKS);
+					return;
+				}
+				emit("action_result", currentPosition, "\"action\":\"bank_deposit\",\"result\":\"success\",\"count\":" +
+				     std::to_string(serviceBeforeMoney) + ",\"bank_before\":" + std::to_string(serviceBeforeBalance) +
+				     ",\"bank_after\":" + std::to_string(player->getBankBalance()));
+				bankDepositComplete = true;
+				conversationStep = ConversationStep::Ready;
+			}
+			if (conversationStep == ConversationStep::Ready) {
+				serviceBeforeBalance = player->getBankBalance();
+				++counters.actionsAttempted;
+				npc->receiveSpeech(player, TALKTYPE_PRIVATE_PN, "withdraw " + std::to_string(carriedGoldReserve));
+				conversationStep = ConversationStep::Confirm;
+				schedule(SCHEDULER_MINTICKS);
+				return;
+			}
+			if (conversationStep == ConversationStep::Confirm) {
+				++counters.actionsAttempted;
+				npc->receiveSpeech(player, TALKTYPE_PRIVATE_PN, "yes");
+				conversationStep = ConversationStep::Verify;
+				schedule(SCHEDULER_MINTICKS);
+				return;
+			}
+			if (player->getMoney() == carriedGoldReserve && player->getBankBalance() + carriedGoldReserve == serviceBeforeBalance) {
+				emit("action_result", currentPosition, "\"action\":\"bank_withdraw\",\"result\":\"success\",\"count\":100,\"bank_before\":" +
+				     std::to_string(serviceBeforeBalance) + ",\"bank_after\":" + std::to_string(player->getBankBalance()));
+				serviceStage = ServiceStage::Complete;
+				schedule(SCHEDULER_MINTICKS);
+				return;
+			}
+			if (++serviceAttempts >= maximumServiceAttempts) {
+				logActionFailure("bank_withdraw", "transaction_not_verified", currentPosition);
+				stop("bank_withdraw_not_verified", currentPosition);
+				return;
+			}
+			conversationStep = ConversationStep::Ready;
+			schedule(SCHEDULER_MINTICKS);
+		}
+
+		void processService(Player* player, const Position& currentPosition)
+		{
+			if (serviceStage == ServiceStage::Discover) {
+				bankDepositComplete = false;
+				discoverServices(currentPosition);
+				schedule(SCHEDULER_MINTICKS);
+				return;
+			}
+			if (serviceStage == ServiceStage::SellLoot) {
+				uint16_t itemId = 0;
+				ServiceNpc* seller = findLootSeller(player, currentPosition, itemId);
+				if (!seller) {
+					serviceStage = ServiceStage::BuyPotions;
+					resetConversation(0);
+					schedule(SCHEDULER_MINTICKS);
+					return;
+				}
+				if (serviceTargetId != seller->id) {
+					resetConversation(seller->id);
+				}
+				processServiceShop(player, currentPosition, *seller, "sell", itemId,
+				                   std::min<uint32_t>(100, getInventoryItemCount(*player, itemId)), false);
+				return;
+			}
+			if (serviceStage == ServiceStage::BuyPotions || serviceStage == ServiceStage::BuyMeat) {
+				const uint16_t itemId = serviceStage == ServiceStage::BuyPotions ? smallHealthPotionItemId : meatItemId;
+				const uint32_t minimum = serviceStage == ServiceStage::BuyPotions ? minimumSmallHealthPotions : minimumMeat;
+				const uint32_t currentCount = getInventoryItemCount(*player, itemId);
+				if (currentCount >= minimum) {
+					serviceStage = serviceStage == ServiceStage::BuyPotions ? ServiceStage::BuyMeat : ServiceStage::Bank;
+					resetConversation(0);
+					schedule(SCHEDULER_MINTICKS);
+					return;
+				}
+				ServiceNpc* seller = findShopFor(itemId, true, currentPosition);
+				if (!seller) {
+					stop("required_shop_offer_unavailable", currentPosition);
+					return;
+				}
+				if (serviceTargetId != seller->id) {
+					resetConversation(seller->id);
+				}
+				processServiceShop(player, currentPosition, *seller, serviceStage == ServiceStage::BuyPotions ? "buy_potions" : "buy_meat",
+				                   itemId, minimum - currentCount, true);
+				return;
+			}
+			if (serviceStage == ServiceStage::Bank) {
+				ServiceNpc* banker = findNearestService(serviceBankers, currentPosition);
+				if (!banker) {
+					stop("banker_unavailable", currentPosition);
+					return;
+				}
+				if (serviceTargetId != banker->id) {
+					resetConversation(banker->id);
+				}
+				processBank(player, currentPosition, *banker);
+				return;
+			}
+			beginReturn(player, currentPosition, "service_complete");
 		}
 
 		Item* findNavigationItem(const PlayerBotNavigationStep& step) const
@@ -870,7 +1378,8 @@ class PlayerBotController
 					if (!navigationSteps.empty()) {
 						navigationSteps.pop_front();
 					}
-				} else if (player->getWalkDelay() > 0 || !player->canDoAction()) {
+				} else if ((player->getWalkDelay() > 0 || !player->canDoAction()) &&
+				           std::chrono::steady_clock::now() - navigationStepStarted < navigationStepTimeout) {
 					schedule(navigationDecisionDelay(*player));
 					return false;
 				} else {
@@ -955,6 +1464,7 @@ class PlayerBotController
 			}
 			navigationExpectedPosition = step.expectedPosition;
 			navigationStepTarget = step.target;
+			navigationStepStarted = std::chrono::steady_clock::now();
 			navigationPending = true;
 			schedule(navigationDecisionDelay(*player));
 			return false;
@@ -962,7 +1472,8 @@ class PlayerBotController
 
 		bool isProtectedDepositItem(const Item& item) const
 		{
-			return item.getID() == ropeItemId || item.getID() == 2554 || item.getID() == cheeseItemId;
+			return item.getID() == ropeItemId || item.getID() == 2554 || item.getID() == meatItemId ||
+			       item.getID() == smallHealthPotionItemId || item.getWorth() != 0;
 		}
 
 		bool findDepositableItem(Container* container, Container*& source, Item*& depositItem) const
@@ -1079,8 +1590,13 @@ class PlayerBotController
 		{
 			if (cyclePhase == CyclePhase::Hunt &&
 			    (std::chrono::steady_clock::now() >= huntDeadline || player->getFreeCapacity() < returnCapacityThreshold)) {
-				beginReturn(player, currentPosition,
-				            player->getFreeCapacity() < returnCapacityThreshold ? "capacity" : "hunt_deadline");
+				beginService(player, currentPosition,
+				             player->getFreeCapacity() < returnCapacityThreshold ? "capacity" : "hunt_deadline");
+			}
+
+			if (cyclePhase == CyclePhase::Service) {
+				processService(player, currentPosition);
+				return;
 			}
 
 			if (cyclePhase == CyclePhase::ReturnToDepot) {
@@ -1700,6 +2216,21 @@ class PlayerBotController
 		std::unordered_map<uint32_t, std::chrono::steady_clock::time_point> suppressedTraversalTargets;
 		bool restoredTraversalState = false;
 		CyclePhase cyclePhase = CyclePhase::ReturnToDepot;
+		ServiceStage serviceStage = ServiceStage::Discover;
+		ConversationStep conversationStep = ConversationStep::Greet;
+		std::vector<ServiceNpc> serviceShops;
+		std::vector<ServiceNpc> serviceBankers;
+		uint32_t serviceTargetId = 0;
+		Position serviceApproachTarget;
+		std::set<Position> serviceRejectedApproaches;
+		uint32_t serviceAttempts = 0;
+		uint16_t serviceItemId = 0;
+		uint32_t serviceAmount = 0;
+		uint32_t serviceBeforeItemCount = 0;
+		uint64_t serviceBeforeMoney = 0;
+		uint64_t serviceBeforeBalance = 0;
+		bool bankDepositComplete = false;
+		bool serviceGreetingAcknowledged = false;
 		size_t huntRouteIndex = 0;
 		uint32_t completedCycles = 0;
 		std::chrono::steady_clock::time_point huntDeadline;
@@ -1708,6 +2239,7 @@ class PlayerBotController
 		Position navigationTarget;
 		Position navigationExpectedPosition;
 		Position navigationStepTarget;
+		std::chrono::steady_clock::time_point navigationStepStarted;
 		PlayerBotNavigationStep worldChangeStep;
 		std::map<Position, std::chrono::steady_clock::time_point> temporarilyBlockedPositions;
 		bool navigationPending = false;
@@ -1725,6 +2257,13 @@ class PlayerBotController
 PlayerBotManager g_playerBots;
 
 PlayerBotManager::~PlayerBotManager() = default;
+
+void PlayerBotManager::onNpcReply(uint32_t playerId, uint32_t npcId, uint8_t type, const std::string& text)
+{
+	if (controller) {
+		controller->onNpcReply(playerId, npcId, type, text);
+	}
+}
 
 bool PlayerBotManager::spawn(const std::string& name)
 {
