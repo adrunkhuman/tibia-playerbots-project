@@ -3,6 +3,8 @@ local depotPosition = Position(32105, 32195, 8)
 local depotTilePosition = Position(32105, 32196, 8)
 local lootItemId = ITEM_GOLD_COIN
 local lootCount = 37
+local emptyMonsterName = "Playerbot Empty Corpse"
+local lootMonsterName = "Playerbot Loot Corpse"
 
 local function suppressNearbyMonsters(playerId)
     local player = Player(playerId)
@@ -10,11 +12,33 @@ local function suppressNearbyMonsters(playerId)
         return
     end
     for _, creature in ipairs(Game.getSpectators(player:getPosition(), true, false, 10, 10, 10, 10)) do
-        if creature:isMonster() then
+        if creature:isMonster() and creature:getName() ~= emptyMonsterName and creature:getName() ~= lootMonsterName then
             creature:remove()
         end
     end
     addEvent(suppressNearbyMonsters, 100, playerId)
+end
+
+local function spawnCorpseMonster(playerId, monsterName)
+    local player = Player(playerId)
+    assert(player and not player:isRemoved(), "Bot One disappeared before corpse test spawn")
+    local origin = player:getPosition()
+    local candidates = {
+        Position(origin.x + 1, origin.y, origin.z),
+        Position(origin.x, origin.y + 1, origin.z),
+        Position(origin.x - 1, origin.y, origin.z),
+        Position(origin.x, origin.y - 1, origin.z),
+    }
+    for _, position in ipairs(candidates) do
+        local tile = Tile(position)
+        if tile and tile:isWalkable() then
+            local monster = Game.createMonster(monsterName, position, true, true)
+            assert(monster, "corpse test monster could not be created: " .. monsterName)
+            print("PLAYERBOT_GAMEPLAY_TEST SPAWNED " .. monsterName)
+            return
+        end
+    end
+    error("no adjacent tile was available for corpse test monster")
 end
 
 local function removeBlockers(firstId, secondId, thirdId)
@@ -74,12 +98,19 @@ function login.onLogin(player)
     end
 
     local mode = os.getenv("PLAYERBOT_GAMEPLAY_MODE") or "cycle"
-    assert(mode == "cycle" or mode == "navigation", "unknown PLAYERBOT_GAMEPLAY_MODE: " .. mode)
+    assert(mode == "cycle" or mode == "navigation" or mode == "corpse", "unknown PLAYERBOT_GAMEPLAY_MODE: " .. mode)
     assert(player:teleportTo(depotPosition), "fake depot position could not be restored")
     if mode == "navigation" then
         createTemporaryBlockers()
         suppressNearbyMonsters(player:getId())
         print("PLAYERBOT_GAMEPLAY_TEST NAVIGATION_START")
+        return true
+    end
+    if mode == "corpse" then
+        suppressNearbyMonsters(player:getId())
+        addEvent(spawnCorpseMonster, 500, player:getId(), emptyMonsterName)
+        addEvent(spawnCorpseMonster, 8000, player:getId(), lootMonsterName)
+        print("PLAYERBOT_GAMEPLAY_TEST CORPSE_START")
         return true
     end
 
