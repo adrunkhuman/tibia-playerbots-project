@@ -2,6 +2,7 @@ param(
     [ValidateRange(60, 3600)]
     [int]$TimeoutSeconds = 300,
     [switch]$FullNavigation,
+    [switch]$CorpseLoot,
     [switch]$KeepStack
 )
 
@@ -147,6 +148,44 @@ function Assert-NavigationEvents {
     }
 }
 
+function Assert-CorpseEvents {
+    param([string]$Logs)
+
+    $events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
+    $emptyTarget = @($events | Where-Object {
+        $_.event -eq "target_changed" -and $_.target_name -eq "Playerbot Empty Corpse"
+    })
+    $emptyResult = @($events | Where-Object {
+        $_.event -eq "action_result" -and $_.action -eq "loot" -and
+        $_.result -eq "skipped" -and $_.reason -eq "corpse_empty"
+    })
+    $lootTarget = @($events | Where-Object {
+        $_.event -eq "target_changed" -and $_.target_name -eq "Playerbot Loot Corpse"
+    })
+    $lootResult = @($events | Where-Object {
+        $_.event -eq "action_result" -and $_.action -eq "loot" -and
+        $_.result -eq "success" -and $_.item_id -eq 2148
+    })
+    $falseUnavailable = @($events | Where-Object {
+        $_.event -eq "action_result" -and $_.action -eq "loot" -and
+        $_.result -eq "failed" -and $_.reason -eq "owned_corpse_unavailable"
+    })
+    $terminal = @($events | Where-Object { $_.event -eq "terminal" })
+
+    if ($emptyTarget.Count -lt 1 -or $emptyResult.Count -ne 1) {
+        throw "The empty corpse was not opened and classified exactly once."
+    }
+    if ($lootTarget.Count -lt 1 -or $lootResult.Count -lt 1) {
+        throw "The guaranteed-loot corpse did not preserve normal looting."
+    }
+    if ($falseUnavailable.Count -ne 0) {
+        throw "An available test corpse was reported unavailable."
+    }
+    if ($terminal.Count -ne 0) {
+        throw "The playerbot emitted a terminal event during corpse classification."
+    }
+}
+
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
     throw "Docker is required to run the playerbot gameplay suite."
 }
@@ -173,6 +212,15 @@ try {
         Invoke-Compose up --detach
         $navigationLogs = Wait-ForPlayerbotEventCount -Action "hunt_waypoint" -Count 5
         Assert-NavigationEvents -Logs $navigationLogs
+    }
+
+    if ($CorpseLoot) {
+        Invoke-Compose down --volumes --remove-orphans
+        $env:PLAYERBOT_GAMEPLAY_MODE = "corpse"
+        $env:PLAYERBOT_HUNT_DURATION_SECONDS = "900"
+        Invoke-Compose up --detach
+        $corpseLogs = Wait-ForLog -Pattern '"action":"loot","result":"success","item_id":2148'
+        Assert-CorpseEvents -Logs $corpseLogs
     }
     "PLAYERBOT_GAMEPLAY_TEST PASS"
 }

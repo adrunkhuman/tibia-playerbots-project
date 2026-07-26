@@ -1411,6 +1411,7 @@ class PlayerBotController
 			corpseSearchAttempts = 0;
 			corpseOpenAttempts = 0;
 			pendingLootItemId = 0;
+			lootedCurrentCorpse = false;
 			unavailableLootItemIds.clear();
 			setStage(ScenarioStage::LootCorpse, currentPosition);
 		}
@@ -1423,36 +1424,30 @@ class PlayerBotController
 			setStage(ScenarioStage::Traverse, currentPosition);
 		}
 
-		bool hasDesiredLoot(const Player& player, const Container& corpse) const
-		{
-			(void)player;
-			for (Item* item : corpse.getItemList()) {
-				if (item) {
-					return true;
-				}
-			}
-			return false;
-		}
-
-		Container* findRatCorpse(Player* player, const Position& currentPosition)
+		Container* findCorpse(Player* player, const Position& searchPosition)
 		{
 			Container* fallback = nullptr;
 			Position fallbackPosition;
 			for (int32_t offsetX = -1; offsetX <= 1; ++offsetX) {
 				for (int32_t offsetY = -1; offsetY <= 1; ++offsetY) {
-					Position position(currentPosition.x + offsetX, currentPosition.y + offsetY, currentPosition.z);
+					Position position(searchPosition.x + offsetX, searchPosition.y + offsetY, searchPosition.z);
 					Tile* tile = g_game.map.getTile(position);
 					TileItemVector* items = tile ? tile->getItemList() : nullptr;
 					if (!items) {
 						continue;
 					}
 
-					for (auto it = items->rbegin(); it != items->rend(); ++it) {
-						Container* corpse = (*it)->getContainer();
-						if (!corpse || !player->canOpenCorpse(corpse->getCorpseOwner())) {
+					for (auto it = items->getBeginDownItem(); it != items->getEndDownItem(); ++it) {
+						Item* item = *it;
+						Container* corpse = item->getContainer();
+						if (!corpse || Item::items[item->getID()].corpseType == RACE_NONE) {
 							continue;
 						}
-						if (hasDesiredLoot(*player, *corpse)) {
+						const uint32_t corpseOwner = corpse->getCorpseOwner();
+						if (corpseOwner != 0 && !player->canOpenCorpse(corpseOwner)) {
+							continue;
+						}
+						if (position == searchPosition) {
 							lootPosition = position;
 							return corpse;
 						}
@@ -1484,7 +1479,10 @@ class PlayerBotController
 
 		void lootCorpse(Player* player, const Position& currentPosition)
 		{
-			Container* corpse = findRatCorpse(player, currentPosition);
+			Container* corpse = player->getContainerByID(corpseContainerId);
+			if (!corpse || Item::items[corpse->getID()].corpseType == RACE_NONE) {
+				corpse = findCorpse(player, lootPosition);
+			}
 			if (!Position::areInRange<1, 1, 0>(currentPosition, lootPosition)) {
 				processNavigation(player, currentPosition, lootPosition);
 				return;
@@ -1503,19 +1501,12 @@ class PlayerBotController
 				const uint32_t inventoryCount = getInventoryItemCount(*player, pendingLootItemId);
 				if (inventoryCount > pendingLootInventoryCount) {
 					logLootSuccess(pendingLootItemId, inventoryCount - pendingLootInventoryCount, inventoryCount, currentPosition);
+					lootedCurrentCorpse = true;
 				} else {
 					unavailableLootItemIds.insert(pendingLootItemId);
 					logActionFailure("loot", "item_move_failed", currentPosition);
 				}
 				pendingLootItemId = 0;
-			}
-
-			Item* backpackItem = player->getInventoryItem(CONST_SLOT_BACKPACK);
-			Container* backpack = backpackItem ? backpackItem->getContainer() : nullptr;
-			if (!backpack) {
-				logActionFailure("loot", "backpack_unavailable", currentPosition);
-				finishLoot(player, currentPosition);
-				return;
 			}
 
 			if (player->getContainerByID(corpseContainerId) != corpse) {
@@ -1535,6 +1526,27 @@ class PlayerBotController
 				}
 				++counters.actionsAttempted;
 				g_game.playerUseItem(playerId, lootPosition, static_cast<uint8_t>(stackPosition), corpseContainerId, corpse->getClientID());
+				return;
+			}
+
+			if (corpse->empty()) {
+				if (!lootedCurrentCorpse) {
+					std::ostringstream fields;
+					fields << "\"action\":\"loot\",\"result\":\"skipped\",\"reason\":\"corpse_empty\""
+					       << ",\"corpse_item_id\":" << corpse->getID() << ",\"corpse_owner_id\":" << corpse->getCorpseOwner()
+					       << ",\"corpse_position\":{\"x\":" << lootPosition.x << ",\"y\":" << lootPosition.y
+					       << ",\"z\":" << static_cast<uint16_t>(lootPosition.z) << '}';
+					emit("action_result", currentPosition, fields.str());
+				}
+				finishLoot(player, currentPosition);
+				return;
+			}
+
+			Item* backpackItem = player->getInventoryItem(CONST_SLOT_BACKPACK);
+			Container* backpack = backpackItem ? backpackItem->getContainer() : nullptr;
+			if (!backpack) {
+				logActionFailure("loot", "backpack_unavailable", currentPosition);
+				finishLoot(player, currentPosition);
 				return;
 			}
 
@@ -1671,6 +1683,7 @@ class PlayerBotController
 		uint32_t corpseSearchAttempts = 0;
 		uint32_t corpseOpenAttempts = 0;
 		uint16_t pendingLootItemId = 0;
+		bool lootedCurrentCorpse = false;
 		uint16_t pendingDepositItemId = 0;
 		uint32_t pendingLootInventoryCount = 0;
 		uint32_t pendingDepositDestinationCount = 0;

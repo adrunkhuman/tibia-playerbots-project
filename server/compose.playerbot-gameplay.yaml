@@ -4,3 +4,4 @@ services:
       PLAYERBOT_GAMEPLAY_MODE: "${PLAYERBOT_GAMEPLAY_MODE:-cycle}"
     volumes:
       - ./tests/playerbot-gameplay:/app/data/scripts/playerbot-gameplay:ro
+      - ./tests/playerbot-monsters/corpse.lua:/app/data/monster/lua/playerbot_corpse_monsters.lua:ro

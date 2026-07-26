@@ -88,7 +88,7 @@ and `terminal`. Event-specific fields are conditional, and `target_id` is
 | `state_transition` | `from`, `to` |
 | `objective_transition` | Cycle phase `from`, `to`, and `reason`; phases are `return_to_depot`, `deposit_loot`, and `hunt` |
 | `target_changed` | `previous_target_id`, `target_id`, optional target type and position, `reason` |
-| `action_result` | Always has `action` and `result`; failures also have `reason`. Navigation plans include their destination, step count, and expanded-node count. Successful `eat`, `loot`, and `deposit` records include item details. |
+| `action_result` | Always has `action` and `result`; failures and skipped actions also have `reason`. Navigation plans include their destination, step count, and expanded-node count. Successful `eat`, `loot`, and `deposit` records include item details. A corpse found empty immediately after normal opening emits `action=loot`, `result=skipped`, `reason=corpse_empty`, `corpse_item_id`, `corpse_owner_id`, and `corpse_position`. |
 | `stuck` | `reason`, `blocked_steps` |
 | `summary` | current state and target, uptime, decision/pathfinding timing, action, failure, stuck, and suppression counters |
 | `terminal` | `reason` |
@@ -143,6 +143,14 @@ consumes one through the normal item-use path, verifies both the inventory
 decrease and food-condition increase, and repeats until another cheese would
 exceed the game's fullness limit or it runs out of cheese.
 
+Corpse discovery does not inspect contents. It accepts only server-identified
+corpse containers; owner `0` is unrestricted, while an owned corpse requires
+`Player::canOpenCorpse`, which allows the owner or an eligible party member.
+The bot then approaches and opens the corpse through normal item use before
+checking whether it is empty. Ineligible corpses are ignored during bounded
+search and can end as `owned_corpse_unavailable`; repeated normal-use failures
+end as `corpse_open_failed`.
+
 Normal shutdown saves the bot through the existing player persistence path.
 Routes, objectives, hunt deadlines, targets, action attempts, transient blocked
 positions, and combat suppression remain in memory only. Startup conservatively
@@ -193,14 +201,25 @@ matrix for every supported transition adapter:
 pwsh -File scripts/test-playerbot-gameplay.ps1 -FullNavigation
 ```
 
+`-CorpseLoot` first runs the baseline cycle test, resets the disposable stack,
+then creates deterministic empty and guaranteed-loot monsters. It verifies that
+the bot identifies an openable corpse from server item/ownership metadata,
+opens it normally before classifying it as empty, and preserves the normal
+item-move path for a corpse containing gold:
+
+```powershell
+pwsh -File scripts/test-playerbot-gameplay.ps1 -CorpseLoot
+```
+
 The suite rebuilds the server and resets the disposable Compose stack and
 database volume. It removes them afterward; `-KeepStack` leaves the final stack
 running. The default timeout is 300 seconds and can be changed with
 `-TimeoutSeconds` (60-3600).
 
 This prototype advances the mainland loop tracked in #22 and the navigation
-architecture tracked in #28 without closing either umbrella issue. Empty and
-unavailable corpse classification remains follow-up #29.
+architecture tracked in #28 without closing either umbrella issue. Empty
+corpse classification implements the first slice of #29; moved, expired,
+inaccessible, non-owned, and policy-rejected corpse outcomes remain follow-up.
 
 Run the connectionless interaction probe locally with the regression overlay:
 
