@@ -44,8 +44,11 @@ pwsh -File scripts/test-playerbot-gameplay.ps1 -FullNavigation
 ```
 
 `-CorpseLoot` runs the baseline, resets the stack, then creates deterministic
-empty and guaranteed-loot monsters. It verifies normal corpse opening before
-empty classification and preserves item movement for a corpse containing gold:
+non-lootable, empty, guaranteed-loot, and container-only death-item monsters.
+It verifies that loaded non-corpse items are skipped without an open attempt,
+including a container after a valid lootable corpse, normal corpse opening
+precedes empty classification, and item movement is preserved for a corpse
+containing gold:
 
 ```powershell
 pwsh -File scripts/test-playerbot-gameplay.ps1 -CorpseLoot

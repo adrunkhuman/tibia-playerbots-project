@@ -57,6 +57,9 @@ class Monster final : public Creature
 		const Monster* getMonster() const override {
 			return this;
 		}
+		uint16_t getCorpseItemId() const {
+			return mType->info.lookcorpse;
+		}
 
 		void setID() override {
 			if (id == 0) {

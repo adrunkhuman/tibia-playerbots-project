@@ -1,4 +1,4 @@
-local function registerCorpseTestMonster(name, loot)
+local function registerCorpseTestMonster(name, loot, corpseId)
     local monsterType = Game.createMonsterType(name)
     local monster = {
         description = name:lower(),
@@ -7,7 +7,7 @@ local function registerCorpseTestMonster(name, loot)
         health = 1,
         maxHealth = 1,
         race = "blood",
-        corpse = 5964,
+        corpse = corpseId or 5964,
         speed = 0,
         flags = {
             summonable = false,
@@ -31,3 +31,5 @@ registerCorpseTestMonster("Playerbot Empty Corpse", {})
 registerCorpseTestMonster("Playerbot Loot Corpse", {
     {id = ITEM_GOLD_COIN, chance = 100000, maxCount = 1},
 })
+registerCorpseTestMonster("Playerbot Nonlootable Corpse", {}, ITEM_GOLD_COIN)
+registerCorpseTestMonster("Playerbot Container Death Item", {}, ITEM_BAG)

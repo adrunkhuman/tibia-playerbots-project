@@ -8,6 +8,8 @@ local potionItemId = 8704
 local meatItemId = 2666
 local emptyMonsterName = "Playerbot Empty Corpse"
 local lootMonsterName = "Playerbot Loot Corpse"
+local nonlootableMonsterName = "Playerbot Nonlootable Corpse"
+local containerDeathItemMonsterName = "Playerbot Container Death Item"
 
 local function suppressNearbyMonsters(playerId)
     local player = Player(playerId)
@@ -15,7 +17,8 @@ local function suppressNearbyMonsters(playerId)
         return
     end
     for _, creature in ipairs(Game.getSpectators(player:getPosition(), true, false, 10, 10, 10, 10)) do
-        if creature:isMonster() and creature:getName() ~= emptyMonsterName and creature:getName() ~= lootMonsterName then
+        if creature:isMonster() and creature:getName() ~= emptyMonsterName and creature:getName() ~= lootMonsterName and
+            creature:getName() ~= nonlootableMonsterName and creature:getName() ~= containerDeathItemMonsterName then
             creature:remove()
         end
     end
@@ -117,9 +120,15 @@ function login.onLogin(player)
         return true
     end
     if mode == "corpse" then
+        assert(not ItemType(ITEM_GOLD_COIN):isCorpse() and not ItemType(ITEM_GOLD_COIN):isContainer(),
+            "non-lootable corpse fixture must not be an openable corpse")
+        assert(not ItemType(ITEM_BAG):isCorpse() and ItemType(ITEM_BAG):isContainer(),
+            "container death-item fixture must be a non-corpse container")
         suppressNearbyMonsters(player:getId())
-        addEvent(spawnCorpseMonster, 500, player:getId(), emptyMonsterName)
-        addEvent(spawnCorpseMonster, 8000, player:getId(), lootMonsterName)
+        addEvent(spawnCorpseMonster, 500, player:getId(), nonlootableMonsterName)
+        addEvent(spawnCorpseMonster, 5000, player:getId(), emptyMonsterName)
+        addEvent(spawnCorpseMonster, 12500, player:getId(), lootMonsterName)
+        addEvent(spawnCorpseMonster, 20000, player:getId(), containerDeathItemMonsterName)
         print("PLAYERBOT_GAMEPLAY_TEST CORPSE_START")
         return true
     end
