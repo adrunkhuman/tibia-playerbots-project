@@ -100,9 +100,13 @@ pwsh -File scripts/bootstrap-client.ps1
   mechanism.
 - Keep bot-facing UI and network notifications behind null-safe `Player`
   methods; playerbot code and datapack scripts must not dereference `client`.
-- The hardcoded Rookgaard traversal route and combat behavior are a bounded
-  prototype, not the settled bot architecture or product goal. Discuss and
-  document broader goals before generalizing the prototype.
+- Treat the current Rookgaard hunt/depot loop and bounded map-derived navigator
+  as prototypes, not settled whole-map navigation. Provide destination goals
+  rather than ordered transition checkpoints, and preserve normal movement,
+  item-use, action-delay, and replanning behavior.
+- Playerbots must identify corpses through normal corpse/container and ownership
+  metadata, open them through normal item use, and inspect contents only after
+  opening. Do not use server-only corpse contents for pre-opening decisions.
 - The intended scale is eventually hundreds of bots. Do not introduce one OS
   thread, graphical client, renderer, UI, or blocking loop per bot.
 - Schedule bot decisions through the server dispatcher/scheduler, stagger work,
@@ -135,6 +139,12 @@ ports `7171` and `7172` accept local connections. Confirm that
 `playerbot-setup` exits successfully, exactly one valid `Bot One` registration
 exists, and the server emits a valid JSONL `playerbot` `lifecycle` event with
 status `online` for `Bot One`.
+
+For playerbot navigation or looting changes, also run:
+
+```powershell
+pwsh -File scripts/test-playerbot-gameplay.ps1 -FullNavigation -CorpseLoot
+```
 
 For protocol or gameplay-facing client changes, also test:
 
