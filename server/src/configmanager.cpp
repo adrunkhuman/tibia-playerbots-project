@@ -312,6 +312,7 @@ bool ConfigManager::load()
 	integer[STATS_SLOW_LOG_TIME] = getGlobalNumber(L, "statsSlowLogTime", 10);
 	integer[STATS_VERY_SLOW_LOG_TIME] = getGlobalNumber(L, "statsVerySlowLogTime", 50);
 	integer[PLAYERBOT_TRAVERSAL_TRIPS] = getGlobalNumber(L, "playerbotTraversalTrips", 5);
+	integer[PLAYERBOT_HUNT_DURATION_SECONDS] = getGlobalNumber(L, "playerbotHuntDurationSeconds", 300);
 
 	expStages = loadXMLStages();
 	if (expStages.empty()) {

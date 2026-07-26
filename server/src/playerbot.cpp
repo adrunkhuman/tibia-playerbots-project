@@ -11,6 +11,7 @@
 #include "otpch.h"
 
 #include "playerbot.h"
+#include "playerbotnavigation.h"
 
 #include "container.h"
 #include "condition.h"
@@ -58,6 +59,16 @@ namespace {
 	constexpr size_t traversalReverseEnd = 12;
 	constexpr std::chrono::seconds traversalCombatTimeout(60);
 	constexpr std::chrono::seconds traversalTargetSuppression(120);
+	constexpr std::chrono::seconds navigationBlockSuppression(10);
+	constexpr uint32_t returnCapacityThreshold = 20 * 100;
+	constexpr Position fakeDepotPosition(32105, 32195, 8);
+	constexpr Position fakeDepotTilePosition(32105, 32196, 8);
+	constexpr std::array<Position, 4> huntingLoop = {{
+		Position(32084, 32144, 5),
+		Position(32103, 32124, 8),
+		Position(32117, 32090, 9),
+		Position(32103, 32124, 8),
+	}};
 	constexpr const char* botAccountName = "bot-one";
 
 	enum class TraversalAction : uint8_t {
@@ -155,37 +166,19 @@ class PlayerBotController
 		{
 			previousPosition = position;
 			lastPosition = position;
-			if (!restoredTraversalState) {
-				for (size_t index = 0; index < traversalCheckpoints.size(); ++index) {
-					if (position == traversalCheckpoints[index].target) {
-						traversalCheckpoint = index;
-						break;
-					}
-				}
-				if (position == Position(32091, 32169, 7)) {
-					traversalCheckpoint = 2;
-				}
-			}
 			emit("lifecycle", position, "\"status\":\"online\",\"message\":\"Playerbot online\"");
-			const uint32_t requiredTrips = std::max<int32_t>(1, g_config.getNumber(ConfigManager::PLAYERBOT_TRAVERSAL_TRIPS));
-			if (completedTrips >= requiredTrips && position == Position(32101, 32129, 4)) {
-				setStage(ScenarioStage::Complete, position);
-				schedule(navigationInterval);
-				return;
-			}
-			if (restoredTraversalState && position.z == traversalCheckpoints[traversalCheckpoint].expectedFloor) {
-				if (Player* player = g_game.getPlayerByID(playerId)) {
-					advanceTraversal(player, position);
-					if (scenarioStage == ScenarioStage::Complete || scenarioStage == ScenarioStage::Stopped) {
-						return;
-					}
-				}
-			}
+			cyclePhase = CyclePhase::ReturnToDepot;
 			setStage(ScenarioStage::Traverse, position);
 			schedule(navigationInterval);
 		}
 
 	private:
+		enum class CyclePhase : uint8_t {
+			ReturnToDepot,
+			DepositLoot,
+			Hunt,
+		};
+
 		enum class ScenarioStage : uint8_t {
 			ToStart,
 			ToGrate,
@@ -538,6 +531,16 @@ class PlayerBotController
 				if (!creature->getMonster() || creature->isRemoved() || creature->isDead() || !player->canSee(creature->getPosition())) {
 					continue;
 				}
+				if (!Position::areInRange<1, 1, 0>(currentPosition, creature->getPosition())) {
+					FindPathParams pathParams;
+					pathParams.maxSearchDist = 32;
+					pathParams.minTargetDist = 1;
+					pathParams.maxTargetDist = 1;
+					std::vector<Direction> targetRoute;
+					if (!findPath(player, creature->getPosition(), targetRoute, pathParams)) {
+						continue;
+					}
+				}
 				auto suppressed = suppressedTraversalTargets.find(creature->getID());
 				if (suppressed != suppressedTraversalTargets.end()) {
 					if (std::chrono::steady_clock::now() < suppressed->second) {
@@ -555,6 +558,7 @@ class PlayerBotController
 				setTraversalTarget(creature, currentPosition);
 				combatStarted = std::chrono::steady_clock::now();
 				route.clear();
+				clearNavigation();
 				setStage(ScenarioStage::TraversalCombat, currentPosition);
 				return true;
 			}
@@ -573,7 +577,7 @@ class PlayerBotController
 		{
 			Creature* target = g_game.getCreatureByID(ratId);
 			if (!target || target->isRemoved() || target->isDead()) {
-				finishTraversalCombat(player, currentPosition, "target_defeated");
+				beginLoot(currentPosition);
 			} else if (!player->canSee(target->getPosition()) || player->getAttackedCreature() != target) {
 				finishTraversalCombat(player, currentPosition, "target_lost");
 			} else if (std::chrono::steady_clock::now() - combatStarted >= traversalCombatTimeout) {
@@ -746,116 +750,383 @@ class PlayerBotController
 			persistTraversalState(player);
 		}
 
-		void processTraversal(Player* player, const Position& currentPosition)
+		const char* cyclePhaseName() const
 		{
-			if (scenarioStage == ScenarioStage::Complete) {
+			switch (cyclePhase) {
+				case CyclePhase::ReturnToDepot: return "return_to_depot";
+				case CyclePhase::DepositLoot: return "deposit_loot";
+				case CyclePhase::Hunt: return "hunt";
+			}
+			return "unknown";
+		}
+
+		void setCyclePhase(CyclePhase phase, const Position& position, const char* reason)
+		{
+			if (cyclePhase == phase) {
 				return;
 			}
+			const char* previous = cyclePhaseName();
+			cyclePhase = phase;
+			std::ostringstream fields;
+			fields << "\"from\":" << jsonString(previous) << ",\"to\":" << jsonString(cyclePhaseName())
+			       << ",\"reason\":" << jsonString(reason);
+			emit("objective_transition", position, fields.str());
+		}
+
+		void clearNavigation()
+		{
+			navigationSteps.clear();
+			navigationPending = false;
+			worldChangePending = false;
+			navigationTarget = Position();
+		}
+
+		void beginReturn(Player* player, const Position& position, const char* reason)
+		{
+			const uint32_t previousTarget = ratId;
+			g_game.playerCancelAttackAndFollow(playerId);
+			clearRatTarget(position, reason);
+			route.clear();
+			clearNavigation();
+			pendingLootItemId = 0;
+			player->closeContainer(corpseContainerId);
+			setStage(ScenarioStage::Traverse, position);
+			setCyclePhase(CyclePhase::ReturnToDepot, position, reason);
+			std::ostringstream fields;
+			fields << "\"action\":\"return\",\"result\":\"started\",\"reason\":" << jsonString(reason)
+			       << ",\"previous_target_id\":" << (previousTarget == 0 ? "null" : std::to_string(previousTarget))
+			       << ",\"destination\":{\"x\":" << fakeDepotPosition.x << ",\"y\":" << fakeDepotPosition.y
+			       << ",\"z\":" << static_cast<uint16_t>(fakeDepotPosition.z) << '}';
+			emit("action_result", position, fields.str());
+		}
+
+		Item* findNavigationItem(const PlayerBotNavigationStep& step) const
+		{
+			Tile* tile = g_game.map.getTile(step.target);
+			if (!tile) {
+				return nullptr;
+			}
+			if (Item* ground = tile->getGround(); ground && ground->getID() == step.itemId) {
+				return ground;
+			}
+			if (TileItemVector* items = tile->getItemList()) {
+				for (Item* item : *items) {
+					if (item->getID() == step.itemId) {
+						return item;
+					}
+				}
+			}
+			return nullptr;
+		}
+
+		bool executeNavigationStep(Player* player, const PlayerBotNavigationStep& step)
+		{
+			++counters.actionsAttempted;
+			if (step.action == PlayerBotNavigationAction::Move) {
+				g_game.playerMove(playerId, step.direction);
+				return true;
+			}
+
+			Item* target = findNavigationItem(step);
+			Tile* tile = g_game.map.getTile(step.target);
+			const int32_t stackPosition = target && tile ? tile->getThingIndex(target) : -1;
+			if (!target || stackPosition < 0 || stackPosition > UINT8_MAX) {
+				return false;
+			}
+
+			if (step.action == PlayerBotNavigationAction::UseRope ||
+			    step.action == PlayerBotNavigationAction::UseShovel) {
+				const uint16_t toolId = step.action == PlayerBotNavigationAction::UseRope ? ropeItemId : 2554;
+				Item* tool = g_game.findItemOfType(player, toolId, true);
+				if (!tool) {
+					return false;
+				}
+				g_game.playerUseItemEx(playerId, Position(0xFFFF, 0, 0), 0, tool->getClientID(), step.target,
+				                         static_cast<uint8_t>(stackPosition), target->getClientID());
+				return true;
+			}
+
+			g_game.playerUseItem(playerId, step.target, static_cast<uint8_t>(stackPosition), 0, target->getClientID());
+			return true;
+		}
+
+		uint32_t navigationDecisionDelay(const Player& player) const
+		{
+			const uint32_t walkDelay = static_cast<uint32_t>(std::max<int32_t>(0, player.getWalkDelay()));
+			return std::max<uint32_t>(SCHEDULER_MINTICKS, std::max(walkDelay, player.getNextActionTime()));
+		}
+
+		bool processNavigation(Player* player, const Position& currentPosition, const Position& destination)
+		{
+			if (currentPosition == destination) {
+				clearNavigation();
+				return true;
+			}
+
+			if (navigationPending) {
+				if (currentPosition == navigationExpectedPosition) {
+					navigationPending = false;
+					blockedStepCount = 0;
+					if (!navigationSteps.empty()) {
+						navigationSteps.pop_front();
+					}
+				} else if (player->getWalkDelay() > 0 || !player->canDoAction()) {
+					schedule(navigationDecisionDelay(*player));
+					return false;
+				} else {
+					navigationPending = false;
+					navigationSteps.clear();
+					temporarilyBlockedPositions[navigationStepTarget] =
+						std::chrono::steady_clock::now() + navigationBlockSuppression;
+					logActionFailure("navigate", "step_result_mismatch", currentPosition);
+					++blockedStepCount;
+				}
+			}
+			if (worldChangePending) {
+				const PlayerBotNavigationStep pendingStep = worldChangeStep;
+				worldChangePending = false;
+				if (Item* unchanged = findNavigationItem(pendingStep)) {
+					temporarilyBlockedPositions[pendingStep.target] =
+						std::chrono::steady_clock::now() + navigationBlockSuppression;
+					logActionFailure("navigate", "transition_state_unchanged", currentPosition);
+				}
+			}
+
+			if (navigationTarget != destination) {
+				navigationSteps.clear();
+				navigationTarget = destination;
+			}
+			if (navigationSteps.empty()) {
+				const auto now = std::chrono::steady_clock::now();
+				for (auto it = temporarilyBlockedPositions.begin(); it != temporarilyBlockedPositions.end();) {
+					if (it->second <= now) {
+						it = temporarilyBlockedPositions.erase(it);
+					} else {
+						++it;
+					}
+				}
+				std::set<Position> blockedPositions;
+				for (const auto& blocked : temporarilyBlockedPositions) {
+					blockedPositions.insert(blocked.first);
+				}
+				uint64_t expandedNodes = 0;
+				++counters.pathfindingCalls;
+				const auto startedAt = std::chrono::steady_clock::now();
+				const bool planned = navigator.plan(*player, destination, blockedPositions, navigationSteps, expandedNodes);
+				counters.pathfindingTimeUs += std::chrono::duration_cast<std::chrono::microseconds>(
+					std::chrono::steady_clock::now() - startedAt).count();
+				if (!planned || navigationSteps.empty()) {
+					++counters.pathfindingFailures;
+					logActionFailure("navigate", "route_unavailable", currentPosition);
+					if (blockedPositions.empty() && ++fixedTargetRouteFailureCount >= 20) {
+						stop("navigation_route_unavailable", currentPosition);
+					}
+					schedule(blockedRouteRetryInterval);
+					return false;
+				}
+				fixedTargetRouteFailureCount = 0;
+				std::ostringstream fields;
+				fields << "\"action\":\"plan\",\"result\":\"success\",\"steps\":" << navigationSteps.size()
+				       << ",\"expanded_nodes\":" << expandedNodes << ",\"destination\":{\"x\":" << destination.x
+				       << ",\"y\":" << destination.y << ",\"z\":" << static_cast<uint16_t>(destination.z) << '}';
+				emit("action_result", currentPosition, fields.str());
+			}
+
+			if (!player->canDoAction() || navigationSteps.empty()) {
+				schedule(navigationDecisionDelay(*player));
+				return false;
+			}
+
+			const PlayerBotNavigationStep& step = navigationSteps.front();
+			if (!executeNavigationStep(player, step)) {
+				navigationSteps.clear();
+				logActionFailure("navigate", "transition_unavailable", currentPosition);
+				schedule(blockedRouteRetryInterval);
+				return false;
+			}
+
+			if (step.action == PlayerBotNavigationAction::UseDoor ||
+			    step.action == PlayerBotNavigationAction::UseShovel) {
+				worldChangeStep = step;
+				worldChangePending = true;
+				navigationSteps.clear();
+				schedule(navigationDecisionDelay(*player));
+				return false;
+			}
+			navigationExpectedPosition = step.expectedPosition;
+			navigationStepTarget = step.target;
+			navigationPending = true;
+			schedule(navigationDecisionDelay(*player));
+			return false;
+		}
+
+		bool isProtectedDepositItem(const Item& item) const
+		{
+			return item.getID() == ropeItemId || item.getID() == 2554 || item.getID() == cheeseItemId;
+		}
+
+		bool findDepositableItem(Container* container, Container*& source, Item*& depositItem) const
+		{
+			for (Item* item : container->getItemList()) {
+				if (Container* child = item->getContainer()) {
+					(void)child;
+					source = container;
+					depositItem = item;
+					return true;
+				}
+				if (!isProtectedDepositItem(*item)) {
+					source = container;
+					depositItem = item;
+					return true;
+				}
+			}
+			return false;
+		}
+
+		void startHunt(const Position& position)
+		{
+			setCyclePhase(CyclePhase::Hunt, position, "deposit_complete");
+			huntRouteIndex = 0;
+			const int32_t duration = std::max<int32_t>(1, g_config.getNumber(ConfigManager::PLAYERBOT_HUNT_DURATION_SECONDS));
+			huntDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(duration);
+			clearNavigation();
+			++completedCycles;
+			std::ostringstream fields;
+			fields << "\"action\":\"hunt_cycle\",\"result\":\"started\",\"cycle\":" << completedCycles
+			       << ",\"duration_seconds\":" << duration;
+			emit("action_result", position, fields.str());
+		}
+
+		void processDeposit(Player* player, const Position& currentPosition)
+		{
+			Item* backpackItem = player->getInventoryItem(CONST_SLOT_BACKPACK);
+			Container* backpack = backpackItem ? backpackItem->getContainer() : nullptr;
+			Tile* destination = g_game.map.getTile(fakeDepotTilePosition);
+			if (!backpack || !destination) {
+				stop("fake_depot_unavailable", currentPosition);
+				return;
+			}
+			if (pendingDepositItemId != 0) {
+				const uint32_t destinationCount = destination->getItemTypeCount(pendingDepositItemId);
+				if (destinationCount <= pendingDepositDestinationCount) {
+					logActionFailure("deposit", "item_move_failed", currentPosition);
+					stop("fake_depot_rejected_loot", currentPosition);
+					return;
+				}
+				std::ostringstream fields;
+				fields << "\"action\":\"deposit\",\"result\":\"success\",\"item_id\":" << pendingDepositItemId
+				       << ",\"count\":" << (destinationCount - pendingDepositDestinationCount);
+				emit("action_result", currentPosition, fields.str());
+				pendingDepositItemId = 0;
+			}
+
+			if (player->getContainerByID(backpackContainerId) != backpack) {
+				if (!player->canDoAction()) {
+					schedule(navigationDecisionDelay(*player));
+					return;
+				}
+				const int8_t existingContainerId = player->getContainerID(backpack);
+				if (existingContainerId >= 0) {
+					player->closeContainer(static_cast<uint8_t>(existingContainerId));
+				}
+				const Position backpackPosition(0xFFFF, CONST_SLOT_BACKPACK, 0);
+				++counters.actionsAttempted;
+				g_game.playerUseItem(playerId, backpackPosition, 0, backpackContainerId, backpack->getClientID());
+				schedule(navigationDecisionDelay(*player));
+				return;
+			}
+
+			Container* source = nullptr;
+			Item* depositItem = nullptr;
+			if (!findDepositableItem(backpack, source, depositItem)) {
+				if (player->getFreeCapacity() < returnCapacityThreshold) {
+					stop("depot_capacity_not_recovered", currentPosition);
+					return;
+				}
+				std::ostringstream fields;
+				fields << "\"action\":\"deposit\",\"result\":\"complete\",\"cycle\":" << completedCycles;
+				emit("action_result", currentPosition, fields.str());
+				startHunt(currentPosition);
+				schedule(navigationInterval);
+				return;
+			}
+
+			const int8_t sourceContainerId = player->getContainerID(source);
+			const ItemDeque& sourceItems = source->getItemList();
+			auto sourceItem = std::find(sourceItems.begin(), sourceItems.end(), depositItem);
+			if (sourceContainerId < 0 || sourceItem == sourceItems.end() ||
+			    std::distance(sourceItems.begin(), sourceItem) > UINT8_MAX) {
+				stop("fake_depot_source_unavailable", currentPosition);
+				return;
+			}
+			if (!player->canDoAction()) {
+				schedule(navigationDecisionDelay(*player));
+				return;
+			}
+
+			const uint8_t sourceIndex = static_cast<uint8_t>(std::distance(sourceItems.begin(), sourceItem));
+			const uint8_t count = static_cast<uint8_t>(depositItem->getItemCount());
+			const Position sourcePosition(0xFFFF, 0x40 | static_cast<uint8_t>(sourceContainerId), sourceIndex);
+			pendingDepositItemId = depositItem->getID();
+			pendingDepositDestinationCount = destination->getItemTypeCount(pendingDepositItemId);
+			++counters.actionsAttempted;
+			g_game.playerMoveItem(player, sourcePosition, depositItem->getClientID(), sourceIndex,
+			                      fakeDepotTilePosition, count, depositItem, destination);
+			schedule(navigationDecisionDelay(*player));
+		}
+
+		void processTraversal(Player* player, const Position& currentPosition)
+		{
+			if (cyclePhase == CyclePhase::Hunt &&
+			    (std::chrono::steady_clock::now() >= huntDeadline || player->getFreeCapacity() < returnCapacityThreshold)) {
+				beginReturn(player, currentPosition,
+				            player->getFreeCapacity() < returnCapacityThreshold ? "capacity" : "hunt_deadline");
+			}
+
+			if (cyclePhase == CyclePhase::ReturnToDepot) {
+				if (!processNavigation(player, currentPosition, fakeDepotPosition)) {
+					return;
+				}
+				setCyclePhase(CyclePhase::DepositLoot, currentPosition, "depot_reached");
+				processDeposit(player, currentPosition);
+				return;
+			}
+
+			if (cyclePhase == CyclePhase::DepositLoot) {
+				if (currentPosition != fakeDepotPosition) {
+					setCyclePhase(CyclePhase::ReturnToDepot, currentPosition, "displaced_during_deposit");
+					clearNavigation();
+					if (!processNavigation(player, currentPosition, fakeDepotPosition)) {
+						return;
+					}
+					setCyclePhase(CyclePhase::DepositLoot, currentPosition, "depot_reached");
+				}
+				processDeposit(player, currentPosition);
+				return;
+			}
+
 			if (scenarioStage == ScenarioStage::TraversalCombat) {
 				processTraversalCombat(player, currentPosition);
 				return;
 			}
-
-			if (stepPending) {
-				if (currentPosition == previousPosition) {
-					const int32_t walkDelay = player->getWalkDelay();
-					if (walkDelay > 0) {
-						schedule(static_cast<uint32_t>(walkDelay) + SCHEDULER_MINTICKS);
-						return;
-					}
-					route.clear();
-					logActionFailure("move", "position_unchanged", currentPosition);
-					++blockedStepCount;
-					if (blockedStepCount == 3) {
-						++counters.stuckEvents;
-						emit("stuck", currentPosition, "\"reason\":\"repeated_blocked_movement\",\"blocked_steps\":3");
-					}
-					if (blockedStepCount >= maxBlockedTraversalSteps) {
-						stop("traversal_movement_blocked", currentPosition);
-						return;
-					}
-				} else {
-					blockedStepCount = 0;
-				}
-				stepPending = false;
+			if (scenarioStage == ScenarioStage::LootCorpse) {
+				lootCorpse(player, currentPosition);
+				return;
 			}
-
-			const TraversalCheckpoint& checkpoint = traversalCheckpoints[traversalCheckpoint];
-			if (transitionPending) {
-				if (currentPosition.z == checkpoint.expectedFloor) {
-					advanceTraversal(player, currentPosition);
-					if (scenarioStage == ScenarioStage::Complete || scenarioStage == ScenarioStage::Stopped) {
-						return;
-					}
-				} else if (player->getWalkDelay() > 0 || !player->canDoAction()) {
-					schedule(blockedRouteRetryInterval);
-					return;
-				} else {
-					transitionPending = false;
-					route.clear();
-					logActionFailure("transition", "floor_change_not_verified", currentPosition);
-					if (++transitionAttempts >= 5) {
-						stop("traversal_transition_failed", currentPosition);
-						return;
-					}
-				}
-			}
-
 			if (attackVisibleMonster(player, currentPosition)) {
 				schedule(navigationInterval);
 				return;
 			}
 
-			const TraversalCheckpoint& currentCheckpoint = traversalCheckpoints[traversalCheckpoint];
-			if (currentCheckpoint.action == TraversalAction::Walk && currentPosition == currentCheckpoint.target) {
-				if (player->getWalkDelay() > 0) {
-					schedule(blockedRouteRetryInterval);
-					return;
-				}
-				previousPosition = currentPosition;
-				stepPending = true;
-				transitionPending = true;
-				++counters.actionsAttempted;
-				g_game.playerMove(playerId, DIRECTION_NORTH);
-				schedule(navigationInterval);
+			const Position& target = huntingLoop[huntRouteIndex];
+			if (!processNavigation(player, currentPosition, target)) {
 				return;
 			}
-			if (!planTraversalRoute(player, currentCheckpoint)) {
-				if (scenarioStage != ScenarioStage::Stopped) {
-					schedule(blockedRouteRetryInterval);
-				}
-				return;
-			}
-
-			if (currentCheckpoint.action != TraversalAction::Walk &&
-			    Position::areInRange<1, 1, 0>(currentPosition, currentCheckpoint.target)) {
-				if (!player->canDoAction()) {
-					schedule(blockedRouteRetryInterval);
-					return;
-				}
-				if (useTraversalCheckpoint(player, currentCheckpoint)) {
-					transitionPending = true;
-					schedule(blockedRouteRetryInterval);
-				} else {
-					if (++transitionAttempts >= 5) {
-						stop("traversal_transition_unavailable", currentPosition);
-						return;
-					}
-					schedule(blockedRouteRetryInterval);
-				}
-				return;
-			}
-
-			if (route.empty()) {
-				schedule(blockedRouteRetryInterval);
-				return;
-			}
-			previousPosition = currentPosition;
-			stepPending = true;
-			++counters.actionsAttempted;
-			g_game.playerMove(playerId, route.back());
-			route.pop_back();
-			schedule(navigationInterval);
+			huntRouteIndex = (huntRouteIndex + 1) % huntingLoop.size();
+			std::ostringstream fields;
+			fields << "\"action\":\"hunt_waypoint\",\"result\":\"reached\",\"waypoint\":" << huntRouteIndex;
+			emit("action_result", currentPosition, fields.str());
+			schedule(SCHEDULER_MINTICKS);
 		}
 
 		void navigate()
@@ -889,7 +1160,7 @@ class PlayerBotController
 				return;
 			}
 			if (scenarioStage == ScenarioStage::Traverse || scenarioStage == ScenarioStage::TraversalCombat ||
-			    scenarioStage == ScenarioStage::Complete) {
+			    scenarioStage == ScenarioStage::LootCorpse || scenarioStage == ScenarioStage::Complete) {
 				processTraversal(player, currentPosition);
 				return;
 			}
@@ -1149,14 +1420,14 @@ class PlayerBotController
 			player->closeContainer(corpseContainerId);
 			route.clear();
 			pendingLootItemId = 0;
-			setStage(ScenarioStage::FindRat, currentPosition);
+			setStage(ScenarioStage::Traverse, currentPosition);
 		}
 
 		bool hasDesiredLoot(const Player& player, const Container& corpse) const
 		{
+			(void)player;
 			for (Item* item : corpse.getItemList()) {
-				if (item->getID() == ITEM_GOLD_COIN ||
-				    (item->getID() == cheeseItemId && getInventoryItemCount(player, cheeseItemId) < cheeseLimit)) {
+				if (item) {
 					return true;
 				}
 			}
@@ -1178,7 +1449,7 @@ class PlayerBotController
 
 					for (auto it = items->rbegin(); it != items->rend(); ++it) {
 						Container* corpse = (*it)->getContainer();
-						if (!corpse || corpse->getID() != ratCorpseItemId || !player->canOpenCorpse(corpse->getCorpseOwner())) {
+						if (!corpse || !player->canOpenCorpse(corpse->getCorpseOwner())) {
 							continue;
 						}
 						if (hasDesiredLoot(*player, *corpse)) {
@@ -1213,17 +1484,16 @@ class PlayerBotController
 
 		void lootCorpse(Player* player, const Position& currentPosition)
 		{
+			Container* corpse = findRatCorpse(player, currentPosition);
 			if (!Position::areInRange<1, 1, 0>(currentPosition, lootPosition)) {
-				if (route.empty()) {
-					planRoute(player, lootPosition, 1);
-				}
+				processNavigation(player, currentPosition, lootPosition);
 				return;
 			}
+			schedule(navigationInterval);
 
-			Container* corpse = findRatCorpse(player, currentPosition);
 			if (!corpse) {
 				if (++corpseSearchAttempts >= maxCorpseSearchAttempts) {
-					logActionFailure("loot", "owned_rat_corpse_unavailable", currentPosition);
+					logActionFailure("loot", "owned_corpse_unavailable", currentPosition);
 					finishLoot(player, currentPosition);
 				}
 				return;
@@ -1290,12 +1560,9 @@ class PlayerBotController
 				if (unavailableLootItemIds.find(candidate->getID()) != unavailableLootItemIds.end()) {
 					continue;
 				}
-				if (candidate->getID() == ITEM_GOLD_COIN ||
-				    (candidate->getID() == cheeseItemId && getInventoryItemCount(*player, cheeseItemId) < cheeseLimit)) {
-					lootItem = candidate;
-					lootIndex = static_cast<uint8_t>(index);
-					break;
-				}
+				lootItem = candidate;
+				lootIndex = static_cast<uint8_t>(index);
+				break;
 			}
 
 			if (!lootItem) {
@@ -1404,7 +1671,9 @@ class PlayerBotController
 		uint32_t corpseSearchAttempts = 0;
 		uint32_t corpseOpenAttempts = 0;
 		uint16_t pendingLootItemId = 0;
+		uint16_t pendingDepositItemId = 0;
 		uint32_t pendingLootInventoryCount = 0;
+		uint32_t pendingDepositDestinationCount = 0;
 		std::set<uint16_t> unavailableLootItemIds;
 		bool pendingEat = false;
 		uint32_t pendingEatInventoryCount = 0;
@@ -1417,6 +1686,19 @@ class PlayerBotController
 		std::chrono::steady_clock::time_point combatStarted;
 		std::unordered_map<uint32_t, std::chrono::steady_clock::time_point> suppressedTraversalTargets;
 		bool restoredTraversalState = false;
+		CyclePhase cyclePhase = CyclePhase::ReturnToDepot;
+		size_t huntRouteIndex = 0;
+		uint32_t completedCycles = 0;
+		std::chrono::steady_clock::time_point huntDeadline;
+		PlayerBotNavigator navigator;
+		std::deque<PlayerBotNavigationStep> navigationSteps;
+		Position navigationTarget;
+		Position navigationExpectedPosition;
+		Position navigationStepTarget;
+		PlayerBotNavigationStep worldChangeStep;
+		std::map<Position, std::chrono::steady_clock::time_point> temporarilyBlockedPositions;
+		bool navigationPending = false;
+		bool worldChangePending = false;
 		Counters counters;
 		std::unordered_map<std::string, std::chrono::steady_clock::time_point> repeatedEventTimes;
 		const std::chrono::steady_clock::time_point started = std::chrono::steady_clock::now();

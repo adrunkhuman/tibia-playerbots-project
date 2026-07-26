@@ -77,24 +77,21 @@ docker compose -f server/compose.yaml logs --no-log-prefix --since 30m server | 
 
 Every record has `schema: 1`, a UTC RFC 3339 `ts`,
 `component: "playerbot"`, `event`, `bot`, persistent `player_id`, and
-`position`. Event types are `lifecycle`, `state_transition`, `target_changed`,
-`action_result`, `stuck`, `summary`, and `terminal`. Event-specific fields are
-conditional, and `target_id` is `null` when no target exists.
+`position`. Event types are `lifecycle`, `state_transition`,
+`objective_transition`, `target_changed`, `action_result`, `stuck`, `summary`,
+and `terminal`. Event-specific fields are conditional, and `target_id` is
+`null` when no target exists.
 
 | Event | Distinguishing fields |
 | ----- | --------------------- |
 | `lifecycle` | `status`: `online`, `dead`, or `removed` |
 | `state_transition` | `from`, `to` |
+| `objective_transition` | Cycle phase `from`, `to`, and `reason`; phases are `return_to_depot`, `deposit_loot`, and `hunt` |
 | `target_changed` | `previous_target_id`, `target_id`, optional target type and position, `reason` |
-| `action_result` | Always has `action` and `result`; failures also have `reason`. Successful `transition` records have `checkpoint` and `trip`. Successful `eat` records have `item_id`, `count`, post-action `inventory_count`, and `food_ticks`, the post-action regeneration duration in milliseconds. |
+| `action_result` | Always has `action` and `result`; failures also have `reason`. Navigation plans include their destination, step count, and expanded-node count. Successful `eat`, `loot`, and `deposit` records include item details. |
 | `stuck` | `reason`, `blocked_steps` |
 | `summary` | current state and target, uptime, decision/pathfinding timing, action, failure, stuck, and suppression counters |
 | `terminal` | `reason` |
-
-For a successful `transition`, `trip` is the number of completed forward trips
-when the record is emitted. The first outbound checkpoints therefore report
-`0`; `third_ladder_up` completes the forward trip and reports `1`, and the
-following reverse checkpoints continue to report `1`.
 
 States, actions, results, statuses, and reasons are stable lowercase strings
 intended for machine consumption.
@@ -110,19 +107,36 @@ milliseconds, timing fields ending in `_us` are in microseconds, and counters
 cover one in-memory controller lifetime. They reset when the server or
 controller restarts.
 
-The current implementation is a fixed-route Rookgaard traversal demonstration,
-not a general-purpose bot system. From the temple position at
-`(32097, 32219, 7)`, it follows short replanned route segments through walk-on
-stairs, a rope spot, three ladders, and the paired reverse openings. It attacks
-and chases visible monsters, then resumes from its actual position. At the
-configured final arrival at `(32101, 32129, 4)`, it says `trip completed` and
-stops. Each floor transition is verified before the next checkpoint, and
-repeated path or transition failures terminate the scenario.
+The current implementation is a bounded Rookgaard hunt/depot demonstration,
+not a general-purpose bot system. It plans multi-floor routes from map state
+instead of consuming an ordered checkpoint route. Planning is limited to a
+192-tile margin around the endpoints and 100,000 expanded nodes. The supported
+transition adapters cover ordinary floor changes, configured ladder, rope,
+shovel, and direct-use holes, simple teleports, and unlocked doors. This is not
+yet arbitrary whole-map navigation or a datapack-derived transition registry.
 
-`PLAYERBOT_TRAVERSAL_TRIPS` sets the required trip count at server startup. An
-unset or non-numeric value uses the normal Compose default of `5`; values below
-`1` are clamped to `1`. The route is manually verified because the server smoke
-workflow intentionally does not wait for gameplay trips.
+Walking executes with the player's normal server walk and action delays. Route
+selection weights cardinal steps at 10 and diagonal steps at 30, reflecting the
+server's diagonal penalty. A failed step is excluded for 10 seconds, allowing a
+temporary player or creature blockage to cause a detour or bounded wait.
+Persistent missing routes stop the controller after bounded retries. Missing
+depot state, rejected deposits, and capacity that remains below the return
+threshold after depositing are also terminal failures.
+
+After depositing carried loot on the tile south of `(32105, 32195, 8)`, the bot
+hunts along `(32084, 32144, 5)`, `(32103, 32124, 8)`,
+`(32117, 32090, 9)`, and back through the middle point. It returns after five
+minutes or when free capacity falls below 20 oz, stops attack/follow behavior,
+and deposits carried loot. Equipped items and the root backpack are not
+examined. Top-level backpack items, including loot containers as complete
+units, are moved to the world tile directly south of the standing position;
+rope `2120`, shovel `2554`, and cheese are retained. This fake depot is not
+private or durable depot storage: other players can move its contents, and map
+tile contents are not preserved across a clean world reset.
+
+`PLAYERBOT_HUNT_DURATION_SECONDS` changes the hunt window at server startup and
+defaults to `300`. Invalid text falls back to `300`; zero and negative values
+are clamped to one second. Recreate the server container after changing it.
 
 The bot retains the verified food behavior: when it can eat another cheese, it
 consumes one through the normal item-use path, verifies both the inventory
@@ -130,11 +144,11 @@ decrease and food-condition increase, and repeats until another cheese would
 exceed the game's fullness limit or it runs out of cheese.
 
 Normal shutdown saves the bot through the existing player persistence path.
-Checkpoint progress and completed-trip count use normal player storage and
-survive a clean restart. On startup, the bot reconciles a floor transition that
-completed before its checkpoint was saved. Routes, targets, action attempts,
-and transient combat suppression remain in memory only. Removing the Compose
-volume resets the bot and all other local world state.
+Routes, objectives, hunt deadlines, targets, action attempts, transient blocked
+positions, and combat suppression remain in memory only. Startup conservatively
+returns the bot from its actual persisted position to the fake depot before
+starting another cycle. Removing the Compose volume resets the bot and all
+other local world state.
 
 To inspect Bot One through the client, first stop the server cleanly so its
 inventory is saved, then restart without the server-controlled bot:
@@ -162,18 +176,31 @@ mounts `server/tests/playerbot_connectionless.lua` and covers representative
 Lua UI and network sends, temporary inventory/container mutation, death,
 explicit removal, rejected login, and clean-shutdown persistence.
 
-The local-only gameplay suite verifies one complete trip and its ordered floor
-transitions. It then injects an interrupted-transition state and verifies that
-startup reconciles progress exactly once:
+The local-only gameplay suite injects nested loot, verifies the fake-depot drop
+and protected equipment/tools, triggers a shortened deadline return, and
+requires a second hunt cycle:
 
 ```powershell
 pwsh -File scripts/test-playerbot-gameplay.ps1
 ```
 
+`-FullNavigation` additionally verifies the complete A-B-C-B-A coordinate
+sequence and temporary-blockage recovery with ambient monsters suppressed by
+the test overlay. It is an end-to-end route exercise, not an independent test
+matrix for every supported transition adapter:
+
+```powershell
+pwsh -File scripts/test-playerbot-gameplay.ps1 -FullNavigation
+```
+
 The suite rebuilds the server and resets the disposable Compose stack and
 database volume. It removes them afterward; `-KeepStack` leaves the final stack
-running. The default timeout is 900 seconds and can be changed with
+running. The default timeout is 300 seconds and can be changed with
 `-TimeoutSeconds` (60-3600).
+
+This prototype advances the mainland loop tracked in #22 and the navigation
+architecture tracked in #28 without closing either umbrella issue. Empty and
+unavailable corpse classification remains follow-up #29.
 
 Run the connectionless interaction probe locally with the regression overlay:
 
