@@ -3,6 +3,7 @@ param(
     [int]$TimeoutSeconds = 300,
     [switch]$FullNavigation,
     [switch]$CorpseLoot,
+    [switch]$DeathTelemetry,
     [switch]$KeepStack
 )
 
@@ -113,6 +114,14 @@ function Assert-CycleEvents {
         $_.destination.x -eq 32084 -and $_.destination.y -eq 32144 -and $_.destination.z -eq 5
     })
     $terminal = @($events | Where-Object { $_.event -eq "terminal" })
+    $defensiveStart = @($events | Where-Object {
+        $_.event -eq "action_result" -and $_.action -eq "defensive_combat" -and
+        $_.result -eq "started" -and $_.chase -eq $false
+    })
+    $defensiveComplete = @($events | Where-Object {
+        $_.event -eq "action_result" -and $_.action -eq "defensive_combat" -and
+        $_.result -eq "success" -and $_.reason -eq "target_defeated"
+    })
 
     if ($deposit.Count -ne 1) {
         throw "Expected exactly one injected-loot deposit event, found $($deposit.Count)."
@@ -135,8 +144,43 @@ function Assert-CycleEvents {
     if ($huntPlan.Count -lt 1) {
         throw "The bot did not plan a map-derived route to hunting point A."
     }
+    if ($defensiveStart.Count -lt 1 -or $defensiveComplete.Count -lt 1) {
+        throw "The bot did not complete a non-chasing defensive combat interruption."
+    }
+    if ($defensiveStart[0].route_critical -ne $true) {
+        throw "The bot did not prioritize the attacker occupying its failed navigation step."
+    }
     if ($terminal.Count -ne 0) {
         throw "The playerbot emitted a terminal event during the gameplay cycle."
+    }
+}
+
+function Assert-DeathEvents {
+    param([string]$Logs)
+
+    $events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
+    $deaths = @($events | Where-Object {
+        $_.event -eq "lifecycle" -and $_.status -eq "dead" -and
+        $_.level -gt 0 -and $_.objective -and $_.state -and $_.health -eq 0 -and
+        $_.killer_id -gt 0 -and $_.killer_name -eq "Playerbot Death Threat" -and
+        $_.killer_type -eq "monster" -and $_.most_damage_id -eq $_.killer_id -and
+        $_.most_damage_name -eq $_.killer_name
+    })
+    $terminals = @($events | Where-Object {
+        $_.event -eq "terminal" -and $_.reason -eq "controlled_player_dead"
+    })
+    if ($deaths.Count -ne 1) {
+        throw "Expected exactly one contextual playerbot death event, found $($deaths.Count)."
+    }
+    if ($terminals.Count -ne 1) {
+        throw "Expected exactly one controlled_player_dead terminal event, found $($terminals.Count)."
+    }
+    $deathTimestamp = $deaths[0].ts
+    $actionsAfterDeath = @($events | Where-Object {
+        $_.event -eq "action_result" -and $_.ts -gt $deathTimestamp
+    })
+    if ($actionsAfterDeath.Count -ne 0) {
+        throw "The playerbot continued acting after its death was observed."
     }
 }
 
@@ -260,6 +304,15 @@ try {
         Invoke-Compose up --detach
         $corpseLogs = Wait-ForLog -Pattern '"reason":"corpse_not_lootable","expected_corpse_item_id":1987'
         Assert-CorpseEvents -Logs $corpseLogs
+    }
+
+    if ($DeathTelemetry) {
+        Invoke-Compose down --volumes --remove-orphans
+        $env:PLAYERBOT_GAMEPLAY_MODE = "death"
+        $env:PLAYERBOT_HUNT_DURATION_SECONDS = "900"
+        Invoke-Compose up --detach
+        $deathLogs = Wait-ForLog -Pattern '"event":"terminal".*"reason":"controlled_player_dead"'
+        Assert-DeathEvents -Logs $deathLogs
     }
     "PLAYERBOT_GAMEPLAY_TEST PASS"
 }
