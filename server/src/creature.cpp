@@ -22,6 +22,8 @@
 #include "creature.h"
 #include "game.h"
 #include "monster.h"
+#include "player.h"
+#include "playerbot.h"
 #include "configmanager.h"
 #include "events.h"
 #include "scheduler.h"
@@ -721,6 +723,10 @@ void Creature::onDeath()
 				mostDamageUnjustified = mostDamageCreature->onKilledCreature(this, false);
 			}
 		}
+	}
+
+	if (Player* player = getPlayer(); player && player->isPlayerBot()) {
+		g_playerBots.onDeath(*player, lastHitCreature, mostDamageCreature);
 	}
 
 	bool droppedCorpse = dropCorpse(lastHitCreature, mostDamageCreature, lastHitUnjustified, mostDamageUnjustified);

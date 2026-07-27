@@ -52,7 +52,7 @@ when no target exists.
 
 | Event | Distinguishing fields |
 | ----- | --------------------- |
-| `lifecycle` | `status`: `online`, `dead`, or `removed` |
+| `lifecycle` | `status`: `online`, `dead`, or `removed`. Death records include level, health, objective, controller state, target, last-hit killer, and most-damage source. |
 | `state_transition` | `from`, `to` |
 | `objective_transition` | Cycle phase `from`, `to`, and `reason`; phases are `service`, `return_to_depot`, `deposit_loot`, and `hunt` |
 | `service_discovered` | Tagged live NPC name, capability, ID, and registered offer count |
@@ -119,6 +119,16 @@ not interpreted. It then sends `trade` and requires that NPC to own the loaded
 shop window before transacting. Greeting and shop-window setup each permit
 three attempts; exhausted focus or window attempts emit
 `npc_focus_unconfirmed` or `shop_window_unavailable` and stop the controller.
+
+Outside the hunt phase, an adjacent monster actively targeting the bot
+interrupts service, return, or deposit work. The bot attacks that immediate
+threat without chase mode, does not loot it, and replans the unchanged
+objective after the threat dies or disengages. It does not search for unrelated
+monsters or pursue a threat that moves away. If several adjacent monsters are
+attacking, the monster occupying the bot's pending navigation step is selected
+first. The same priority remains during the temporary suppression window after
+that step is confirmed blocked; distance and creature ID provide deterministic
+fallback ordering.
 
 The current sell allowlist is dead rat (`2813`), bear paw (`5896`), wolf paw
 (`5897`), and minotaur leather (`5878`). Other loot is not sold; top-level
