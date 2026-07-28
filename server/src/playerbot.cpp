@@ -174,9 +174,11 @@ class PlayerBotController
 		{
 			previousPosition = position;
 			lastPosition = position;
+			refreshItemValues();
 			emit("lifecycle", position, "\"status\":\"online\",\"message\":\"Playerbot online\"");
 			const char* gameplayMode = std::getenv("PLAYERBOT_GAMEPLAY_MODE");
-			if (gameplayMode && (std::strcmp(gameplayMode, "navigation") == 0 || std::strcmp(gameplayMode, "corpse") == 0)) {
+			if (gameplayMode && (std::strcmp(gameplayMode, "navigation") == 0 || std::strcmp(gameplayMode, "corpse") == 0 ||
+			                     std::strcmp(gameplayMode, "value") == 0)) {
 				startHunt(position);
 			} else {
 				cyclePhase = CyclePhase::Service;
@@ -234,6 +236,14 @@ class PlayerBotController
 			uint32_t id;
 			Position position;
 			int32_t chebyshevDistance;
+		};
+
+		struct CargoCandidate {
+			Item* item;
+			uint8_t index;
+			uint32_t unitValue;
+			uint32_t unitWeight;
+			uint32_t availableCount;
 		};
 
 		struct Counters {
@@ -408,13 +418,82 @@ class PlayerBotController
 		{
 			std::ostringstream fields;
 			fields << "\"action\":\"loot\",\"result\":\"success\",\"item_id\":" << itemId
-			       << ",\"count\":" << count << ",\"inventory_count\":" << inventoryCount;
+			       << ",\"count\":" << count << ",\"inventory_count\":" << inventoryCount
+			       << ",\"unit_value\":" << itemUnitValue(itemId)
+			       << ",\"total_value\":" << static_cast<uint64_t>(itemUnitValue(itemId)) * count
+			       << ",\"unit_weight\":" << Item::items[itemId].weight;
 			emit("action_result", position, fields.str());
 		}
 
 		uint32_t getInventoryItemCount(const Player& player, uint16_t itemId) const
 		{
 			return static_cast<const Cylinder&>(player).getItemTypeCount(itemId);
+		}
+
+		uint32_t itemUnitValue(uint16_t itemId) const
+		{
+			const ItemType& type = Item::items[itemId];
+			if (type.worth != 0) {
+				return type.worth;
+			}
+			auto it = itemSellValues.find(itemId);
+			return it == itemSellValues.end() ? 0 : it->second;
+		}
+
+		uint32_t protectedItemReserve(uint16_t itemId) const
+		{
+			if (itemId == ropeItemId || itemId == 2554) {
+				return 1;
+			}
+			if (itemId == meatItemId) {
+				return minimumMeat;
+			}
+			if (itemId == smallHealthPotionItemId) {
+				return minimumSmallHealthPotions;
+			}
+			return 0;
+		}
+
+		uint32_t getSaleItemCount(const Player& player, uint16_t itemId) const
+		{
+			const ItemType& type = Item::items[itemId];
+			if ((type.isContainer() && type.corpseType == RACE_NONE) || type.isFluidContainer() || type.isSplash()) {
+				return 0;
+			}
+			Item* backpackItem = player.getInventoryItem(CONST_SLOT_BACKPACK);
+			Container* backpack = backpackItem ? backpackItem->getContainer() : nullptr;
+			if (!backpack) {
+				return 0;
+			}
+			uint32_t count = 0;
+			for (Item* item : backpack->getItemList()) {
+				if (item->getID() == itemId) {
+					const Container* container = item->getContainer();
+					if (container && !container->empty()) {
+						return 0;
+					}
+					count += item->getItemCount();
+				}
+			}
+			uint32_t removableCount = 0;
+			for (int32_t slot = CONST_SLOT_FIRST; slot <= CONST_SLOT_LAST; ++slot) {
+				Item* inventoryItem = player.getInventoryItem(static_cast<slots_t>(slot));
+				Container* container = inventoryItem ? inventoryItem->getContainer() : nullptr;
+				if (!container) {
+					continue;
+				}
+				for (ContainerIterator it = container->iterator(); it.hasNext(); it.advance()) {
+					Item* nestedItem = *it;
+					if (nestedItem->getID() == itemId) {
+						removableCount += nestedItem->getItemCount();
+					}
+				}
+			}
+			if (removableCount != count) {
+				return 0;
+			}
+			const uint32_t reserve = protectedItemReserve(itemId);
+			return count > reserve ? count - reserve : 0;
 		}
 
 		int32_t getFoodTicks(const Player& player) const
@@ -940,6 +1019,7 @@ class PlayerBotController
 			route.clear();
 			clearNavigation();
 			pendingLootItemId = 0;
+			pendingDiscardItemId = 0;
 			player->closeContainer(corpseContainerId);
 			setStage(ScenarioStage::Traverse, position);
 			setCyclePhase(CyclePhase::ReturnToDepot, position, reason);
@@ -992,6 +1072,7 @@ class PlayerBotController
 			route.clear();
 			clearNavigation();
 			pendingLootItemId = 0;
+			pendingDiscardItemId = 0;
 			player->closeContainer(corpseContainerId);
 			serviceShops.clear();
 			serviceBankers.clear();
@@ -1005,6 +1086,7 @@ class PlayerBotController
 
 		void discoverServices(const Position& position)
 		{
+			refreshItemValues();
 			for (const auto& entry : g_game.getNpcs()) {
 				Npc* npc = entry.second;
 				const std::string* capability = npc && !npc->isRemoved() ? npc->getParameter("playerbot_service") : nullptr;
@@ -1157,9 +1239,22 @@ class PlayerBotController
 			return false;
 		}
 
-		bool isApprovedSaleItem(uint16_t itemId) const
+		void refreshItemValues()
 		{
-			return itemId == 2813 || itemId == 5896 || itemId == 5897 || itemId == 5878;
+			itemSellValues.clear();
+			for (const auto& entry : g_game.getNpcs()) {
+				Npc* npc = entry.second;
+				const std::string* capability = npc && !npc->isRemoved() ? npc->getParameter("playerbot_service") : nullptr;
+				if (!capability || *capability != "shop") {
+					continue;
+				}
+				for (const ShopInfo& offer : npc->getShopOffers()) {
+					const ItemType& type = Item::items[offer.itemId];
+					if (offer.sellPrice != 0 && !type.isFluidContainer() && !type.isSplash()) {
+						itemSellValues[offer.itemId] = std::max(itemSellValues[offer.itemId], offer.sellPrice);
+					}
+				}
+			}
 		}
 
 		const ShopInfo* findOffer(const ServiceNpc& service, uint16_t itemId, bool buying) const
@@ -1203,16 +1298,19 @@ class PlayerBotController
 		ServiceNpc* findLootSeller(Player* player, const Position& position, uint16_t& itemId)
 		{
 			ServiceNpc* nearest = nullptr;
+			uint32_t selectedSellPrice = 0;
 			for (ServiceNpc& service : serviceShops) {
 				Npc* npc = g_game.getNpcByID(service.id);
 				if (!npc || npc->isRemoved()) {
 					continue;
 				}
 				for (const ShopInfo& offer : npc->getShopOffers()) {
-					if (offer.sellPrice != 0 && isApprovedSaleItem(offer.itemId) && getInventoryItemCount(*player, offer.itemId) > 0 &&
-					    (!nearest || serviceDistance(position, service) < serviceDistance(position, *nearest))) {
+					if (offer.sellPrice != 0 && getSaleItemCount(*player, offer.itemId) > 0 &&
+					    (!nearest || offer.sellPrice > selectedSellPrice ||
+					     (offer.sellPrice == selectedSellPrice && serviceDistance(position, service) < serviceDistance(position, *nearest)))) {
 						itemId = offer.itemId;
 						nearest = &service;
+						selectedSellPrice = offer.sellPrice;
 					}
 				}
 			}
@@ -1229,6 +1327,9 @@ class PlayerBotController
 			emit("action_result", position, fields.str());
 			conversationStep = ConversationStep::Greet;
 			serviceAttempts = 0;
+			serviceItemId = 0;
+			serviceAmount = 0;
+			schedule(SCHEDULER_MINTICKS);
 		}
 
 		void processServiceShop(Player* player, const Position& currentPosition, ServiceNpc& service, const char* action,
@@ -1261,17 +1362,30 @@ class PlayerBotController
 					                         static_cast<uint8_t>(amount), false, false);
 				} else {
 					g_game.playerSellItem(playerId, Item::items[itemId].clientId, static_cast<uint8_t>(offer->subType),
-					                     static_cast<uint8_t>(amount), false);
+					                     static_cast<uint8_t>(amount), true);
 				}
 				schedule(navigationDecisionDelay(*player));
 				return;
 			}
 
 			const uint32_t currentCount = getInventoryItemCount(*player, serviceItemId);
-			const bool changed = purchase ? currentCount >= serviceBeforeItemCount + serviceAmount :
-			                              currentCount + serviceAmount <= serviceBeforeItemCount;
-			if (changed) {
+			const uint64_t expectedMoneyDelta = static_cast<uint64_t>(serviceAmount) *
+			                                    (purchase ? offer->buyPrice : offer->sellPrice);
+			const bool itemChanged = purchase ? currentCount == serviceBeforeItemCount + serviceAmount :
+			                                  currentCount + serviceAmount == serviceBeforeItemCount;
+			const uint64_t expectedMoney = purchase ? (serviceBeforeMoney > expectedMoneyDelta ? serviceBeforeMoney - expectedMoneyDelta : 0) :
+			                                           serviceBeforeMoney + expectedMoneyDelta;
+			const uint64_t expectedBalance = purchase && expectedMoneyDelta > serviceBeforeMoney ?
+			                                     serviceBeforeBalance - (expectedMoneyDelta - serviceBeforeMoney) : serviceBeforeBalance;
+			const bool economyChanged = player->getMoney() == expectedMoney && player->getBankBalance() == expectedBalance;
+			if (itemChanged && economyChanged) {
 				completeServiceAction(player, action, serviceItemId, serviceAmount, currentPosition);
+				return;
+			}
+			if (currentCount != serviceBeforeItemCount || player->getMoney() != serviceBeforeMoney ||
+			    player->getBankBalance() != serviceBeforeBalance) {
+				logActionFailure(action, "transaction_delta_mismatch", currentPosition);
+				stop("shop_transaction_delta_mismatch", currentPosition);
 				return;
 			}
 			if (++serviceAttempts >= maximumServiceAttempts) {
@@ -1388,6 +1502,22 @@ class PlayerBotController
 				schedule(SCHEDULER_MINTICKS);
 				return;
 			}
+			if (conversationStep == ConversationStep::Verify && serviceItemId != 0 && serviceAmount != 0 &&
+			    (serviceStage == ServiceStage::SellLoot || serviceStage == ServiceStage::BuyPotions ||
+			     serviceStage == ServiceStage::BuyMeat)) {
+				auto service = std::find_if(serviceShops.begin(), serviceShops.end(), [this](const ServiceNpc& candidate) {
+					return candidate.id == serviceTargetId;
+				});
+				if (service == serviceShops.end()) {
+					stop("shop_transaction_service_unavailable", currentPosition);
+					return;
+				}
+				const bool purchase = serviceStage != ServiceStage::SellLoot;
+				const char* action = serviceStage == ServiceStage::SellLoot ? "sell" :
+				                     (serviceStage == ServiceStage::BuyPotions ? "buy_potions" : "buy_meat");
+				processServiceShop(player, currentPosition, *service, action, serviceItemId, serviceAmount, purchase);
+				return;
+			}
 			if (serviceStage == ServiceStage::SellLoot) {
 				uint16_t itemId = 0;
 				ServiceNpc* seller = findLootSeller(player, currentPosition, itemId);
@@ -1401,7 +1531,7 @@ class PlayerBotController
 					resetConversation(seller->id);
 				}
 				processServiceShop(player, currentPosition, *seller, "sell", itemId,
-				                   std::min<uint32_t>(100, getInventoryItemCount(*player, itemId)), false);
+				                   std::min<uint32_t>(100, getSaleItemCount(*player, itemId)), false);
 				return;
 			}
 			if (serviceStage == ServiceStage::BuyPotions || serviceStage == ServiceStage::BuyMeat) {
@@ -1733,6 +1863,10 @@ class PlayerBotController
 					return;
 				}
 			}
+			if (scenarioStage == ScenarioStage::LootCorpse) {
+				lootCorpse(player, currentPosition);
+				return;
+			}
 
 			if (cyclePhase == CyclePhase::Hunt &&
 			    (std::chrono::steady_clock::now() >= huntDeadline || player->getFreeCapacity() < returnCapacityThreshold)) {
@@ -1769,10 +1903,6 @@ class PlayerBotController
 
 			if (scenarioStage == ScenarioStage::TraversalCombat) {
 				processTraversalCombat(player, currentPosition);
-				return;
-			}
-			if (scenarioStage == ScenarioStage::LootCorpse) {
-				lootCorpse(player, currentPosition);
 				return;
 			}
 			if (attackVisibleMonster(player, currentPosition)) {
@@ -2077,6 +2207,7 @@ class PlayerBotController
 			corpseSearchAttempts = 0;
 			corpseOpenAttempts = 0;
 			pendingLootItemId = 0;
+			pendingDiscardItemId = 0;
 			lootedCurrentCorpse = false;
 			unavailableLootItemIds.clear();
 			if (!expectedCorpseLootable) {
@@ -2095,6 +2226,7 @@ class PlayerBotController
 			player->closeContainer(corpseContainerId);
 			route.clear();
 			pendingLootItemId = 0;
+			pendingDiscardItemId = 0;
 			expectedCorpseItemId = 0;
 			expectedCorpseLootable = false;
 			setStage(ScenarioStage::Traverse, currentPosition);
@@ -2153,8 +2285,133 @@ class PlayerBotController
 			return static_cast<uint8_t>(backpack.size());
 		}
 
+		bool isReplaceableCargo(const Item& item) const
+		{
+			const ItemType& type = Item::items[item.getID()];
+			const Container* container = item.getContainer();
+			return (!container || (type.corpseType != RACE_NONE && container->empty())) && item.getWorth() == 0 && protectedItemReserve(item.getID()) == 0 &&
+			       itemUnitValue(item.getID()) != 0 && item.getBaseWeight() != 0;
+		}
+
+		bool chooseCargoReplacement(const Container& backpack, const Item& incoming, uint32_t freeCapacity,
+		                            CargoCandidate& replacement, uint8_t& replacementCount) const
+		{
+			const uint32_t incomingWeight = incoming.getWeight();
+			if (incomingWeight <= freeCapacity || incomingWeight == 0) {
+				return false;
+			}
+
+			std::vector<CargoCandidate> candidates;
+			const ItemDeque& items = backpack.getItemList();
+			for (size_t index = 0; index < items.size() && index <= UINT8_MAX; ++index) {
+				Item* item = items[index];
+				if (!isReplaceableCargo(*item)) {
+					continue;
+				}
+				candidates.push_back({item, static_cast<uint8_t>(index), itemUnitValue(item->getID()),
+				                      item->getBaseWeight(), item->getItemCount()});
+			}
+			std::sort(candidates.begin(), candidates.end(), [](const CargoCandidate& left, const CargoCandidate& right) {
+				const uint64_t leftDensity = static_cast<uint64_t>(left.unitValue) * right.unitWeight;
+				const uint64_t rightDensity = static_cast<uint64_t>(right.unitValue) * left.unitWeight;
+				return leftDensity == rightDensity ? left.item->getID() < right.item->getID() : leftDensity < rightDensity;
+			});
+
+			uint32_t requiredWeight = incomingWeight - freeCapacity;
+			uint64_t totalDiscardedValue = 0;
+			bool selected = false;
+			for (const CargoCandidate& candidate : candidates) {
+				const uint32_t count = std::min(candidate.availableCount,
+				                                (requiredWeight + candidate.unitWeight - 1) / candidate.unitWeight);
+				if (count == 0) {
+					continue;
+				}
+				if (!selected) {
+					replacement = candidate;
+					replacementCount = static_cast<uint8_t>(count);
+					selected = true;
+				}
+				totalDiscardedValue += static_cast<uint64_t>(count) * candidate.unitValue;
+				const uint32_t releasedWeight = count * candidate.unitWeight;
+				if (releasedWeight >= requiredWeight) {
+					requiredWeight = 0;
+					break;
+				}
+				requiredWeight -= releasedWeight;
+			}
+
+			const uint64_t incomingValue = static_cast<uint64_t>(itemUnitValue(incoming.getID())) * incoming.getItemCount();
+			if (!selected || requiredWeight != 0 || incomingValue <= totalDiscardedValue) {
+				return false;
+			}
+			return true;
+		}
+
+		void discardCargoForLoot(Player* player, Container* backpack, Item* incoming, const Position& currentPosition)
+		{
+			CargoCandidate replacement{};
+			uint8_t replacementCount = 0;
+			if (!chooseCargoReplacement(*backpack, *incoming, player->getFreeCapacity(), replacement,
+			                            replacementCount)) {
+				std::ostringstream fields;
+				fields << "\"action\":\"loot\",\"result\":\"skipped\",\"reason\":\"no_capacity\""
+				       << ",\"item_id\":" << incoming->getID() << ",\"count\":" << incoming->getItemCount()
+				       << ",\"unit_value\":" << itemUnitValue(incoming->getID())
+				       << ",\"weight\":" << incoming->getWeight() << ",\"free_capacity\":" << player->getFreeCapacity();
+				emit("action_result", currentPosition, fields.str());
+				unavailableLootItemIds.insert(incoming->getID());
+				return;
+			}
+
+			Tile* destination = g_game.map.getTile(currentPosition);
+			if (!destination || !player->canDoAction()) {
+				return;
+			}
+			pendingDiscardItemId = replacement.item->getID();
+			pendingDiscardCount = replacementCount;
+			pendingDiscardInventoryCount = getInventoryItemCount(*player, pendingDiscardItemId);
+			pendingDiscardValue = replacementCount * replacement.unitValue;
+			pendingDiscardIncomingItemId = incoming->getID();
+			const Position fromPosition(0xFFFF, 0x40 | backpackContainerId, replacement.index);
+			++counters.actionsAttempted;
+			g_game.playerMoveItem(player, fromPosition, replacement.item->getClientID(), replacement.index,
+			                      currentPosition, replacementCount, replacement.item, destination);
+		}
+
+		void verifyPendingLootMoves(Player* player, const Position& currentPosition)
+		{
+			if (pendingLootItemId != 0) {
+				const uint32_t inventoryCount = getInventoryItemCount(*player, pendingLootItemId);
+				if (inventoryCount > pendingLootInventoryCount) {
+					logLootSuccess(pendingLootItemId, inventoryCount - pendingLootInventoryCount, inventoryCount, currentPosition);
+					lootedCurrentCorpse = true;
+				} else {
+					unavailableLootItemIds.insert(pendingLootItemId);
+					logActionFailure("loot", "item_move_failed", currentPosition);
+				}
+				pendingLootItemId = 0;
+			}
+			if (pendingDiscardItemId != 0) {
+				const uint32_t inventoryCount = getInventoryItemCount(*player, pendingDiscardItemId);
+				if (inventoryCount + pendingDiscardCount <= pendingDiscardInventoryCount) {
+					std::ostringstream fields;
+					fields << "\"action\":\"loot_replace\",\"result\":\"success\",\"discarded_item_id\":"
+					       << pendingDiscardItemId << ",\"discarded_count\":" << static_cast<uint32_t>(pendingDiscardCount)
+					       << ",\"discarded_value\":" << pendingDiscardValue
+					       << ",\"incoming_item_id\":" << pendingDiscardIncomingItemId
+					       << ",\"incoming_unit_value\":" << itemUnitValue(pendingDiscardIncomingItemId);
+					emit("action_result", currentPosition, fields.str());
+				} else {
+					logActionFailure("loot_replace", "discard_not_verified", currentPosition);
+					unavailableLootItemIds.insert(pendingDiscardIncomingItemId);
+				}
+				pendingDiscardItemId = 0;
+			}
+		}
+
 		void lootCorpse(Player* player, const Position& currentPosition)
 		{
+			verifyPendingLootMoves(player, currentPosition);
 			Container* corpse = player->getContainerByID(corpseContainerId);
 			if (!corpse || Item::items[corpse->getID()].corpseType == RACE_NONE) {
 				corpse = findCorpse(player, lootPosition);
@@ -2171,18 +2428,6 @@ class PlayerBotController
 					finishLoot(player, currentPosition);
 				}
 				return;
-			}
-
-			if (pendingLootItemId != 0) {
-				const uint32_t inventoryCount = getInventoryItemCount(*player, pendingLootItemId);
-				if (inventoryCount > pendingLootInventoryCount) {
-					logLootSuccess(pendingLootItemId, inventoryCount - pendingLootInventoryCount, inventoryCount, currentPosition);
-					lootedCurrentCorpse = true;
-				} else {
-					unavailableLootItemIds.insert(pendingLootItemId);
-					logActionFailure("loot", "item_move_failed", currentPosition);
-				}
-				pendingLootItemId = 0;
 			}
 
 			if (player->getContainerByID(corpseContainerId) != corpse) {
@@ -2245,21 +2490,39 @@ class PlayerBotController
 			const ItemDeque& corpseItems = corpse->getItemList();
 			for (size_t index = 0; index < corpseItems.size(); ++index) {
 				Item* candidate = corpseItems[index];
-				if (unavailableLootItemIds.find(candidate->getID()) != unavailableLootItemIds.end()) {
+				const uint32_t candidateValue = itemUnitValue(candidate->getID());
+				if (candidateValue == 0 || unavailableLootItemIds.find(candidate->getID()) != unavailableLootItemIds.end()) {
 					continue;
 				}
-				lootItem = candidate;
-				lootIndex = static_cast<uint8_t>(index);
-				break;
+				if (!lootItem) {
+					lootItem = candidate;
+					lootIndex = static_cast<uint8_t>(index);
+					continue;
+				}
+				const uint64_t candidateDensity = static_cast<uint64_t>(candidateValue) * lootItem->getBaseWeight();
+				const uint64_t selectedDensity = static_cast<uint64_t>(itemUnitValue(lootItem->getID())) * candidate->getBaseWeight();
+				if (candidateDensity > selectedDensity ||
+				    (candidateDensity == selectedDensity && candidateValue > itemUnitValue(lootItem->getID()))) {
+					lootItem = candidate;
+					lootIndex = static_cast<uint8_t>(index);
+				}
 			}
 
 			if (!lootItem) {
+				if (!lootedCurrentCorpse) {
+					emit("action_result", currentPosition,
+					     "\"action\":\"loot\",\"result\":\"skipped\",\"reason\":\"no_eligible_loot\"");
+				}
 				finishLoot(player, currentPosition);
 				return;
 			}
 
 			const uint32_t inventoryCount = getInventoryItemCount(*player, lootItem->getID());
 			const uint8_t moveCount = static_cast<uint8_t>(lootItem->getItemCount());
+			if (lootItem->getWeight() > player->getFreeCapacity()) {
+				discardCargoForLoot(player, backpack, lootItem, currentPosition);
+				return;
+			}
 			const Position fromPosition(0xFFFF, 0x40 | corpseContainerId, lootIndex);
 			const Position toPosition(0xFFFF, 0x40 | backpackContainerId, backpackDestinationIndex(*backpack, *lootItem));
 			if (!player->canDoAction()) {
@@ -2361,13 +2624,19 @@ class PlayerBotController
 		uint32_t corpseSearchAttempts = 0;
 		uint32_t corpseOpenAttempts = 0;
 		uint16_t pendingLootItemId = 0;
+		uint16_t pendingDiscardItemId = 0;
 		uint16_t expectedCorpseItemId = 0;
 		bool expectedCorpseLootable = false;
 		bool lootedCurrentCorpse = false;
 		uint16_t pendingDepositItemId = 0;
 		uint32_t pendingLootInventoryCount = 0;
+		uint8_t pendingDiscardCount = 0;
+		uint32_t pendingDiscardInventoryCount = 0;
+		uint32_t pendingDiscardValue = 0;
+		uint16_t pendingDiscardIncomingItemId = 0;
 		uint32_t pendingDepositDestinationCount = 0;
 		std::set<uint16_t> unavailableLootItemIds;
+		std::map<uint16_t, uint32_t> itemSellValues;
 		bool pendingEat = false;
 		uint32_t pendingEatInventoryCount = 0;
 		int32_t pendingEatFoodTicks = 0;
