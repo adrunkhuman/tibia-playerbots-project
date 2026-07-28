@@ -7,13 +7,15 @@ function onCreatureDisappear(cid)			npcHandler:onCreatureDisappear(cid)			end
 function onCreatureSay(cid, type, msg)			npcHandler:onCreatureSay(cid, type, msg)		end
 function onThink()					npcHandler:onThink()					end
 
-item = 'You do not have the required items.'
-done = 'Here you are.'
+local item = 'You do not have the required items.'
+local done = 'Here you are.'
+local talkState = {}
 
 function creatureSayCallback(cid, type, msg)
 	if(not npcHandler:isFocused(cid)) then
 		return false
 	end
+	local talk_state = talkState[cid] or 0
 	
 		if msgcontains(msg, 'offer') then
 		selfSay('You can here change some items for {spider silk yarn}, {chunk of crude iron}, {draconian steel}, {warrior sweat}, {magic sulphur}, {enchanted chicken wing}, {royal steel}, {hell steel}, {fighting spirit}, {infernal bolt}.', cid)
@@ -222,8 +224,15 @@ end
             talk_state = 0
         end
     -- Place all your code in here. Remember that hi, bye and all that stuff is already handled by the npcsystem, so you do not have to take care of that yourself.
-    return true
+	talkState[cid] = talk_state
+	return true
 end
 
+local function releaseFocusCallback(cid)
+	talkState[cid] = nil
+	return true
+end
+
+npcHandler:setCallback(CALLBACK_ONRELEASEFOCUS, releaseFocusCallback)
 npcHandler:setCallback(CALLBACK_MESSAGE_DEFAULT, creatureSayCallback)
 npcHandler:addModule(FocusModule:new())
