@@ -69,11 +69,11 @@ and terminal events, one- then two-second elapsed backoff, fresh service-first
 controllers, no actions during relog delays, resumed service discovery, final
 death-loop abandonment, and removal from online state.
 
-`-Healing` runs the baseline, resets the stack, then starts Bot One at 100
+`-Healing` runs the baseline, resets the stack, then starts Bot One at 50%
 health with three small health potions and no nearby monsters. It verifies
 normal potion consumption and health gain, repeated one-at-a-time healing above
 the 60% threshold, and resumption of the interrupted hunt objective. A second
-focused stack starts at the same health without potions and verifies service
+focused stack starts at the same health ratio without potions and verifies service
 redirection, purchase verification, healing from the new stock, and resumed
 service:
 
@@ -101,6 +101,23 @@ assertions. Death mode kills the bot outside the temple protection zone,
 verifies two temple relogs with one- then two-second backoff, observes the
 second fresh controller resume service, and forces one final death to verify
 the configured death-loop limit.
+
+Gameplay modes deliberately retain fixed hunt destinations and override hunt
+duration to 10 or 900 seconds where required. They do not validate dynamic
+Rookgaard region generation, threat/cooldown decisions, observed XP correction,
+oscillation suppression, or `GOD Admin` notifications. Validate the prototype
+manually on the normal stack and inspect its JSONL evidence:
+
+```powershell
+$env:PLAYERBOT_HUNT_DURATION_SECONDS = "180"
+docker compose -f server/compose.yaml up --build --detach --force-recreate server
+docker compose -f server/compose.yaml logs --follow --no-log-prefix server
+```
+
+Look for `hunt_region_candidate`, `hunt_region_scan`,
+`hunt_region_selection`, `hunt_region_outcome`, `hunt_region_patrol`, and
+`navigation_progress`. The three-minute interval above is an observation
+override; tracked defaults are a `300` speed bonus and 300-second hunt interval.
 
 ## Connectionless Regression Overlay
 

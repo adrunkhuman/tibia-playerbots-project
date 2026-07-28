@@ -242,6 +242,15 @@ void Spawns::clear()
 	filename.clear();
 }
 
+std::vector<SpawnBlockSnapshot> Spawns::getMonsterSpawnSnapshots() const
+{
+	std::vector<SpawnBlockSnapshot> snapshots;
+	for (const Spawn& spawn : spawnList) {
+		spawn.appendSnapshots(snapshots);
+	}
+	return snapshots;
+}
+
 bool Spawns::isInZone(const Position& centerPos, int32_t radius, const Position& pos)
 {
 	if (radius == -1) {
@@ -283,6 +292,20 @@ bool Spawn::findPlayer(const Position& pos)
 bool Spawn::isInSpawnZone(const Position& pos)
 {
 	return Spawns::isInZone(centerPos, radius, pos);
+}
+
+void Spawn::appendSnapshots(std::vector<SpawnBlockSnapshot>& snapshots) const
+{
+	for (const auto& [spawnId, block] : spawnMap) {
+		(void)spawnId;
+		SpawnBlockSnapshot snapshot;
+		snapshot.position = block.pos;
+		snapshot.interval = block.interval;
+		for (const auto& [monsterType, chance] : block.mTypes) {
+			snapshot.monsterTypes.emplace_back(monsterType, chance);
+		}
+		snapshots.push_back(std::move(snapshot));
+	}
 }
 
 bool Spawn::spawnMonster(uint32_t spawnId, spawnBlock_t sb, bool startup/* = false*/)

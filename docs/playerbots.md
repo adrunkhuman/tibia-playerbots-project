@@ -19,8 +19,9 @@ graphical client, renderer, UI, or blocking loop per bot.
 
 `playerbot-setup` runs before the server on fresh and existing database volumes.
 It reserves the local-development account `bot-one` and character name
-`Bot One`, records the character in `player_bots`, and provisions the same
-level-50 traversal loadout as `Rook Tester`. Each character receives its
+`Bot One`, records the character in `player_bots`, and provisions it at level 1
+with normal level-1 health, mana, and capacity plus the same high-skill traversal
+equipment as `Rook Tester`. Each character receives its
 10,000 gp bank balance only when first created. Bot One also receives two
 100-gp backpack stacks only when first created; rerunning setup never restores
 spent balances or coins. Global `freePremium = true` supplies local premium
@@ -62,6 +63,12 @@ when no target exists.
 | `stuck` | `reason`, `blocked_steps` |
 | `summary` | Current state and target, uptime, decision/pathfinding timing, action, failure, stuck, and suppression counters |
 | `terminal` | `reason` |
+| `hunt_region_candidate` | `region_id`, floor, center/destination, patrol count, expected/observed/projected XP fields, threat, score, route evidence, suitability/reachability, optional rejection reason, and complete monster profiles. Rejections include `predicted_damage`, `observed_danger_cooldown`, `unreachable`, and `reachability_budget`. |
+| `hunt_region_scan` | Selection `reason`, player level/health/armor/defense, and `candidate_count` |
+| `hunt_region_selection` | `result=selected`, region and reason; or `result=failed`, `reason=no_suitable_reachable_region` |
+| `hunt_region_outcome` | Region/reason, duration, before/after level, XP gained/rate/projection/correction, kills, and damage taken |
+| `hunt_region_patrol` | `result=skipped`, region/destination, and `reason=unreachable` or `position_oscillation` |
+| `navigation_progress` | `result=suppressed`, `reason=position_oscillation`, destination, blocked transition target, and alternating positions |
 
 Recovery lifecycle fields are evidence-specific:
 
@@ -115,7 +122,11 @@ case-sensitive.
 Walking uses normal server movement and action delays. Route selection weights
 cardinal steps at 10 and diagonal steps at 30. A failed step is excluded for 10
 seconds so a temporary creature blockage can cause a detour or bounded wait.
-Persistent missing routes stop the controller after bounded retries.
+Persistent missing routes stop the controller after bounded retries. Three
+repeated A-B reversals without a new best distance suppress the implicated
+transition tiles for two minutes. A hunt drops that patrol point and continues;
+other objectives replan around the suppression. The recovery emits
+`navigation_progress` and, for hunts, `hunt_region_patrol`.
 
 At startup and after the five-minute deadline or 30 oz capacity threshold, the
 bot discovers live NPCs whose XML has an exact `playerbot_service` value of
@@ -187,11 +198,12 @@ advanced before the bot consumes the newly purchased stock. This is the first
 health-maintenance slice, not general potion, spell, mana, condition, or
 retreat planning.
 
-After depositing remaining carried loot on the tile south of `(32105, 32195, 8)`, the bot
-hunts along `(32084, 32144, 5)`, `(32103, 32124, 8)`,
-`(32117, 32090, 9)`, and back through the middle point. It returns after five
-minutes or when free capacity falls below 30 oz and cancels attack/follow
-behavior before returning.
+After depositing remaining carried loot on the tile south of `(32105, 32195, 8)`,
+normal operation selects a dynamic Rookgaard region and patrols its
+spawn-adjacent destinations. Gameplay fixture modes retain the fixed
+`(32084, 32144, 5)`, `(32103, 32124, 8)`, `(32117, 32090, 9)` sequence for
+regression assertions. The bot returns after the configured hunt interval or
+when free capacity falls below 30 oz and cancels attack/follow first.
 
 The fake depot is a public world tile, not private or durable depot storage.
 Other players can move its contents, and map tile contents are not preserved
@@ -264,6 +276,47 @@ to `5`; repeated deaths multiply it by two up to 60 seconds.
 from a repeated death loop. Invalid text falls back to the respective default;
 zero and negative values are clamped to one. Recreate the server container after
 changing either value.
+
+Normal Rookgaard hunts derive same-floor regions by joining overlapping
+eight-tile spawn heat kernels within a bounded 48-by-48 contour. Loaded monster
+health, attacks, armor, experience, spawn chance, and interval are scored against
+the bot's current health, equipment defense, weapon, and skill. Floor transitions
+remain region boundaries. The existing navigator validates the highest-scoring
+candidates; selected regions supply spawn-adjacent patrol destinations. The
+prototype accepts spawn positions on floors 6 through 15 inside the rectangle
+extending 180 tiles in each axis from temple `(32097, 32219, 7)`.
+Each configured hunt/service cycle triggers rescoring, while excessive observed
+damage temporarily excludes a region. Level gains are recorded in hunt outcomes
+but do not interrupt the fixed hunt interval. Gameplay fixture modes retain their
+fixed regression destinations.
+
+Candidate scoring projects net experience for the configured hunt interval.
+Spawn XP supply is multiplied by the active server experience stage, and route
+movement/use time is deducted from available hunting time. Completed hunts keep
+a bounded rolling correction from observed versus projected XP per minute for
+that region; unobserved regions start at `1.0`. A sample requires at least 30
+seconds and one kill, is clamped to `0.25` through `2.0`, and uses a 65/35 rolling
+blend after the first sample. Observations are controller memory and reset on
+relog or server restart. Threat remains a separate safety gate rather than a
+reward penalty in the XP score.
+
+Predicted threat rejects a region above `0.35` expected fight damage per maximum
+health. It models up to three locally overlapping hostile spawns, reducing
+combined DPS as each target is expected to die. Actual damage totaling one
+maximum-health pool within the first two minutes abandons the region and applies
+a ten-minute controller cooldown.
+
+When the exact character `GOD Admin` is online, objective changes, hunt
+selections/outcomes, and successful verified deposit, sale, purchase, and bank
+transactions are sent directly as both `Bot One` private messages and orange
+console status text. These transient diagnostics bypass creature-speech hooks;
+JSONL remains the durable authoritative log.
+
+`PLAYERBOT_SPEED_BONUS` adds a movement-speed delta from `0` through `1000` to
+server-owned bots after login and defaults to `300`; out-of-range values are
+clamped and invalid text falls back to `300`. It accelerates local development
+and observation without changing combat or action delays.
+Recreate the server after changing it.
 
 `PLAYERBOT_ENABLED` is also evaluated at startup. The exact value `"false"`
 disables controller startup; an unset variable or any other value enables it.
