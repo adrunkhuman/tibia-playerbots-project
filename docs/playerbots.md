@@ -108,10 +108,13 @@ bot discovers live NPCs whose XML has an exact `playerbot_service` value of
 
 Each tagged shop's `ShopModule` registers its loaded XML buy/sell offers on the
 owning live NPC. A tagged shop without registered offers is ignored. The bot
-uses that catalog to select the nearest live merchant that provides its needed
-sale or purchase before moving, rather than visiting every shop to probe its
-window. The selected merchant is still greeted and its normal trade window is
-opened for each transaction.
+uses that catalog to select the best sale price or nearest purchase provider
+before moving, rather than visiting every shop to probe its window. The current
+reachable Rookgaard allowlist contains shops Al Dee, Billy, Dixi, Elgar,
+Hyacinth, Lee'Delle, Lily, Norma, Obi, Tom, and Willie, plus banker Paulie. This
+allowlist is configuration, not inferred geographical knowledge. The selected
+merchant is still greeted and its normal trade window is opened for each
+transaction.
 
 The bot sends `hi` through the selected NPC's normal speech handler and treats
 any private reply from that same NPC as focus acknowledgement; reply text is
@@ -119,6 +122,10 @@ not interpreted. It then sends `trade` and requires that NPC to own the loaded
 shop window before transacting. Greeting and shop-window setup each permit
 three attempts; exhausted focus or window attempts emit
 `npc_focus_unconfirmed` or `shop_window_unavailable` and stop the controller.
+A service must also be reachable by the bounded map navigator and approached
+within three tiles on the same floor; failed service navigation stops the
+controller. Do not tag NPCs outside the bot's reachable region until service
+selection accounts for route reachability and access requirements.
 
 Outside the hunt phase, an adjacent monster actively targeting the bot
 interrupts service, return, or deposit work. The bot attacks that immediate
@@ -130,13 +137,25 @@ first. The same priority remains during the temporary suppression window after
 that step is confirmed blocked; distance and creature ID provide deterministic
 fallback ordering.
 
-The current sell allowlist is dead rat (`2813`), bear paw (`5896`), wolf paw
-(`5897`), and minotaur leather (`5878`). Other loot is not sold; top-level
-items and nested bags are handled by the fake-depot policy below. The bot buys
-exactly any deficit to five small health potions (`8704`) and one meat (`2666`),
-then uses the nearest matching live banker's dialogue to deposit all carried
-money and withdraw 100 gp. NPC names and coordinates are telemetry, not
-controller inputs.
+The bot builds its item-value table from the loaded sell offers of tagged shop
+NPCs. Currency uses its intrinsic worth; other items are eligible loot only
+when a known shop buys them. Corpse contents are ranked by sell value per unit
+weight. When capacity cannot hold a more profitable item, the bot may drop
+lower-density, NPC-sellable backpack cargo if the complete replacement gains
+value. Equipped items, containers, currency, and reserved tools, meat, and
+potions are not replacement candidates. Unknown items remain in the corpse.
+This is a Rookgaard-scale runtime catalog, not the eventual shared world-wide
+economy index. Subtype-specific fluid and splash offers are excluded until the
+inventory policy tracks subtype quantities.
+
+At service time the same loaded offers determine what backpack surplus can be
+sold; equipped items, ordinary containers, non-empty corpse containers, and
+configured supply reserves are excluded. Other loot and nested bags are handled
+by the fake-depot policy below. The bot buys exactly
+any deficit to five small health potions (`8704`) and one meat (`2666`), then
+uses the nearest matching live banker's dialogue to deposit all carried money
+and withdraw 100 gp. NPC names and coordinates are telemetry, not controller
+inputs.
 
 After depositing remaining carried loot on the tile south of `(32105, 32195, 8)`, the bot
 hunts along `(32084, 32144, 5)`, `(32103, 32124, 8)`,

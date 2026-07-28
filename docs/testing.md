@@ -23,7 +23,7 @@ local game ports. It does not execute gameplay actions.
 
 ## Playerbot Gameplay Suite
 
-The baseline suite seeds policy-approved rat loot and an unsellable nested bag.
+The baseline suite seeds NPC-discovered dead-rabbit loot and an unsellable nested bag.
 It verifies tagged live-NPC discovery and runtime offer registration without
 physical shop probing, NPC greeting acknowledgement before trade, normal sale
 and reserve purchases, carried-money-first purchase deductions, banker
@@ -54,10 +54,22 @@ containing gold:
 pwsh -File scripts/test-playerbot-gameplay.ps1 -CorpseLoot
 ```
 
+`-ValueLoot` runs the baseline, resets the stack, and constrains the bot's
+capacity by one ounce. It verifies that the bot replaces a 2 gp dead rabbit
+with a 5 gp dead wolf discovered from loaded NPC offers, records no capacity
+skip, and completes a bank-funded potion purchase:
+
+```powershell
+pwsh -File scripts/test-playerbot-gameplay.ps1 -ValueLoot
+```
+
+`-DeathTelemetry` runs the baseline, resets the stack, then verifies contextual
+death and terminal events without actions continuing after death.
+
 For playerbot navigation or looting changes, run the combined suite:
 
 ```powershell
-pwsh -File scripts/test-playerbot-gameplay.ps1 -FullNavigation -CorpseLoot
+pwsh -File scripts/test-playerbot-gameplay.ps1 -FullNavigation -CorpseLoot -ValueLoot
 ```
 
 The suite rebuilds the server and resets the disposable Compose stack and
@@ -65,12 +77,11 @@ database volume. It removes them afterward; `-KeepStack` leaves the final stack
 running. The default timeout is 300 seconds and can be changed with
 `-TimeoutSeconds` from 60 to 3600 seconds.
 
-The overlay's `PLAYERBOT_GAMEPLAY_MODE` accepts `cycle`, `navigation`, or
-`corpse`. The script selects these modes automatically: the baseline uses
-`cycle`, `-FullNavigation` uses `navigation`, and `-CorpseLoot` uses `corpse`.
-Navigation and corpse modes skip the economic provisioning assertions and start
-the controller directly in hunt mode so their fixtures do not interfere with
-startup service.
+The overlay's `PLAYERBOT_GAMEPLAY_MODE` accepts `cycle`, `navigation`, `corpse`,
+`death`, or `value`. The script selects these modes automatically from the
+corresponding switches. Navigation, corpse, death, and value modes start the
+controller directly in hunt mode so their fixtures do not interfere with the
+baseline startup service assertions.
 
 ## Connectionless Regression Overlay
 

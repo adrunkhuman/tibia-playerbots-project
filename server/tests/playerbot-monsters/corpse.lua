@@ -35,6 +35,9 @@ registerCorpseTestMonster("Playerbot Loot Corpse", {
 registerCorpseTestMonster("Playerbot Nonlootable Corpse", {}, ITEM_GOLD_COIN)
 registerCorpseTestMonster("Playerbot Container Death Item", {}, ITEM_BAG)
 registerCorpseTestMonster("Playerbot Defensive Threat", {}, nil, false, 1)
+registerCorpseTestMonster("Playerbot Value Corpse", {
+    {id = 2826, chance = 100000, maxCount = 1},
+})
 registerCorpseTestMonster("Playerbot Death Threat", {}, nil, true, 100000, {
     {name = "combat", type = COMBAT_PHYSICALDAMAGE, interval = 100, chance = 100,
         minDamage = -10000, maxDamage = -10000, target = true, range = 1},

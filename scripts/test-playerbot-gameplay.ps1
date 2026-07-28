@@ -4,6 +4,7 @@ param(
     [switch]$FullNavigation,
     [switch]$CorpseLoot,
     [switch]$DeathTelemetry,
+    [switch]$ValueLoot,
     [switch]$KeepStack
 )
 
@@ -106,6 +107,10 @@ function Assert-CycleEvents {
     $bankWithdraw = @($events | Where-Object {
         $_.event -eq "action_result" -and $_.action -eq "bank_withdraw" -and $_.result -eq "success"
     })
+    $dynamicSale = @($events | Where-Object {
+        $_.event -eq "action_result" -and $_.action -eq "sell" -and $_.result -eq "success" -and
+        $_.item_id -eq 2992 -and $_.count -eq 1
+    })
     $cycles = @($events | Where-Object {
         $_.event -eq "action_result" -and $_.action -eq "hunt_cycle" -and $_.result -eq "started"
     })
@@ -137,6 +142,9 @@ function Assert-CycleEvents {
     }
     if ($bankDeposit.Count -lt 1 -or $bankWithdraw.Count -lt 1) {
         throw "The bot did not produce the expected purchase, sale, and bank balance result."
+    }
+    if ($dynamicSale.Count -ne 1) {
+        throw "The bot did not sell the dead rabbit discovered from the live NPC offer catalog."
     }
     if ($cycles.Count -lt 2) {
         throw "The bot did not begin a second hunt cycle."
@@ -181,6 +189,32 @@ function Assert-DeathEvents {
     })
     if ($actionsAfterDeath.Count -ne 0) {
         throw "The playerbot continued acting after its death was observed."
+    }
+}
+
+function Assert-ValueLootEvents {
+    param([string]$Logs)
+
+    $events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
+    $replacement = @($events | Where-Object {
+        $_.event -eq "action_result" -and $_.action -eq "loot_replace" -and $_.result -eq "success" -and
+        $_.discarded_item_id -eq 2992 -and $_.discarded_count -eq 1 -and $_.discarded_value -eq 2 -and
+        $_.incoming_item_id -eq 2826
+    })
+    $incomingLoot = @($events | Where-Object {
+        $_.event -eq "action_result" -and $_.action -eq "loot" -and $_.result -eq "success" -and
+        $_.item_id -eq 2826 -and $_.count -eq 1 -and $_.unit_value -eq 5 -and $_.total_value -eq 5
+    })
+    $capacitySkips = @($events | Where-Object {
+        $_.event -eq "action_result" -and $_.action -eq "loot" -and $_.reason -eq "no_capacity"
+    })
+    $bankFundedPurchase = @($events | Where-Object {
+        $_.event -eq "action_result" -and $_.action -eq "buy_potions" -and $_.result -eq "success" -and
+        $_.bank_after -lt $_.bank_before
+    })
+    if ($replacement.Count -ne 1 -or $incomingLoot.Count -ne 1 -or $capacitySkips.Count -ne 0 -or
+        $bankFundedPurchase.Count -ne 1) {
+        throw "The bot did not replace lower-value cargo with the more profitable corpse item."
     }
 }
 
@@ -313,6 +347,15 @@ try {
         Invoke-Compose up --detach
         $deathLogs = Wait-ForLog -Pattern '"event":"terminal".*"reason":"controlled_player_dead"'
         Assert-DeathEvents -Logs $deathLogs
+    }
+
+    if ($ValueLoot) {
+        Invoke-Compose down --volumes --remove-orphans
+        $env:PLAYERBOT_GAMEPLAY_MODE = "value"
+        $env:PLAYERBOT_HUNT_DURATION_SECONDS = "900"
+        Invoke-Compose up --detach
+        $valueLogs = Wait-ForLog -Pattern '"action":"buy_potions".*"result":"success"'
+        Assert-ValueLootEvents -Logs $valueLogs
     }
     "PLAYERBOT_GAMEPLAY_TEST PASS"
 }

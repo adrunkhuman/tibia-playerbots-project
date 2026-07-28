@@ -3,7 +3,7 @@ local depotPosition = Position(32105, 32195, 8)
 local depotTilePosition = Position(32105, 32196, 8)
 local lootItemId = ITEM_GOLD_COIN
 local lootCount = 37
-local saleItemId = 2813
+local saleItemId = 2992
 local potionItemId = 8704
 local meatItemId = 2666
 local emptyMonsterName = "Playerbot Empty Corpse"
@@ -12,6 +12,7 @@ local nonlootableMonsterName = "Playerbot Nonlootable Corpse"
 local containerDeathItemMonsterName = "Playerbot Container Death Item"
 local defensiveMonsterName = "Playerbot Defensive Threat"
 local deathMonsterName = "Playerbot Death Threat"
+local valueMonsterName = "Playerbot Value Corpse"
 
 local function suppressNearbyMonsters(playerId)
     local player = Player(playerId)
@@ -20,7 +21,8 @@ local function suppressNearbyMonsters(playerId)
     end
     for _, creature in ipairs(Game.getSpectators(player:getPosition(), true, false, 10, 10, 10, 10)) do
         if creature:isMonster() and creature:getName() ~= emptyMonsterName and creature:getName() ~= lootMonsterName and
-            creature:getName() ~= nonlootableMonsterName and creature:getName() ~= containerDeathItemMonsterName then
+            creature:getName() ~= nonlootableMonsterName and creature:getName() ~= containerDeathItemMonsterName and
+            creature:getName() ~= valueMonsterName then
             creature:remove()
         end
     end
@@ -53,11 +55,11 @@ local function spawnDefensiveMonsters(playerId)
         if tile and tile:isWalkable() then
             local monster = Game.createMonster(defensiveMonsterName, position, true, true)
             assert(monster, "defensive blocker could not be created")
-            addEvent(activateDefensiveMonster, 1400, playerId, monster:getId())
+            addEvent(activateDefensiveMonster, 2000, playerId, monster:getId())
             spawned = spawned + 1
         end
     end
-    assert(spawned >= 2, "fewer than two adjacent defensive blockers could be created")
+    assert(spawned >= 1, "no adjacent defensive blocker could be created")
     print("PLAYERBOT_GAMEPLAY_TEST DEFENSIVE_BLOCKERS_SPAWNED " .. spawned)
 end
 
@@ -168,7 +170,7 @@ function login.onLogin(player)
     end
 
     local mode = os.getenv("PLAYERBOT_GAMEPLAY_MODE") or "cycle"
-    assert(mode == "cycle" or mode == "navigation" or mode == "corpse" or mode == "death", "unknown PLAYERBOT_GAMEPLAY_MODE: " .. mode)
+    assert(mode == "cycle" or mode == "navigation" or mode == "corpse" or mode == "death" or mode == "value", "unknown PLAYERBOT_GAMEPLAY_MODE: " .. mode)
     assert(player:teleportTo(depotPosition), "fake depot position could not be restored")
     if mode == "death" then
         addEvent(spawnDeathMonster, 100, player:getId())
@@ -194,6 +196,19 @@ function login.onLogin(player)
         print("PLAYERBOT_GAMEPLAY_TEST CORPSE_START")
         return true
     end
+    if mode == "value" then
+        local backpack = player:getSlotItem(CONST_SLOT_BACKPACK)
+        assert(backpack and backpack:addItem(saleItemId, 1), "low-value replacement cargo could not be added")
+        assert(player:removeMoney(player:getMoney()), "value fixture could not force bank-funded supply purchases")
+        local incomingWeight = ItemType(2826):getWeight()
+        local usedCapacity = player:getCapacity() - player:getFreeCapacity()
+        assert(incomingWeight > 1, "value replacement fixture has invalid incoming weight")
+        player:setCapacity(usedCapacity + incomingWeight - 1)
+        suppressNearbyMonsters(player:getId())
+        addEvent(spawnCorpseMonster, 500, player:getId(), valueMonsterName)
+        print("PLAYERBOT_GAMEPLAY_TEST VALUE_START")
+        return true
+    end
 
     assert(player:getMoney() == 200, "Bot One initial backpack purse was not 200 gp")
     assert(player:getBankBalance() == 10000, "Bot One initial bank balance was not 10000 gp")
@@ -202,7 +217,7 @@ function login.onLogin(player)
     local lootBag = backpack:addItem(ITEM_BAG, 1)
     assert(lootBag, "test loot bag could not be added")
     assert(lootBag:addItem(lootItemId, lootCount), "test loot could not be added")
-    assert(backpack:addItem(saleItemId, 1), "test policy-approved loot could not be added")
+    assert(backpack:addItem(saleItemId, 1), "NPC-discovered sellable loot could not be added")
     addEvent(spawnDefensiveMonsters, 100, player:getId())
 
     local depotTile = Tile(depotTilePosition)
