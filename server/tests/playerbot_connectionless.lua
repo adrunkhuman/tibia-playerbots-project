@@ -34,8 +34,6 @@ function login.onLogin(player)
     assert(player:setStorageValue(storageKey, modeValues[mode]))
 
     if mode == "interactions" then
-        assert(player:setStorageValue(45017, 0), "traversal checkpoint could not be reset")
-        assert(player:setStorageValue(45018, 0), "traversal trip count could not be reset")
         assert(player:teleportTo(Position(32097, 32219, 7)), "test position could not be restored")
         local backpack = player:getSlotItem(CONST_SLOT_BACKPACK)
         assert(backpack and backpack:getId() == ITEM_BACKPACK, "seeded backpack is missing")
