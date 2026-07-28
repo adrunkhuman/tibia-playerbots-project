@@ -13,6 +13,7 @@ local containerDeathItemMonsterName = "Playerbot Container Death Item"
 local defensiveMonsterName = "Playerbot Defensive Threat"
 local deathMonsterName = "Playerbot Death Threat"
 local valueMonsterName = "Playerbot Value Corpse"
+local healingPotionCount = 3
 
 local function suppressNearbyMonsters(playerId)
     local player = Player(playerId)
@@ -132,6 +133,32 @@ local function createTemporaryBlockers()
     addEvent(removeBlockers, 3000, blockerIds[1], blockerIds[2], blockerIds[3])
 end
 
+local function verifyHealing(playerId, attempts)
+    local player = Player(playerId)
+    assert(player and not player:isRemoved(), "Bot One disappeared during the healing test")
+    local recovered = player:getHealth() * 100 > player:getMaxHealth() * 60
+    local consumed = player:getItemCount(potionItemId) < healingPotionCount
+    if (not recovered or not consumed) and attempts > 0 then
+        addEvent(verifyHealing, 250, playerId, attempts - 1)
+        return
+    end
+    assert(recovered, "Bot One did not heal above the configured health threshold")
+    assert(consumed, "Bot One did not consume a small health potion")
+    print("PLAYERBOT_GAMEPLAY_TEST HEALING_STATE_PASS")
+end
+
+local function verifyHealingResupply(playerId, attempts)
+    local player = Player(playerId)
+    assert(player and not player:isRemoved(), "Bot One disappeared during the healing resupply test")
+    if player:getHealth() * 100 <= player:getMaxHealth() * 60 and attempts > 0 then
+        addEvent(verifyHealingResupply, 250, playerId, attempts - 1)
+        return
+    end
+    assert(player:getHealth() * 100 > player:getMaxHealth() * 60,
+        "Bot One did not recover after starting without healing supplies")
+    print("PLAYERBOT_GAMEPLAY_TEST HEALING_RESUPPLY_STATE_PASS")
+end
+
 local function verifyService(playerId, initialDepotBagCount, attempts)
     local player = Player(playerId)
     assert(player and not player:isRemoved(), "Bot One disappeared during the gameplay test")
@@ -170,7 +197,8 @@ function login.onLogin(player)
     end
 
     local mode = os.getenv("PLAYERBOT_GAMEPLAY_MODE") or "cycle"
-    assert(mode == "cycle" or mode == "navigation" or mode == "corpse" or mode == "death" or mode == "value", "unknown PLAYERBOT_GAMEPLAY_MODE: " .. mode)
+    assert(mode == "cycle" or mode == "navigation" or mode == "corpse" or mode == "death" or mode == "healing" or
+        mode == "healing_resupply" or mode == "value", "unknown PLAYERBOT_GAMEPLAY_MODE: " .. mode)
     assert(player:teleportTo(depotPosition), "fake depot position could not be restored")
     if mode == "death" then
         addEvent(spawnDeathMonster, 100, player:getId())
@@ -181,6 +209,23 @@ function login.onLogin(player)
         createTemporaryBlockers()
         suppressNearbyMonsters(player:getId())
         print("PLAYERBOT_GAMEPLAY_TEST NAVIGATION_START")
+        return true
+    end
+    if mode == "healing" then
+        suppressNearbyMonsters(player:getId())
+        assert(player:getItemCount(potionItemId) == 0, "healing fixture expected no seeded potions")
+        assert(player:addItem(potionItemId, healingPotionCount), "healing fixture could not add small health potions")
+        assert(player:setHealth(100), "healing fixture could not lower Bot One's health")
+        addEvent(verifyHealing, 250, player:getId(), 40)
+        print("PLAYERBOT_GAMEPLAY_TEST HEALING_START")
+        return true
+    end
+    if mode == "healing_resupply" then
+        suppressNearbyMonsters(player:getId())
+        assert(player:getItemCount(potionItemId) == 0, "healing resupply fixture expected no seeded potions")
+        assert(player:setHealth(100), "healing resupply fixture could not lower Bot One's health")
+        addEvent(verifyHealingResupply, 250, player:getId(), 240)
+        print("PLAYERBOT_GAMEPLAY_TEST HEALING_RESUPPLY_START")
         return true
     end
     if mode == "corpse" then

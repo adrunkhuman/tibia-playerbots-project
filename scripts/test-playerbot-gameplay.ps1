@@ -4,6 +4,7 @@ param(
     [switch]$FullNavigation,
     [switch]$CorpseLoot,
     [switch]$DeathTelemetry,
+    [switch]$Healing,
     [switch]$ValueLoot,
     [switch]$KeepStack
 )
@@ -192,6 +193,81 @@ function Assert-DeathEvents {
     }
 }
 
+function Assert-HealingEvents {
+    param([string]$Logs)
+
+    $events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
+    $heals = @($events | Where-Object {
+        $_.event -eq "action_result" -and $_.action -eq "heal" -and $_.result -eq "success" -and
+        $_.method -eq "small_health_potion" -and $_.item_id -eq 8704 -and
+        $_.trigger -eq "health_threshold" -and $_.objective -eq "hunt" -and
+        $_.health_after -gt $_.health_before -and $_.resource_after -eq ($_.resource_before - 1)
+    })
+    $failures = @($events | Where-Object {
+        $_.event -eq "action_result" -and $_.action -eq "heal" -and $_.result -ne "success"
+    })
+    $lastHealIndex = -1
+    $planAfterHealing = $false
+    for ($index = 0; $index -lt $events.Count; $index++) {
+        $event = $events[$index]
+        if ($event.event -eq "action_result" -and $event.action -eq "heal" -and $event.result -eq "success") {
+            $lastHealIndex = $index
+        }
+        elseif ($lastHealIndex -ge 0 -and $event.event -eq "action_result" -and $event.action -eq "plan" -and
+            $event.result -eq "success" -and $event.destination.x -eq 32084 -and
+            $event.destination.y -eq 32144 -and $event.destination.z -eq 5) {
+            $planAfterHealing = $true
+        }
+    }
+    if ($heals.Count -lt 2 -or $heals.Count -gt 3) {
+        throw "Expected two or three verified small-health-potion actions, found $($heals.Count)."
+    }
+    if ($heals[-1].health_after * 100 -le $heals[-1].health_max * 60) {
+        throw "The bot did not heal above its configured health threshold."
+    }
+    if ($failures.Count -ne 0) {
+        throw "The focused healing scenario produced a failed or skipped healing outcome."
+    }
+    if (-not $planAfterHealing) {
+        throw "The bot did not resume its interrupted hunt objective after healing."
+    }
+    if (@($events | Where-Object { $_.event -eq "terminal" }).Count -ne 0) {
+        throw "The playerbot emitted a terminal event during healing."
+    }
+}
+
+function Assert-HealingResupplyEvents {
+    param([string]$Logs)
+
+    $events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
+    $missingSupply = @($events | Where-Object {
+        $_.event -eq "action_result" -and $_.action -eq "heal" -and
+        $_.result -eq "skipped" -and $_.reason -eq "missing_supply" -and $_.objective -eq "hunt"
+    })
+    $purchases = @($events | Where-Object {
+        $_.event -eq "action_result" -and $_.action -eq "buy_potions" -and $_.result -eq "success"
+    })
+    $heals = @($events | Where-Object {
+        $_.event -eq "action_result" -and $_.action -eq "heal" -and $_.result -eq "success" -and
+        $_.objective -eq "service" -and $_.resource_after -eq ($_.resource_before - 1)
+    })
+    $serviceResumed = @($events | Where-Object {
+        $_.event -eq "action_result" -and $_.action -eq "buy_meat" -and $_.result -eq "success"
+    })
+    $transactionFailures = @($events | Where-Object {
+        $_.reason -eq "transaction_delta_mismatch" -or $_.reason -eq "shop_transaction_delta_mismatch"
+    })
+    if ($missingSupply.Count -ne 1 -or $purchases.Count -lt 1 -or $heals.Count -lt 2) {
+        throw "The bot did not refill and consume potions after the missing-supply healing outcome."
+    }
+    if ($serviceResumed.Count -lt 1) {
+        throw "The bot did not resume service after healing with newly purchased potions."
+    }
+    if ($transactionFailures.Count -ne 0 -or @($events | Where-Object { $_.event -eq "terminal" }).Count -ne 0) {
+        throw "Healing interfered with service transaction verification."
+    }
+}
+
 function Assert-ValueLootEvents {
     param([string]$Logs)
 
@@ -347,6 +423,23 @@ try {
         Invoke-Compose up --detach
         $deathLogs = Wait-ForLog -Pattern '"event":"terminal".*"reason":"controlled_player_dead"'
         Assert-DeathEvents -Logs $deathLogs
+    }
+
+    if ($Healing) {
+        Invoke-Compose down --volumes --remove-orphans
+        $env:PLAYERBOT_GAMEPLAY_MODE = "healing"
+        $env:PLAYERBOT_HUNT_DURATION_SECONDS = "900"
+        Invoke-Compose up --detach
+        Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST HEALING_STATE_PASS' | Out-Null
+        $healingLogs = Wait-ForLog -Pattern '"action":"plan","result":"success".*"destination":\{"x":32084,"y":32144,"z":5\}'
+        Assert-HealingEvents -Logs $healingLogs
+
+        Invoke-Compose down --volumes --remove-orphans
+        $env:PLAYERBOT_GAMEPLAY_MODE = "healing_resupply"
+        Invoke-Compose up --detach
+        Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST HEALING_RESUPPLY_STATE_PASS' | Out-Null
+        $resupplyLogs = Wait-ForLog -Pattern '"action":"buy_meat".*"result":"success"'
+        Assert-HealingResupplyEvents -Logs $resupplyLogs
     }
 
     if ($ValueLoot) {
