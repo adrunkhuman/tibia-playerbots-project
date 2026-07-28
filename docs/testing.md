@@ -89,8 +89,28 @@ pwsh -File scripts/test-playerbot-gameplay.ps1 -FullNavigation -CorpseLoot -Heal
 
 The suite rebuilds the server and resets the disposable Compose stack and
 database volume. It removes them afterward; `-KeepStack` leaves the final stack
-running. The default timeout is 300 seconds and can be changed with
-`-TimeoutSeconds` from 60 to 3600 seconds.
+running. It prints wall-clock timing for the build and every scenario.
+
+Focused debugging can skip both the baseline and a known-current image build:
+
+```powershell
+docker compose -f server/compose.yaml build server
+pwsh -File scripts/test-playerbot-gameplay.ps1 -Healing -Focused -SkipBuild
+```
+
+`-Focused` requires at least one scenario switch and runs only the requested
+scenarios. `-SkipBuild` requires an existing `angelion-server:latest` image and
+does not verify that it matches the worktree; omit it before final validation.
+Docker builds use a persistent BuildKit `ccache` mount. The compile layer copies
+only CMake and C++ inputs, so datapack and fixture-only edits reuse the server
+binary while source edits reuse unchanged compiler results.
+
+Default fail-fast deadlines cover each complete scenario, including stack setup
+and all waits: 180 seconds for the baseline and full navigation, 60 for corpse
+and ordinary healing, 45 for death, and 90 for
+healing-resupply and value-loot. An explicitly supplied `-TimeoutSeconds` from
+30 through 3600 overrides every scenario deadline for slower machines. A wait
+failure includes Compose status and the last 80 server-log lines.
 
 The overlay's `PLAYERBOT_GAMEPLAY_MODE` accepts `cycle`, `navigation`, `corpse`,
 `death`, `healing`, `healing_resupply`, or `value`. The script selects these
