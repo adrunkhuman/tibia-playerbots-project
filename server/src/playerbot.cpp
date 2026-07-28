@@ -42,6 +42,7 @@ namespace {
 	constexpr uint16_t meatItemId = 2666;
 	constexpr uint16_t smallHealthPotionItemId = 8704;
 	constexpr uint32_t minimumSmallHealthPotions = 5;
+	constexpr int32_t healingHealthPercent = 60;
 	constexpr uint32_t minimumMeat = 1;
 	constexpr int32_t meatFoodTicks = 108000;
 	constexpr int32_t maximumFoodSeconds = 1200;
@@ -53,6 +54,7 @@ namespace {
 	constexpr std::chrono::seconds traversalTargetSuppression(120);
 	constexpr std::chrono::seconds navigationBlockSuppression(10);
 	constexpr std::chrono::seconds navigationStepTimeout(2);
+	constexpr std::chrono::seconds healingRetryInterval(2);
 	constexpr uint32_t returnCapacityThreshold = 30 * 100;
 	constexpr uint32_t carriedGoldReserve = 100;
 	constexpr uint32_t maximumServiceAttempts = 3;
@@ -126,6 +128,7 @@ class PlayerBotController
 			emit("lifecycle", position, "\"status\":\"online\",\"message\":\"Playerbot online\"");
 			const char* gameplayMode = std::getenv("PLAYERBOT_GAMEPLAY_MODE");
 			if (gameplayMode && (std::strcmp(gameplayMode, "navigation") == 0 || std::strcmp(gameplayMode, "corpse") == 0 ||
+			                     std::strcmp(gameplayMode, "healing") == 0 || std::strcmp(gameplayMode, "healing_resupply") == 0 ||
 			                     std::strcmp(gameplayMode, "value") == 0)) {
 				startHunt(position);
 			} else {
@@ -401,6 +404,92 @@ class PlayerBotController
 		bool canEatCheese(const Player& player) const
 		{
 			return getFoodTicks(player) / 1000 + meatFoodTicks / 1000 < maximumFoodSeconds;
+		}
+
+		bool needsHealing(const Player& player) const
+		{
+			return static_cast<int64_t>(player.getHealth()) * 100 <=
+			       static_cast<int64_t>(player.getMaxHealth()) * healingHealthPercent;
+		}
+
+		void logHealResult(const char* result, const char* reason, int32_t healthAfter,
+		                   uint32_t potionCountAfter, const Position& position)
+		{
+			std::ostringstream fields;
+			fields << "\"action\":\"heal\",\"result\":" << jsonString(result)
+			       << ",\"method\":\"small_health_potion\",\"item_id\":" << smallHealthPotionItemId
+			       << ",\"trigger\":\"health_threshold\",\"objective\":" << jsonString(cyclePhaseName())
+			       << ",\"state\":" << jsonString(stageName(scenarioStage))
+			       << ",\"health_before\":" << pendingHealHealth
+			       << ",\"health_after\":" << healthAfter
+			       << ",\"health_max\":" << pendingHealHealthMax
+			       << ",\"resource_before\":" << pendingHealPotionCount
+			       << ",\"resource_after\":" << potionCountAfter;
+			if (reason) {
+				fields << ",\"reason\":" << jsonString(reason);
+			}
+			emit("action_result", position, fields.str());
+		}
+
+		bool handleHealing(Player* player, const Position& currentPosition)
+		{
+			const auto now = std::chrono::steady_clock::now();
+			if (pendingHeal) {
+				const uint32_t potionCount = getInventoryItemCount(*player, smallHealthPotionItemId);
+				const int32_t health = player->getHealth();
+				if (potionCount < pendingHealPotionCount && health > pendingHealHealth) {
+					logHealResult("success", nullptr, health, potionCount, currentPosition);
+				} else {
+					++counters.actionsFailed;
+					logHealResult("failed", potionCount < pendingHealPotionCount ? "ineffective_recovery" : "use_not_verified",
+					              health, potionCount, currentPosition);
+					healRetryAfter = now + healingRetryInterval;
+				}
+				pendingHeal = false;
+			}
+			if (serviceStage == ServiceStage::BuyPotions) {
+				return false;
+			}
+
+			if (!needsHealing(*player)) {
+				return false;
+			}
+			if (now < healRetryAfter || !player->canDoAction()) {
+				return true;
+			}
+
+			const uint32_t potionCount = getInventoryItemCount(*player, smallHealthPotionItemId);
+			if (potionCount == 0) {
+				if (shouldEmitRepeated("heal:missing_supply")) {
+					std::ostringstream fields;
+					fields << "\"action\":\"heal\",\"result\":\"skipped\",\"reason\":\"missing_supply\""
+					       << ",\"method\":\"small_health_potion\",\"item_id\":" << smallHealthPotionItemId
+					       << ",\"trigger\":\"health_threshold\",\"objective\":" << jsonString(cyclePhaseName())
+					       << ",\"state\":" << jsonString(stageName(scenarioStage))
+					       << ",\"health_before\":" << player->getHealth()
+					       << ",\"health_after\":" << player->getHealth()
+					       << ",\"health_max\":" << player->getMaxHealth()
+					       << ",\"resource_before\":0,\"resource_after\":0";
+					emit("action_result", currentPosition, fields.str());
+				}
+				if (cyclePhase != CyclePhase::Service) {
+					beginService(player, currentPosition, "healing_supply_missing");
+				}
+				return false;
+			}
+
+			Item* potion = g_game.findItemOfType(player, smallHealthPotionItemId, true);
+			if (!potion) {
+				return true;
+			}
+
+			pendingHealHealth = player->getHealth();
+			pendingHealHealthMax = player->getMaxHealth();
+			pendingHealPotionCount = potionCount;
+			pendingHeal = true;
+			++counters.actionsAttempted;
+			g_game.playerUseWithCreature(playerId, Position(0xFFFF, 0, 0), 0, playerId, potion->getClientID());
+			return true;
 		}
 
 		void logEatSuccess(uint32_t inventoryCount, int32_t foodTicks, const Position& position)
@@ -1675,6 +1764,10 @@ class PlayerBotController
 			const Position currentPosition = player->getPosition();
 			lastPosition = currentPosition;
 			maybeLogSummary(currentPosition);
+			if (handleHealing(player, currentPosition)) {
+				schedule(blockedRouteRetryInterval);
+				return;
+			}
 			if (handleFood(player, currentPosition)) {
 				schedule(blockedRouteRetryInterval);
 				return;
@@ -2046,6 +2139,11 @@ class PlayerBotController
 		uint32_t pendingDepositDestinationCount = 0;
 		std::set<uint16_t> unavailableLootItemIds;
 		std::map<uint16_t, uint32_t> itemSellValues;
+		bool pendingHeal = false;
+		int32_t pendingHealHealth = 0;
+		int32_t pendingHealHealthMax = 0;
+		uint32_t pendingHealPotionCount = 0;
+		std::chrono::steady_clock::time_point healRetryAfter;
 		bool pendingEat = false;
 		uint32_t pendingEatInventoryCount = 0;
 		int32_t pendingEatFoodTicks = 0;

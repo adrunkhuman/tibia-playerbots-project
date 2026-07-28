@@ -58,7 +58,7 @@ when no target exists.
 | `service_discovered` | Tagged live NPC name, capability, ID, and registered offer count |
 | `npc_reply` | Selected NPC name, ID, and private acknowledgement text |
 | `target_changed` | `previous_target_id`, `target_id`, optional target type and position, `reason` |
-| `action_result` | Always has `action` and `result`; failures and skipped actions also have `reason`. Navigation plans include destination, step count, and expanded-node count. Successful `eat`, `loot`, and `deposit` records include item details. |
+| `action_result` | Always has `action` and `result`; failures and skipped actions also have `reason`. Navigation plans include destination, step count, and expanded-node count. Successful `heal`, `eat`, `loot`, and `deposit` records include item details. |
 | `stuck` | `reason`, `blocked_steps` |
 | `summary` | Current state and target, uptime, decision/pathfinding timing, action, failure, stuck, and suppression counters |
 | `terminal` | `reason` |
@@ -66,6 +66,14 @@ when no target exists.
 A corpse found empty immediately after normal opening emits `action=loot`,
 `result=skipped`, `reason=corpse_empty`, `corpse_item_id`, `corpse_owner_id`,
 and `corpse_position`.
+
+A healing result includes `method`, `item_id`, `trigger`, `objective`, `state`,
+`health_before`, `health_after`, `health_max`, `resource_before`, and
+`resource_after`. Verified potion consumption with net health gain is
+`result=success`. Missing stock is `result=skipped`, `reason=missing_supply`;
+unobserved consumption is `result=failed`, `reason=use_not_verified`; and
+observed consumption without net health gain is `result=failed`,
+`reason=ineffective_recovery`.
 
 States, actions, results, statuses, and reasons are stable lowercase strings for
 machine consumption. The controller emits a cumulative summary every 60
@@ -156,6 +164,17 @@ any deficit to five small health potions (`8704`) and one meat (`2666`), then
 uses the nearest matching live banker's dialogue to deposit all carried money
 and withdraw 100 gp. NPC names and coordinates are telemetry, not controller
 inputs.
+
+At or below 60% health, the bot interrupts its current objective and uses one
+carried small health potion on itself through normal use-with-creature handling.
+It verifies both potion consumption and net health gain before attempting
+another potion or resuming the unchanged objective. A missing potion is a
+bounded supply outcome that redirects the bot to its existing service cycle;
+unverified use and consumed potions without observed recovery are distinct
+failures. An in-flight potion purchase is verified and its service stage is
+advanced before the bot consumes the newly purchased stock. This is the first
+health-maintenance slice, not general potion, spell, mana, condition, or
+retreat planning.
 
 After depositing remaining carried loot on the tile south of `(32105, 32195, 8)`, the bot
 hunts along `(32084, 32144, 5)`, `(32103, 32124, 8)`,

@@ -66,10 +66,22 @@ pwsh -File scripts/test-playerbot-gameplay.ps1 -ValueLoot
 `-DeathTelemetry` runs the baseline, resets the stack, then verifies contextual
 death and terminal events without actions continuing after death.
 
+`-Healing` runs the baseline, resets the stack, then starts Bot One at 100
+health with three small health potions and no nearby monsters. It verifies
+normal potion consumption and health gain, repeated one-at-a-time healing above
+the 60% threshold, and resumption of the interrupted hunt objective. A second
+focused stack starts at the same health without potions and verifies service
+redirection, purchase verification, healing from the new stock, and resumed
+service:
+
+```powershell
+pwsh -File scripts/test-playerbot-gameplay.ps1 -Healing
+```
+
 For playerbot navigation or looting changes, run the combined suite:
 
 ```powershell
-pwsh -File scripts/test-playerbot-gameplay.ps1 -FullNavigation -CorpseLoot -ValueLoot
+pwsh -File scripts/test-playerbot-gameplay.ps1 -FullNavigation -CorpseLoot -Healing -ValueLoot
 ```
 
 The suite rebuilds the server and resets the disposable Compose stack and
@@ -78,10 +90,11 @@ running. The default timeout is 300 seconds and can be changed with
 `-TimeoutSeconds` from 60 to 3600 seconds.
 
 The overlay's `PLAYERBOT_GAMEPLAY_MODE` accepts `cycle`, `navigation`, `corpse`,
-`death`, or `value`. The script selects these modes automatically from the
-corresponding switches. Navigation, corpse, death, and value modes start the
-controller directly in hunt mode so their fixtures do not interfere with the
-baseline startup service assertions.
+`death`, `healing`, `healing_resupply`, or `value`. The script selects these
+modes automatically from the corresponding switches. Navigation, corpse,
+healing, healing-resupply, death, and value modes start the controller directly
+in hunt mode so their fixtures do not interfere with the baseline startup
+service assertions.
 
 ## Connectionless Regression Overlay
 
