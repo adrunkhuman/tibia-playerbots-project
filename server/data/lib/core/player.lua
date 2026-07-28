@@ -32,6 +32,14 @@ function Player.getDepotItems(self, depotId)
 	return self:getDepotChest(depotId, true):getItemHoldingCount()
 end
 
+function Player.hasRookgaardShield(self)
+	return self:getItemCount(2512) > 0
+		or self:getItemCount(2526) > 0
+		or self:getItemCount(2511) > 0
+		or self:getItemCount(2510) > 0
+		or self:getItemCount(2530) > 0
+end
+
 function Player.hasFlag(self, flag)
 	return self:getGroup():hasFlag(flag)
 end
