@@ -19,6 +19,8 @@
 
 #include "otpch.h"
 
+#include "playerbot.h"
+
 #include "protocolgame.h"
 
 #include "outputmessage.h"
@@ -139,7 +141,7 @@ void ProtocolGame::login(const std::string& name, uint32_t accountId, OperatingS
 {
 	//dispatcher thread
 	Player* foundPlayer = g_game.getPlayerByName(name);
-	if (foundPlayer && foundPlayer->isPlayerBot()) {
+	if ((foundPlayer && foundPlayer->isPlayerBot()) || g_playerBots.owns(name)) {
 		disconnectClient("This character is controlled by the server.");
 		return;
 	}

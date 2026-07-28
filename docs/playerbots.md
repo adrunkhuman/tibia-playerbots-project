@@ -52,7 +52,7 @@ when no target exists.
 
 | Event | Distinguishing fields |
 | ----- | --------------------- |
-| `lifecycle` | `status`: `online`, `dead`, or `removed`. Death records include level, health, objective, controller state, target, last-hit killer, and most-damage source. |
+| `lifecycle` | `status`: `online`, `dead`, `removed`, `recovery_scheduled`, `recovery_failed`, or `recovery_abandoned`. Death records include level, health, objective, controller state, target, last-hit killer, and most-damage source. Recovery records include death count, relog attempt, delay, and bounded failure reason where applicable. |
 | `state_transition` | `from`, `to` |
 | `objective_transition` | Cycle phase `from`, `to`, and `reason`; phases are `service`, `return_to_depot`, `deposit_loot`, and `hunt` |
 | `service_discovered` | Tagged live NPC name, capability, ID, and registered offer count |
@@ -62,6 +62,17 @@ when no target exists.
 | `stuck` | `reason`, `blocked_steps` |
 | `summary` | Current state and target, uptime, decision/pathfinding timing, action, failure, stuck, and suppression counters |
 | `terminal` | `reason` |
+
+Recovery lifecycle fields are evidence-specific:
+
+| Status | Reason | Additional fields |
+| ------ | ------ | ----------------- |
+| `online` | none | `recovered`, `recovery_count`, `objective` |
+| `recovery_scheduled` | `death` or `relog_retry` | `death_count`, `relog_attempt`, `delay_ms` |
+| `recovery_failed` | `player_removal_failed` | none |
+| `recovery_failed` | `relog_failed` | `relog_attempt` |
+| `recovery_abandoned` | `death_loop_limit` | `death_count`, `maximum_deaths` |
+| `recovery_abandoned` | `ownership_conflict` or `relog_attempt_limit` | none |
 
 A corpse found empty immediately after normal opening emits `action=loot`,
 `result=skipped`, `reason=corpse_empty`, `corpse_item_id`, `corpse_owner_id`,
@@ -228,11 +239,31 @@ outcomes remain future work in issue #29.
 Routes, objectives, hunt deadlines, service catalogs, targets, action attempts,
 transient blocked positions, and combat suppression remain in memory only.
 Startup begins a fresh service cycle from the bot's actual persisted position.
+Death preserves the normal corpse, penalties, save, removal, and temple login
+position. The manager retains server ownership while the bot is offline, waits
+for the configured relog delay, loads the same persistent character, and creates
+a fresh controller in the service phase. No pre-death target, route, container,
+NPC conversation, pending action, or objective state is resumed.
+
+Deaths within five minutes of the previous login use exponential relog backoff,
+capped at 60 seconds. A lifetime of at least five minutes resets that count.
+The configured death limit permits that many consecutive recoveries and
+abandons the next death. A failed character load permits three total relog
+attempts: the initial attempt and two retries. Server ownership and human-login
+blocking remain in force during all recovery delays, failures, retries, and
+abandonment outcomes until playerbots are disabled and the server is recreated.
 Removing the Compose volume resets the bot and all other local world state.
 
 `PLAYERBOT_HUNT_DURATION_SECONDS` changes the hunt window at server startup and
 defaults to `300`. Invalid text falls back to `300`; zero and negative values
 are clamped to one second. Recreate the server container after changing it.
+
+`PLAYERBOT_RELOG_DELAY_SECONDS` sets the initial post-death delay and defaults
+to `5`; repeated deaths multiply it by two up to 60 seconds.
+`PLAYERBOT_MAX_CONSECUTIVE_DEATHS` defaults to `3` and bounds automatic recovery
+from a repeated death loop. Invalid text falls back to the respective default;
+zero and negative values are clamped to one. Recreate the server container after
+changing either value.
 
 `PLAYERBOT_ENABLED` is also evaluated at startup. The exact value `"false"`
 disables controller startup; an unset variable or any other value enables it.

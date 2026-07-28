@@ -63,8 +63,11 @@ skip, and completes a bank-funded potion purchase:
 pwsh -File scripts/test-playerbot-gameplay.ps1 -ValueLoot
 ```
 
-`-DeathTelemetry` runs the baseline, resets the stack, then verifies contextual
-death and terminal events without actions continuing after death.
+`-DeathTelemetry` runs the baseline, resets the stack, and sets a one-second
+relog delay with a two-recovery death-loop limit. It verifies contextual death
+and terminal events, one- then two-second elapsed backoff, fresh service-first
+controllers, no actions during relog delays, resumed service discovery, final
+death-loop abandonment, and removal from online state.
 
 `-Healing` runs the baseline, resets the stack, then starts Bot One at 100
 health with three small health potions and no nearby monsters. It verifies
@@ -92,9 +95,12 @@ running. The default timeout is 300 seconds and can be changed with
 The overlay's `PLAYERBOT_GAMEPLAY_MODE` accepts `cycle`, `navigation`, `corpse`,
 `death`, `healing`, `healing_resupply`, or `value`. The script selects these
 modes automatically from the corresponding switches. Navigation, corpse,
-healing, healing-resupply, death, and value modes start the controller directly
-in hunt mode so their fixtures do not interfere with the baseline startup
-service assertions.
+healing, healing-resupply, and value modes start the controller directly in
+hunt mode so their fixtures do not interfere with the baseline startup service
+assertions. Death mode kills the bot outside the temple protection zone,
+verifies two temple relogs with one- then two-second backoff, observes the
+second fresh controller resume service, and forces one final death to verify
+the configured death-loop limit.
 
 ## Connectionless Regression Overlay
 

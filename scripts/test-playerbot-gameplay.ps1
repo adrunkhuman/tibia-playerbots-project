@@ -17,6 +17,8 @@ $gameplayComposeFile = Join-Path $projectRoot "server\compose.playerbot-gameplay
 $composeArguments = @("compose", "-f", $composeFile, "-f", $gameplayComposeFile)
 $previousDuration = $env:PLAYERBOT_HUNT_DURATION_SECONDS
 $previousMode = $env:PLAYERBOT_GAMEPLAY_MODE
+$previousRelogDelay = $env:PLAYERBOT_RELOG_DELAY_SECONDS
+$previousMaximumDeaths = $env:PLAYERBOT_MAX_CONSECUTIVE_DEATHS
 
 function Invoke-Compose {
     param([Parameter(ValueFromRemainingArguments)][string[]]$Arguments)
@@ -35,6 +37,15 @@ function Get-ServerLogs {
     return $output -join "`n"
 }
 
+function Get-OnlineBotCount {
+    $query = "SELECT COUNT(*) FROM players_online JOIN players ON players.id = players_online.player_id WHERE players.name = 'Bot One';"
+    $output = & docker @composeArguments exec -T database mariadb --host=database --user=angelion --password=angelion --skip-column-names angelion -e $query
+    if ($LASTEXITCODE -ne 0) {
+        throw "Could not query Bot One's online state."
+    }
+    return [int]($output | Select-Object -Last 1)
+}
+
 function Wait-ForLog {
     param([string]$Pattern)
 
@@ -47,6 +58,20 @@ function Wait-ForLog {
         Start-Sleep -Seconds 2
     }
     throw "Timed out after $TimeoutSeconds seconds waiting for server log pattern: $Pattern"
+}
+
+function Wait-ForPlayerbotEvent {
+    param([scriptblock]$Predicate)
+
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    while ([DateTime]::UtcNow -lt $deadline) {
+        $logs = Get-ServerLogs
+        if (@(ConvertFrom-PlayerbotLogs -Logs $logs | Where-Object $Predicate).Count -gt 0) {
+            return $logs
+        }
+        Start-Sleep -Seconds 1
+    }
+    throw "Timed out after $TimeoutSeconds seconds waiting for a playerbot event."
 }
 
 function Wait-ForPlayerbotEventCount {
@@ -178,18 +203,72 @@ function Assert-DeathEvents {
     $terminals = @($events | Where-Object {
         $_.event -eq "terminal" -and $_.reason -eq "controlled_player_dead"
     })
-    if ($deaths.Count -ne 1) {
-        throw "Expected exactly one contextual playerbot death event, found $($deaths.Count)."
-    }
-    if ($terminals.Count -ne 1) {
-        throw "Expected exactly one controlled_player_dead terminal event, found $($terminals.Count)."
-    }
-    $deathTimestamp = $deaths[0].ts
-    $actionsAfterDeath = @($events | Where-Object {
-        $_.event -eq "action_result" -and $_.ts -gt $deathTimestamp
+    $scheduled = @($events | Where-Object {
+        $_.event -eq "lifecycle" -and $_.status -eq "recovery_scheduled" -and
+        $_.reason -eq "death" -and $_.relog_attempt -eq 1
     })
-    if ($actionsAfterDeath.Count -ne 0) {
-        throw "The playerbot continued acting after its death was observed."
+    $recovered = @($events | Where-Object {
+        $_.event -eq "lifecycle" -and $_.status -eq "online" -and $_.recovered -eq $true -and
+        $_.objective -eq "service"
+    })
+    $abandoned = @($events | Where-Object {
+        $_.event -eq "lifecycle" -and $_.status -eq "recovery_abandoned" -and
+        $_.reason -eq "death_loop_limit"
+    })
+    if ($deaths.Count -ne 3) {
+        throw "Expected exactly three contextual playerbot death events, found $($deaths.Count)."
+    }
+    if ($terminals.Count -ne 3) {
+        throw "Expected exactly three controlled_player_dead terminal events, found $($terminals.Count)."
+    }
+    if ($scheduled.Count -ne 2 -or $scheduled[0].death_count -ne 1 -or $scheduled[0].delay_ms -ne 1000 -or
+        $scheduled[1].death_count -ne 2 -or $scheduled[1].delay_ms -ne 2000) {
+        throw "Death recovery did not schedule the expected bounded exponential backoff."
+    }
+    if ($recovered.Count -ne 2 -or $recovered[0].recovery_count -ne 1 -or $recovered[1].recovery_count -ne 2) {
+        throw "Expected two fresh service-first recovered controllers."
+    }
+    if ($abandoned.Count -ne 1 -or $abandoned[0].death_count -ne 3 -or $abandoned[0].maximum_deaths -ne 2) {
+        throw "Death recovery did not stop at the configured consecutive-death limit."
+    }
+    if (@($events | Where-Object { $_.event -eq "lifecycle" -and $_.status -eq "recovery_failed" }).Count -ne 0) {
+        throw "The focused death recovery scenario produced a failed relog."
+    }
+
+    for ($deathIndex = 0; $deathIndex -lt $recovered.Count; $deathIndex++) {
+        $start = [Array]::IndexOf($events, $deaths[$deathIndex])
+        $scheduledIndex = [Array]::IndexOf($events, $scheduled[$deathIndex])
+        $terminalIndex = [Array]::IndexOf($events, $terminals[$deathIndex])
+        $end = [Array]::IndexOf($events, $recovered[$deathIndex])
+        if ($start -lt 0 -or $scheduledIndex -le $start -or $terminalIndex -le $scheduledIndex -or $end -le $terminalIndex) {
+            throw "Death, scheduling, terminal, and recovered events were not causally ordered."
+        }
+        $actionsDuringRelog = @($events[($start + 1)..($end - 1)] | Where-Object { $_.event -eq "action_result" })
+        if ($actionsDuringRelog.Count -ne 0) {
+            throw "The dead controller continued acting during its relog delay."
+        }
+        $scheduledAt = [DateTimeOffset]::Parse($scheduled[$deathIndex].ts).ToUnixTimeMilliseconds()
+        $recoveredAt = [DateTimeOffset]::Parse($recovered[$deathIndex].ts).ToUnixTimeMilliseconds()
+        if ($recoveredAt - $scheduledAt -lt $scheduled[$deathIndex].delay_ms - 100) {
+            throw "The bot recovered before its requested relog delay elapsed."
+        }
+    }
+
+    $secondRecoveryIndex = [Array]::IndexOf($events, $recovered[1])
+    $thirdDeathIndex = [Array]::IndexOf($events, $deaths[2])
+    $serviceAfterRecovery = @($events[($secondRecoveryIndex + 1)..($thirdDeathIndex - 1)] | Where-Object {
+        $_.event -eq "service_discovered"
+    })
+    $huntAfterRecovery = @($events[($secondRecoveryIndex + 1)..($thirdDeathIndex - 1)] | Where-Object {
+        $_.event -eq "action_result" -and $_.action -in @("attack", "hunt_cycle", "hunt_waypoint")
+    })
+    if ($serviceAfterRecovery.Count -lt 1 -or $huntAfterRecovery.Count -ne 0) {
+        throw "The final recovered controller did not resume service before hunting."
+    }
+    if (@($events[($thirdDeathIndex + 1)..($events.Count - 1)] | Where-Object {
+        $_.event -eq "lifecycle" -and $_.status -eq "online"
+    }).Count -ne 0) {
+        throw "The bot relogged after reaching the configured death-loop limit."
     }
 }
 
@@ -420,8 +499,18 @@ try {
         Invoke-Compose down --volumes --remove-orphans
         $env:PLAYERBOT_GAMEPLAY_MODE = "death"
         $env:PLAYERBOT_HUNT_DURATION_SECONDS = "900"
+        $env:PLAYERBOT_RELOG_DELAY_SECONDS = "1"
+        $env:PLAYERBOT_MAX_CONSECUTIVE_DEATHS = "2"
         Invoke-Compose up --detach
-        $deathLogs = Wait-ForLog -Pattern '"event":"terminal".*"reason":"controlled_player_dead"'
+        Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST DEATH_RECOVERY_STATE_PASS' | Out-Null
+        $deathLogs = Wait-ForPlayerbotEvent -Predicate {
+            $_.event -eq "lifecycle" -and $_.status -eq "recovery_abandoned" -and $_.reason -eq "death_loop_limit"
+        }
+        Start-Sleep -Seconds 1
+        if ((Get-OnlineBotCount) -ne 0) {
+            throw "Bot One remained online after death recovery was abandoned."
+        }
+        $deathLogs = Get-ServerLogs
         Assert-DeathEvents -Logs $deathLogs
     }
 
@@ -464,5 +553,7 @@ finally {
     finally {
         $env:PLAYERBOT_HUNT_DURATION_SECONDS = $previousDuration
         $env:PLAYERBOT_GAMEPLAY_MODE = $previousMode
+        $env:PLAYERBOT_RELOG_DELAY_SECONDS = $previousRelogDelay
+        $env:PLAYERBOT_MAX_CONSECUTIVE_DEATHS = $previousMaximumDeaths
     }
 }
