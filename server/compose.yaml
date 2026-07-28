@@ -52,6 +52,8 @@ services:
     environment:
       PLAYERBOT_ENABLED: ${PLAYERBOT_ENABLED:-true}
       PLAYERBOT_HUNT_DURATION_SECONDS: ${PLAYERBOT_HUNT_DURATION_SECONDS:-300}
+      PLAYERBOT_RELOG_DELAY_SECONDS: ${PLAYERBOT_RELOG_DELAY_SECONDS:-5}
+      PLAYERBOT_MAX_CONSECUTIVE_DEATHS: ${PLAYERBOT_MAX_CONSECUTIVE_DEATHS:-3}
     depends_on:
       playerbot-setup:
         condition: service_completed_successfully

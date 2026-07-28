@@ -14,6 +14,15 @@ local defensiveMonsterName = "Playerbot Defensive Threat"
 local deathMonsterName = "Playerbot Death Threat"
 local valueMonsterName = "Playerbot Value Corpse"
 local healingPotionCount = 3
+local deathLoginCount = 0
+
+local function removeNearbyMonsters(player)
+    for _, creature in ipairs(Game.getSpectators(player:getPosition(), true, false, 10, 10, 10, 10)) do
+        if creature:isMonster() then
+            creature:remove()
+        end
+    end
+end
 
 local function suppressNearbyMonsters(playerId)
     local player = Player(playerId)
@@ -83,6 +92,14 @@ local function spawnDeathMonster(playerId)
         end
     end
     error("no adjacent tile was available for death telemetry test monster")
+end
+
+local function prepareDeath(playerId)
+    local player = Player(playerId)
+    assert(player and not player:isRemoved(), "Bot One disappeared before death recovery setup")
+    assert(player:teleportTo(depotPosition), "death recovery fixture could not leave the temple protection zone")
+    removeNearbyMonsters(player)
+    spawnDeathMonster(playerId)
 end
 
 local function spawnCorpseMonster(playerId, monsterName)
@@ -199,12 +216,22 @@ function login.onLogin(player)
     local mode = os.getenv("PLAYERBOT_GAMEPLAY_MODE") or "cycle"
     assert(mode == "cycle" or mode == "navigation" or mode == "corpse" or mode == "death" or mode == "healing" or
         mode == "healing_resupply" or mode == "value", "unknown PLAYERBOT_GAMEPLAY_MODE: " .. mode)
-    assert(player:teleportTo(depotPosition), "fake depot position could not be restored")
     if mode == "death" then
-        addEvent(spawnDeathMonster, 100, player:getId())
-        print("PLAYERBOT_GAMEPLAY_TEST DEATH_START")
+        deathLoginCount = deathLoginCount + 1
+        removeNearbyMonsters(player)
+        local position = player:getPosition()
+        assert(position.x == 32097 and position.y == 32219 and position.z == 7,
+            "Bot One did not log in at the Rookgaard temple")
+        if deathLoginCount <= 2 then
+            addEvent(prepareDeath, 100, player:getId())
+            print("PLAYERBOT_GAMEPLAY_TEST DEATH_START " .. deathLoginCount)
+        else
+            addEvent(prepareDeath, 1500, player:getId())
+            print("PLAYERBOT_GAMEPLAY_TEST DEATH_RECOVERY_STATE_PASS")
+        end
         return true
     end
+    assert(player:teleportTo(depotPosition), "fake depot position could not be restored")
     if mode == "navigation" then
         createTemporaryBlockers()
         suppressNearbyMonsters(player:getId())

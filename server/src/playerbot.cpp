@@ -55,9 +55,11 @@ namespace {
 	constexpr std::chrono::seconds navigationBlockSuppression(10);
 	constexpr std::chrono::seconds navigationStepTimeout(2);
 	constexpr std::chrono::seconds healingRetryInterval(2);
+	constexpr std::chrono::minutes stableLifetimeReset(5);
 	constexpr uint32_t returnCapacityThreshold = 30 * 100;
 	constexpr uint32_t carriedGoldReserve = 100;
 	constexpr uint32_t maximumServiceAttempts = 3;
+	constexpr uint32_t maximumRelogAttempts = 3;
 	constexpr Position fakeDepotPosition(32105, 32195, 8);
 	constexpr Position fakeDepotTilePosition(32105, 32196, 8);
 	constexpr std::array<Position, 4> huntingLoop = {{
@@ -110,9 +112,26 @@ namespace {
 		          << std::setw(3) << std::setfill('0') << milliseconds << 'Z';
 		return timestamp.str();
 	}
+
+	void emitPlayerbotEvent(const std::string& playerName, uint32_t playerGuid, const char* event,
+	                        const Position& position, const std::string& fields = {})
+	{
+		std::ostringstream output;
+		output << "{\"schema\":1,\"ts\":" << jsonString(utcTimestamp())
+		       << ",\"component\":\"playerbot\",\"event\":" << jsonString(event)
+		       << ",\"bot\":" << jsonString(playerName)
+		       << ",\"player_id\":" << playerGuid
+		       << ",\"position\":{\"x\":" << position.x << ",\"y\":" << position.y
+		       << ",\"z\":" << static_cast<uint16_t>(position.z) << '}';
+		if (!fields.empty()) {
+			output << ',' << fields;
+		}
+		output << "}\n";
+		std::cout << output.str() << std::flush;
+	}
 }
 
-class PlayerBotController
+class PlayerBotController : public std::enable_shared_from_this<PlayerBotController>
 {
 	friend class PlayerBotManager;
 
@@ -121,15 +140,22 @@ class PlayerBotController
 			playerId(player.getID()), playerGuid(player.getGUID()), playerName(player.getName())
 		{}
 
-		void start(const Position& position)
+		void start(const Position& position, bool recovered, uint32_t recoveryCount)
 		{
 			lastPosition = position;
 			refreshItemValues();
-			emit("lifecycle", position, "\"status\":\"online\",\"message\":\"Playerbot online\"");
 			const char* gameplayMode = std::getenv("PLAYERBOT_GAMEPLAY_MODE");
-			if (gameplayMode && (std::strcmp(gameplayMode, "navigation") == 0 || std::strcmp(gameplayMode, "corpse") == 0 ||
-			                     std::strcmp(gameplayMode, "healing") == 0 || std::strcmp(gameplayMode, "healing_resupply") == 0 ||
-			                     std::strcmp(gameplayMode, "value") == 0)) {
+			const bool startInHunt = !recovered && gameplayMode &&
+				(std::strcmp(gameplayMode, "navigation") == 0 || std::strcmp(gameplayMode, "corpse") == 0 ||
+				 std::strcmp(gameplayMode, "healing") == 0 || std::strcmp(gameplayMode, "healing_resupply") == 0 ||
+				 std::strcmp(gameplayMode, "value") == 0);
+			std::ostringstream lifecycle;
+			lifecycle << "\"status\":\"online\",\"message\":\"Playerbot online\""
+			          << ",\"recovered\":" << (recovered ? "true" : "false")
+			          << ",\"recovery_count\":" << recoveryCount
+			          << ",\"objective\":\"" << (startInHunt ? "hunt" : "service") << '"';
+			emit("lifecycle", position, lifecycle.str());
+			if (startInHunt) {
 				startHunt(position);
 			} else {
 				cyclePhase = CyclePhase::Service;
@@ -217,7 +243,12 @@ class PlayerBotController
 
 		void schedule(uint32_t interval)
 		{
-			g_scheduler.addEvent(createSchedulerTask(interval, std::bind(&PlayerBotController::navigate, this)));
+			std::weak_ptr<PlayerBotController> weakController = shared_from_this();
+			g_scheduler.addEvent(createSchedulerTask(interval, [weakController]() {
+				if (std::shared_ptr<PlayerBotController> controller = weakController.lock()) {
+					controller->navigate();
+				}
+			}));
 		}
 
 		static const char* stageName(ScenarioStage stage)
@@ -233,18 +264,7 @@ class PlayerBotController
 
 		void emit(const char* event, const Position& position, const std::string& fields = {}) const
 		{
-			std::ostringstream output;
-			output << "{\"schema\":1,\"ts\":" << jsonString(utcTimestamp())
-			       << ",\"component\":\"playerbot\",\"event\":" << jsonString(event)
-			       << ",\"bot\":" << jsonString(playerName)
-			       << ",\"player_id\":" << playerGuid
-			       << ",\"position\":{\"x\":" << position.x << ",\"y\":" << position.y
-			       << ",\"z\":" << static_cast<uint16_t>(position.z) << '}';
-			if (!fields.empty()) {
-				output << ',' << fields;
-			}
-			output << "}\n";
-			std::cout << output.str() << std::flush;
+			emitPlayerbotEvent(playerName, playerGuid, event, position, fields);
 		}
 
 		bool shouldEmitRepeated(const std::string& key)
@@ -2196,11 +2216,44 @@ PlayerBotManager g_playerBots;
 
 PlayerBotManager::~PlayerBotManager() = default;
 
+bool PlayerBotManager::owns(const std::string& name) const
+{
+	return !controlledName.empty() && strcasecmp(controlledName.c_str(), name.c_str()) == 0;
+}
+
 void PlayerBotManager::onDeath(const Player& player, const Creature* killer, const Creature* mostDamageKiller)
 {
-	if (controller) {
-		controller->onDeath(player, killer, mostDamageKiller);
+	if (!controller || player.getID() != controller->playerId) {
+		return;
 	}
+
+	controller->onDeath(player, killer, mostDamageKiller);
+	if (recoveryEventId != 0) {
+		return;
+	}
+
+	const auto now = std::chrono::steady_clock::now();
+	if (lastSpawnedAt.time_since_epoch().count() != 0 && now - lastSpawnedAt >= stableLifetimeReset) {
+		consecutiveDeaths = 0;
+	}
+	++consecutiveDeaths;
+	const uint32_t maximumDeaths = std::max<int32_t>(1, g_config.getNumber(ConfigManager::PLAYERBOT_MAX_CONSECUTIVE_DEATHS));
+	if (consecutiveDeaths > maximumDeaths) {
+		controller->emit("lifecycle", player.getPosition(),
+		                 "\"status\":\"recovery_abandoned\",\"reason\":\"death_loop_limit\",\"death_count\":" +
+		                     std::to_string(consecutiveDeaths) + ",\"maximum_deaths\":" + std::to_string(maximumDeaths));
+		const uint32_t generation = ++recoveryGeneration;
+		recoveryEventId = g_scheduler.addEvent(createSchedulerTask(
+			SCHEDULER_MINTICKS, std::bind(&PlayerBotManager::finalizeAbandonedDeath, this, generation)));
+		return;
+	}
+
+	uint64_t delay = std::min<uint64_t>(static_cast<uint64_t>(std::max<int32_t>(1,
+		g_config.getNumber(ConfigManager::PLAYERBOT_RELOG_DELAY_SECONDS))) * 1000, 60000);
+	for (uint32_t death = 1; death < consecutiveDeaths && delay < 60000; ++death) {
+		delay = std::min<uint64_t>(delay * 2, 60000);
+	}
+	scheduleRecovery(static_cast<uint32_t>(delay), 1);
 }
 
 void PlayerBotManager::onNpcReply(uint32_t playerId, uint32_t npcId, uint8_t type, const std::string& text)
@@ -2212,7 +2265,16 @@ void PlayerBotManager::onNpcReply(uint32_t playerId, uint32_t npcId, uint8_t typ
 
 bool PlayerBotManager::spawn(const std::string& name)
 {
-	if (g_game.getPlayerByName(name)) {
+	if (controller || g_game.getPlayerByName(name)) {
+		return false;
+	}
+	consecutiveDeaths = 0;
+	return load(name, false);
+}
+
+bool PlayerBotManager::load(const std::string& name, bool recovered)
+{
+	if (controller || g_game.getPlayerByName(name)) {
 		return false;
 	}
 
@@ -2227,9 +2289,11 @@ bool PlayerBotManager::spawn(const std::string& name)
 	if (!result) {
 		return false;
 	}
+	controlledName = name;
+	controlledGuid = result->getNumber<uint32_t>("id");
 
 	Player* player = new Player(nullptr);
-	if (!IOLoginData::loadPlayerById(player, result->getNumber<uint32_t>("id"))) {
+	if (!IOLoginData::loadPlayerById(player, controlledGuid)) {
 		delete player;
 		return false;
 	}
@@ -2245,7 +2309,93 @@ bool PlayerBotManager::spawn(const std::string& name)
 		return false;
 	}
 
-	controller = std::make_unique<PlayerBotController>(*player);
-	controller->start(player->getPosition());
+	controller = std::make_shared<PlayerBotController>(*player);
+	lastSpawnedAt = std::chrono::steady_clock::now();
+	controller->start(player->getPosition(), recovered, consecutiveDeaths);
 	return true;
+}
+
+void PlayerBotManager::scheduleRecovery(uint32_t delay, uint32_t relogAttempt)
+{
+	if (!controller || recoveryEventId != 0) {
+		return;
+	}
+
+	controller->emit("lifecycle", controller->lastPosition,
+	                 "\"status\":\"recovery_scheduled\",\"reason\":\"death\",\"death_count\":" +
+	                     std::to_string(consecutiveDeaths) + ",\"relog_attempt\":" + std::to_string(relogAttempt) +
+	                     ",\"delay_ms\":" + std::to_string(delay));
+	const uint32_t generation = ++recoveryGeneration;
+	recoveryEventId = g_scheduler.addEvent(createSchedulerTask(
+		delay, std::bind(&PlayerBotManager::recover, this, generation, relogAttempt)));
+}
+
+void PlayerBotManager::recover(uint32_t generation, uint32_t relogAttempt)
+{
+	if (generation != recoveryGeneration || controlledName.empty()) {
+		return;
+	}
+	recoveryEventId = 0;
+	Position recoveryPosition = controller ? controller->lastPosition : Position();
+
+	if (Player* existing = g_game.getPlayerByName(controlledName)) {
+		if (!existing->isPlayerBot() || existing->getGUID() != controlledGuid) {
+			emitPlayerbotEvent(controlledName, controlledGuid, "lifecycle", recoveryPosition,
+			                   "\"status\":\"recovery_abandoned\",\"reason\":\"ownership_conflict\"");
+			return;
+		}
+		if (controller) {
+			controller->stop("controlled_player_dead", recoveryPosition);
+		}
+		if (!g_game.removeCreature(existing, false)) {
+			emitPlayerbotEvent(controlledName, controlledGuid, "lifecycle", recoveryPosition,
+			                   "\"status\":\"recovery_failed\",\"reason\":\"player_removal_failed\"");
+			return;
+		}
+	}
+
+	if (controller) {
+		controller->stop("controlled_player_dead", recoveryPosition);
+		controller.reset();
+	}
+	if (load(controlledName, true)) {
+		return;
+	}
+
+	emitPlayerbotEvent(controlledName, controlledGuid, "lifecycle", recoveryPosition,
+	                   "\"status\":\"recovery_failed\",\"reason\":\"relog_failed\",\"relog_attempt\":" +
+	                       std::to_string(relogAttempt));
+	if (relogAttempt >= maximumRelogAttempts) {
+		emitPlayerbotEvent(controlledName, controlledGuid, "lifecycle", recoveryPosition,
+		                   "\"status\":\"recovery_abandoned\",\"reason\":\"relog_attempt_limit\"");
+		return;
+	}
+
+	const uint64_t configuredRetryDelay = static_cast<uint64_t>(std::max<int32_t>(1,
+		g_config.getNumber(ConfigManager::PLAYERBOT_RELOG_DELAY_SECONDS))) * 1000;
+	const uint32_t retryDelay = static_cast<uint32_t>(std::min<uint64_t>(configuredRetryDelay, 60000));
+	emitPlayerbotEvent(controlledName, controlledGuid, "lifecycle", recoveryPosition,
+	                   "\"status\":\"recovery_scheduled\",\"reason\":\"relog_retry\",\"death_count\":" +
+	                       std::to_string(consecutiveDeaths) + ",\"relog_attempt\":" + std::to_string(relogAttempt + 1) +
+	                       ",\"delay_ms\":" + std::to_string(retryDelay));
+	const uint32_t retryGeneration = ++recoveryGeneration;
+	recoveryEventId = g_scheduler.addEvent(createSchedulerTask(
+		retryDelay, std::bind(&PlayerBotManager::recover, this, retryGeneration, relogAttempt + 1)));
+}
+
+void PlayerBotManager::finalizeAbandonedDeath(uint32_t generation)
+{
+	if (generation != recoveryGeneration) {
+		return;
+	}
+	recoveryEventId = 0;
+	const Position position = controller ? controller->lastPosition : Position();
+	if (controller) {
+		controller->stop("controlled_player_dead", position);
+	}
+	if (Player* existing = g_game.getPlayerByName(controlledName);
+	    existing && existing->isPlayerBot() && existing->getGUID() == controlledGuid) {
+		g_game.removeCreature(existing, false);
+	}
+	controller.reset();
 }
