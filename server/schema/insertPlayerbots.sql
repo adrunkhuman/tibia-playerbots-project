@@ -2,7 +2,7 @@ INSERT INTO `accounts` (`name`, `password`, `type`, `premium_ends_at`, `email`, 
 VALUES ('bot-one', SHA1('bot-one'), 1, 0, '', 0)
 ON DUPLICATE KEY UPDATE `id` = `id`;
 
--- These local-development defaults support the hardcoded Rookgaard traversal scenario.
+-- These local-development defaults support the Rookgaard hunt and service loop.
 
 CREATE TABLE IF NOT EXISTS `player_bots` (
     `player_id` int NOT NULL,
