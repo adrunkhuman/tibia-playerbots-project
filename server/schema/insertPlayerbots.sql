@@ -20,11 +20,11 @@ INSERT INTO `players` (
     `cap`, `sex`, `stamina`, `skill_sword`, `skill_shielding`, `balance`
 )
 SELECT
-    'Bot One', 1, `id`, 50, 0, 395,
-    395, 1847300, 68, 76, 78,
-    39, 128, 0, 2, 0, 245,
-    245, 0, 100, 6, 32097, 32219, 7,
-    890, 1, 2520, 70, 60, 10000
+    'Bot One', 1, `id`, 1, 0, 150,
+    150, 0, 68, 76, 78,
+    39, 128, 0, 2, 0, 0,
+    0, 0, 100, 6, 32097, 32219, 7,
+    400, 1, 2520, 70, 60, 10000
 FROM `accounts`
 WHERE `name` = 'bot-one'
   AND NOT EXISTS (SELECT 1 FROM `players` WHERE `name` = 'Bot One');

@@ -77,6 +77,7 @@ struct spellBlock_t {
 		range(other.range),
 		minCombatValue(other.minCombatValue),
 		maxCombatValue(other.maxCombatValue),
+		conditionDamage(other.conditionDamage),
 		combatSpell(other.combatSpell),
 		isMelee(other.isMelee) {
 		other.spell = nullptr;
@@ -88,6 +89,7 @@ struct spellBlock_t {
 	uint32_t range = 0;
 	int32_t minCombatValue = 0;
 	int32_t maxCombatValue = 0;
+	int32_t conditionDamage = 0;
 	bool combatSpell = false;
 	bool isMelee = false;
 };

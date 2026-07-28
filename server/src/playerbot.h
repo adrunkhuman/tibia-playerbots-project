@@ -11,8 +11,11 @@
 #ifndef FS_PLAYERBOT_H
 #define FS_PLAYERBOT_H
 
+#include "position.h"
+
 #include <cstdint>
 #include <chrono>
+#include <map>
 #include <memory>
 #include <string>
 
@@ -28,6 +31,7 @@ class PlayerBotManager
 		bool spawn(const std::string& name);
 		bool owns(const std::string& name) const;
 		void onDeath(const Player& player, const Creature* killer, const Creature* mostDamageKiller);
+		void onHealthDrain(const Player& player, uint32_t damage);
 		void onNpcReply(uint32_t playerId, uint32_t npcId, uint8_t type, const std::string& text);
 
 	private:
@@ -42,6 +46,7 @@ class PlayerBotManager
 		uint32_t recoveryEventId = 0;
 		uint32_t recoveryGeneration = 0;
 		uint32_t consecutiveDeaths = 0;
+		std::map<Position, std::chrono::steady_clock::time_point> huntRegionCooldowns;
 		std::chrono::steady_clock::time_point lastSpawnedAt;
 };
 

@@ -1503,6 +1503,9 @@ void Player::removeMessageBuffer()
 void Player::drainHealth(Creature* attacker, int32_t damage)
 {
 	Creature::drainHealth(attacker, damage);
+	if (isPlayerBot() && damage > 0) {
+		g_playerBots.onHealthDrain(*this, static_cast<uint32_t>(damage));
+	}
 	sendStats();
 }
 

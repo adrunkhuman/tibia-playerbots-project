@@ -307,6 +307,7 @@ bool Monsters::deserializeSpell(const pugi::xml_node& node, spellBlock_t& sb, co
 			}
 
 			if (conditionType != CONDITION_NONE) {
+				sb.conditionDamage = std::max(std::abs(minDamage), std::abs(maxDamage));
 				Condition* condition = getDamageCondition(conditionType, maxDamage, minDamage, 0, tickInterval);
 				combat->addCondition(condition);
 			}
@@ -487,6 +488,7 @@ bool Monsters::deserializeSpell(const pugi::xml_node& node, spellBlock_t& sb, co
 			int32_t minDamage = std::abs(sb.minCombatValue);
 			int32_t maxDamage = std::abs(sb.maxCombatValue);
 			int32_t startDamage = 0;
+			sb.conditionDamage = std::max(minDamage, maxDamage);
 
 			if ((attr = node.attribute("start"))) {
 				int32_t value = std::abs(pugi::cast<int32_t>(attr.value()));

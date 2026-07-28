@@ -38,6 +38,12 @@ struct spawnBlock_t {
 	Direction direction;
 };
 
+struct SpawnBlockSnapshot {
+	Position position;
+	std::vector<std::pair<const MonsterType*, uint16_t>> monsterTypes;
+	uint32_t interval = 0;
+};
+
 class Spawn
 {
 	public:
@@ -62,6 +68,7 @@ class Spawn
 
 		bool isInSpawnZone(const Position& pos);
 		void cleanup();
+		void appendSnapshots(std::vector<SpawnBlockSnapshot>& snapshots) const;
 
 	private:
 		//map of the spawned creatures
@@ -91,6 +98,7 @@ class Spawns
 		bool loadFromXml(const std::string& filename);
 		void startup();
 		void clear();
+		std::vector<SpawnBlockSnapshot> getMonsterSpawnSnapshots() const;
 
 		bool isStarted() const {
 			return started;

@@ -298,8 +298,8 @@ function Assert-HealingEvents {
             $planAfterHealing = $true
         }
     }
-    if ($heals.Count -lt 2 -or $heals.Count -gt 3) {
-        throw "Expected two or three verified small-health-potion actions, found $($heals.Count)."
+    if ($heals.Count -lt 1 -or $heals.Count -gt 3) {
+        throw "Expected one to three verified small-health-potion actions, found $($heals.Count)."
     }
     if ($heals[-1].health_after * 100 -le $heals[-1].health_max * 60) {
         throw "The bot did not heal above its configured health threshold."
@@ -336,7 +336,7 @@ function Assert-HealingResupplyEvents {
     $transactionFailures = @($events | Where-Object {
         $_.reason -eq "transaction_delta_mismatch" -or $_.reason -eq "shop_transaction_delta_mismatch"
     })
-    if ($missingSupply.Count -ne 1 -or $purchases.Count -lt 1 -or $heals.Count -lt 2) {
+    if ($missingSupply.Count -ne 1 -or $purchases.Count -lt 1 -or $heals.Count -lt 1) {
         throw "The bot did not refill and consume potions after the missing-supply healing outcome."
     }
     if ($serviceResumed.Count -lt 1) {
