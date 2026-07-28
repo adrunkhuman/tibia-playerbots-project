@@ -19,7 +19,7 @@ npcHandler:addModule(VoiceModule:new(voices))
 -- Greeting and Farewell
 keywordHandler:addGreetKeyword({'hi'}, {npcHandler = npcHandler, text = 'Good day, Ma\'am. How may I help you, |PLAYERNAME|? If you like to see my offers, simply ask me for a trade!'}, function(player) return player:getSex() == PLAYERSEX_FEMALE end)
 keywordHandler:addAliasKeyword({'hello'})
-keywordHandler:addGreetKeyword({'hi'}, {npcHandler = npcHandler, text = 'Good day, Sir. How may I help you, |PLAYERNAME|? If you like to see my offers, simply ask me for a trade!'}, function(player) return player:getSex() == PLAYERSEX_FEMALE end)
+keywordHandler:addGreetKeyword({'hi'}, {npcHandler = npcHandler, text = 'Good day, Sir. How may I help you, |PLAYERNAME|? If you like to see my offers, simply ask me for a trade!'}, function(player) return player:getSex() == PLAYERSEX_MALE end)
 keywordHandler:addAliasKeyword({'hello'})
 keywordHandler:addFarewellKeyword({'bye'}, {npcHandler = npcHandler, text = 'Good bye, Ma\'am.'}, function(player) return player:getSex() == PLAYERSEX_FEMALE end)
 keywordHandler:addAliasKeyword({'farewell'})
