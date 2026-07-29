@@ -27,11 +27,12 @@ local function creatureSayCallback(cid, type, msg)
 	local player = Player(cid)
 
 	if (msgcontains(msg, "offers")) then
-		local text = "I have these offers: "
-		for i, v in pairs(itemsTable) do
-			text = text.. "{" ..i.. "}, "
+		local offers = {}
+		for name in pairs(itemsTable) do
+			offers[#offers + 1] = "{" .. name .. "}"
 		end
-		npcHandler:say(text, cid)
+		table.sort(offers)
+		npcHandler:say("I have these offers: " .. table.concat(offers, ", ") .. ".", cid)
 	end
 
 	if npcHandler.topic[cid] == 0 then
