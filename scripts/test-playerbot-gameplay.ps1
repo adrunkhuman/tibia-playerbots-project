@@ -425,24 +425,24 @@ function Assert-PickupProgressionEvents {
 
     $events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
     $candidate = @($events | Where-Object {
-        $_.event -eq "strategy_candidate" -and $_.candidate_id -eq 64119 -and $_.result -eq "feasible" -and
-        $_.item_id -eq 2404 -and $_.benefit -eq 1 -and $_.travel_steps -gt 0
+        $_.event -eq "strategy_candidate" -and $_.candidate_id -eq 64120 -and $_.result -eq "feasible" -and
+        $_.item_id -eq 2384 -and $_.benefit -eq 3 -and $_.travel_steps -gt 0
     })
     $selection = @($events | Where-Object {
-        $_.event -eq "strategy_selection" -and $_.candidate_id -eq 64119 -and
-        $_.reason -eq "nearest_useful_reachable_reward"
+        $_.event -eq "strategy_selection" -and $_.candidate_id -eq 64120 -and
+		$_.reason -eq "highest_known_utility_reachable_reward"
     })
     $claim = @($events | Where-Object {
         $_.event -eq "action_result" -and $_.action -eq "claim_reward" -and $_.result -eq "success" -and
-        $_.candidate_id -eq 64119 -and $_.item_id -eq 2404 -and $_.inventory_after -eq ($_.inventory_before + 1)
+        $_.candidate_id -eq 64120 -and $_.item_id -eq 2384 -and $_.inventory_after -eq ($_.inventory_before + 1)
     })
     $equip = @($events | Where-Object {
         $_.event -eq "action_result" -and $_.action -eq "equip" -and $_.result -eq "success" -and
-        $_.item_id -eq 2404 -and $_.displaced_item_id -eq 2382 -and $_.metric -eq "attack" -and
-        $_.value_before -eq 7 -and $_.value_after -eq 8
+        $_.item_id -eq 2384 -and $_.displaced_item_id -eq 2382 -and $_.metric -eq "attack" -and
+		$_.value_before -eq 7 -and $_.value_after -eq 10
     })
     $complete = @($events | Where-Object {
-        $_.event -eq "strategy_objective_result" -and $_.candidate_id -eq 64119 -and
+        $_.event -eq "strategy_objective_result" -and $_.candidate_id -eq 64120 -and
         $_.result -eq "success" -and $_.reason -eq "reward_equipped"
     })
     $online = @($events | Where-Object {
@@ -464,16 +464,98 @@ function Assert-PickupProgressionRestartEvents {
     $events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
     $firstClaims = @($events | Where-Object {
         $_.event -eq "action_result" -and $_.action -eq "claim_reward" -and
-        $_.result -eq "success" -and $_.candidate_id -eq 64119
+		$_.result -eq "success" -and $_.candidate_id -eq 64120
     })
     $nextSelection = @($events | Where-Object {
-        $_.event -eq "strategy_selection" -and $_.candidate_id -eq 64120 -and $_.item_id -eq 2384
+		$_.event -eq "strategy_selection" -and $_.candidate_id -ne 64120
     })
     $online = @($events | Where-Object {
         $_.event -eq "lifecycle" -and $_.status -eq "online" -and $_.objective -eq "pickup_reward"
     })
-    if ($firstClaims.Count -ne 1 -or $nextSelection.Count -ne 1 -or $online.Count -ne 2) {
+	if ($firstClaims.Count -ne 1 -or $nextSelection.Count -ne 1 -or $online.Count -ne 2) {
         throw "Pickup progression did not reconstruct the next objective from persisted claim and equipment state."
+    }
+}
+
+function Assert-NestedPickupProgressionEvents {
+    param([string]$Logs)
+
+    $events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
+    $selection = @($events | Where-Object {
+        $_.event -eq "strategy_selection" -and $_.candidate_id -eq 50083 -and $_.item_id -eq 2512 -and
+        $_.root_item_id -eq 1994 -and $_.known_utility -gt 0
+    })
+    $inspection = @($events | Where-Object {
+        $_.event -eq "reward_inspection" -and $_.candidate_id -eq 50083 -and $_.recursive -and
+        $_.item_count -ge 5 -and $_.container_count -eq 1 -and $_.equipment_upgrade_count -eq 3 -and
+        @($_.items | Where-Object { $_.item_id -eq 2512 -and $_.classes -contains "equipment_upgrade" }).Count -eq 1 -and
+        @($_.items | Where-Object { $_.item_id -eq 2380 }).Count -eq 1 -and
+        @($_.items | Where-Object { $_.item_id -eq 2175 }).Count -eq 1 -and
+        (@($_.items | Where-Object { $_.item_id -eq 2666 -and $_.classes -contains "food" }) |
+            Measure-Object -Property count -Sum).Sum -eq 2
+    })
+    $claim = @($events | Where-Object {
+        $_.event -eq "action_result" -and $_.action -eq "claim_reward" -and $_.candidate_id -eq 50083 -and
+        $_.root_item_id -eq 1994 -and $_.root_count_after -eq ($_.root_count_before + 1)
+    })
+    $opened = @($events | Where-Object {
+        $_.event -eq "action_result" -and $_.action -eq "open_reward_container" -and
+        $_.result -eq "requested" -and $_.item_id -eq 1994 -and $_.depth -eq 0
+    })
+    $equip = @($events | Where-Object {
+        $_.event -eq "action_result" -and $_.action -eq "equip" -and $_.result -eq "success" -and
+        $_.item_id -eq 2512 -and $_.slot -eq 5
+    })
+    $equipIndex = -1
+    $claimSeen = $false
+    $eatDuringAccess = $false
+    for ($index = 0; $index -lt $events.Count; $index++) {
+        if ($events[$index].event -eq "action_result" -and $events[$index].action -eq "claim_reward" -and
+            $events[$index].result -eq "success" -and $events[$index].candidate_id -eq 50083) {
+            $claimSeen = $true
+        }
+        if ($events[$index].event -eq "action_result" -and $events[$index].action -eq "equip" -and
+            $events[$index].result -eq "success" -and $events[$index].item_id -eq 2512) {
+            $equipIndex = $index
+            break
+        }
+        if ($claimSeen -and $events[$index].event -eq "action_result" -and $events[$index].action -eq "eat") {
+            $eatDuringAccess = $true
+        }
+    }
+    if ($selection.Count -ne 1 -or $inspection.Count -lt 1 -or $claim.Count -ne 1 -or
+        $opened.Count -ne 1 -or $equip.Count -ne 1 -or $equipIndex -lt 0 -or $eatDuringAccess) {
+        throw "Nested pickup progression failed: selection=$($selection.Count), inspection=$($inspection.Count), claim=$($claim.Count), opened=$($opened.Count), equip=$($equip.Count), equipIndex=$equipIndex, eatDuringAccess=$eatDuringAccess."
+    }
+}
+
+function Assert-EconomicPickupProgressionEvents {
+    param([string]$Logs)
+
+    $events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
+    $selection = @($events | Where-Object {
+        $_.event -eq "strategy_selection" -and $_.candidate_id -eq 50082 -and $_.item_id -eq 2152 -and
+        $_.root_item_id -eq 2152 -and $_.known_utility -eq 1000
+    })
+    $inspection = @($events | Where-Object {
+        $_.event -eq "reward_inspection" -and $_.candidate_id -eq 50082 -and $_.item_count -eq 2 -and
+        $_.currency_value -eq 1000 -and $_.equipment_upgrade_count -eq 0 -and
+        @($_.items | Where-Object { $_.item_id -eq 2152 -and $_.classes -contains "currency" }).Count -eq 1 -and
+        @($_.items | Where-Object { $_.item_id -eq 2050 -and $_.classes -contains "unknown_keep" }).Count -eq 1
+    })
+    $claim = @($events | Where-Object {
+        $_.event -eq "action_result" -and $_.action -eq "claim_reward" -and $_.candidate_id -eq 50082 -and
+        $_.inventory_before -eq 5 -and $_.inventory_after -eq 15 -and
+        $_.top_level_root_count -eq 2 -and $_.all_roots_verified
+    })
+    $complete = @($events | Where-Object {
+        $_.event -eq "strategy_objective_result" -and $_.candidate_id -eq 50082 -and
+        $_.result -eq "success" -and $_.reason -eq "reward_bundle_claimed"
+    })
+    $equipmentActions = @($events | Where-Object { $_.action -eq "equip" -or $_.action -eq "open_reward_container" })
+    if ($selection.Count -ne 1 -or $inspection.Count -lt 1 -or $claim.Count -ne 1 -or
+        $complete.Count -ne 1 -or $equipmentActions.Count -ne 0) {
+        throw "Economic pickup progression did not preserve and verify the complete non-equipment reward bundle."
     }
 }
 
@@ -482,12 +564,12 @@ function Assert-PickupProgressionResumeEvents {
 
     $events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
     $selection = @($events | Where-Object {
-        $_.event -eq "strategy_selection" -and $_.candidate_id -eq 64119 -and
+        $_.event -eq "strategy_selection" -and $_.candidate_id -eq 64120 -and
         $_.reason -eq "resume_claimed_upgrade" -and $_.travel_steps -eq 0
     })
     $equip = @($events | Where-Object {
         $_.event -eq "action_result" -and $_.action -eq "equip" -and $_.result -eq "success" -and
-        $_.item_id -eq 2404 -and $_.displaced_item_id -eq 2382
+        $_.item_id -eq 2384 -and $_.displaced_item_id -eq 2382
     })
     if ($selection.Count -ne 1 -or $equip.Count -ne 1) {
         throw "Pickup progression did not resume a persisted claimed-but-unequipped reward."
@@ -497,12 +579,36 @@ function Assert-PickupProgressionResumeEvents {
     }
 }
 
+function Assert-NestedPickupProgressionResumeEvents {
+    param([string]$Logs)
+
+    $events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
+    $selection = @($events | Where-Object {
+        $_.event -eq "strategy_selection" -and $_.candidate_id -eq 50083 -and
+        $_.item_id -eq 2512 -and $_.root_item_id -eq 1994 -and
+        $_.reason -eq "resume_claimed_upgrade" -and $_.travel_steps -eq 0
+    })
+    $opened = @($events | Where-Object {
+        $_.event -eq "action_result" -and $_.action -eq "open_reward_container" -and $_.item_id -eq 1994
+    })
+    $equip = @($events | Where-Object {
+        $_.event -eq "action_result" -and $_.action -eq "equip" -and $_.result -eq "success" -and
+        $_.item_id -eq 2512
+    })
+    if ($selection.Count -ne 1 -or $opened.Count -ne 1 -or $equip.Count -ne 1) {
+        throw "Pickup progression did not resume a persisted nested claimed-but-unequipped reward."
+    }
+    if (@($events | Where-Object { $_.action -eq "claim_reward" }).Count -ne 0) {
+        throw "Nested claimed-reward reconstruction attempted to claim the reward again."
+    }
+}
+
 function Assert-PickupProgressionSpaceEvents {
     param([string]$Logs)
 
     $events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
     $rejected = @($events | Where-Object {
-        $_.event -eq "strategy_candidate" -and $_.candidate_id -eq 64119 -and
+        $_.event -eq "strategy_candidate" -and $_.candidate_id -eq 64120 -and
         $_.result -eq "rejected" -and $_.reason -eq "insufficient_inventory_space"
     })
     $selected = @($events | Where-Object { $_.event -eq "strategy_selection" })
@@ -521,7 +627,7 @@ function Assert-GoalArbitrationEvents {
     $selections = @($events | Where-Object { $_.event -eq "goal_selection" } | Sort-Object decision_id)
     if ($selections.Count -ne 4 -or
         $selections[0].decision_id -ne 1 -or $selections[0].decision_reason -ne "startup" -or
-        $selections[0].to_goal -ne "pickup_reward" -or $selections[0].candidate_id -ne 64119 -or
+        $selections[0].to_goal -ne "pickup_reward" -or $selections[0].candidate_id -ne 64120 -or
         $selections[1].decision_id -ne 2 -or $selections[1].decision_reason -ne "pickup_complete" -or
         $selections[1].from_goal -ne "pickup_reward" -or $selections[1].to_goal -ne "service" -or
         $selections[2].decision_id -ne 3 -or $selections[2].decision_reason -ne "service_complete" -or
@@ -534,7 +640,7 @@ function Assert-GoalArbitrationEvents {
     $initialCandidates = @($events | Where-Object { $_.event -eq "goal_candidate" -and $_.decision_id -eq 1 })
     $initialService = @($initialCandidates | Where-Object { $_.goal -eq "service" -and $_.feasible -and $_.utility -gt 300 })
     $initialPickup = @($initialCandidates | Where-Object {
-        $_.goal -eq "pickup_reward" -and $_.feasible -and $_.candidate_id -eq 64119 -and $_.utility -gt 500
+        $_.goal -eq "pickup_reward" -and $_.feasible -and $_.candidate_id -eq 64120 -and $_.utility -gt 500
     })
     $initialHunt = @($initialCandidates | Where-Object {
         $_.goal -eq "hunt" -and -not $_.evaluated -and -not $_.feasible -and $_.utility -eq 300 -and
@@ -722,13 +828,32 @@ try {
             $env:PLAYERBOT_HUNT_DURATION_SECONDS = "900"
             Invoke-Compose up --detach
             Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST PICKUP_PROGRESSION_PASS' | Out-Null
-            $progressionLogs = Wait-ForLog -Pattern '"event":"strategy_objective_result".*"candidate_id":64119.*"result":"success"'
+            $progressionLogs = Wait-ForLog -Pattern '"event":"strategy_objective_result".*"candidate_id":64120.*"result":"success"'
             Assert-PickupProgressionEvents -Logs $progressionLogs
             Invoke-Compose stop server
             Invoke-Compose up --detach server
-            $restartLogs = Wait-ForLog -Pattern '"event":"strategy_selection".*"candidate_id":64120.*"item_id":2384'
+			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST PICKUP_PROGRESSION_RESTART_START' | Out-Null
+			$restartLogs = Wait-ForLog -Pattern '"event":"strategy_selection".*"candidate_id":(?!64120)'
             Assert-PickupProgressionRestartEvents -Logs $restartLogs
         }
+
+		Invoke-Scenario -Name "pickup_progression_bundle" -DefaultTimeoutSeconds 60 -Body {
+			Invoke-Compose down --volumes --remove-orphans
+			$env:PLAYERBOT_GAMEPLAY_MODE = "progression_bundle"
+			Invoke-Compose up --detach
+			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST PICKUP_PROGRESSION_BUNDLE_PASS' | Out-Null
+			$bundleLogs = Wait-ForLog -Pattern '"event":"strategy_objective_result".*"candidate_id":50082.*"result":"success"'
+			Assert-EconomicPickupProgressionEvents -Logs $bundleLogs
+		}
+
+		Invoke-Scenario -Name "pickup_progression_nested" -DefaultTimeoutSeconds 60 -Body {
+			Invoke-Compose down --volumes --remove-orphans
+			$env:PLAYERBOT_GAMEPLAY_MODE = "progression_nested"
+			Invoke-Compose up --detach
+			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST PICKUP_PROGRESSION_NESTED_PASS' | Out-Null
+			$nestedLogs = Wait-ForLog -Pattern '"event":"strategy_objective_result".*"candidate_id":50083.*"result":"success"'
+			Assert-NestedPickupProgressionEvents -Logs $nestedLogs
+		}
 
         Invoke-Scenario -Name "pickup_progression_resume" -DefaultTimeoutSeconds 60 -Body {
             Invoke-Compose down --volumes --remove-orphans
@@ -739,12 +864,21 @@ try {
             Assert-PickupProgressionResumeEvents -Logs $resumeLogs
         }
 
+        Invoke-Scenario -Name "pickup_progression_nested_resume" -DefaultTimeoutSeconds 60 -Body {
+            Invoke-Compose down --volumes --remove-orphans
+            $env:PLAYERBOT_GAMEPLAY_MODE = "progression_nested_resume"
+            Invoke-Compose up --detach
+            Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST PICKUP_PROGRESSION_NESTED_PASS' | Out-Null
+            $nestedResumeLogs = Wait-ForLog -Pattern '"event":"strategy_selection".*"reason":"resume_claimed_upgrade".*"root_item_id":1994'
+            Assert-NestedPickupProgressionResumeEvents -Logs $nestedResumeLogs
+        }
+
         Invoke-Scenario -Name "pickup_progression_space" -DefaultTimeoutSeconds 60 -Body {
             Invoke-Compose down --volumes --remove-orphans
             $env:PLAYERBOT_GAMEPLAY_MODE = "progression_space"
             Invoke-Compose up --detach
             Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST PICKUP_PROGRESSION_SPACE_START' | Out-Null
-            $spaceLogs = Wait-ForLog -Pattern '"candidate_id":64119.*"reason":"insufficient_inventory_space"'
+            $spaceLogs = Wait-ForLog -Pattern '"candidate_id":64120.*"reason":"insufficient_inventory_space"'
             Assert-PickupProgressionSpaceEvents -Logs $spaceLogs
         }
     }

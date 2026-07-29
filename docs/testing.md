@@ -82,18 +82,24 @@ pwsh -File scripts/test-playerbot-gameplay.ps1 -Healing
 ```
 
 `-PickupProgression` starts from the normal jacket-and-club loadout with the
-configured playerbot speed boost intact. It verifies discovery and selection of
-the nearest useful generic Rookgaard reward, normal claim/storage effects,
-combat-knife equipment, preservation of the displaced club, and return to
-service. It then restarts the server without resetting the database and verifies
-that persisted storage/equipment produce the next distinct reward objective.
-Additional clean fixtures reconstruct a claimed-but-unequipped reward without a
-second claim and reject a new claim when the root backpack cannot hold both the
-reward and displaced equipment:
+configured playerbot speed boost intact. It verifies recursive bundle
+inspection, known-utility selection, normal claim/storage effects, direct
+equipment, and post-claim restart selection. Focused nested fixtures inspect the
+purple-bag reward, claim the complete bag, open it normally, equip its wooden
+shield ahead of mutable food siblings, and preserve the hand axe and spellbook.
+Additional clean fixtures
+claim and verify the two-root torch/platinum economic bundle against a
+pre-existing platinum stack without equipment actions, reconstruct direct and
+nested claimed-but-unequipped rewards without a
+second claim, and reject a new claim when the root backpack cannot hold the reward:
 
 ```powershell
 pwsh -File scripts/test-playerbot-gameplay.ps1 -PickupProgression
 ```
+
+This suite covers only shared container rewards with action ID `2000`. It does
+not cover action ID `2001` non-container rewards or rewards from dedicated quest
+scripts. Those reward sources remain outside the current playerbot behavior.
 
 `-GoalArbitration` verifies four consecutive decision boundaries. A useful
 pickup beats optional service and hunting at startup; pickup cooldown then lets
@@ -140,7 +146,8 @@ failure includes Compose status and the last 80 server-log lines.
 
 The overlay's `PLAYERBOT_GAMEPLAY_MODE` accepts `cycle`, `navigation`, `corpse`,
 `death`, `healing`, `healing_resupply`, `value`, `progression`,
-`progression_resume`, `progression_space`, `arbitration`, or
+`progression_bundle`, `progression_nested`, `progression_resume`, `progression_nested_resume`,
+`progression_space`, `arbitration`, or
 `arbitration_interrupt`. The script selects these
 modes automatically from the corresponding switches. Navigation, corpse,
 healing, healing-resupply, and value modes start the controller directly in
