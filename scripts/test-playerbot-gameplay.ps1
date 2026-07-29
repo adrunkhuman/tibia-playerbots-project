@@ -7,6 +7,7 @@ param(
 	[switch]$Healing,
 	[switch]$ValueLoot,
 	[switch]$PickupProgression,
+	[switch]$GoalArbitration,
 	[switch]$Focused,
 	[switch]$SkipBuild,
 	[switch]$KeepStack
@@ -513,6 +514,85 @@ function Assert-PickupProgressionSpaceEvents {
     }
 }
 
+function Assert-GoalArbitrationEvents {
+    param([string]$Logs)
+
+    $events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
+    $selections = @($events | Where-Object { $_.event -eq "goal_selection" } | Sort-Object decision_id)
+    if ($selections.Count -ne 4 -or
+        $selections[0].decision_id -ne 1 -or $selections[0].decision_reason -ne "startup" -or
+        $selections[0].to_goal -ne "pickup_reward" -or $selections[0].candidate_id -ne 64119 -or
+        $selections[1].decision_id -ne 2 -or $selections[1].decision_reason -ne "pickup_complete" -or
+        $selections[1].from_goal -ne "pickup_reward" -or $selections[1].to_goal -ne "service" -or
+        $selections[2].decision_id -ne 3 -or $selections[2].decision_reason -ne "service_complete" -or
+        $selections[2].from_goal -ne "service" -or $selections[2].to_goal -ne "hunt" -or
+        $selections[3].decision_id -ne 4 -or $selections[3].decision_reason -ne "hunt_deadline" -or
+        $selections[3].from_goal -ne "hunt" -or $selections[3].to_goal -ne "hunt") {
+        throw "Goal arbitration did not select the expected pickup, service, and hunt sequence."
+    }
+
+    $initialCandidates = @($events | Where-Object { $_.event -eq "goal_candidate" -and $_.decision_id -eq 1 })
+    $initialService = @($initialCandidates | Where-Object { $_.goal -eq "service" -and $_.feasible -and $_.utility -gt 300 })
+    $initialPickup = @($initialCandidates | Where-Object {
+        $_.goal -eq "pickup_reward" -and $_.feasible -and $_.candidate_id -eq 64119 -and $_.utility -gt 500
+    })
+    $initialHunt = @($initialCandidates | Where-Object {
+        $_.goal -eq "hunt" -and -not $_.evaluated -and -not $_.feasible -and $_.utility -eq 300 -and
+        $_.reason -eq "deferred_lower_utility"
+    })
+    $cooldown = @($events | Where-Object {
+        $_.event -eq "goal_candidate" -and $_.decision_id -eq 2 -and $_.goal -eq "pickup_reward" -and
+        -not $_.feasible -and $_.reason -eq "cooldown"
+    })
+    $settledService = @($events | Where-Object {
+        $_.event -eq "goal_candidate" -and $_.decision_id -eq 3 -and $_.goal -eq "service" -and
+        -not $_.feasible -and $_.reason -eq "no_service_need"
+    })
+    $results = @($events | Where-Object { $_.event -eq "goal_result" })
+    $pickupResult = @($results | Where-Object {
+        $_.decision_id -eq 1 -and $_.goal -eq "pickup_reward" -and $_.result -eq "success"
+    })
+    $serviceResult = @($results | Where-Object {
+        $_.decision_id -eq 2 -and $_.goal -eq "service" -and $_.result -eq "success"
+    })
+    $huntResult = @($results | Where-Object {
+        $_.decision_id -eq 3 -and $_.goal -eq "hunt" -and $_.result -eq "success" -and $_.reason -eq "hunt_deadline"
+    })
+    $huntStarted = @($events | Where-Object {
+        $_.event -eq "action_result" -and $_.action -eq "hunt_cycle" -and $_.result -eq "started"
+    })
+    if ($initialService.Count -ne 1 -or $initialPickup.Count -ne 1 -or $initialHunt.Count -ne 1 -or
+        $cooldown.Count -ne 1 -or $settledService.Count -ne 1 -or $pickupResult.Count -ne 1 -or
+        $serviceResult.Count -ne 1 -or $huntResult.Count -ne 1 -or $huntStarted.Count -ne 2) {
+        throw "Goal arbitration candidate, cooldown, result, or hunt evidence was incomplete."
+    }
+    if (@($events | Where-Object { $_.event -eq "terminal" }).Count -ne 0) {
+        throw "The playerbot emitted a terminal event during goal arbitration."
+    }
+}
+
+function Assert-GoalArbitrationInterruptEvents {
+    param([string]$Logs)
+
+    $events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
+    $result = @($events | Where-Object {
+        $_.event -eq "goal_result" -and $_.decision_id -eq 1 -and $_.goal -eq "pickup_reward" -and
+        $_.result -eq "interrupted" -and $_.reason -eq "healing_supply_missing"
+    })
+    $criticalService = @($events | Where-Object {
+        $_.event -eq "goal_candidate" -and $_.decision_id -eq 2 -and $_.goal -eq "service" -and
+        $_.feasible -and $_.utility -eq 1000 -and $_.reason -eq "critical_healing"
+    })
+    $selection = @($events | Where-Object {
+        $_.event -eq "goal_selection" -and $_.decision_id -eq 2 -and $_.decision_reason -eq "pickup_interrupted" -and
+        $_.from_goal -eq "pickup_reward" -and $_.to_goal -eq "service"
+    })
+    $claim = @($events | Where-Object { $_.action -eq "claim_reward" })
+    if ($result.Count -ne 1 -or $criticalService.Count -ne 1 -or $selection.Count -ne 1 -or $claim.Count -ne 0) {
+        throw "Critical healing did not interrupt pickup and force service before reward claim."
+    }
+}
+
 function Assert-NavigationEvents {
     param([string]$Logs)
 
@@ -602,7 +682,8 @@ if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
 	throw "Docker is required to run the playerbot gameplay suite."
 }
 
-$focusedScenarioRequested = $FullNavigation -or $CorpseLoot -or $DeathTelemetry -or $Healing -or $ValueLoot -or $PickupProgression
+$focusedScenarioRequested = $FullNavigation -or $CorpseLoot -or $DeathTelemetry -or $Healing -or $ValueLoot -or
+    $PickupProgression -or $GoalArbitration
 if ($Focused -and -not $focusedScenarioRequested) {
 	throw "-Focused requires at least one focused scenario switch."
 }
@@ -665,6 +746,28 @@ try {
             Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST PICKUP_PROGRESSION_SPACE_START' | Out-Null
             $spaceLogs = Wait-ForLog -Pattern '"candidate_id":64119.*"reason":"insufficient_inventory_space"'
             Assert-PickupProgressionSpaceEvents -Logs $spaceLogs
+        }
+    }
+
+    if ($GoalArbitration) {
+        Invoke-Scenario -Name "goal_arbitration" -DefaultTimeoutSeconds 240 -Body {
+            Invoke-Compose down --volumes --remove-orphans
+            $env:PLAYERBOT_GAMEPLAY_MODE = "arbitration"
+            $env:PLAYERBOT_HUNT_DURATION_SECONDS = "10"
+            Invoke-Compose up --detach
+            Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST GOAL_ARBITRATION_START' | Out-Null
+            $arbitrationLogs = Wait-ForLog -Pattern '"event":"goal_selection".*"decision_id":4.*"to_goal":"hunt"'
+            Assert-GoalArbitrationEvents -Logs $arbitrationLogs
+        }
+
+        Invoke-Scenario -Name "goal_arbitration_interrupt" -DefaultTimeoutSeconds 60 -Body {
+            Invoke-Compose down --volumes --remove-orphans
+            $env:PLAYERBOT_GAMEPLAY_MODE = "arbitration_interrupt"
+            $env:PLAYERBOT_HUNT_DURATION_SECONDS = "900"
+            Invoke-Compose up --detach
+            Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST GOAL_ARBITRATION_INTERRUPT_TRIGGERED' | Out-Null
+            $interruptLogs = Wait-ForLog -Pattern '"event":"goal_selection".*"decision_id":2.*"to_goal":"service"'
+            Assert-GoalArbitrationInterruptEvents -Logs $interruptLogs
         }
     }
 
