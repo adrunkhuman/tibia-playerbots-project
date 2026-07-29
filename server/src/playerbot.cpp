@@ -60,6 +60,16 @@ namespace {
 	constexpr std::chrono::seconds healingRetryInterval(2);
 	constexpr std::chrono::minutes stableLifetimeReset(5);
 	constexpr std::chrono::minutes huntRegionCooldown(10);
+	constexpr std::chrono::minutes pickupRewardSuccessCooldown(5);
+	constexpr std::chrono::seconds pickupRewardFailureCooldown(60);
+	constexpr int32_t serviceGoalBaseUtility = 400;
+	constexpr int32_t pickupRewardBaseUtility = 650;
+	constexpr int32_t huntGoalUtility = 300;
+	constexpr int32_t capacityServiceUtility = 900;
+	constexpr int32_t criticalHealingServiceUtility = 1000;
+	constexpr int32_t missingPotionUtility = 15;
+	constexpr int32_t missingFoodUtility = 20;
+	constexpr int32_t sellableItemUtility = 10;
 	constexpr uint32_t returnCapacityThreshold = 30 * 100;
 	constexpr uint32_t carriedGoldReserve = 100;
 	constexpr uint32_t maximumServiceAttempts = 3;
@@ -159,27 +169,33 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 			const bool progressionMode = gameplayMode &&
 				(std::strcmp(gameplayMode, "progression") == 0 ||
 				 std::strcmp(gameplayMode, "progression_resume") == 0 ||
-				 std::strcmp(gameplayMode, "progression_space") == 0);
+				 std::strcmp(gameplayMode, "progression_space") == 0 ||
+				 std::strcmp(gameplayMode, "arbitration") == 0 ||
+				 std::strcmp(gameplayMode, "arbitration_interrupt") == 0);
 			progressionEnabled = !regressionMode && (!gameplayMode || progressionMode);
 			const bool startInHunt = !recovered && gameplayMode &&
 				(std::strcmp(gameplayMode, "navigation") == 0 || std::strcmp(gameplayMode, "corpse") == 0 ||
 				 std::strcmp(gameplayMode, "healing") == 0 || std::strcmp(gameplayMode, "healing_resupply") == 0 ||
 				 std::strcmp(gameplayMode, "value") == 0);
 			Player* controlledPlayer = g_game.getPlayerByID(playerId);
-			const bool startProgression = progressionEnabled && controlledPlayer &&
-			                              selectPickupReward(*controlledPlayer, position);
+			const bool useGoalSelector = !recovered && progressionEnabled && controlledPlayer;
+			if (useGoalSelector && !selectTopLevelGoal(*controlledPlayer, position, "startup")) {
+				return;
+			}
 			std::ostringstream lifecycle;
 			lifecycle << "\"status\":\"online\",\"message\":\"Playerbot online\""
 			          << ",\"recovered\":" << (recovered ? "true" : "false")
 			          << ",\"recovery_count\":" << recoveryCount
-			          << ",\"objective\":" << jsonString(startProgression ? objectiveName() : (startInHunt ? "hunt" : "service"))
+			          << ",\"objective\":" << jsonString(useGoalSelector ? topLevelGoalName(activeGoal) : (startInHunt ? "hunt" : "service"))
 			          << ",\"step_speed\":" << (g_game.getPlayerByID(playerId) ? g_game.getPlayerByID(playerId)->getSpeed() : 0);
 			emit("lifecycle", position, lifecycle.str());
-			if (startProgression) {
-				cyclePhase = CyclePhase::Service;
+			if (useGoalSelector) {
+				// The selected goal initialized its own executor state.
 			} else if (startInHunt) {
-				startHunt(g_game.getPlayerByID(playerId), position);
+				activeGoal = TopLevelGoal::Hunt;
+				startHunt(g_game.getPlayerByID(playerId), position, "focused_fixture");
 			} else {
+				activeGoal = TopLevelGoal::Service;
 				cyclePhase = CyclePhase::Service;
 			}
 			setStage(ScenarioStage::Traverse, position);
@@ -216,6 +232,19 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 			PickupReward,
 		};
 
+		enum class TopLevelGoal : uint8_t {
+			Service,
+			PickupReward,
+			Hunt,
+		};
+
+		struct GoalCandidate {
+			TopLevelGoal goal;
+			bool feasible;
+			int32_t utility;
+			std::string reason;
+		};
+
 		enum class ProgressionStage : uint8_t {
 			Travel,
 			UseReward,
@@ -246,6 +275,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 			uint32_t estimatedDistance = 0;
 			uint32_t requiredBackpackSlots = 0;
 			uint64_t expandedNodes = 0;
+			bool resumeEquipment = false;
 		};
 
 		struct ServiceNpc {
@@ -560,6 +590,10 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 					       << ",\"health_max\":" << player->getMaxHealth()
 					       << ",\"resource_before\":0,\"resource_after\":0";
 					emit("action_result", currentPosition, fields.str());
+				}
+				if (progressionObjective != ProgressionObjective::None) {
+					finishProgressionObjective(player, currentPosition, "interrupted", "healing_supply_missing", false);
+					return true;
 				}
 				if (cyclePhase != CyclePhase::Service) {
 					beginService(player, currentPosition, "healing_supply_missing");
@@ -1028,7 +1062,8 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 			emit("strategy_candidate", position, fields.str());
 		}
 
-		bool selectPickupReward(Player& player, const Position& position)
+		bool findPickupReward(Player& player, const Position& position, PickupReward& reward,
+		                      std::deque<PlayerBotNavigationStep>& rewardSteps)
 		{
 			std::optional<PickupReward> claimedUpgrade;
 			std::vector<PickupReward> unclaimedCandidates;
@@ -1133,25 +1168,160 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 			if (!selected) {
 				return false;
 			}
+			selected->resumeEquipment = resumeEquipment;
+			reward = *selected;
+			rewardSteps = std::move(selectedSteps);
+			return true;
+		}
 
-			pickupReward = *selected;
+		const char* topLevelGoalName(TopLevelGoal goal) const
+		{
+			switch (goal) {
+				case TopLevelGoal::Service: return "service";
+				case TopLevelGoal::PickupReward: return "pickup_reward";
+				case TopLevelGoal::Hunt: return "hunt";
+			}
+			return "unknown";
+		}
+
+		uint32_t saleableItemCount(const Player& player) const
+		{
+			uint32_t count = 0;
+			for (const auto& entry : itemSellValues) {
+				count += getSaleItemCount(player, entry.first);
+			}
+			return count;
+		}
+
+		GoalCandidate serviceGoalCandidate(const Player& player) const
+		{
+			const uint32_t potionCount = getInventoryItemCount(player, smallHealthPotionItemId);
+			const uint32_t meatCount = getInventoryItemCount(player, meatItemId);
+			const uint32_t missingPotions = potionCount < minimumSmallHealthPotions ?
+			                                  minimumSmallHealthPotions - potionCount : 0;
+			const uint32_t missingMeat = meatCount < minimumMeat ? minimumMeat - meatCount : 0;
+			const uint32_t sellable = saleableItemCount(player);
+			const bool lowCapacity = player.getFreeCapacity() < returnCapacityThreshold;
+			const bool criticalHealing = needsHealing(player) && missingPotions != 0;
+			const bool cashAdjustment = player.getMoney() != carriedGoldReserve;
+			const bool feasible = lowCapacity || missingPotions != 0 || missingMeat != 0 || sellable != 0 || cashAdjustment;
+			int32_t utility = feasible ? serviceGoalBaseUtility : 0;
+			utility += static_cast<int32_t>(missingPotions * missingPotionUtility + missingMeat * missingFoodUtility +
+			                                std::min<uint32_t>(sellable, 20) * sellableItemUtility);
+			utility += cashAdjustment ? 10 : 0;
+			if (lowCapacity) {
+				utility = std::max<int32_t>(utility, capacityServiceUtility);
+			}
+			if (criticalHealing) {
+				utility = std::max<int32_t>(utility, criticalHealingServiceUtility);
+			}
+			const char* reason = criticalHealing ? "critical_healing" : lowCapacity ? "capacity" :
+			                     missingPotions != 0 ? "healing_reserve" :
+			                     missingMeat != 0 ? "food_reserve" : sellable != 0 ? "sellable_inventory" :
+			                     cashAdjustment ? "cash_reserve" : "no_service_need";
+			return GoalCandidate{TopLevelGoal::Service, feasible, utility, reason};
+		}
+
+		void emitGoalCandidate(const Player& player, const GoalCandidate& candidate, const Position& position, const char* decisionReason,
+		                       const PickupReward* reward = nullptr) const
+		{
+			std::ostringstream fields;
+			const bool evaluated = candidate.reason != "deferred_lower_utility";
+			fields << "\"decision_id\":" << goalDecisionId << ",\"decision_reason\":" << jsonString(decisionReason)
+			       << ",\"goal\":" << jsonString(topLevelGoalName(candidate.goal))
+			       << ",\"evaluated\":" << (evaluated ? "true" : "false")
+			       << ",\"feasible\":" << (candidate.feasible ? "true" : "false")
+			       << ",\"utility\":" << candidate.utility << ",\"reason\":" << jsonString(candidate.reason);
+			if (candidate.goal == TopLevelGoal::Service) {
+				fields << ",\"potion_count\":" << getInventoryItemCount(player, smallHealthPotionItemId)
+				       << ",\"meat_count\":" << getInventoryItemCount(player, meatItemId)
+				       << ",\"sellable_count\":" << saleableItemCount(player);
+			}
+			if (reward) {
+				fields << ",\"candidate_id\":" << reward->uniqueId << ",\"item_id\":" << reward->itemId
+				       << ",\"benefit\":" << reward->benefit << ",\"travel_steps\":" << reward->travelSteps;
+			}
+			emit("goal_candidate", position, fields.str());
+		}
+
+		void beginPickupReward(Player& player, const Position& position, PickupReward reward,
+		                       std::deque<PlayerBotNavigationStep> rewardSteps)
+		{
+			pickupReward = std::move(reward);
 			progressionObjective = ProgressionObjective::PickupReward;
-			progressionStage = resumeEquipment ? ProgressionStage::EquipReward : ProgressionStage::Travel;
+			progressionStage = pickupReward.resumeEquipment ? ProgressionStage::EquipReward : ProgressionStage::Travel;
 			progressionAttempts = 0;
-			if (!resumeEquipment) {
-				navigationTarget = selected->approachPosition;
-				navigationSteps = std::move(selectedSteps);
+			if (!pickupReward.resumeEquipment) {
+				navigationTarget = pickupReward.approachPosition;
+				navigationSteps = std::move(rewardSteps);
 			}
 			std::ostringstream fields;
-			fields << "\"goal\":\"pickup_reward\",\"candidate_id\":" << selected->uniqueId
-			       << ",\"reason\":" << jsonString(resumeEquipment ? "resume_claimed_upgrade" : "nearest_useful_reachable_reward")
-			       << ",\"item_id\":" << selected->itemId
-			       << ",\"benefit\":" << selected->benefit << ",\"travel_steps\":" << selected->travelSteps;
+			fields << "\"goal\":\"pickup_reward\",\"candidate_id\":" << pickupReward.uniqueId
+			       << ",\"reason\":" << jsonString(pickupReward.resumeEquipment ? "resume_claimed_upgrade" :
+			                                                                    "nearest_useful_reachable_reward")
+			       << ",\"item_id\":" << pickupReward.itemId << ",\"benefit\":" << pickupReward.benefit
+			       << ",\"travel_steps\":" << pickupReward.travelSteps;
 			emit("strategy_selection", position, fields.str());
-			emit("objective_transition", position,
-			     "\"from\":\"service\",\"to\":\"pickup_reward\",\"reason\":\"useful_reachable_reward\"");
-			say(player, resumeEquipment ? "Equipping a previously claimed reward." :
-			                              "Going to claim a useful equipment reward.");
+			say(player, pickupReward.resumeEquipment ? "Equipping a previously claimed reward." :
+			                                         "Going to claim a useful equipment reward.");
+		}
+
+		bool selectTopLevelGoal(Player& player, const Position& position, const char* decisionReason)
+		{
+			++goalDecisionId;
+			const GoalCandidate service = serviceGoalCandidate(player);
+			PickupReward reward;
+			std::deque<PlayerBotNavigationStep> rewardSteps;
+			const auto now = std::chrono::steady_clock::now();
+			const bool pickupCoolingDown = pickupRewardCooldownUntil > now;
+			const bool pickupFound = !pickupCoolingDown && findPickupReward(player, position, reward, rewardSteps);
+			const int32_t pickupUtility = pickupFound ?
+				std::max<int32_t>(0, pickupRewardBaseUtility + reward.benefit * 20 - static_cast<int32_t>(reward.travelSteps)) : 0;
+			const GoalCandidate pickup{TopLevelGoal::PickupReward, pickupFound, pickupUtility,
+			                           pickupCoolingDown ? "cooldown" : pickupFound ? "useful_reachable_reward" : "no_useful_reward"};
+			const bool higherUtilityGoal = (service.feasible && service.utility > huntGoalUtility) ||
+			                               (pickup.feasible && pickup.utility > huntGoalUtility);
+			const bool fixedFixtureRoute = std::getenv("PLAYERBOT_GAMEPLAY_MODE") != nullptr;
+			const bool huntFeasible = !higherUtilityGoal &&
+			                          (fixedFixtureRoute || selectHuntRegion(player, position, "goal_feasibility"));
+			const GoalCandidate hunt{TopLevelGoal::Hunt, huntFeasible, huntGoalUtility,
+			                         higherUtilityGoal ? "deferred_lower_utility" :
+			                         huntFeasible ? "autonomous_hunting_available" : "no_suitable_reachable_region"};
+			emitGoalCandidate(player, service, position, decisionReason);
+			emitGoalCandidate(player, pickup, position, decisionReason, pickupFound ? &reward : nullptr);
+			emitGoalCandidate(player, hunt, position, decisionReason);
+
+			const GoalCandidate* selected = nullptr;
+			for (const GoalCandidate* candidate : {&service, &pickup, &hunt}) {
+				if (candidate->feasible && (!selected || candidate->utility > selected->utility)) {
+					selected = candidate;
+				}
+			}
+			if (!selected) {
+				emit("goal_selection", position,
+				     "\"decision_id\":" + std::to_string(goalDecisionId) + ",\"decision_reason\":" +
+				         jsonString(decisionReason) + ",\"result\":\"failed\",\"reason\":\"no_feasible_goal\"");
+				stop("no_feasible_goal", position);
+				return false;
+			}
+			const TopLevelGoal previousGoal = activeGoal;
+			activeGoal = selected->goal;
+			std::ostringstream fields;
+			fields << "\"decision_id\":" << goalDecisionId << ",\"decision_reason\":" << jsonString(decisionReason)
+			       << ",\"from_goal\":" << jsonString(topLevelGoalName(previousGoal))
+			       << ",\"to_goal\":" << jsonString(topLevelGoalName(activeGoal))
+			       << ",\"utility\":" << selected->utility << ",\"reason\":" << jsonString(selected->reason);
+			if (selected->goal == TopLevelGoal::PickupReward) {
+				fields << ",\"candidate_id\":" << reward.uniqueId << ",\"item_id\":" << reward.itemId;
+			}
+			emit("goal_selection", position, fields.str());
+			if (selected->goal == TopLevelGoal::PickupReward) {
+				beginPickupReward(player, position, std::move(reward), std::move(rewardSteps));
+			} else if (selected->goal == TopLevelGoal::Service) {
+				beginService(&player, position, "goal_selected");
+			} else {
+				startHunt(&player, position, "goal_selected");
+			}
 			return true;
 		}
 
@@ -1160,15 +1330,17 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 			return progressionObjective == ProgressionObjective::PickupReward ? "pickup_reward" : cyclePhaseName();
 		}
 
-		void finishProgressionObjective(Player* player, const Position& position, const char* result, const char* reason)
+		void finishProgressionObjective(Player* player, const Position& position, const char* result, const char* reason,
+		                                bool scheduleNext = true)
 		{
 			std::ostringstream fields;
 			fields << "\"goal\":\"pickup_reward\",\"candidate_id\":" << pickupReward.uniqueId
 			       << ",\"item_id\":" << pickupReward.itemId << ",\"result\":" << jsonString(result)
 			       << ",\"reason\":" << jsonString(reason);
 			emit("strategy_objective_result", position, fields.str());
-			emit("objective_transition", position,
-			     "\"from\":\"pickup_reward\",\"to\":\"service\",\"reason\":" + jsonString(reason));
+			emit("goal_result", position,
+			     "\"decision_id\":" + std::to_string(goalDecisionId) + ",\"goal\":\"pickup_reward\",\"result\":" +
+			         jsonString(result) + ",\"reason\":" + jsonString(reason));
 			if (player) {
 				say(*player, std::string("Equipment reward objective ") + result + ": " + reason + '.');
 			}
@@ -1181,7 +1353,21 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 			conversationStep = ConversationStep::Greet;
 			serviceTargetId = 0;
 			cyclePhase = CyclePhase::Service;
-			schedule(SCHEDULER_MINTICKS);
+			pickupRewardCooldownUntil = std::chrono::steady_clock::now() +
+			                            (std::strcmp(result, "success") == 0 ? pickupRewardSuccessCooldown :
+			                                                                    pickupRewardFailureCooldown);
+			if (progressionEnabled && player) {
+				const char* decisionReason = std::strcmp(result, "success") == 0 ? "pickup_complete" :
+				                             std::strcmp(result, "interrupted") == 0 ? "pickup_interrupted" : "pickup_failed";
+				selectTopLevelGoal(*player, position, decisionReason);
+			} else {
+				activeGoal = TopLevelGoal::Service;
+				emit("objective_transition", position,
+				     "\"from\":\"pickup_reward\",\"to\":\"service\",\"reason\":" + jsonString(reason));
+			}
+			if (scheduleNext) {
+				schedule(SCHEDULER_MINTICKS);
+			}
 		}
 
 		void processPickupReward(Player* player, const Position& currentPosition)
@@ -1423,7 +1609,20 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 
 		void beginService(Player* player, const Position& position, const char* reason)
 		{
+			const bool interruptedHunt = progressionEnabled && activeGoal == TopLevelGoal::Hunt;
 			finishHuntRegion(*player, position, reason);
+			if (interruptedHunt) {
+				emit("goal_result", position,
+				     "\"decision_id\":" + std::to_string(goalDecisionId) +
+				         ",\"goal\":\"hunt\",\"result\":\"interrupted\",\"reason\":" + jsonString(reason));
+				++goalDecisionId;
+				emit("goal_selection", position,
+				     "\"decision_id\":" + std::to_string(goalDecisionId) + ",\"decision_reason\":" + jsonString(reason) +
+				         ",\"from_goal\":\"hunt\",\"to_goal\":\"service\",\"utility\":" +
+				         std::to_string(criticalHealingServiceUtility) + ',' +
+				         "\"reason\":\"forced_interrupt\",\"forced\":true");
+			}
+			activeGoal = TopLevelGoal::Service;
 			g_game.playerCancelAttackAndFollow(playerId);
 			clearRatTarget(position, reason);
 			clearNavigation();
@@ -1438,6 +1637,22 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 			conversationStep = ConversationStep::Greet;
 			serviceAttempts = 0;
 			setCyclePhase(CyclePhase::Service, position, reason);
+		}
+
+		void finishHuntAndSelectGoal(Player* player, const Position& position, const char* reason)
+		{
+			finishHuntRegion(*player, position, reason);
+			g_game.playerCancelAttackAndFollow(playerId);
+			clearRatTarget(position, reason);
+			clearNavigation();
+			pendingLootItemId = 0;
+			pendingDiscardItemId = 0;
+			player->closeContainer(corpseContainerId);
+			emit("goal_result", position,
+			     "\"decision_id\":" + std::to_string(goalDecisionId) +
+			         ",\"goal\":\"hunt\",\"result\":\"success\",\"reason\":" + jsonString(reason));
+			selectTopLevelGoal(*player, position, reason);
+			schedule(SCHEDULER_MINTICKS);
 		}
 
 		void discoverServices(const Position& position)
@@ -2377,16 +2592,17 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 			return true;
 		}
 
-		void startHunt(Player* player, const Position& position)
+		void startHunt(Player* player, const Position& position, const char* reason)
 		{
 			if (!player) {
 				stop("controlled_player_not_found", position);
 				return;
 			}
-			setCyclePhase(CyclePhase::Hunt, position, "deposit_complete");
+			activeGoal = TopLevelGoal::Hunt;
+			setCyclePhase(CyclePhase::Hunt, position, reason);
 			huntRouteIndex = 0;
 			const bool fixedFixtureRoute = std::getenv("PLAYERBOT_GAMEPLAY_MODE") != nullptr;
-			if (!fixedFixtureRoute && !selectHuntRegion(*player, position, "hunt_started")) {
+			if (!fixedFixtureRoute && !activeHuntRegion && !selectHuntRegion(*player, position, "hunt_started")) {
 				stop("hunt_region_unavailable", position);
 				return;
 			}
@@ -2449,7 +2665,14 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 				std::ostringstream fields;
 				fields << "\"action\":\"deposit\",\"result\":\"complete\",\"cycle\":" << completedCycles;
 				emit("action_result", currentPosition, fields.str());
-				startHunt(player, currentPosition);
+				if (progressionEnabled) {
+					emit("goal_result", currentPosition,
+					     "\"decision_id\":" + std::to_string(goalDecisionId) +
+					         ",\"goal\":\"service\",\"result\":\"success\",\"reason\":\"service_complete\"");
+					selectTopLevelGoal(*player, currentPosition, "service_complete");
+				} else {
+					startHunt(player, currentPosition, "deposit_complete");
+				}
 				schedule(navigationInterval);
 				return;
 			}
@@ -2500,8 +2723,13 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 			}
 			if (cyclePhase == CyclePhase::Hunt &&
 			    (std::chrono::steady_clock::now() >= huntDeadline || player->getFreeCapacity() < returnCapacityThreshold)) {
-				beginService(player, currentPosition,
-				             player->getFreeCapacity() < returnCapacityThreshold ? "capacity" : "hunt_deadline");
+				const char* reason = player->getFreeCapacity() < returnCapacityThreshold ? "capacity" : "hunt_deadline";
+				if (progressionEnabled) {
+					finishHuntAndSelectGoal(player, currentPosition, reason);
+					return;
+				} else {
+					beginService(player, currentPosition, reason);
+				}
 			}
 
 			if (cyclePhase == CyclePhase::Service) {
@@ -3008,7 +3236,10 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		ProgressionObjective progressionObjective = ProgressionObjective::None;
 		ProgressionStage progressionStage = ProgressionStage::Travel;
 		PickupReward pickupReward;
+		TopLevelGoal activeGoal = TopLevelGoal::Service;
 		bool progressionEnabled = false;
+		uint64_t goalDecisionId = 0;
+		std::chrono::steady_clock::time_point pickupRewardCooldownUntil;
 		uint32_t progressionAttempts = 0;
 		uint32_t pendingRewardItemCount = 0;
 		uint16_t pendingEquipmentItemId = 0;

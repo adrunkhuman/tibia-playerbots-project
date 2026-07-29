@@ -196,6 +196,13 @@ local function verifyPickupProgression(playerId, attempts)
     print("PLAYERBOT_GAMEPLAY_TEST PICKUP_PROGRESSION_PASS")
 end
 
+local function triggerArbitrationInterrupt(playerId)
+    local player = Player(playerId)
+    assert(player and not player:isRemoved(), "Bot One disappeared before the arbitration interrupt")
+    player:addHealth(-math.floor(player:getMaxHealth() / 2))
+    print("PLAYERBOT_GAMEPLAY_TEST GOAL_ARBITRATION_INTERRUPT_TRIGGERED")
+end
+
 local function verifyService(playerId, initialDepotBagCount, attempts)
     local player = Player(playerId)
     assert(player and not player:isRemoved(), "Bot One disappeared during the gameplay test")
@@ -236,7 +243,8 @@ function login.onLogin(player)
     local mode = os.getenv("PLAYERBOT_GAMEPLAY_MODE") or "cycle"
     assert(mode == "cycle" or mode == "navigation" or mode == "corpse" or mode == "death" or mode == "healing" or
         mode == "healing_resupply" or mode == "value" or mode == "progression" or
-        mode == "progression_resume" or mode == "progression_space",
+        mode == "progression_resume" or mode == "progression_space" or mode == "arbitration" or
+        mode == "arbitration_interrupt",
         "unknown PLAYERBOT_GAMEPLAY_MODE: " .. mode)
     if mode == "death" then
         deathLoginCount = deathLoginCount + 1
@@ -253,6 +261,24 @@ function login.onLogin(player)
         end
         return true
     end
+    if mode == "arbitration" or mode == "arbitration_interrupt" then
+        local position = player:getPosition()
+        assert(position.x == 32097 and position.y == 32219 and position.z == 7,
+            "goal arbitration fixture did not start at the Rookgaard temple")
+        assert(player:getSlotItem(CONST_SLOT_ARMOR):getId() == starterArmorId,
+            "goal arbitration fixture expected starter armor")
+        assert(player:getSlotItem(CONST_SLOT_LEFT):getId() == starterWeaponId,
+            "goal arbitration fixture expected starter weapon")
+        suppressNearbyMonsters(player:getId())
+        if mode == "arbitration_interrupt" then
+            addEvent(triggerArbitrationInterrupt, 2000, player:getId())
+            print("PLAYERBOT_GAMEPLAY_TEST GOAL_ARBITRATION_INTERRUPT_START")
+        else
+            print("PLAYERBOT_GAMEPLAY_TEST GOAL_ARBITRATION_START")
+        end
+        return true
+    end
+
     if mode == "progression" or mode == "progression_resume" or mode == "progression_space" then
         local position = player:getPosition()
         if mode == "progression_resume" then

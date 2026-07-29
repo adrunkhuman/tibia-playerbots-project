@@ -95,10 +95,22 @@ reward and displaced equipment:
 pwsh -File scripts/test-playerbot-gameplay.ps1 -PickupProgression
 ```
 
+`-GoalArbitration` verifies four consecutive decision boundaries. A useful
+pickup beats optional service and hunting at startup; pickup cooldown then lets
+service win; completed service with settled reserves selects hunting; and the
+ten-second hunt deadline reevaluates to hunting rather than forcing unnecessary
+service. A second fixture damages the bot during pickup and verifies that
+critical healing interrupts it before claim and forces service. Candidate
+utilities, results, decision IDs, and the absence of terminal failure are asserted:
+
+```powershell
+pwsh -File scripts/test-playerbot-gameplay.ps1 -GoalArbitration
+```
+
 For playerbot navigation or looting changes, run the combined suite:
 
 ```powershell
-pwsh -File scripts/test-playerbot-gameplay.ps1 -FullNavigation -CorpseLoot -Healing -ValueLoot -PickupProgression
+pwsh -File scripts/test-playerbot-gameplay.ps1 -FullNavigation -CorpseLoot -Healing -ValueLoot -PickupProgression -GoalArbitration
 ```
 
 The suite rebuilds the server and resets the disposable Compose stack and
@@ -121,18 +133,20 @@ binary while source edits reuse unchanged compiler results.
 
 Default fail-fast deadlines cover each complete scenario, including stack setup
 and all waits: 180 seconds for the baseline, full navigation, and pickup
-progression; 60 for corpse and ordinary healing, 45 for death, and 90 for
+progression, and 240 seconds for goal arbitration; 60 for corpse and ordinary healing, 45 for death, and 90 for
 healing-resupply and value-loot. An explicitly supplied `-TimeoutSeconds` from
 30 through 3600 overrides every scenario deadline for slower machines. A wait
 failure includes Compose status and the last 80 server-log lines.
 
 The overlay's `PLAYERBOT_GAMEPLAY_MODE` accepts `cycle`, `navigation`, `corpse`,
-`death`, `healing`, `healing_resupply`, `value`, or `progression`. The script selects these
+`death`, `healing`, `healing_resupply`, `value`, `progression`,
+`progression_resume`, `progression_space`, `arbitration`, or
+`arbitration_interrupt`. The script selects these
 modes automatically from the corresponding switches. Navigation, corpse,
 healing, healing-resupply, and value modes start the controller directly in
 hunt mode so their fixtures do not interfere with the baseline startup service
-assertions. Progression mode retains the normal temple start and objective
-selection. Death mode kills the bot outside the temple protection zone,
+assertions. Progression and arbitration modes retain the normal temple start
+and objective selection. Death mode kills the bot outside the temple protection zone,
 verifies two temple relogs with one- then two-second backoff, observes the
 second fresh controller resume service, and forces one final death to verify
 the configured death-loop limit.

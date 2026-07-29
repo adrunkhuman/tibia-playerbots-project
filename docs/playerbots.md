@@ -60,6 +60,9 @@ when no target exists.
 | `strategy_candidate` | Pickup-reward candidate ID, item/slot/stat benefit, travel evidence, feasibility, and rejection reason |
 | `strategy_selection` | Selected goal/candidate and the inspectable selection reason |
 | `strategy_objective_result` | Goal/candidate, result, and terminal objective reason |
+| `goal_candidate` | Decision ID/reason, `service`, `pickup_reward`, or `hunt`, evaluated/feasible flags, utility, and goal-specific evidence |
+| `goal_selection` | Decision ID/reason, previous and selected goal, utility, rationale, and optional forced-interrupt marker |
+| `goal_result` | Decision ID, completed/interrupted goal, result, and reason |
 | `service_discovered` | Tagged live NPC name, capability, ID, and registered offer count |
 | `npc_reply` | Selected NPC name, ID, and private acknowledgement text |
 | `target_changed` | `previous_target_id`, `target_id`, optional target type and position, `reason` |
@@ -124,17 +127,36 @@ navigator reachability are checked before selection. Routes requiring
 a door, rope, or shovel action, or more than 120 steps, are not considered
 simple pickup objectives.
 
-The nearest useful reachable reward is selected deterministically. The bot
+The nearest useful reachable reward is evaluated deterministically. The bot
 travels to an adjacent tile, uses the map object normally, verifies both its
 unique-ID storage and inventory increase, then equips the upgrade through a
-normal item move and verifies that the displaced item remains owned. It then
-starts the existing service/hunt loop. Transient objective and route state are
+normal item move and verifies that the displaced item remains owned. Transient
+objective and route state are
 not persisted; after restart, persisted storage and equipment cause the next
 candidate evaluation to skip completed or obsolete rewards. A claimed upgrade
 still owned but not yet equipped resumes directly at equipment handling rather
-than claiming again. This first slice
-runs only at controller startup and is not yet a general continuously running
-goal selector.
+than claiming again.
+
+The top-level selector compares `service`, `pickup_reward`, and `hunt` only at
+safe objective boundaries: normal startup, pickup completion/failure, completed
+service/depot work, and a hunt deadline or capacity return. It does not run
+during movement, combat, healing, looting, dialogue, transactions, or pending
+item verification. Death recovery and focused gameplay modes preserve their
+forced service/hunt contracts. Observed danger, missing healing supplies, and
+other executor safety interrupts can force service without waiting for a normal
+boundary.
+
+Selection is intentionally deterministic and provisional. Hunt has utility
+`300`; ordinary service starts at `400` and adds reserve, sale, and cash needs;
+pickup starts at `650`, adds equipment benefit, and subtracts route steps.
+Capacity service is at least `900`, and critical healing service is at least
+`1000`. A successful pickup applies a five-minute in-memory family cooldown; a
+failed or safety-interrupted pickup applies 60 seconds. This prevents immediate
+reward chaining while retaining reproducible evidence for later calibration and
+probabilistic preferences. Hunt feasibility is deferred when a higher-utility
+goal already wins; when hunt can win, the normal region planner must produce a
+suitable reachable region before selection. The selected region is carried into
+the hunt executor rather than planned twice.
 
 The navigator searches loaded map state within a 192-tile margin around the
 endpoints and a 100,000-node expansion cap. Transition adapters cover ordinary
