@@ -16,8 +16,12 @@ local valueMonsterName = "Playerbot Value Corpse"
 local healingPotionCount = 3
 local starterArmorId = 2650
 local starterWeaponId = 2382
-local pickupRewardId = 2404
-local pickupRewardStorage = 64119
+local pickupRewardId = 2384
+local pickupRewardStorage = 64120
+local nestedRewardStorage = 50083
+local nestedRewardRootId = 1994
+local nestedRewardShieldId = 2512
+local economicRewardStorage = 50082
 local deathLoginCount = 0
 
 local function removeNearbyMonsters(player)
@@ -196,6 +200,40 @@ local function verifyPickupProgression(playerId, attempts)
     print("PLAYERBOT_GAMEPLAY_TEST PICKUP_PROGRESSION_PASS")
 end
 
+local function verifyNestedPickupProgression(playerId, attempts)
+    local player = Player(playerId)
+    assert(player and not player:isRemoved(), "Bot One disappeared during nested pickup progression")
+    local shield = player:getSlotItem(CONST_SLOT_RIGHT)
+    local complete = player:getStorageValue(nestedRewardStorage) == 1 and shield and
+        shield:getId() == nestedRewardShieldId
+    if not complete and attempts > 0 then
+        addEvent(verifyNestedPickupProgression, 500, playerId, attempts - 1)
+        return
+    end
+    assert(player:getStorageValue(nestedRewardStorage) == 1, "nested reward storage was not persisted")
+    assert(shield and shield:getId() == nestedRewardShieldId, "nested wooden shield was not equipped")
+    assert(player:getItemCount(nestedRewardRootId) == 1, "nested reward root bag was not preserved")
+    assert(player:getItemCount(2380) == 1, "nested reward hand axe was not preserved")
+    assert(player:getItemCount(2175) == 1, "nested reward spellbook was not preserved")
+    assert(player:getItemCount(starterWeaponId) == 1, "starter weapon was lost during nested equipment handling")
+    print("PLAYERBOT_GAMEPLAY_TEST PICKUP_PROGRESSION_NESTED_PASS")
+end
+
+local function verifyEconomicPickupProgression(playerId, attempts)
+    local player = Player(playerId)
+    assert(player and not player:isRemoved(), "Bot One disappeared during economic pickup progression")
+    local complete = player:getStorageValue(economicRewardStorage) == 1 and
+        player:getItemCount(2050) >= 1 and player:getItemCount(2152) >= 15
+    if not complete and attempts > 0 then
+        addEvent(verifyEconomicPickupProgression, 500, playerId, attempts - 1)
+        return
+    end
+    assert(player:getStorageValue(economicRewardStorage) == 1, "economic reward storage was not persisted")
+    assert(player:getItemCount(2050) >= 1, "economic reward torch was not preserved")
+    assert(player:getItemCount(2152) >= 15, "economic reward platinum coins were not merged and preserved")
+    print("PLAYERBOT_GAMEPLAY_TEST PICKUP_PROGRESSION_BUNDLE_PASS")
+end
+
 local function triggerArbitrationInterrupt(playerId)
     local player = Player(playerId)
     assert(player and not player:isRemoved(), "Bot One disappeared before the arbitration interrupt")
@@ -242,8 +280,10 @@ function login.onLogin(player)
 
     local mode = os.getenv("PLAYERBOT_GAMEPLAY_MODE") or "cycle"
     assert(mode == "cycle" or mode == "navigation" or mode == "corpse" or mode == "death" or mode == "healing" or
-        mode == "healing_resupply" or mode == "value" or mode == "progression" or
-        mode == "progression_resume" or mode == "progression_space" or mode == "arbitration" or
+		mode == "healing_resupply" or mode == "value" or mode == "progression" or mode == "progression_bundle" or
+		mode == "progression_nested" or
+        mode == "progression_resume" or mode == "progression_nested_resume" or mode == "progression_space" or
+        mode == "arbitration" or
         mode == "arbitration_interrupt",
         "unknown PLAYERBOT_GAMEPLAY_MODE: " .. mode)
     if mode == "death" then
@@ -279,7 +319,36 @@ function login.onLogin(player)
         return true
     end
 
-    if mode == "progression" or mode == "progression_resume" or mode == "progression_space" then
+	if mode == "progression_bundle" then
+		assert(player:addItem(2152, 5), "economic progression fixture could not seed an existing platinum stack")
+		assert(player:teleportTo(Position(32034, 32277, 8)), "economic progression fixture could not approach the reward")
+		suppressNearbyMonsters(player:getId())
+		addEvent(verifyEconomicPickupProgression, 500, player:getId(), 360)
+		print("PLAYERBOT_GAMEPLAY_TEST PICKUP_PROGRESSION_BUNDLE_START")
+		return true
+	end
+
+	if mode == "progression_nested" then
+		assert(player:setStorageValue(50082, 1), "nested progression fixture could not suppress the nearby currency reward")
+		local rewardChest = Container(nestedRewardStorage)
+		local rewardBag = nil
+		for _, item in ipairs(rewardChest and rewardChest:getItems() or {}) do
+			if item:getId() == nestedRewardRootId then
+				rewardBag = item
+				break
+			end
+		end
+		assert(rewardBag and rewardBag:addItem(meatItemId, 2),
+			"nested progression fixture could not add mutable food siblings")
+		assert(player:teleportTo(Position(32034, 32275, 7)), "nested progression fixture could not approach the reward")
+		suppressNearbyMonsters(player:getId())
+		addEvent(verifyNestedPickupProgression, 500, player:getId(), 360)
+		print("PLAYERBOT_GAMEPLAY_TEST PICKUP_PROGRESSION_NESTED_START")
+		return true
+	end
+
+    if mode == "progression" or mode == "progression_resume" or mode == "progression_nested_resume" or
+        mode == "progression_space" then
         local position = player:getPosition()
         if mode == "progression_resume" then
             assert(player:getStorageValue(pickupRewardStorage) == -1,
@@ -287,10 +356,20 @@ function login.onLogin(player)
             assert(player:setStorageValue(pickupRewardStorage, 1), "resume fixture could not set claimed storage")
             local backpack = player:getSlotItem(CONST_SLOT_BACKPACK)
             assert(backpack and backpack:addItem(pickupRewardId, 1), "resume fixture could not add claimed reward")
+        elseif mode == "progression_nested_resume" then
+            assert(player:getStorageValue(nestedRewardStorage) == -1,
+                "nested resume fixture expected an unclaimed reward")
+            assert(player:setStorageValue(nestedRewardStorage, 1), "nested resume fixture could not set claimed storage")
+            local backpack = player:getSlotItem(CONST_SLOT_BACKPACK)
+            local rewardBag = backpack and backpack:addItem(nestedRewardRootId, 1)
+            assert(rewardBag, "nested resume fixture could not add the reward bag")
+            assert(rewardBag:addItem(2175, 1), "nested resume fixture could not add the spellbook")
+            assert(rewardBag:addItem(2380, 1), "nested resume fixture could not add the hand axe")
+            assert(rewardBag:addItem(nestedRewardShieldId, 1), "nested resume fixture could not add the wooden shield")
         elseif mode == "progression_space" then
             local backpack = player:getSlotItem(CONST_SLOT_BACKPACK)
             assert(backpack, "inventory-space fixture expected a backpack")
-            while backpack:getSize() + 1 < backpack:getCapacity() do
+            while backpack:getSize() < backpack:getCapacity() do
                 assert(backpack:addItem(ITEM_BAG, 1), "inventory-space fixture could not fill the backpack")
             end
             print("PLAYERBOT_GAMEPLAY_TEST PICKUP_PROGRESSION_SPACE_START")
@@ -309,9 +388,16 @@ function login.onLogin(player)
                 "pickup progression fixture did not restore persisted equipment")
         end
         suppressNearbyMonsters(player:getId())
-        addEvent(verifyPickupProgression, 500, player:getId(), 360)
-        print(mode == "progression_resume" and "PLAYERBOT_GAMEPLAY_TEST PICKUP_PROGRESSION_RESUME_START" or
-            "PLAYERBOT_GAMEPLAY_TEST PICKUP_PROGRESSION_START")
+		local progressionRestart = mode == "progression" and player:getStorageValue(pickupRewardStorage) == 1
+		if not progressionRestart then
+			addEvent(mode == "progression_nested_resume" and verifyNestedPickupProgression or
+				verifyPickupProgression, 500, player:getId(), 360)
+		end
+        local startMarker = mode == "progression_resume" and "PLAYERBOT_GAMEPLAY_TEST PICKUP_PROGRESSION_RESUME_START" or
+            mode == "progression_nested_resume" and "PLAYERBOT_GAMEPLAY_TEST PICKUP_PROGRESSION_NESTED_RESUME_START" or
+			progressionRestart and "PLAYERBOT_GAMEPLAY_TEST PICKUP_PROGRESSION_RESTART_START" or
+			"PLAYERBOT_GAMEPLAY_TEST PICKUP_PROGRESSION_START"
+        print(startMarker)
         return true
     end
 

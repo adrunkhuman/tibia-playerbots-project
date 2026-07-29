@@ -58,6 +58,7 @@ when no target exists.
 | `state_transition` | `from`, `to` |
 | `objective_transition` | Objective `from`, `to`, and `reason`; progression currently adds `pickup_reward` above cycle phases `service`, `return_to_depot`, `deposit_loot`, and `hunt` |
 | `strategy_candidate` | Pickup-reward candidate ID, item/slot/stat benefit, travel evidence, feasibility, and rejection reason |
+| `reward_inspection` | Generic reward UID/destination, recursive item paths, names/counts, classifications, known utility, currency/sell totals, upgrade/container/unknown counts, and the complete known bundle tree flattened with containment paths |
 | `strategy_selection` | Selected goal/candidate and the inspectable selection reason |
 | `strategy_objective_result` | Goal/candidate, result, and terminal objective reason |
 | `goal_candidate` | Decision ID/reason, `service`, `pickup_reward`, or `hunt`, evaluated/feasible flags, utility, and goal-specific evidence |
@@ -66,7 +67,7 @@ when no target exists.
 | `service_discovered` | Tagged live NPC name, capability, ID, and registered offer count |
 | `npc_reply` | Selected NPC name, ID, and private acknowledgement text |
 | `target_changed` | `previous_target_id`, `target_id`, optional target type and position, `reason` |
-| `action_result` | Always has `action` and `result`; failures and skipped actions also have `reason`. Navigation plans include destination, step count, and expanded-node count. Successful `heal`, `eat`, `loot`, and `deposit` records include item details. |
+| `action_result` | Always has `action` and `result`; failures and skipped actions also have `reason`. Navigation plans include destination, step count, and expanded-node count. Successful `heal`, `eat`, `loot`, and `deposit` records include item details. A successful `claim_reward` includes selected-root counts before and after use, `top_level_root_count`, and `all_roots_verified`. A requested `open_reward_container` includes `container_id`, nested `depth`, and `item_id`; bounded open failure ends the objective with `reward_container_open_failed`. |
 | `stuck` | `reason`, `blocked_steps` |
 | `summary` | Current state and target, uptime, decision/pathfinding timing, action, failure, stuck, and suppression counters |
 | `terminal` | `reason` |
@@ -119,20 +120,43 @@ destination goals rather than ordered transition checkpoints.
 
 Normal startup first evaluates the initial progression slice. It enumerates
 loaded unique map items whose action ID is the generic quest-chest handler
-`2000`, restricts them to the existing bounded Rookgaard area, reads rewards
-from their loaded container contents, and compares basic armor, shield, and
-one-handed weapon stats against equipped slots. Claimed storage, capacity,
-root-backpack space for every reward and displaced equipment item, and bounded
-navigator reachability are checked before selection. Routes requiring
+`2000`, restricts them to the existing bounded Rookgaard area, and recursively
+inspects every top-level reward and nested container item while preserving root
+ordinals and child paths. Loaded metadata and current player state classify
+known equipment upgrades, currency, configured supplies/food/tools, known NPC
+sellables, containers, and safe `unknown_keep` items. Unknown items remain
+visible and protected but receive no invented utility. Claimed storage,
+recursive bundle weight, top-level root slots, displaced-equipment space, and
+bounded navigator reachability are checked before selection. Routes requiring
 a door, rope, or shovel action, or more than 120 steps, are not considered
 simple pickup objectives.
 
-The nearest useful reachable reward is evaluated deterministically. The bot
-travels to an adjacent tile, uses the map object normally, verifies both its
-unique-ID storage and inventory increase, then equips the upgrade through a
-normal item move and verifies that the displaced item remains owned. Transient
-objective and route state are
-not persisted; after restart, persisted storage and equipment cause the next
+This progression slice supports only shared container rewards handled by action
+ID `2000`. Action ID `2001` uses the separate non-container reward table and is
+not inspected or claimed. Dedicated quest actions, including quest levers, are
+also outside this slice. Their rewards require separate behavior rather than
+container-tree inspection.
+
+Reward bundles are ordered by known utility minus estimated travel, then route
+validated until a useful candidate succeeds. Equipment bundles receive the
+existing progression priority; purely economic bundles use a lower base and
+must still beat hunting. The bot travels to an adjacent tile, uses the map
+object normally, verifies unique-ID storage and every cloned top-level root,
+including aggregate count growth when a stackable root merges into existing
+inventory and structural signatures for non-stackable roots. All top-level
+roots must pass before the claim succeeds. The bot then opens the main backpack
+and nested reward ancestors through bounded normal item-use actions. Open
+container window `0` is reserved for corpses, `1` for the main backpack, and
+`2` through `15` for at most 14 nested reward ancestors. A deeper path is
+unsupported, and repeated failure to open one ancestor ends the objective.
+Routine healing and eating wait through claim verification, nested equipment
+access, and equipment-result verification so supplies cannot mutate the bundle
+identity or interrupt displaced-item verification while either is still needed. A
+selected nested upgrade is moved normally into its equipment slot;
+the root container, sibling contents, and displaced equipment remain owned.
+Bundles with positive known utility but no equipment upgrade complete after the
+whole reward is verified. Transient objective and route state are not persisted;
+after restart, persisted storage and equipment cause the next
 candidate evaluation to skip completed or obsolete rewards. A claimed upgrade
 still owned but not yet equipped resumes directly at equipment handling rather
 than claiming again.
@@ -144,11 +168,13 @@ during movement, combat, healing, looting, dialogue, transactions, or pending
 item verification. Death recovery and focused gameplay modes preserve their
 forced service/hunt contracts. Observed danger, missing healing supplies, and
 other executor safety interrupts can force service without waiting for a normal
-boundary.
+boundary. Critical healing can interrupt reward travel before a claim. After a
+claim, routine upkeep waits for the bounded verification and equipment sequence.
 
 Selection is intentionally deterministic and provisional. Hunt has utility
 `300`; ordinary service starts at `400` and adds reserve, sale, and cash needs;
-pickup starts at `650`, adds equipment benefit, and subtracts route steps.
+equipment pickup starts at `650`, economic pickup at `250`, and both add known
+bundle utility before subtracting route steps.
 Capacity service is at least `900`, and critical healing service is at least
 `1000`. A successful pickup applies a five-minute in-memory family cooldown; a
 failed or safety-interrupted pickup applies 60 seconds. This prevents immediate
@@ -334,6 +360,8 @@ remain region boundaries. The existing navigator validates the highest-scoring
 candidates; selected regions supply spawn-adjacent patrol destinations. The
 prototype accepts spawn positions on floors 6 through 15 inside the rectangle
 extending 180 tiles in each axis from temple `(32097, 32219, 7)`.
+This is an axis-aligned square cutoff: X and Y are each checked independently.
+It is not a radial distance or a verified boundary for all of Rookgaard.
 Each configured hunt/service cycle triggers rescoring, while excessive observed
 damage temporarily excludes a region. Level gains are recorded in hunt outcomes
 but do not interrupt the fixed hunt interval. Gameplay fixture modes retain their
