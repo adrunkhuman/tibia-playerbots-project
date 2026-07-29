@@ -8,6 +8,7 @@ playerbotEnabled = os.getenv("PLAYERBOT_ENABLED") ~= "false"
 playerbotHuntDurationSeconds = tonumber(os.getenv("PLAYERBOT_HUNT_DURATION_SECONDS")) or 300
 playerbotRelogDelaySeconds = tonumber(os.getenv("PLAYERBOT_RELOG_DELAY_SECONDS")) or 5
 playerbotMaxConsecutiveDeaths = tonumber(os.getenv("PLAYERBOT_MAX_CONSECUTIVE_DEATHS")) or 3
+playerbotSpeedBonus = tonumber(os.getenv("PLAYERBOT_SPEED_BONUS")) or 300
 
 -- Combat settings
 -- NOTE: valid values for worldType are: "pvp", "no-pvp" and "pvp-enforced"

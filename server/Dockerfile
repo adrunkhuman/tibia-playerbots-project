@@ -1,3 +1,5 @@
+# syntax=docker/dockerfile:1
+
 FROM ubuntu:24.04 AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -5,6 +7,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \
     && apt-get install --no-install-recommends -y \
         build-essential \
+        ccache \
         cmake \
         libboost-date-time-dev \
         libboost-iostreams-dev \
@@ -16,14 +19,23 @@ RUN apt-get update \
         libpugixml-dev \
     && rm -rf /var/lib/apt/lists/*
 
-WORKDIR /src
-COPY . .
+ENV CCACHE_SLOPPINESS=pch_defines,time_macros
 
-RUN cmake -S . -B build \
+WORKDIR /src
+COPY CMakeLists.txt ./
+COPY cmake ./cmake
+COPY src ./src
+
+RUN --mount=type=cache,target=/root/.cache/ccache \
+    cmake -S . -B build \
         -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+        -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+        -DCMAKE_CXX_FLAGS=-fpch-preprocess \
         -DSKIP_GIT=ON \
         -DUSE_LUAJIT=ON \
-    && cmake --build build --parallel 2
+    && cmake --build build --parallel 2 \
+    && ccache --show-stats
 
 FROM ubuntu:24.04
 

@@ -69,11 +69,11 @@ and terminal events, one- then two-second elapsed backoff, fresh service-first
 controllers, no actions during relog delays, resumed service discovery, final
 death-loop abandonment, and removal from online state.
 
-`-Healing` runs the baseline, resets the stack, then starts Bot One at 100
+`-Healing` runs the baseline, resets the stack, then starts Bot One at 50%
 health with three small health potions and no nearby monsters. It verifies
 normal potion consumption and health gain, repeated one-at-a-time healing above
 the 60% threshold, and resumption of the interrupted hunt objective. A second
-focused stack starts at the same health without potions and verifies service
+focused stack starts at the same health ratio without potions and verifies service
 redirection, purchase verification, healing from the new stock, and resumed
 service:
 
@@ -89,8 +89,28 @@ pwsh -File scripts/test-playerbot-gameplay.ps1 -FullNavigation -CorpseLoot -Heal
 
 The suite rebuilds the server and resets the disposable Compose stack and
 database volume. It removes them afterward; `-KeepStack` leaves the final stack
-running. The default timeout is 300 seconds and can be changed with
-`-TimeoutSeconds` from 60 to 3600 seconds.
+running. It prints wall-clock timing for the build and every scenario.
+
+Focused debugging can skip both the baseline and a known-current image build:
+
+```powershell
+docker compose -f server/compose.yaml build server
+pwsh -File scripts/test-playerbot-gameplay.ps1 -Healing -Focused -SkipBuild
+```
+
+`-Focused` requires at least one scenario switch and runs only the requested
+scenarios. `-SkipBuild` requires an existing `angelion-server:latest` image and
+does not verify that it matches the worktree; omit it before final validation.
+Docker builds use a persistent BuildKit `ccache` mount. The compile layer copies
+only CMake and C++ inputs, so datapack and fixture-only edits reuse the server
+binary while source edits reuse unchanged compiler results.
+
+Default fail-fast deadlines cover each complete scenario, including stack setup
+and all waits: 180 seconds for the baseline and full navigation, 60 for corpse
+and ordinary healing, 45 for death, and 90 for
+healing-resupply and value-loot. An explicitly supplied `-TimeoutSeconds` from
+30 through 3600 overrides every scenario deadline for slower machines. A wait
+failure includes Compose status and the last 80 server-log lines.
 
 The overlay's `PLAYERBOT_GAMEPLAY_MODE` accepts `cycle`, `navigation`, `corpse`,
 `death`, `healing`, `healing_resupply`, or `value`. The script selects these
@@ -101,6 +121,23 @@ assertions. Death mode kills the bot outside the temple protection zone,
 verifies two temple relogs with one- then two-second backoff, observes the
 second fresh controller resume service, and forces one final death to verify
 the configured death-loop limit.
+
+Gameplay modes deliberately retain fixed hunt destinations and override hunt
+duration to 10 or 900 seconds where required. They do not validate dynamic
+Rookgaard region generation, threat/cooldown decisions, observed XP correction,
+oscillation suppression, or `GOD Admin` notifications. Validate the prototype
+manually on the normal stack and inspect its JSONL evidence:
+
+```powershell
+$env:PLAYERBOT_HUNT_DURATION_SECONDS = "180"
+docker compose -f server/compose.yaml up --build --detach --force-recreate server
+docker compose -f server/compose.yaml logs --follow --no-log-prefix server
+```
+
+Look for `hunt_region_candidate`, `hunt_region_scan`,
+`hunt_region_selection`, `hunt_region_outcome`, `hunt_region_patrol`, and
+`navigation_progress`. The three-minute interval above is an observation
+override; tracked defaults are a `300` speed bonus and 300-second hunt interval.
 
 ## Connectionless Regression Overlay
 

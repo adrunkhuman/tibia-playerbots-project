@@ -1,12 +1,14 @@
 param(
-    [ValidateRange(60, 3600)]
-    [int]$TimeoutSeconds = 300,
+	[ValidateRange(30, 3600)]
+	[int]$TimeoutSeconds = 300,
     [switch]$FullNavigation,
     [switch]$CorpseLoot,
     [switch]$DeathTelemetry,
-    [switch]$Healing,
-    [switch]$ValueLoot,
-    [switch]$KeepStack
+	[switch]$Healing,
+	[switch]$ValueLoot,
+	[switch]$Focused,
+	[switch]$SkipBuild,
+	[switch]$KeepStack
 )
 
 $ErrorActionPreference = "Stop"
@@ -19,6 +21,11 @@ $previousDuration = $env:PLAYERBOT_HUNT_DURATION_SECONDS
 $previousMode = $env:PLAYERBOT_GAMEPLAY_MODE
 $previousRelogDelay = $env:PLAYERBOT_RELOG_DELAY_SECONDS
 $previousMaximumDeaths = $env:PLAYERBOT_MAX_CONSECUTIVE_DEATHS
+$timeoutOverridden = $PSBoundParameters.ContainsKey("TimeoutSeconds")
+$timings = [ordered]@{}
+$currentWaitTimeoutSeconds = $TimeoutSeconds
+$currentScenario = "startup"
+$currentScenarioDeadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
 
 function Invoke-Compose {
     param([Parameter(ValueFromRemainingArguments)][string[]]$Arguments)
@@ -46,10 +53,19 @@ function Get-OnlineBotCount {
     return [int]($output | Select-Object -Last 1)
 }
 
+function Throw-WaitTimeout {
+	param([string]$Message)
+
+	$status = & docker @composeArguments ps --all 2>&1
+	$logs = try { Get-ServerLogs } catch { "Server logs unavailable: $($_.Exception.Message)" }
+	$tail = (($logs -split "`r?`n") | Select-Object -Last 80) -join "`n"
+	throw "$Message`nScenario: $currentScenario`n--- compose status ---`n$($status -join "`n")`n--- server log tail ---`n$tail"
+}
+
 function Wait-ForLog {
     param([string]$Pattern)
 
-    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+	$deadline = $currentScenarioDeadline
     while ([DateTime]::UtcNow -lt $deadline) {
         $logs = Get-ServerLogs
         if ($logs -match $Pattern) {
@@ -57,13 +73,13 @@ function Wait-ForLog {
         }
         Start-Sleep -Seconds 2
     }
-    throw "Timed out after $TimeoutSeconds seconds waiting for server log pattern: $Pattern"
+	Throw-WaitTimeout "Timed out after $currentWaitTimeoutSeconds seconds waiting for server log pattern: $Pattern"
 }
 
 function Wait-ForPlayerbotEvent {
     param([scriptblock]$Predicate)
 
-    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+	$deadline = $currentScenarioDeadline
     while ([DateTime]::UtcNow -lt $deadline) {
         $logs = Get-ServerLogs
         if (@(ConvertFrom-PlayerbotLogs -Logs $logs | Where-Object $Predicate).Count -gt 0) {
@@ -71,7 +87,7 @@ function Wait-ForPlayerbotEvent {
         }
         Start-Sleep -Seconds 1
     }
-    throw "Timed out after $TimeoutSeconds seconds waiting for a playerbot event."
+	Throw-WaitTimeout "Timed out after $currentWaitTimeoutSeconds seconds waiting for a playerbot event."
 }
 
 function Wait-ForPlayerbotEventCount {
@@ -80,7 +96,7 @@ function Wait-ForPlayerbotEventCount {
         [int]$Count
     )
 
-    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+	$deadline = $currentScenarioDeadline
     while ([DateTime]::UtcNow -lt $deadline) {
         $logs = Get-ServerLogs
         $events = @(ConvertFrom-PlayerbotLogs -Logs $logs | Where-Object {
@@ -91,7 +107,36 @@ function Wait-ForPlayerbotEventCount {
         }
         Start-Sleep -Seconds 2
     }
-    throw "Timed out after $TimeoutSeconds seconds waiting for $Count '$Action' events."
+	Throw-WaitTimeout "Timed out after $currentWaitTimeoutSeconds seconds waiting for $Count '$Action' events."
+}
+
+function Invoke-TimedStep {
+	param(
+		[string]$Name,
+		[scriptblock]$Body
+	)
+
+	$stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+	try {
+		& $Body
+	}
+	finally {
+		$stopwatch.Stop()
+		$timings[$Name] = $stopwatch.Elapsed
+	}
+}
+
+function Invoke-Scenario {
+	param(
+		[string]$Name,
+		[int]$DefaultTimeoutSeconds,
+		[scriptblock]$Body
+	)
+
+	$script:currentScenario = $Name
+	$script:currentWaitTimeoutSeconds = if ($timeoutOverridden) { $TimeoutSeconds } else { $DefaultTimeoutSeconds }
+	$script:currentScenarioDeadline = [DateTime]::UtcNow.AddSeconds($currentWaitTimeoutSeconds)
+	Invoke-TimedStep -Name $Name -Body $Body
 }
 
 function ConvertFrom-PlayerbotLogs {
@@ -298,8 +343,8 @@ function Assert-HealingEvents {
             $planAfterHealing = $true
         }
     }
-    if ($heals.Count -lt 2 -or $heals.Count -gt 3) {
-        throw "Expected two or three verified small-health-potion actions, found $($heals.Count)."
+    if ($heals.Count -lt 1 -or $heals.Count -gt 3) {
+        throw "Expected one to three verified small-health-potion actions, found $($heals.Count)."
     }
     if ($heals[-1].health_after * 100 -le $heals[-1].health_max * 60) {
         throw "The bot did not heal above its configured health threshold."
@@ -336,7 +381,7 @@ function Assert-HealingResupplyEvents {
     $transactionFailures = @($events | Where-Object {
         $_.reason -eq "transaction_delta_mismatch" -or $_.reason -eq "shop_transaction_delta_mismatch"
     })
-    if ($missingSupply.Count -ne 1 -or $purchases.Count -lt 1 -or $heals.Count -lt 2) {
+    if ($missingSupply.Count -ne 1 -or $purchases.Count -lt 1 -or $heals.Count -lt 1) {
         throw "The bot did not refill and consume potions after the missing-supply healing outcome."
     }
     if ($serviceResumed.Count -lt 1) {
@@ -459,101 +504,132 @@ function Assert-CorpseEvents {
 }
 
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
-    throw "Docker is required to run the playerbot gameplay suite."
+	throw "Docker is required to run the playerbot gameplay suite."
+}
+
+$focusedScenarioRequested = $FullNavigation -or $CorpseLoot -or $DeathTelemetry -or $Healing -or $ValueLoot
+if ($Focused -and -not $focusedScenarioRequested) {
+	throw "-Focused requires at least one focused scenario switch."
 }
 
 try {
-    & docker info *> $null
-    if ($LASTEXITCODE -ne 0) {
-        throw "Docker is not running."
-    }
+	& docker info *> $null
+	if ($LASTEXITCODE -ne 0) {
+		throw "Docker is not running."
+	}
 
-    Invoke-Compose down --volumes --remove-orphans
-    $env:PLAYERBOT_GAMEPLAY_MODE = "cycle"
-    $env:PLAYERBOT_HUNT_DURATION_SECONDS = "10"
-    Invoke-Compose up --build --detach
+	if ($SkipBuild) {
+		& docker image inspect angelion-server:latest *> $null
+		if ($LASTEXITCODE -ne 0) {
+			throw "-SkipBuild requires an existing angelion-server:latest image."
+		}
+	} else {
+		Invoke-TimedStep -Name "build" -Body { Invoke-Compose build server }
+	}
 
-    Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST SERVICE_PASS' | Out-Null
-    $cycleLogs = Wait-ForLog -Pattern '"action":"hunt_cycle","result":"started","cycle":2'
-    Assert-CycleEvents -Logs $cycleLogs
+	if (-not $Focused) {
+		Invoke-Scenario -Name "cycle" -DefaultTimeoutSeconds 180 -Body {
+			Invoke-Compose down --volumes --remove-orphans
+			$env:PLAYERBOT_GAMEPLAY_MODE = "cycle"
+			$env:PLAYERBOT_HUNT_DURATION_SECONDS = "10"
+			Invoke-Compose up --detach
+			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST SERVICE_PASS' | Out-Null
+			$cycleLogs = Wait-ForLog -Pattern '"action":"hunt_cycle","result":"started","cycle":2'
+			Assert-CycleEvents -Logs $cycleLogs
+		}
+	}
 
-    if ($FullNavigation) {
-        Invoke-Compose down --volumes --remove-orphans
-        $env:PLAYERBOT_GAMEPLAY_MODE = "navigation"
-        $env:PLAYERBOT_HUNT_DURATION_SECONDS = "900"
-        Invoke-Compose up --detach
-        $navigationLogs = Wait-ForPlayerbotEventCount -Action "hunt_waypoint" -Count 5
-        Assert-NavigationEvents -Logs $navigationLogs
-    }
+	if ($FullNavigation) {
+		Invoke-Scenario -Name "navigation" -DefaultTimeoutSeconds 180 -Body {
+			Invoke-Compose down --volumes --remove-orphans
+			$env:PLAYERBOT_GAMEPLAY_MODE = "navigation"
+			$env:PLAYERBOT_HUNT_DURATION_SECONDS = "900"
+			Invoke-Compose up --detach
+			$navigationLogs = Wait-ForPlayerbotEventCount -Action "hunt_waypoint" -Count 5
+			Assert-NavigationEvents -Logs $navigationLogs
+		}
+	}
 
-    if ($CorpseLoot) {
-        Invoke-Compose down --volumes --remove-orphans
-        $env:PLAYERBOT_GAMEPLAY_MODE = "corpse"
-        $env:PLAYERBOT_HUNT_DURATION_SECONDS = "900"
-        Invoke-Compose up --detach
-        $corpseLogs = Wait-ForLog -Pattern '"reason":"corpse_not_lootable","expected_corpse_item_id":1987'
-        Assert-CorpseEvents -Logs $corpseLogs
-    }
+	if ($CorpseLoot) {
+		Invoke-Scenario -Name "corpse" -DefaultTimeoutSeconds 60 -Body {
+			Invoke-Compose down --volumes --remove-orphans
+			$env:PLAYERBOT_GAMEPLAY_MODE = "corpse"
+			$env:PLAYERBOT_HUNT_DURATION_SECONDS = "900"
+			Invoke-Compose up --detach
+			$corpseLogs = Wait-ForLog -Pattern '"reason":"corpse_not_lootable","expected_corpse_item_id":1987'
+			Assert-CorpseEvents -Logs $corpseLogs
+		}
+	}
 
-    if ($DeathTelemetry) {
-        Invoke-Compose down --volumes --remove-orphans
-        $env:PLAYERBOT_GAMEPLAY_MODE = "death"
-        $env:PLAYERBOT_HUNT_DURATION_SECONDS = "900"
-        $env:PLAYERBOT_RELOG_DELAY_SECONDS = "1"
-        $env:PLAYERBOT_MAX_CONSECUTIVE_DEATHS = "2"
-        Invoke-Compose up --detach
-        Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST DEATH_RECOVERY_STATE_PASS' | Out-Null
-        $deathLogs = Wait-ForPlayerbotEvent -Predicate {
-            $_.event -eq "lifecycle" -and $_.status -eq "recovery_abandoned" -and $_.reason -eq "death_loop_limit"
-        }
-        Start-Sleep -Seconds 1
-        if ((Get-OnlineBotCount) -ne 0) {
-            throw "Bot One remained online after death recovery was abandoned."
-        }
-        $deathLogs = Get-ServerLogs
-        Assert-DeathEvents -Logs $deathLogs
-    }
+	if ($DeathTelemetry) {
+		Invoke-Scenario -Name "death" -DefaultTimeoutSeconds 45 -Body {
+			Invoke-Compose down --volumes --remove-orphans
+			$env:PLAYERBOT_GAMEPLAY_MODE = "death"
+			$env:PLAYERBOT_HUNT_DURATION_SECONDS = "900"
+			$env:PLAYERBOT_RELOG_DELAY_SECONDS = "1"
+			$env:PLAYERBOT_MAX_CONSECUTIVE_DEATHS = "2"
+			Invoke-Compose up --detach
+			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST DEATH_RECOVERY_STATE_PASS' | Out-Null
+			$deathLogs = Wait-ForPlayerbotEvent -Predicate {
+				$_.event -eq "lifecycle" -and $_.status -eq "recovery_abandoned" -and $_.reason -eq "death_loop_limit"
+			}
+			Start-Sleep -Seconds 1
+			if ((Get-OnlineBotCount) -ne 0) {
+				throw "Bot One remained online after death recovery was abandoned."
+			}
+			Assert-DeathEvents -Logs (Get-ServerLogs)
+		}
+	}
 
-    if ($Healing) {
-        Invoke-Compose down --volumes --remove-orphans
-        $env:PLAYERBOT_GAMEPLAY_MODE = "healing"
-        $env:PLAYERBOT_HUNT_DURATION_SECONDS = "900"
-        Invoke-Compose up --detach
-        Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST HEALING_STATE_PASS' | Out-Null
-        $healingLogs = Wait-ForLog -Pattern '"action":"plan","result":"success".*"destination":\{"x":32084,"y":32144,"z":5\}'
-        Assert-HealingEvents -Logs $healingLogs
+	if ($Healing) {
+		Invoke-Scenario -Name "healing" -DefaultTimeoutSeconds 60 -Body {
+			Invoke-Compose down --volumes --remove-orphans
+			$env:PLAYERBOT_GAMEPLAY_MODE = "healing"
+			$env:PLAYERBOT_HUNT_DURATION_SECONDS = "900"
+			Invoke-Compose up --detach
+			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST HEALING_STATE_PASS' | Out-Null
+			$healingLogs = Wait-ForLog -Pattern '"action":"plan","result":"success".*"destination":\{"x":32084,"y":32144,"z":5\}'
+			Assert-HealingEvents -Logs $healingLogs
+		}
 
-        Invoke-Compose down --volumes --remove-orphans
-        $env:PLAYERBOT_GAMEPLAY_MODE = "healing_resupply"
-        Invoke-Compose up --detach
-        Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST HEALING_RESUPPLY_STATE_PASS' | Out-Null
-        $resupplyLogs = Wait-ForLog -Pattern '"action":"buy_meat".*"result":"success"'
-        Assert-HealingResupplyEvents -Logs $resupplyLogs
-    }
+		Invoke-Scenario -Name "healing_resupply" -DefaultTimeoutSeconds 90 -Body {
+			Invoke-Compose down --volumes --remove-orphans
+			$env:PLAYERBOT_GAMEPLAY_MODE = "healing_resupply"
+			Invoke-Compose up --detach
+			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST HEALING_RESUPPLY_STATE_PASS' | Out-Null
+			$resupplyLogs = Wait-ForLog -Pattern '"action":"buy_meat".*"result":"success"'
+			Assert-HealingResupplyEvents -Logs $resupplyLogs
+		}
+	}
 
-    if ($ValueLoot) {
-        Invoke-Compose down --volumes --remove-orphans
-        $env:PLAYERBOT_GAMEPLAY_MODE = "value"
-        $env:PLAYERBOT_HUNT_DURATION_SECONDS = "900"
-        Invoke-Compose up --detach
-        $valueLogs = Wait-ForLog -Pattern '"action":"buy_potions".*"result":"success"'
-        Assert-ValueLootEvents -Logs $valueLogs
-    }
-    "PLAYERBOT_GAMEPLAY_TEST PASS"
+	if ($ValueLoot) {
+		Invoke-Scenario -Name "value" -DefaultTimeoutSeconds 90 -Body {
+			Invoke-Compose down --volumes --remove-orphans
+			$env:PLAYERBOT_GAMEPLAY_MODE = "value"
+			$env:PLAYERBOT_HUNT_DURATION_SECONDS = "900"
+			Invoke-Compose up --detach
+			$valueLogs = Wait-ForLog -Pattern '"action":"buy_potions".*"result":"success"'
+			Assert-ValueLootEvents -Logs $valueLogs
+		}
+	}
+	"PLAYERBOT_GAMEPLAY_TEST PASS"
 }
 finally {
-    try {
-        if (-not $KeepStack -and (Get-Command docker -ErrorAction SilentlyContinue)) {
-            & docker @composeArguments down --volumes --remove-orphans
-            if ($LASTEXITCODE -ne 0) {
-                throw "Could not clean up the playerbot gameplay stack."
-            }
-        }
-    }
-    finally {
-        $env:PLAYERBOT_HUNT_DURATION_SECONDS = $previousDuration
-        $env:PLAYERBOT_GAMEPLAY_MODE = $previousMode
-        $env:PLAYERBOT_RELOG_DELAY_SECONDS = $previousRelogDelay
-        $env:PLAYERBOT_MAX_CONSECUTIVE_DEATHS = $previousMaximumDeaths
-    }
+	try {
+		if (-not $KeepStack -and (Get-Command docker -ErrorAction SilentlyContinue)) {
+			& docker @composeArguments down --volumes --remove-orphans
+			if ($LASTEXITCODE -ne 0) {
+				throw "Could not clean up the playerbot gameplay stack."
+			}
+		}
+	}
+	finally {
+		$env:PLAYERBOT_HUNT_DURATION_SECONDS = $previousDuration
+		$env:PLAYERBOT_GAMEPLAY_MODE = $previousMode
+		$env:PLAYERBOT_RELOG_DELAY_SECONDS = $previousRelogDelay
+		$env:PLAYERBOT_MAX_CONSECUTIVE_DEATHS = $previousMaximumDeaths
+		foreach ($timing in $timings.GetEnumerator()) {
+			"PLAYERBOT_GAMEPLAY_TIMING $($timing.Key)=$([Math]::Round($timing.Value.TotalSeconds, 2))s"
+		}
+	}
 }

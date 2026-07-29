@@ -314,6 +314,7 @@ bool ConfigManager::load()
 	integer[PLAYERBOT_HUNT_DURATION_SECONDS] = getGlobalNumber(L, "playerbotHuntDurationSeconds", 300);
 	integer[PLAYERBOT_RELOG_DELAY_SECONDS] = getGlobalNumber(L, "playerbotRelogDelaySeconds", 5);
 	integer[PLAYERBOT_MAX_CONSECUTIVE_DEATHS] = getGlobalNumber(L, "playerbotMaxConsecutiveDeaths", 3);
+	integer[PLAYERBOT_SPEED_BONUS] = getGlobalNumber(L, "playerbotSpeedBonus", 300);
 
 	expStages = loadXMLStages();
 	if (expStages.empty()) {
