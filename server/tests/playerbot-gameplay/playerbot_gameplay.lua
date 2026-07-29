@@ -14,6 +14,10 @@ local defensiveMonsterName = "Playerbot Defensive Threat"
 local deathMonsterName = "Playerbot Death Threat"
 local valueMonsterName = "Playerbot Value Corpse"
 local healingPotionCount = 3
+local starterArmorId = 2650
+local starterWeaponId = 2382
+local pickupRewardId = 2404
+local pickupRewardStorage = 64119
 local deathLoginCount = 0
 
 local function removeNearbyMonsters(player)
@@ -176,6 +180,22 @@ local function verifyHealingResupply(playerId, attempts)
     print("PLAYERBOT_GAMEPLAY_TEST HEALING_RESUPPLY_STATE_PASS")
 end
 
+local function verifyPickupProgression(playerId, attempts)
+    local player = Player(playerId)
+    assert(player and not player:isRemoved(), "Bot One disappeared during the pickup progression test")
+    local equipped = player:getSlotItem(CONST_SLOT_LEFT)
+    local complete = player:getStorageValue(pickupRewardStorage) == 1 and equipped and equipped:getId() == pickupRewardId
+    if not complete and attempts > 0 then
+        addEvent(verifyPickupProgression, 500, playerId, attempts - 1)
+        return
+    end
+    assert(player:getStorageValue(pickupRewardStorage) == 1, "pickup reward storage was not persisted")
+    assert(equipped and equipped:getId() == pickupRewardId, "pickup reward was not equipped")
+    assert(player:getItemCount(starterWeaponId) == 1, "displaced starter weapon was not preserved")
+    assert(player:getSpeed() > 220, "playerbot testing speed boost was not preserved")
+    print("PLAYERBOT_GAMEPLAY_TEST PICKUP_PROGRESSION_PASS")
+end
+
 local function verifyService(playerId, initialDepotBagCount, attempts)
     local player = Player(playerId)
     assert(player and not player:isRemoved(), "Bot One disappeared during the gameplay test")
@@ -185,7 +205,7 @@ local function verifyService(playerId, initialDepotBagCount, attempts)
     local depositedBags = depotTile:getItemCountById(ITEM_BAG) - initialDepotBagCount
     local complete = depositedBags == 1 and player:getItemCount(saleItemId) == 0 and
         player:getItemCount(potionItemId) >= 5 and player:getItemCount(meatItemId) >= 1 and
-        player:getMoney() == 100 and player:getBankBalance() == 10034
+        player:getMoney() == 100 and player:getBankBalance() == 134
     if not complete and attempts > 0 then
         addEvent(verifyService, 500, playerId, initialDepotBagCount, attempts - 1)
         return
@@ -196,11 +216,11 @@ local function verifyService(playerId, initialDepotBagCount, attempts)
     assert(player:getItemCount(potionItemId) >= 5, "small health potion reserve was not purchased")
     assert(player:getItemCount(meatItemId) >= 1, "meat reserve was not purchased")
     assert(player:getMoney() == 100, "banker did not leave the carried gold reserve")
-    assert(player:getBankBalance() == 10034, "shop purchases and bank transactions produced the wrong balance")
-    assert(player:getSlotItem(CONST_SLOT_ARMOR):getId() == 2463, "plate armor was deposited")
-    assert(player:getSlotItem(CONST_SLOT_RIGHT):getId() == 2521, "dark shield was deposited")
-    assert(player:getSlotItem(CONST_SLOT_LEFT):getId() == 2392, "fire sword was deposited")
-    assert(player:getSlotItem(CONST_SLOT_FEET):getId() == 2195, "Boots of Haste were deposited")
+    assert(player:getBankBalance() == 134, "shop purchases and bank transactions produced the wrong balance")
+    assert(player:getSlotItem(CONST_SLOT_ARMOR):getId() == starterArmorId, "starter jacket was deposited")
+    assert(not player:getSlotItem(CONST_SLOT_RIGHT), "unexpected item appeared in the starter shield slot")
+    assert(player:getSlotItem(CONST_SLOT_LEFT):getId() == starterWeaponId, "starter club was deposited")
+    assert(not player:getSlotItem(CONST_SLOT_FEET), "unexpected item appeared in the starter feet slot")
     assert(player:getItemCount(2120) == 1, "rope was deposited")
     assert(player:getItemCount(2554) == 1, "shovel was deposited")
     print("PLAYERBOT_GAMEPLAY_TEST SERVICE_PASS")
@@ -215,7 +235,9 @@ function login.onLogin(player)
 
     local mode = os.getenv("PLAYERBOT_GAMEPLAY_MODE") or "cycle"
     assert(mode == "cycle" or mode == "navigation" or mode == "corpse" or mode == "death" or mode == "healing" or
-        mode == "healing_resupply" or mode == "value", "unknown PLAYERBOT_GAMEPLAY_MODE: " .. mode)
+        mode == "healing_resupply" or mode == "value" or mode == "progression" or
+        mode == "progression_resume" or mode == "progression_space",
+        "unknown PLAYERBOT_GAMEPLAY_MODE: " .. mode)
     if mode == "death" then
         deathLoginCount = deathLoginCount + 1
         removeNearbyMonsters(player)
@@ -231,6 +253,42 @@ function login.onLogin(player)
         end
         return true
     end
+    if mode == "progression" or mode == "progression_resume" or mode == "progression_space" then
+        local position = player:getPosition()
+        if mode == "progression_resume" then
+            assert(player:getStorageValue(pickupRewardStorage) == -1,
+                "resume fixture expected an unclaimed pickup reward")
+            assert(player:setStorageValue(pickupRewardStorage, 1), "resume fixture could not set claimed storage")
+            local backpack = player:getSlotItem(CONST_SLOT_BACKPACK)
+            assert(backpack and backpack:addItem(pickupRewardId, 1), "resume fixture could not add claimed reward")
+        elseif mode == "progression_space" then
+            local backpack = player:getSlotItem(CONST_SLOT_BACKPACK)
+            assert(backpack, "inventory-space fixture expected a backpack")
+            while backpack:getSize() + 1 < backpack:getCapacity() do
+                assert(backpack:addItem(ITEM_BAG, 1), "inventory-space fixture could not fill the backpack")
+            end
+            print("PLAYERBOT_GAMEPLAY_TEST PICKUP_PROGRESSION_SPACE_START")
+            return true
+        elseif player:getStorageValue(pickupRewardStorage) == -1 then
+            assert(position.x == 32097 and position.y == 32219 and position.z == 7,
+                "pickup progression fixture did not start at the Rookgaard temple")
+            assert(player:getSlotItem(CONST_SLOT_ARMOR):getId() == starterArmorId,
+                "pickup progression fixture expected starter armor")
+            assert(player:getSlotItem(CONST_SLOT_LEFT):getId() == starterWeaponId,
+                "pickup progression fixture expected starter weapon")
+            assert(not player:getSlotItem(CONST_SLOT_RIGHT), "pickup progression fixture expected an empty shield slot")
+            assert(not player:getSlotItem(CONST_SLOT_FEET), "pickup progression fixture expected an empty feet slot")
+        else
+            assert(player:getSlotItem(CONST_SLOT_LEFT):getId() == pickupRewardId,
+                "pickup progression fixture did not restore persisted equipment")
+        end
+        suppressNearbyMonsters(player:getId())
+        addEvent(verifyPickupProgression, 500, player:getId(), 360)
+        print(mode == "progression_resume" and "PLAYERBOT_GAMEPLAY_TEST PICKUP_PROGRESSION_RESUME_START" or
+            "PLAYERBOT_GAMEPLAY_TEST PICKUP_PROGRESSION_START")
+        return true
+    end
+
     assert(player:teleportTo(depotPosition), "fake depot position could not be restored")
     if mode == "navigation" then
         createTemporaryBlockers()
@@ -283,7 +341,7 @@ function login.onLogin(player)
     end
 
     assert(player:getMoney() == 200, "Bot One initial backpack purse was not 200 gp")
-    assert(player:getBankBalance() == 10000, "Bot One initial bank balance was not 10000 gp")
+    assert(player:getBankBalance() == 100, "Bot One initial bank balance was not 100 gp")
     local backpack = player:getSlotItem(CONST_SLOT_BACKPACK)
     assert(backpack and backpack:getId() == ITEM_BACKPACK, "seeded backpack is missing")
     local lootBag = backpack:addItem(ITEM_BAG, 1)

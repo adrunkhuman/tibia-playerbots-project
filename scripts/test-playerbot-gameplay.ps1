@@ -6,6 +6,7 @@ param(
     [switch]$DeathTelemetry,
 	[switch]$Healing,
 	[switch]$ValueLoot,
+	[switch]$PickupProgression,
 	[switch]$Focused,
 	[switch]$SkipBuild,
 	[switch]$KeepStack
@@ -418,6 +419,100 @@ function Assert-ValueLootEvents {
     }
 }
 
+function Assert-PickupProgressionEvents {
+    param([string]$Logs)
+
+    $events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
+    $candidate = @($events | Where-Object {
+        $_.event -eq "strategy_candidate" -and $_.candidate_id -eq 64119 -and $_.result -eq "feasible" -and
+        $_.item_id -eq 2404 -and $_.benefit -eq 1 -and $_.travel_steps -gt 0
+    })
+    $selection = @($events | Where-Object {
+        $_.event -eq "strategy_selection" -and $_.candidate_id -eq 64119 -and
+        $_.reason -eq "nearest_useful_reachable_reward"
+    })
+    $claim = @($events | Where-Object {
+        $_.event -eq "action_result" -and $_.action -eq "claim_reward" -and $_.result -eq "success" -and
+        $_.candidate_id -eq 64119 -and $_.item_id -eq 2404 -and $_.inventory_after -eq ($_.inventory_before + 1)
+    })
+    $equip = @($events | Where-Object {
+        $_.event -eq "action_result" -and $_.action -eq "equip" -and $_.result -eq "success" -and
+        $_.item_id -eq 2404 -and $_.displaced_item_id -eq 2382 -and $_.metric -eq "attack" -and
+        $_.value_before -eq 7 -and $_.value_after -eq 8
+    })
+    $complete = @($events | Where-Object {
+        $_.event -eq "strategy_objective_result" -and $_.candidate_id -eq 64119 -and
+        $_.result -eq "success" -and $_.reason -eq "reward_equipped"
+    })
+    $online = @($events | Where-Object {
+        $_.event -eq "lifecycle" -and $_.status -eq "online" -and $_.objective -eq "pickup_reward" -and
+        $_.step_speed -gt 220
+    })
+    if ($candidate.Count -ne 1 -or $selection.Count -ne 1 -or $claim.Count -ne 1 -or
+        $equip.Count -ne 1 -or $complete.Count -ne 1 -or $online.Count -ne 1) {
+        throw "The pickup progression objective did not complete the expected candidate, claim, equip, and lifecycle sequence."
+    }
+    if (@($events | Where-Object { $_.event -eq "terminal" }).Count -ne 0) {
+        throw "The playerbot emitted a terminal event during pickup progression."
+    }
+}
+
+function Assert-PickupProgressionRestartEvents {
+    param([string]$Logs)
+
+    $events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
+    $firstClaims = @($events | Where-Object {
+        $_.event -eq "action_result" -and $_.action -eq "claim_reward" -and
+        $_.result -eq "success" -and $_.candidate_id -eq 64119
+    })
+    $nextSelection = @($events | Where-Object {
+        $_.event -eq "strategy_selection" -and $_.candidate_id -eq 64120 -and $_.item_id -eq 2384
+    })
+    $online = @($events | Where-Object {
+        $_.event -eq "lifecycle" -and $_.status -eq "online" -and $_.objective -eq "pickup_reward"
+    })
+    if ($firstClaims.Count -ne 1 -or $nextSelection.Count -ne 1 -or $online.Count -ne 2) {
+        throw "Pickup progression did not reconstruct the next objective from persisted claim and equipment state."
+    }
+}
+
+function Assert-PickupProgressionResumeEvents {
+    param([string]$Logs)
+
+    $events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
+    $selection = @($events | Where-Object {
+        $_.event -eq "strategy_selection" -and $_.candidate_id -eq 64119 -and
+        $_.reason -eq "resume_claimed_upgrade" -and $_.travel_steps -eq 0
+    })
+    $equip = @($events | Where-Object {
+        $_.event -eq "action_result" -and $_.action -eq "equip" -and $_.result -eq "success" -and
+        $_.item_id -eq 2404 -and $_.displaced_item_id -eq 2382
+    })
+    if ($selection.Count -ne 1 -or $equip.Count -ne 1) {
+        throw "Pickup progression did not resume a persisted claimed-but-unequipped reward."
+    }
+    if (@($events | Where-Object { $_.action -eq "claim_reward" }).Count -ne 0) {
+        throw "Claimed-reward reconstruction attempted to claim the reward again."
+    }
+}
+
+function Assert-PickupProgressionSpaceEvents {
+    param([string]$Logs)
+
+    $events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
+    $rejected = @($events | Where-Object {
+        $_.event -eq "strategy_candidate" -and $_.candidate_id -eq 64119 -and
+        $_.result -eq "rejected" -and $_.reason -eq "insufficient_inventory_space"
+    })
+    $selected = @($events | Where-Object { $_.event -eq "strategy_selection" })
+    $online = @($events | Where-Object {
+        $_.event -eq "lifecycle" -and $_.status -eq "online" -and $_.objective -eq "service"
+    })
+    if ($rejected.Count -ne 1 -or $selected.Count -ne 0 -or $online.Count -ne 1) {
+        throw "Pickup progression did not reject a claim that lacked reward-and-exchange space."
+    }
+}
+
 function Assert-NavigationEvents {
     param([string]$Logs)
 
@@ -507,7 +602,7 @@ if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
 	throw "Docker is required to run the playerbot gameplay suite."
 }
 
-$focusedScenarioRequested = $FullNavigation -or $CorpseLoot -or $DeathTelemetry -or $Healing -or $ValueLoot
+$focusedScenarioRequested = $FullNavigation -or $CorpseLoot -or $DeathTelemetry -or $Healing -or $ValueLoot -or $PickupProgression
 if ($Focused -and -not $focusedScenarioRequested) {
 	throw "-Focused requires at least one focused scenario switch."
 }
@@ -538,6 +633,40 @@ try {
 			Assert-CycleEvents -Logs $cycleLogs
 		}
 	}
+
+    if ($PickupProgression) {
+        Invoke-Scenario -Name "pickup_progression" -DefaultTimeoutSeconds 180 -Body {
+            Invoke-Compose down --volumes --remove-orphans
+            $env:PLAYERBOT_GAMEPLAY_MODE = "progression"
+            $env:PLAYERBOT_HUNT_DURATION_SECONDS = "900"
+            Invoke-Compose up --detach
+            Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST PICKUP_PROGRESSION_PASS' | Out-Null
+            $progressionLogs = Wait-ForLog -Pattern '"event":"strategy_objective_result".*"candidate_id":64119.*"result":"success"'
+            Assert-PickupProgressionEvents -Logs $progressionLogs
+            Invoke-Compose stop server
+            Invoke-Compose up --detach server
+            $restartLogs = Wait-ForLog -Pattern '"event":"strategy_selection".*"candidate_id":64120.*"item_id":2384'
+            Assert-PickupProgressionRestartEvents -Logs $restartLogs
+        }
+
+        Invoke-Scenario -Name "pickup_progression_resume" -DefaultTimeoutSeconds 60 -Body {
+            Invoke-Compose down --volumes --remove-orphans
+            $env:PLAYERBOT_GAMEPLAY_MODE = "progression_resume"
+            Invoke-Compose up --detach
+            Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST PICKUP_PROGRESSION_PASS' | Out-Null
+            $resumeLogs = Wait-ForLog -Pattern '"event":"strategy_selection".*"reason":"resume_claimed_upgrade"'
+            Assert-PickupProgressionResumeEvents -Logs $resumeLogs
+        }
+
+        Invoke-Scenario -Name "pickup_progression_space" -DefaultTimeoutSeconds 60 -Body {
+            Invoke-Compose down --volumes --remove-orphans
+            $env:PLAYERBOT_GAMEPLAY_MODE = "progression_space"
+            Invoke-Compose up --detach
+            Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST PICKUP_PROGRESSION_SPACE_START' | Out-Null
+            $spaceLogs = Wait-ForLog -Pattern '"candidate_id":64119.*"reason":"insufficient_inventory_space"'
+            Assert-PickupProgressionSpaceEvents -Logs $spaceLogs
+        }
+    }
 
 	if ($FullNavigation) {
 		Invoke-Scenario -Name "navigation" -DefaultTimeoutSeconds 180 -Body {

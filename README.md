@@ -53,6 +53,9 @@ ports `7171` and `7172` only to `127.0.0.1`.
 `Rook Tester` is a reproducible level-50 traversal character with sword and
 shielding skills, backpack, plate armor, dark shield, fire sword, Boots of
 Haste, rope, and shovel. The loadout is recreated with every fresh database.
+`Bot One` starts at level 1 with a jacket, club, backpack, tools, 200 carried gp,
+and 100 banked gp; the configured playerbot speed bonus remains enabled for
+faster local observation.
 
 Reset all disposable local database and world state with:
 

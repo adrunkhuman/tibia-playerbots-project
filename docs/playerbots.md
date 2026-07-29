@@ -20,9 +20,10 @@ graphical client, renderer, UI, or blocking loop per bot.
 `playerbot-setup` runs before the server on fresh and existing database volumes.
 It reserves the local-development account `bot-one` and character name
 `Bot One`, records the character in `player_bots`, and provisions it at level 1
-with normal level-1 health, mana, and capacity plus the same high-skill traversal
-equipment as `Rook Tester`. Each character receives its
-10,000 gp bank balance only when first created. Bot One also receives two
+with normal level-1 health, mana, and capacity, a starter jacket and club, and
+the existing high sword and shielding skills used by the hunt prototype. It
+also receives a backpack, rope, and shovel. Each character receives its
+100 gp bank balance only when first created. Bot One also receives two
 100-gp backpack stacks only when first created; rerunning setup never restores
 spent balances or coins. Global `freePremium = true` supplies local premium
 access, so provisioning does not create account-specific premium expiries.
@@ -55,7 +56,10 @@ when no target exists.
 | ----- | --------------------- |
 | `lifecycle` | `status`: `online`, `dead`, `removed`, `recovery_scheduled`, `recovery_failed`, or `recovery_abandoned`. Death records include level, health, objective, controller state, target, last-hit killer, and most-damage source. Recovery records include death count, relog attempt, delay, and bounded failure reason where applicable. |
 | `state_transition` | `from`, `to` |
-| `objective_transition` | Cycle phase `from`, `to`, and `reason`; phases are `service`, `return_to_depot`, `deposit_loot`, and `hunt` |
+| `objective_transition` | Objective `from`, `to`, and `reason`; progression currently adds `pickup_reward` above cycle phases `service`, `return_to_depot`, `deposit_loot`, and `hunt` |
+| `strategy_candidate` | Pickup-reward candidate ID, item/slot/stat benefit, travel evidence, feasibility, and rejection reason |
+| `strategy_selection` | Selected goal/candidate and the inspectable selection reason |
+| `strategy_objective_result` | Goal/candidate, result, and terminal objective reason |
 | `service_discovered` | Tagged live NPC name, capability, ID, and registered offer count |
 | `npc_reply` | Selected NPC name, ID, and private acknowledgement text |
 | `target_changed` | `previous_target_id`, `target_id`, optional target type and position, `reason` |
@@ -109,6 +113,28 @@ lifetime. They reset when the server or controller restarts.
 The current implementation is a bounded Rookgaard demonstration, not a
 general-purpose bot system or settled whole-map navigation. Callers provide
 destination goals rather than ordered transition checkpoints.
+
+Normal startup first evaluates the initial progression slice. It enumerates
+loaded unique map items whose action ID is the generic quest-chest handler
+`2000`, restricts them to the existing bounded Rookgaard area, reads rewards
+from their loaded container contents, and compares basic armor, shield, and
+one-handed weapon stats against equipped slots. Claimed storage, capacity,
+root-backpack space for every reward and displaced equipment item, and bounded
+navigator reachability are checked before selection. Routes requiring
+a door, rope, or shovel action, or more than 120 steps, are not considered
+simple pickup objectives.
+
+The nearest useful reachable reward is selected deterministically. The bot
+travels to an adjacent tile, uses the map object normally, verifies both its
+unique-ID storage and inventory increase, then equips the upgrade through a
+normal item move and verifies that the displaced item remains owned. It then
+starts the existing service/hunt loop. Transient objective and route state are
+not persisted; after restart, persisted storage and equipment cause the next
+candidate evaluation to skip completed or obsolete rewards. A claimed upgrade
+still owned but not yet equipped resumes directly at equipment handling rather
+than claiming again. This first slice
+runs only at controller startup and is not yet a general continuously running
+goal selector.
 
 The navigator searches loaded map state within a 192-tile margin around the
 endpoints and a 100,000-node expansion cap. Transition adapters cover ordinary
@@ -250,7 +276,8 @@ outcomes remain future work in issue #29.
 
 Routes, objectives, hunt deadlines, service catalogs, targets, action attempts,
 transient blocked positions, and combat suppression remain in memory only.
-Startup begins a fresh service cycle from the bot's actual persisted position.
+Startup reconstructs pickup-reward candidates from persisted player and loaded
+world state, then begins a fresh service cycle when none is selected.
 Death preserves the normal corpse, penalties, save, removal, and temple login
 position. The manager retains server ownership while the bot is offline, waits
 for the configured relog delay, loads the same persistent character, and creates
@@ -339,6 +366,7 @@ ownership transfer is intentionally unsupported.
 
 ## Scope
 
-The prototype advances the mainland loop tracked in issue #22 and navigation
-architecture tracked in issue #28 without closing either umbrella. See
+The prototype advances progression issue #57, the mainland loop tracked in
+issue #22, and navigation architecture tracked in issue #28 without closing
+those umbrellas. See
 [`testing.md`](testing.md) for validation commands.
