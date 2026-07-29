@@ -18,10 +18,10 @@ local function creatureSayCallback(cid, type, msg)
 	end
 
 	local asksAboutJob = msgcontains(msg, "job") or msgcontains(msg, "vampiric crest")
-	if asksAboutJob and player:getStorageValue(Storage.InServiceofYalahar.Questline) ~= 54 then
+	if asksAboutJob and player:getStorageValue(Storage.InServiceofYalahar.Questline) ~= 53 then
 		npcHandler:say("I'm an Augur of the city of Yalahar. My special duty consists of coordinating the efforts to keep the city and its services running.", cid)
 	elseif asksAboutJob then
-		if player:getStorageValue(Storage.InServiceofYalahar.Questline) == 54 then
+		if player:getStorageValue(Storage.InServiceofYalahar.Questline) == 53 then
 			npcHandler:say("Did you bring me the vampiric crest?", cid)
 			npcHandler.topic[cid] = 6
 		end
@@ -251,7 +251,7 @@ local function creatureSayCallback(cid, type, msg)
 			npcHandler:say("I knew that you were smart enough to make the right decision! Your next mission will be a special one! ", cid)
 			npcHandler.topic[cid] = 0
 		elseif npcHandler.topic[cid] == 6 then
-			if player:getStorageValue(Storage.InServiceofYalahar.Questline) == 54 and player:removeItem(9955, 1) then
+			if player:getStorageValue(Storage.InServiceofYalahar.Questline) == 53 and player:removeItem(9955, 1) then
 				player:setStorageValue(Storage.InServiceofYalahar.Questline, 55)
 				npcHandler:say("Great! Here, take this yalaharian addon in a return.", cid)
 				player:addOutfitAddon(325, player:getStorageValue(Storage.InServiceofYalahar.SideDecision) == 1 and 1 or 2)
