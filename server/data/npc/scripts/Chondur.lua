@@ -7,43 +7,6 @@ function onCreatureDisappear(cid)		npcHandler:onCreatureDisappear(cid)			end
 function onCreatureSay(cid, type, msg)		npcHandler:onCreatureSay(cid, type, msg)		end
 function onThink()		npcHandler:onThink()		end
 
-local function creatureSayCallback(cid, type, msg)
-	if not npcHandler:isFocused(cid) then
-		return false
-	end
-
-	local player = Player(cid)
-	if msgcontains(msg, 'stampor') or msgcontains(msg, 'mount') then
-		if not player:hasMount(11) then
-				npcHandler:say('You did bring all the items I requqested, cuild. Good. Shall I travel to the spirit realm and try finding a stampor compasion for you?', cid)
-				npcHandler.topic[cid] = 1
-		else
-			npcHandler:say('You already have stampor mount.', cid)
-			npcHandler.topic[cid] = 0
-		end
-	elseif msgcontains(msg, 'yes') then
-		if npcHandler.topic[cid] == 1 then
-			if player:removeItem(13299, 50) and player:removeItem(13301, 30) and player:removeItem(13300, 100) then
-				npcHandler:say({
-					'Ohhhhh Mmmmmmmmmmmm Ammmmmgggggggaaaaaaa ...',
-					'Aaaaaaaaaahhmmmm Mmmaaaaaaaaaa Kaaaaaamaaaa ...',
-					'Brrt! I think it worked! It\'s a male stampor. I linked this spirit to yours. You can probably already summon him to you ...',
-					'So, since me are done here... I need to prepare another ritual, so please let me work, cuild.'
-				}, cid)
-				player:addMount(11)
-				player:getPosition():sendMagicEffect(CONST_ME_MAGIC_RED)
-			else
-				npcHandler:say('Sorry you don\'t have the necessary items.', cid)
-			end
-			npcHandler.topic[cid] = 0
-		end
-	elseif msgcontains(msg, 'no') and npcHandler.topic[cid] > 2 then
-		npcHandler:say('Maybe next time.', cid)
-		npcHandler.topic[cid] = 0
-	end
-	return true
-end
-
 -- Shaman Addons
 -- If the player can't wear shaman outfit
 local function notReadyKeyword(keyword, text)
@@ -216,5 +179,4 @@ keywordHandler:addKeyword({'spellbook'}, StdModule.say, {npcHandler = npcHandler
 -- Energy Field
 keywordHandler:addKeyword({'energy field'}, StdModule.say, {npcHandler = npcHandler, text = 'Ah, the energy barrier set up by the cult is maintained by lousy magic, but it\'s still effective. Without a proper counterspell, you won\'t be able to pass it.'})
 
-npcHandler:setCallback(CALLBACK_MESSAGE_DEFAULT, creatureSayCallback)
 npcHandler:addModule(FocusModule:new())

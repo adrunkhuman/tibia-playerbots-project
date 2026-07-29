@@ -10,22 +10,14 @@ function onThink()				npcHandler:onThink()					end
 local storeTable = {}
 local itemsTable = {
 	["gingerbreadman"] = {itemId = 6501, count = 1},
-	["christmas cookie tray"] = {itemId = 22644, count = 1},
 	["gingerbread recipe"] = {itemId = 6523, count = 10},
 	["jewel case"] = {itemId = 8261, count = 25},
 	["santa hat"] = {itemId = 6531, count = 50},
 	["santa backpack"] = {itemId = 11263, count = 75},
-	["snowflake tapestry"] = {itemId = 22649, count = 75},
 	["santa doll"] = {itemId = 6512, count = 100},
 	["snowman doll"] = {itemId = 11256, count = 150},
-	["snow globe"] = {itemId = 22645, count = 150},
-	["frazzlemaw santa"] = {itemId = 22642, count = 250},
-	["leaf golem santa"] = {itemId = 22643, count = 250},
-	["santa music box"] = {itemId = 22647, count = 250},
 	["santa teddy"] = {itemId = 11255, count = 500},
-	["maxxen santa"] = {itemId = 24321, count = 250},
-	["present bag"] = {itemId = 6497, count = 1},
-	["ferumbras' teddy santa"] = {itemId = 25535, count = 250}
+	["present bag"] = {itemId = 6497, count = 1}
 }
 
 local function creatureSayCallback(cid, type, msg)
@@ -35,11 +27,12 @@ local function creatureSayCallback(cid, type, msg)
 	local player = Player(cid)
 
 	if (msgcontains(msg, "offers")) then
-		local text = "I have these offers: "
-		for i, v in pairs(itemsTable) do
-			text = text.. "{" ..i.. "}, "
+		local offers = {}
+		for name in pairs(itemsTable) do
+			offers[#offers + 1] = "{" .. name .. "}"
 		end
-		npcHandler:say(text, cid)
+		table.sort(offers)
+		npcHandler:say("I have these offers: " .. table.concat(offers, ", ") .. ".", cid)
 	end
 
 	if npcHandler.topic[cid] == 0 then
