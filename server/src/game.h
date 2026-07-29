@@ -491,6 +491,7 @@ class Game
 		void removeBedSleeper(uint32_t guid);
 
 		Item* getUniqueItem(uint16_t uniqueId);
+		const std::unordered_map<uint16_t, Item*>& getUniqueItems() const { return uniqueItems; }
 		bool addUniqueItem(uint16_t uniqueId, Item* item);
 		void removeUniqueItem(uint16_t uniqueId);
 

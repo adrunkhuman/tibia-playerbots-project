@@ -2,7 +2,8 @@ INSERT INTO `accounts` (`name`, `password`, `type`, `premium_ends_at`, `email`, 
 VALUES ('bot-one', SHA1('bot-one'), 1, 0, '', 0)
 ON DUPLICATE KEY UPDATE `id` = `id`;
 
--- These local-development defaults support the Rookgaard hunt and service loop.
+-- These local-development defaults start normal Rookgaard progression. Focused
+-- gameplay fixtures add any stronger equipment their scenario requires.
 
 CREATE TABLE IF NOT EXISTS `player_bots` (
     `player_id` int NOT NULL,
@@ -24,7 +25,7 @@ SELECT
     150, 0, 68, 76, 78,
     39, 128, 0, 2, 0, 0,
     0, 0, 100, 6, 32097, 32219, 7,
-    400, 1, 2520, 70, 60, 10000
+    400, 1, 2520, 70, 60, 100
 FROM `accounts`
 WHERE `name` = 'bot-one'
   AND NOT EXISTS (SELECT 1 FROM `players` WHERE `name` = 'Bot One');
@@ -61,10 +62,8 @@ SET @bot_next_sid = (
 INSERT INTO `player_items` (`player_id`, `pid`, `sid`, `itemtype`, `count`, `attributes`)
 SELECT @bot_player_id, `loadout`.`pid`, @bot_next_sid + `loadout`.`offset`, `loadout`.`itemtype`, 1, ''
 FROM (
-    SELECT 4 AS `pid`, 1 AS `offset`, 2463 AS `itemtype`
-    UNION ALL SELECT 5, 2, 2521
-    UNION ALL SELECT 6, 3, 2392
-    UNION ALL SELECT 8, 4, 2195
+    SELECT 4 AS `pid`, 1 AS `offset`, 2650 AS `itemtype`
+    UNION ALL SELECT 6, 2, 2382
 ) AS `loadout`
 WHERE NOT EXISTS (
     SELECT 1 FROM `player_items`
