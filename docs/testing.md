@@ -98,8 +98,9 @@ pwsh -File scripts/test-playerbot-gameplay.ps1 -PickupProgression
 ```
 
 This suite covers only shared container rewards with action ID `2000`. It does
-not cover action ID `2001` non-container rewards or rewards from dedicated quest
-scripts. Those reward sources remain outside the current playerbot behavior.
+not cover the separately known action ID `2001` doublet reward or rewards from
+dedicated quest scripts. Other non-container reward sources remain outside the
+current playerbot behavior.
 
 `-GoalArbitration` verifies four consecutive decision boundaries. A useful
 pickup beats optional service and hunting at startup; pickup cooldown then lets
@@ -113,10 +114,25 @@ utilities, results, decision IDs, and the absence of terminal failure are assert
 pwsh -File scripts/test-playerbot-gameplay.ps1 -GoalArbitration
 ```
 
+`-OracleDeparture` advances the clean fixture to level 8, selects the live
+runtime-tagged Oracle, navigates from the Rookgaard temple, and completes the
+normal `hi`, `yes`, `thais`, `knight`, `yes` dialogue. It verifies vocation ID
+`4`, town ID `2`, and the Thais temple position, then stops and restarts the
+server to verify clean-shutdown persistence and startup
+`objective="departure_complete"` reconstruction:
+
+```powershell
+pwsh -File scripts/test-playerbot-gameplay.ps1 -OracleDeparture
+```
+
+The fixture emits `ORACLE_DEPARTURE_START`, `ORACLE_DEPARTURE_PASS`, and
+`ORACLE_DEPARTURE_RESTART_PASS`. It does not validate the noncanonical Oracle
+starter-item grants tracked in issue #65.
+
 For playerbot navigation or looting changes, run the combined suite:
 
 ```powershell
-pwsh -File scripts/test-playerbot-gameplay.ps1 -FullNavigation -CorpseLoot -Healing -ValueLoot -PickupProgression -GoalArbitration
+pwsh -File scripts/test-playerbot-gameplay.ps1 -FullNavigation -CorpseLoot -Healing -ValueLoot -PickupProgression -GoalArbitration -OracleDeparture
 ```
 
 The suite rebuilds the server and resets the disposable Compose stack and
@@ -138,25 +154,26 @@ only CMake and C++ inputs, so datapack and fixture-only edits reuse the server
 binary while source edits reuse unchanged compiler results.
 
 Default fail-fast deadlines cover each complete scenario, including stack setup
-and all waits: 180 seconds for the baseline, full navigation, and pickup
-progression, and 240 seconds for goal arbitration; 60 for corpse and ordinary healing, 45 for death, and 90 for
-healing-resupply and value-loot. An explicitly supplied `-TimeoutSeconds` from
-30 through 3600 overrides every scenario deadline for slower machines. A wait
-failure includes Compose status and the last 80 server-log lines.
+and all waits: 180 seconds for the baseline, full navigation, pickup progression,
+and Oracle departure; 240 seconds for goal arbitration; 60 for corpse and
+ordinary healing; 45 for death; and 90 for healing-resupply and value-loot. An
+explicitly supplied `-TimeoutSeconds` from 30 through 3600 overrides every
+scenario deadline for slower machines. A wait failure includes Compose status
+and the last 80 server-log lines.
 
 The overlay's `PLAYERBOT_GAMEPLAY_MODE` accepts `cycle`, `navigation`, `corpse`,
 `death`, `healing`, `healing_resupply`, `value`, `progression`,
 `progression_bundle`, `progression_nested`, `progression_resume`, `progression_nested_resume`,
-`progression_space`, `arbitration`, or
-`arbitration_interrupt`. The script selects these
+`progression_space`, `arbitration`, `arbitration_interrupt`, or `departure`. The
+script selects these
 modes automatically from the corresponding switches. Navigation, corpse,
 healing, healing-resupply, and value modes start the controller directly in
 hunt mode so their fixtures do not interfere with the baseline startup service
-assertions. Progression and arbitration modes retain the normal temple start
-and objective selection. Death mode kills the bot outside the temple protection zone,
-verifies two temple relogs with one- then two-second backoff, observes the
-second fresh controller resume service, and forces one final death to verify
-the configured death-loop limit.
+assertions. Progression, arbitration, and departure modes retain the normal
+temple start and objective selection. Death mode kills the bot outside the
+temple protection zone, verifies two temple relogs with one- then two-second
+backoff, observes the second fresh controller resume service, and forces one
+final death to verify the configured death-loop limit.
 
 Gameplay modes deliberately retain fixed hunt destinations and override hunt
 duration to 10 or 900 seconds where required. They do not validate dynamic
