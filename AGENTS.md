@@ -61,6 +61,23 @@ git subtree pull --prefix=client redemption-upstream main --squash
 - Use `bug` or `enhancement` for type where applicable. Add only useful area
   labels: `playerbot`, `content`, `client`, `testing`, and `research`.
 
+## Pull Requests
+
+- Match the PR body to the change. Do not force every PR into a fixed template
+  or add empty sections.
+- State the changed behavior and why it changed. Keep implementation narration
+  out unless it helps a reviewer assess risk.
+- Include only high-signal evidence. Prefer a reproduced failure and the
+  targeted passing check that proves the fix.
+- Do not repeat routine build, formatting, Compose, port, or CI checks when
+  GitHub already reports them. Record them only when the result is unusual, a
+  check was skipped, or the evidence is important to the change.
+- State material limits, compatibility effects, migrations, and untested paths.
+  Omit a notes section when there is nothing useful to report.
+- AI-assisted development does not reduce the need for evidence. Base validation
+  claims on observed command or runtime results, not agent confidence or review
+  ceremony.
+
 ## Protocol And Client
 
 - The compatibility target is standard Tibia protocol 8.60.
