@@ -65,10 +65,10 @@ checkpoints. Focused regression fixtures retain fixed destinations for
 deterministic assertions.
 
 Significant decisions, transitions, candidates, outcomes, and failures emit
-JSON Lines on stdout with schema version `1`. Event-specific fields are
-documented in [`docs/playerbots.md`](docs/playerbots.md). Repeated events may be
-suppressed, and successful movement is not logged once per tile. Tests assert
-against this stream rather than scraping human-readable output.
+JSON Lines on stdout with schema version `1`. The stable envelope and event
+families are documented in [`docs/playerbots.md`](docs/playerbots.md). Repeated
+events may be suppressed, and successful movement is not logged once per tile.
+Tests assert against this stream rather than scraping human-readable output.
 
 ## 8.60 fidelity
 
