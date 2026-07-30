@@ -15,9 +15,38 @@
 // Playerbot lifecycle, scheduling, navigation execution, and telemetry.
 using namespace playerbot;
 
+const PlayerBotTestPolicy& playerbot::testPolicyFromEnvironment()
+{
+	static const PlayerBotTestPolicy policy = []() {
+		const char* gameplayMode = std::getenv("PLAYERBOT_GAMEPLAY_MODE");
+		const char* regressionMode = std::getenv("PLAYERBOT_REGRESSION_MODE");
+		const bool progressionMode = gameplayMode &&
+			(std::strcmp(gameplayMode, "progression") == 0 ||
+			 std::strcmp(gameplayMode, "progression_bundle") == 0 ||
+			 std::strcmp(gameplayMode, "progression_nested") == 0 ||
+			 std::strcmp(gameplayMode, "progression_resume") == 0 ||
+			 std::strcmp(gameplayMode, "progression_nested_resume") == 0 ||
+			 std::strcmp(gameplayMode, "progression_space") == 0 ||
+			 std::strcmp(gameplayMode, "arbitration") == 0 ||
+			 std::strcmp(gameplayMode, "arbitration_interrupt") == 0 ||
+			 std::strcmp(gameplayMode, "departure") == 0);
+		const bool startInHunt = gameplayMode &&
+			(std::strcmp(gameplayMode, "navigation") == 0 || std::strcmp(gameplayMode, "corpse") == 0 ||
+			 std::strcmp(gameplayMode, "healing") == 0 || std::strcmp(gameplayMode, "healing_resupply") == 0 ||
+			 std::strcmp(gameplayMode, "value") == 0);
+		return PlayerBotTestPolicy{
+			!regressionMode && (!gameplayMode || progressionMode),
+			startInHunt,
+			gameplayMode != nullptr,
+		};
+	}();
+	return policy;
+}
+
 PlayerBotController::PlayerBotController(const Player& player,
-                            std::map<Position, std::chrono::steady_clock::time_point>& sharedHuntRegionCooldowns) :
-	playerId(player.getID()), playerGuid(player.getGUID()), playerName(player.getName()),
+                            std::map<Position, std::chrono::steady_clock::time_point>& sharedHuntRegionCooldowns,
+                            const PlayerBotTestPolicy& testPolicy) :
+	playerId(player.getID()), playerGuid(player.getGUID()), playerName(player.getName()), testPolicy(testPolicy),
 	huntRegionCooldowns(sharedHuntRegionCooldowns)
 {}
 
@@ -25,26 +54,10 @@ void PlayerBotController::start(const Position& position, bool recovered, uint32
 {
 	lastPosition = position;
 	refreshItemValues();
-	const char* gameplayMode = std::getenv("PLAYERBOT_GAMEPLAY_MODE");
-	const char* regressionMode = std::getenv("PLAYERBOT_REGRESSION_MODE");
-	const bool progressionMode = gameplayMode &&
-		(std::strcmp(gameplayMode, "progression") == 0 ||
-		 std::strcmp(gameplayMode, "progression_bundle") == 0 ||
-		 std::strcmp(gameplayMode, "progression_nested") == 0 ||
-		 std::strcmp(gameplayMode, "progression_resume") == 0 ||
-		 std::strcmp(gameplayMode, "progression_nested_resume") == 0 ||
-		 std::strcmp(gameplayMode, "progression_space") == 0 ||
-		 std::strcmp(gameplayMode, "arbitration") == 0 ||
-		 std::strcmp(gameplayMode, "arbitration_interrupt") == 0 ||
-		 std::strcmp(gameplayMode, "departure") == 0);
-	progressionEnabled = !regressionMode && (!gameplayMode || progressionMode);
-	const bool startInHunt = !recovered && gameplayMode &&
-		(std::strcmp(gameplayMode, "navigation") == 0 || std::strcmp(gameplayMode, "corpse") == 0 ||
-		 std::strcmp(gameplayMode, "healing") == 0 || std::strcmp(gameplayMode, "healing_resupply") == 0 ||
-		 std::strcmp(gameplayMode, "value") == 0);
+	const bool startInHunt = !recovered && testPolicy.startInHunt;
 	Player* controlledPlayer = g_game.getPlayerByID(playerId);
 	const bool departureComplete = controlledPlayer && hasCompletedRookgaardDeparture(*controlledPlayer);
-	const bool useGoalSelector = !recovered && progressionEnabled && controlledPlayer;
+	const bool useGoalSelector = !recovered && testPolicy.progressionEnabled && controlledPlayer;
 	if (useGoalSelector && !departureComplete && !selectTopLevelGoal(*controlledPlayer, position, "startup")) {
 		return;
 	}

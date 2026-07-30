@@ -75,7 +75,7 @@ void PlayerBotController::onNpcReply(uint32_t replyingPlayerId, uint32_t npcId, 
 
 void PlayerBotController::beginService(Player* player, const Position& position, const char* reason)
 {
-	const bool interruptedHunt = progressionEnabled && activeGoal == TopLevelGoal::Hunt;
+	const bool interruptedHunt = testPolicy.progressionEnabled && activeGoal == TopLevelGoal::Hunt;
 	finishHuntRegion(*player, position, reason);
 	if (interruptedHunt) {
 		emit("goal_result", position,
@@ -686,7 +686,7 @@ void PlayerBotController::processDeposit(Player* player, const Position& current
 		std::ostringstream fields;
 		fields << "\"action\":\"deposit\",\"result\":\"complete\",\"cycle\":" << completedCycles;
 		emit("action_result", currentPosition, fields.str());
-		if (progressionEnabled) {
+		if (testPolicy.progressionEnabled) {
 			emit("goal_result", currentPosition,
 			     "\"decision_id\":" + std::to_string(goalDecisionId) +
 			         ",\"goal\":\"service\",\"result\":\"success\",\"reason\":\"service_complete\"");
