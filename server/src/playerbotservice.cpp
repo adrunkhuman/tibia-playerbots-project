@@ -367,7 +367,7 @@ void PlayerBotController::completeServiceAction(Player* player, const char* acti
 	say(*player, std::string(action) == "sell" ?
 	     "Sold " + std::to_string(amount) + " " + itemName + '.' :
 	     "Bought " + std::to_string(amount) + " " + itemName + '.');
-	conversationStep = ConversationStep::Greet;
+	conversationStep = ConversationStep::Ready;
 	serviceAttempts = 0;
 	serviceItemId = 0;
 	serviceAmount = 0;
@@ -567,7 +567,6 @@ void PlayerBotController::processService(Player* player, const Position& current
 		ServiceNpc* seller = findLootSeller(player, currentPosition, itemId);
 		if (!seller) {
 			serviceStage = ServiceStage::BuyPotions;
-			resetConversation(0);
 			schedule(SCHEDULER_MINTICKS);
 			return;
 		}
@@ -584,7 +583,6 @@ void PlayerBotController::processService(Player* player, const Position& current
 		const uint32_t currentCount = getInventoryItemCount(*player, itemId);
 		if (currentCount >= minimum) {
 			serviceStage = serviceStage == ServiceStage::BuyPotions ? ServiceStage::BuyMeat : ServiceStage::Bank;
-			resetConversation(0);
 			schedule(SCHEDULER_MINTICKS);
 			return;
 		}
