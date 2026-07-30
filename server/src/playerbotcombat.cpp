@@ -105,7 +105,11 @@ bool PlayerBotController::handleHealing(Player* player, const Position& currentP
 			emit("action_result", currentPosition, fields.str());
 		}
 		if (progressionObjective != ProgressionObjective::None) {
-			finishProgressionObjective(player, currentPosition, "interrupted", "healing_supply_missing", false);
+			if (progressionObjective == ProgressionObjective::OracleDeparture) {
+				finishOracleDeparture(player, currentPosition, "interrupted", "healing_supply_missing");
+			} else {
+				finishProgressionObjective(player, currentPosition, "interrupted", "healing_supply_missing", false);
+			}
 			return true;
 		}
 		if (cyclePhase != CyclePhase::Service) {

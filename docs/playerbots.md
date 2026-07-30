@@ -56,18 +56,18 @@ when no target exists.
 | ----- | --------------------- |
 | `lifecycle` | `status`: `online`, `dead`, `removed`, `recovery_scheduled`, `recovery_failed`, or `recovery_abandoned`. Death records include level, health, objective, controller state, target, last-hit killer, and most-damage source. Recovery records include death count, relog attempt, delay, and bounded failure reason where applicable. |
 | `state_transition` | `from`, `to` |
-| `objective_transition` | Objective `from`, `to`, and `reason`; progression currently adds `pickup_reward` above cycle phases `service`, `return_to_depot`, `deposit_loot`, and `hunt` |
+| `objective_transition` | Objective `from`, `to`, and `reason`; pickup progression adds `pickup_reward` above cycle phases `service`, `return_to_depot`, `deposit_loot`, and `hunt` |
 | `strategy_candidate` | Pickup-reward candidate ID, item/slot/stat benefit, travel evidence, feasibility, and rejection reason |
 | `reward_inspection` | Generic reward UID/destination, recursive item paths, names/counts, classifications, known utility, currency/sell totals, upgrade/container/unknown counts, and the complete known bundle tree flattened with containment paths |
 | `strategy_selection` | Selected goal/candidate and the inspectable selection reason |
 | `strategy_objective_result` | Goal/candidate, result, and terminal objective reason |
-| `goal_candidate` | Decision ID/reason, `service`, `pickup_reward`, or `hunt`, evaluated/feasible flags, utility, and goal-specific evidence |
+| `goal_candidate` | Decision ID/reason, `oracle_departure`, `service`, `pickup_reward`, or `hunt`, evaluated/feasible flags, utility, and goal-specific evidence. Oracle candidates include NPC, town, vocation, and route fields. |
 | `goal_selection` | Decision ID/reason, previous and selected goal, utility, rationale, and optional forced-interrupt marker |
 | `goal_result` | Decision ID, completed/interrupted goal, result, and reason |
 | `service_discovered` | Tagged live NPC name, capability, ID, and registered offer count |
 | `npc_reply` | Selected NPC name, ID, and private acknowledgement text |
 | `target_changed` | `previous_target_id`, `target_id`, optional target type and position, `reason` |
-| `action_result` | Always has `action` and `result`; failures and skipped actions also have `reason`. Navigation plans include destination, step count, and expanded-node count. Successful `heal`, `eat`, `loot`, and `deposit` records include item details. A successful `claim_reward` includes selected-root counts before and after use, `top_level_root_count`, and `all_roots_verified`. A requested `open_reward_container` includes `container_id`, nested `depth`, and `item_id`; bounded open failure ends the objective with `reward_container_open_failed`. |
+| `action_result` | Always has `action` and `result`; failures and skipped actions also have `reason`. Navigation plans include destination, step count, and expanded-node count. Successful `heal`, `eat`, `loot`, and `deposit` records include item details. A successful `claim_reward` includes selected-root counts before and after use, `top_level_root_count`, and `all_roots_verified`. A successful `oracle_departure` includes `town_id`, `vocation_id`, and `teleported=true`. A requested `open_reward_container` includes `container_id`, nested `depth`, and `item_id`; bounded open failure ends the objective with `reward_container_open_failed`. |
 | `stuck` | `reason`, `blocked_steps` |
 | `summary` | Current state and target, uptime, decision/pathfinding timing, action, failure, stuck, and suppression counters |
 | `terminal` | `reason` |
@@ -161,18 +161,20 @@ candidate evaluation to skip completed or obsolete rewards. A claimed upgrade
 still owned but not yet equipped resumes directly at equipment handling rather
 than claiming again.
 
-The top-level selector compares `service`, `pickup_reward`, and `hunt` only at
-safe objective boundaries: normal startup, pickup completion/failure, completed
-service/depot work, and a hunt deadline or capacity return. It does not run
-during movement, combat, healing, looting, dialogue, transactions, or pending
-item verification. Death recovery and focused gameplay modes preserve their
-forced service/hunt contracts. Observed danger, missing healing supplies, and
-other executor safety interrupts can force service without waiting for a normal
-boundary. Critical healing can interrupt reward travel before a claim. After a
-claim, routine upkeep waits for the bounded verification and equipment sequence.
+The top-level selector compares `oracle_departure`, `service`, `pickup_reward`,
+and `hunt` only at safe objective boundaries: normal startup, pickup
+completion/failure, completed service/depot work, and a hunt deadline or
+capacity return. It does not run during movement, combat, healing, looting,
+dialogue, transactions, or pending item verification. Death recovery and
+focused gameplay modes preserve their forced service/hunt contracts. Observed
+danger, missing healing supplies, and other executor safety interrupts can force
+service without waiting for a normal boundary. Critical healing can interrupt
+reward or Oracle travel before an irreversible action. After a claim, routine
+upkeep waits for the bounded verification and equipment sequence.
 
 Selection is intentionally deterministic and provisional. Hunt has utility
-`300`; ordinary service starts at `400` and adds reserve, sale, and cash needs;
+`300`; Oracle departure has utility `950`; ordinary service starts at `400` and
+adds reserve, sale, and cash needs;
 equipment pickup starts at `650`, economic pickup at `250`, and both add known
 bundle utility before subtracting route steps.
 Capacity service is at least `900`, and critical healing service is at least
@@ -183,6 +185,24 @@ probabilistic preferences. Hunt feasibility is deferred when a higher-utility
 goal already wins; when hunt can win, the normal region planner must produce a
 suitable reachable region before selection. The selected region is carried into
 the hunt executor rather than planned twice.
+
+### Rookgaard Oracle Departure
+
+An unpromoted level 8 through 10 player evaluates the live Oracle tagged with
+`playerbot_service=oracle`. The navigator derives a reachable position within
+private-speech range from loaded map state; no fixed route to the Oracle is
+stored. Critical healing service retains utility `1000` and can interrupt travel
+before the irreversible dialogue.
+
+The current deterministic choice is Thais knight. The bot uses the normal NPC
+speech path in the sequence `hi`, `yes`, `thais`, `knight`, `yes`. Completion
+requires vocation ID `4`, town ID `2`, and the player's position to equal the
+registered Thais temple. After success the controller remains server-owned but
+stopped because mainland behavior is not implemented yet.
+
+The datapack currently grants noncanonical starter items during this dialogue.
+The departure objective neither depends on nor verifies those items; their
+content-fidelity removal is tracked in issue #65.
 
 The navigator searches loaded map state within a 192-tile margin around the
 endpoints and a 100,000-node expansion cap. Transition adapters cover ordinary
@@ -325,7 +345,10 @@ outcomes remain future work in issue #29.
 Routes, objectives, hunt deadlines, service catalogs, targets, action attempts,
 transient blocked positions, and combat suppression remain in memory only.
 Startup reconstructs pickup-reward candidates from persisted player and loaded
-world state, then begins a fresh service cycle when none is selected.
+world state, then begins a fresh service cycle when none is selected. A player
+with a nonzero vocation and a non-Rookgaard town is instead reported online with
+`objective="departure_complete"` and remains stopped at the persisted mainland
+position.
 Death preserves the normal corpse, penalties, save, removal, and temple login
 position. The manager retains server ownership while the bot is offline, waits
 for the configured relog delay, loads the same persistent character, and creates
@@ -418,5 +441,5 @@ ownership transfer is intentionally unsupported.
 
 The prototype advances progression issue #57, the mainland loop tracked in
 issue #22, and navigation architecture tracked in issue #28 without closing
-those umbrellas. See
+those umbrellas. Oracle item-grant fidelity remains tracked in issue #65. See
 [`testing.md`](testing.md) for validation commands.

@@ -703,6 +703,7 @@ bool PlayerBotController::findPickupReward(Player& player, const Position& posit
 const char* PlayerBotController::topLevelGoalName(TopLevelGoal goal) const
 {
 	switch (goal) {
+		case TopLevelGoal::Departure: return "oracle_departure";
 		case TopLevelGoal::Service: return "service";
 		case TopLevelGoal::PickupReward: return "pickup_reward";
 		case TopLevelGoal::Hunt: return "hunt";
@@ -749,7 +750,7 @@ PlayerBotController::GoalCandidate PlayerBotController::serviceGoalCandidate(con
 }
 
 void PlayerBotController::emitGoalCandidate(const Player& player, const GoalCandidate& candidate, const Position& position, const char* decisionReason,
-                       const PickupReward* reward) const
+	                       const PickupReward* reward, const DeparturePlan* departure) const
 {
 	std::ostringstream fields;
 	const bool evaluated = candidate.reason != "deferred_lower_utility";
@@ -766,6 +767,11 @@ void PlayerBotController::emitGoalCandidate(const Player& player, const GoalCand
 	if (reward) {
 		fields << ",\"candidate_id\":" << reward->uniqueId << ",\"item_id\":" << reward->itemId
 		       << ",\"benefit\":" << reward->benefit << ",\"travel_steps\":" << reward->travelSteps;
+	}
+	if (departure) {
+		fields << ",\"npc_id\":" << departure->npcId << ",\"town\":\"thais\",\"town_id\":" << oracleTownId
+		       << ",\"vocation\":\"knight\",\"vocation_id\":" << oracleVocationId
+		       << ",\"travel_steps\":" << departure->travelSteps;
 	}
 	emit("goal_candidate", position, fields.str());
 }
@@ -799,6 +805,17 @@ bool PlayerBotController::selectTopLevelGoal(Player& player, const Position& pos
 {
 	++goalDecisionId;
 	const GoalCandidate service = serviceGoalCandidate(player);
+	DeparturePlan departure;
+	std::deque<PlayerBotNavigationStep> departureRoute;
+	const bool departureEligible = player.getLevel() >= oracleMinimumLevel && player.getLevel() <= oracleMaximumLevel &&
+	                               player.getVocation()->getId() == 0;
+	const bool departureFound = departureEligible && findOracleDeparture(player, position, departure, departureRoute);
+	const GoalCandidate departureCandidate{TopLevelGoal::Departure, departureFound,
+	                                       departureFound ? oracleDepartureUtility : 0,
+	                                       player.getVocation()->getId() != 0 ? "already_departed" :
+	                                       player.getLevel() < oracleMinimumLevel ? "below_minimum_level" :
+	                                       player.getLevel() > oracleMaximumLevel ? "above_maximum_level" :
+	                                       departureFound ? "oracle_reachable" : "oracle_unreachable"};
 	PickupReward reward;
 	std::deque<PlayerBotNavigationStep> rewardSteps;
 	const auto now = std::chrono::steady_clock::now();
@@ -809,7 +826,8 @@ bool PlayerBotController::selectTopLevelGoal(Player& player, const Position& pos
 		                         static_cast<int32_t>(reward.knownUtility) - static_cast<int32_t>(reward.travelSteps)) : 0;
 	const GoalCandidate pickup{TopLevelGoal::PickupReward, pickupFound, pickupUtility,
 	                           pickupCoolingDown ? "cooldown" : pickupFound ? "useful_reachable_reward" : "no_useful_reward"};
-	const bool higherUtilityGoal = (service.feasible && service.utility > huntGoalUtility) ||
+	const bool higherUtilityGoal = (departureCandidate.feasible && departureCandidate.utility > huntGoalUtility) ||
+	                               (service.feasible && service.utility > huntGoalUtility) ||
 	                               (pickup.feasible && pickup.utility > huntGoalUtility);
 	const bool fixedFixtureRoute = std::getenv("PLAYERBOT_GAMEPLAY_MODE") != nullptr;
 	const bool huntFeasible = !higherUtilityGoal &&
@@ -817,12 +835,15 @@ bool PlayerBotController::selectTopLevelGoal(Player& player, const Position& pos
 	const GoalCandidate hunt{TopLevelGoal::Hunt, huntFeasible, huntGoalUtility,
 	                         higherUtilityGoal ? "deferred_lower_utility" :
 	                         huntFeasible ? "autonomous_hunting_available" : "no_suitable_reachable_region"};
+	emitGoalCandidate(player, departureCandidate, position, decisionReason, nullptr,
+	                  departureFound ? &departure : nullptr);
 	emitGoalCandidate(player, service, position, decisionReason);
 	emitGoalCandidate(player, pickup, position, decisionReason, pickupFound ? &reward : nullptr);
 	emitGoalCandidate(player, hunt, position, decisionReason);
 
 	const GoalCandidate* selected = nullptr;
-	for (const GoalCandidate* candidate : {&service, &pickup, &hunt}) {
+	const std::array<const GoalCandidate*, 4> candidates = {&departureCandidate, &service, &pickup, &hunt};
+	for (const GoalCandidate* candidate : candidates) {
 		if (candidate->feasible && (!selected || candidate->utility > selected->utility)) {
 			selected = candidate;
 		}
@@ -841,11 +862,16 @@ bool PlayerBotController::selectTopLevelGoal(Player& player, const Position& pos
 	       << ",\"from_goal\":" << jsonString(topLevelGoalName(previousGoal))
 	       << ",\"to_goal\":" << jsonString(topLevelGoalName(activeGoal))
 	       << ",\"utility\":" << selected->utility << ",\"reason\":" << jsonString(selected->reason);
-	if (selected->goal == TopLevelGoal::PickupReward) {
+	if (selected->goal == TopLevelGoal::Departure) {
+		fields << ",\"npc_id\":" << departure.npcId << ",\"town_id\":" << oracleTownId
+		       << ",\"vocation_id\":" << oracleVocationId;
+	} else if (selected->goal == TopLevelGoal::PickupReward) {
 		fields << ",\"candidate_id\":" << reward.uniqueId << ",\"item_id\":" << reward.itemId;
 	}
 	emit("goal_selection", position, fields.str());
-	if (selected->goal == TopLevelGoal::PickupReward) {
+	if (selected->goal == TopLevelGoal::Departure) {
+		beginOracleDeparture(player, position, std::move(departure), std::move(departureRoute));
+	} else if (selected->goal == TopLevelGoal::PickupReward) {
 		beginPickupReward(player, position, std::move(reward), std::move(rewardSteps));
 	} else if (selected->goal == TopLevelGoal::Service) {
 		beginService(&player, position, "goal_selected");
@@ -857,7 +883,8 @@ bool PlayerBotController::selectTopLevelGoal(Player& player, const Position& pos
 
 const char* PlayerBotController::objectiveName() const
 {
-	return progressionObjective == ProgressionObjective::PickupReward ? "pickup_reward" : cyclePhaseName();
+	return progressionObjective == ProgressionObjective::OracleDeparture ? "oracle_departure" :
+	       progressionObjective == ProgressionObjective::PickupReward ? "pickup_reward" : cyclePhaseName();
 }
 
 void PlayerBotController::finishProgressionObjective(Player* player, const Position& position, const char* result, const char* reason,
@@ -1048,7 +1075,9 @@ void PlayerBotController::processPickupReward(Player* player, const Position& cu
 
 void PlayerBotController::processProgression(Player* player, const Position& currentPosition)
 {
-	if (progressionObjective == ProgressionObjective::PickupReward) {
+	if (progressionObjective == ProgressionObjective::OracleDeparture) {
+		processOracleDeparture(player, currentPosition);
+	} else if (progressionObjective == ProgressionObjective::PickupReward) {
 		processPickupReward(player, currentPosition);
 	}
 }

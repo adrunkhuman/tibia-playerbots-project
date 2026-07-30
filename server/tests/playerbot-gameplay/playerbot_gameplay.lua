@@ -24,6 +24,22 @@ local nestedRewardShieldId = 2512
 local economicRewardStorage = 50082
 local deathLoginCount = 0
 
+local function verifyOracleDeparture(playerId, attempts)
+    local player = Player(playerId)
+    assert(player and not player:isRemoved(), "Bot One disappeared during Oracle departure")
+    local town = player:getTown()
+    local position = player:getPosition()
+    local temple = Town(2):getTemplePosition()
+    local complete = player:getVocation():getId() == 4 and town and town:getId() == 2 and
+        position.x == temple.x and position.y == temple.y and position.z == temple.z
+    if not complete and attempts > 0 then
+        addEvent(verifyOracleDeparture, 250, playerId, attempts - 1)
+        return
+    end
+    assert(complete, "Bot One did not become a Thais knight at the Oracle")
+    print("PLAYERBOT_GAMEPLAY_TEST ORACLE_DEPARTURE_PASS")
+end
+
 local function removeNearbyMonsters(player)
     for _, creature in ipairs(Game.getSpectators(player:getPosition(), true, false, 10, 10, 10, 10)) do
         if creature:isMonster() then
@@ -284,7 +300,7 @@ function login.onLogin(player)
 		mode == "progression_nested" or
         mode == "progression_resume" or mode == "progression_nested_resume" or mode == "progression_space" or
         mode == "arbitration" or
-        mode == "arbitration_interrupt",
+        mode == "arbitration_interrupt" or mode == "departure",
         "unknown PLAYERBOT_GAMEPLAY_MODE: " .. mode)
     if mode == "death" then
         deathLoginCount = deathLoginCount + 1
@@ -299,6 +315,28 @@ function login.onLogin(player)
             addEvent(prepareDeath, 1500, player:getId())
             print("PLAYERBOT_GAMEPLAY_TEST DEATH_RECOVERY_STATE_PASS")
         end
+        return true
+    end
+    if mode == "departure" then
+        if player:getVocation():getId() ~= 0 then
+            local town = player:getTown()
+            local position = player:getPosition()
+            local temple = Town(2):getTemplePosition()
+            assert(player:getVocation():getId() == 4 and town and town:getId() == 2,
+                "Oracle departure restart restored the wrong vocation or town")
+            assert(position.x == temple.x and position.y == temple.y and position.z == temple.z,
+                "Oracle departure restart restored the wrong position")
+            print("PLAYERBOT_GAMEPLAY_TEST ORACLE_DEPARTURE_RESTART_PASS")
+            return true
+        end
+        local requiredExperience = Game.getExperienceForLevel(8) - player:getExperience()
+        if requiredExperience > 0 then
+            player:addExperience(requiredExperience)
+        end
+        assert(player:getLevel() == 8, "Oracle departure fixture could not advance Bot One to level 8")
+        suppressNearbyMonsters(player:getId())
+        addEvent(verifyOracleDeparture, 500, player:getId(), 360)
+        print("PLAYERBOT_GAMEPLAY_TEST ORACLE_DEPARTURE_START")
         return true
     end
     if mode == "arbitration" or mode == "arbitration_interrupt" then

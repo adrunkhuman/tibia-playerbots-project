@@ -8,6 +8,7 @@ param(
 	[switch]$ValueLoot,
 	[switch]$PickupProgression,
 	[switch]$GoalArbitration,
+	[switch]$OracleDeparture,
 	[switch]$Focused,
 	[switch]$SkipBuild,
 	[switch]$KeepStack
@@ -237,6 +238,44 @@ function Assert-CycleEvents {
     }
     if ($terminal.Count -ne 0) {
         throw "The playerbot emitted a terminal event during the gameplay cycle."
+    }
+}
+
+function Assert-OracleDepartureEvents {
+    param([string]$Logs, [switch]$Restart)
+
+    $events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
+    if ($Restart) {
+        $restored = @($events | Where-Object {
+            $_.event -eq "lifecycle" -and $_.status -eq "online" -and $_.objective -eq "departure_complete"
+        })
+        if ($restored.Count -lt 1) {
+            throw "The persisted Oracle departure state was not restored."
+        }
+        return
+    }
+
+    $candidate = @($events | Where-Object {
+        $_.event -eq "goal_candidate" -and $_.goal -eq "oracle_departure" -and $_.feasible -eq $true -and
+        $_.town_id -eq 2 -and $_.vocation_id -eq 4
+    })
+    $selection = @($events | Where-Object {
+        $_.event -eq "goal_selection" -and $_.to_goal -eq "oracle_departure" -and
+        $_.town_id -eq 2 -and $_.vocation_id -eq 4
+    })
+    $result = @($events | Where-Object {
+        $_.event -eq "action_result" -and $_.action -eq "oracle_departure" -and $_.result -eq "success" -and
+        $_.town_id -eq 2 -and $_.vocation_id -eq 4 -and $_.teleported -eq $true
+    })
+    $goalResult = @($events | Where-Object {
+        $_.event -eq "goal_result" -and $_.goal -eq "oracle_departure" -and $_.result -eq "success"
+    })
+    $stopped = @($events | Where-Object {
+        $_.event -eq "state_transition" -and $_.to -eq "stopped"
+    })
+    if ($candidate.Count -lt 1 -or $selection.Count -lt 1 -or $result.Count -ne 1 -or
+        $goalResult.Count -ne 1 -or $stopped.Count -ne 1) {
+        throw "The bot did not complete and verify the selected Oracle departure."
     }
 }
 
@@ -793,7 +832,7 @@ if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
 }
 
 $focusedScenarioRequested = $FullNavigation -or $CorpseLoot -or $DeathTelemetry -or $Healing -or $ValueLoot -or
-    $PickupProgression -or $GoalArbitration
+    $PickupProgression -or $GoalArbitration -or $OracleDeparture
 if ($Focused -and -not $focusedScenarioRequested) {
 	throw "-Focused requires at least one focused scenario switch."
 }
@@ -906,6 +945,23 @@ try {
             Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST GOAL_ARBITRATION_INTERRUPT_TRIGGERED' | Out-Null
             $interruptLogs = Wait-ForLog -Pattern '"event":"goal_selection".*"decision_id":2.*"to_goal":"service"'
             Assert-GoalArbitrationInterruptEvents -Logs $interruptLogs
+        }
+    }
+
+    if ($OracleDeparture) {
+        Invoke-Scenario -Name "oracle_departure" -DefaultTimeoutSeconds 180 -Body {
+            Invoke-Compose down --volumes --remove-orphans
+            $env:PLAYERBOT_GAMEPLAY_MODE = "departure"
+            $env:PLAYERBOT_HUNT_DURATION_SECONDS = "900"
+            Invoke-Compose up --detach
+            Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST ORACLE_DEPARTURE_PASS' | Out-Null
+            $departureLogs = Wait-ForLog -Pattern '"action":"oracle_departure","result":"success"'
+            Assert-OracleDepartureEvents -Logs $departureLogs
+            Invoke-Compose stop server
+            Invoke-Compose up --detach server
+            Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST ORACLE_DEPARTURE_RESTART_PASS' | Out-Null
+            $restartLogs = Wait-ForLog -Pattern '"objective":"departure_complete"'
+            Assert-OracleDepartureEvents -Logs $restartLogs -Restart
         }
     }
 

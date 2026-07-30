@@ -35,25 +35,32 @@ void PlayerBotController::start(const Position& position, bool recovered, uint32
 		 std::strcmp(gameplayMode, "progression_nested_resume") == 0 ||
 		 std::strcmp(gameplayMode, "progression_space") == 0 ||
 		 std::strcmp(gameplayMode, "arbitration") == 0 ||
-		 std::strcmp(gameplayMode, "arbitration_interrupt") == 0);
+		 std::strcmp(gameplayMode, "arbitration_interrupt") == 0 ||
+		 std::strcmp(gameplayMode, "departure") == 0);
 	progressionEnabled = !regressionMode && (!gameplayMode || progressionMode);
 	const bool startInHunt = !recovered && gameplayMode &&
 		(std::strcmp(gameplayMode, "navigation") == 0 || std::strcmp(gameplayMode, "corpse") == 0 ||
 		 std::strcmp(gameplayMode, "healing") == 0 || std::strcmp(gameplayMode, "healing_resupply") == 0 ||
 		 std::strcmp(gameplayMode, "value") == 0);
 	Player* controlledPlayer = g_game.getPlayerByID(playerId);
+	const bool departureComplete = controlledPlayer && hasCompletedRookgaardDeparture(*controlledPlayer);
 	const bool useGoalSelector = !recovered && progressionEnabled && controlledPlayer;
-	if (useGoalSelector && !selectTopLevelGoal(*controlledPlayer, position, "startup")) {
+	if (useGoalSelector && !departureComplete && !selectTopLevelGoal(*controlledPlayer, position, "startup")) {
 		return;
 	}
 	std::ostringstream lifecycle;
 	lifecycle << "\"status\":\"online\",\"message\":\"Playerbot online\""
 	          << ",\"recovered\":" << (recovered ? "true" : "false")
 	          << ",\"recovery_count\":" << recoveryCount
-	          << ",\"objective\":" << jsonString(useGoalSelector ? topLevelGoalName(activeGoal) : (startInHunt ? "hunt" : "service"))
+	          << ",\"objective\":" << jsonString(departureComplete ? "departure_complete" :
+	                                                    useGoalSelector ? topLevelGoalName(activeGoal) :
+	                                                    (startInHunt ? "hunt" : "service"))
 	          << ",\"step_speed\":" << (g_game.getPlayerByID(playerId) ? g_game.getPlayerByID(playerId)->getSpeed() : 0);
 	emit("lifecycle", position, lifecycle.str());
-	if (useGoalSelector) {
+	if (departureComplete) {
+		setStage(ScenarioStage::Stopped, position);
+		return;
+	} else if (useGoalSelector) {
 		// The selected goal initialized its own executor state.
 	} else if (startInHunt) {
 		activeGoal = TopLevelGoal::Hunt;
@@ -623,11 +630,13 @@ void PlayerBotController::navigate()
 	                             (progressionStage == ProgressionStage::VerifyReward ||
 	                              progressionStage == ProgressionStage::EquipReward ||
 	                              progressionStage == ProgressionStage::VerifyEquipment);
-	if (!accessingReward && handleHealing(player, currentPosition)) {
+	const bool verifyingDeparture = progressionObjective == ProgressionObjective::OracleDeparture &&
+	                                departureStage == DepartureStage::Verify;
+	if (!accessingReward && !verifyingDeparture && handleHealing(player, currentPosition)) {
 		schedule(blockedRouteRetryInterval);
 		return;
 	}
-	if (!accessingReward && handleFood(player, currentPosition)) {
+	if (!accessingReward && !verifyingDeparture && handleFood(player, currentPosition)) {
 		schedule(blockedRouteRetryInterval);
 		return;
 	}

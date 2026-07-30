@@ -71,6 +71,7 @@ namespace playerbot {
 	inline constexpr int32_t pickupRewardBaseUtility = 650;
 	inline constexpr int32_t economicPickupBaseUtility = 250;
 	inline constexpr int32_t huntGoalUtility = 300;
+	inline constexpr int32_t oracleDepartureUtility = 950;
 	inline constexpr int32_t capacityServiceUtility = 900;
 	inline constexpr int32_t criticalHealingServiceUtility = 1000;
 	inline constexpr int32_t missingPotionUtility = 15;
@@ -85,6 +86,11 @@ namespace playerbot {
 	inline constexpr uint16_t nonContainerQuestActionId = 2001;
 	inline constexpr uint16_t doubletQuestUniqueId = 56002;
 	inline constexpr uint16_t doubletItemId = 2485;
+	inline constexpr uint16_t oracleMinimumLevel = 8;
+	inline constexpr uint16_t oracleMaximumLevel = 10;
+	inline constexpr uint16_t oracleVocationId = 4;
+	inline constexpr uint32_t oracleTownId = 2;
+	inline constexpr uint32_t rookgaardTownId = 6;
 	inline constexpr Position rookgaardTemplePosition(32097, 32219, 7);
 	inline constexpr int32_t rookgaardRewardRadius = 180;
 	inline constexpr Position fakeDepotPosition(32105, 32195, 8);
@@ -141,9 +147,11 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		enum class ProgressionObjective : uint8_t {
 			None,
 			PickupReward,
+			OracleDeparture,
 		};
 
 		enum class TopLevelGoal : uint8_t {
+			Departure,
 			Service,
 			PickupReward,
 			Hunt,
@@ -162,6 +170,16 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 			VerifyReward,
 			EquipReward,
 			VerifyEquipment,
+		};
+
+		enum class DepartureStage : uint8_t {
+			Travel,
+			Greet,
+			ConfirmReady,
+			ChooseTown,
+			ChooseVocation,
+			ConfirmVocation,
+			Verify,
 		};
 
 		struct EquipmentUpgrade {
@@ -239,6 +257,14 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 			std::vector<std::string> nonStackableRootSignatures;
 			std::map<uint16_t, uint32_t> stackableRootCounts;
 			bool resumeEquipment = false;
+		};
+
+		struct DeparturePlan {
+			uint32_t npcId = 0;
+			Position npcPosition;
+			Position approachPosition;
+			uint32_t travelSteps = 0;
+			uint64_t expandedNodes = 0;
 		};
 
 		struct ServiceNpc {
@@ -402,6 +428,18 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		bool findPickupReward(Player& player, const Position& position, PickupReward& reward,
 		                      std::deque<PlayerBotNavigationStep>& rewardSteps);
 
+		bool hasCompletedRookgaardDeparture(const Player& player) const;
+
+		bool findOracleDeparture(Player& player, const Position& position, DeparturePlan& plan,
+		                         std::deque<PlayerBotNavigationStep>& departureSteps);
+
+		void beginOracleDeparture(Player& player, const Position& position, DeparturePlan plan,
+		                          std::deque<PlayerBotNavigationStep> departureSteps);
+
+		void processOracleDeparture(Player* player, const Position& currentPosition);
+
+		void finishOracleDeparture(Player* player, const Position& position, const char* result, const char* reason);
+
 		const char* topLevelGoalName(TopLevelGoal goal) const;
 
 		uint32_t saleableItemCount(const Player& player) const;
@@ -409,7 +447,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		GoalCandidate serviceGoalCandidate(const Player& player) const;
 
 		void emitGoalCandidate(const Player& player, const GoalCandidate& candidate, const Position& position, const char* decisionReason,
-		                       const PickupReward* reward = nullptr) const;
+		                       const PickupReward* reward = nullptr, const DeparturePlan* departure = nullptr) const;
 
 		void beginPickupReward(Player& player, const Position& position, PickupReward reward,
 		                       std::deque<PlayerBotNavigationStep> rewardSteps);
@@ -566,7 +604,9 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		ConversationStep conversationStep = ConversationStep::Greet;
 		ProgressionObjective progressionObjective = ProgressionObjective::None;
 		ProgressionStage progressionStage = ProgressionStage::Travel;
+		DepartureStage departureStage = DepartureStage::Travel;
 		PickupReward pickupReward;
+		DeparturePlan departurePlan;
 		TopLevelGoal activeGoal = TopLevelGoal::Service;
 		bool progressionEnabled = false;
 		uint64_t goalDecisionId = 0;
