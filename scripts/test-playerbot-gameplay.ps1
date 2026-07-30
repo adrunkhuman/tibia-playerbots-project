@@ -416,6 +416,10 @@ function Assert-HealingResupplyEvents {
     $purchases = @($events | Where-Object {
         $_.event -eq "action_result" -and $_.action -eq "buy_potions" -and $_.result -eq "success"
     })
+    $flaskSales = @($events | Where-Object {
+        $_.event -eq "action_result" -and $_.action -eq "sell" -and $_.result -eq "success" -and
+        $_.item_id -eq 7636 -and $_.count -eq 1
+    })
     $heals = @($events | Where-Object {
         $_.event -eq "action_result" -and $_.action -eq "heal" -and $_.result -eq "success" -and
         $_.objective -eq "service" -and $_.resource_after -eq ($_.resource_before - 1)
@@ -426,7 +430,7 @@ function Assert-HealingResupplyEvents {
     $transactionFailures = @($events | Where-Object {
         $_.reason -eq "transaction_delta_mismatch" -or $_.reason -eq "shop_transaction_delta_mismatch"
     })
-    if ($missingSupply.Count -ne 1 -or $purchases.Count -lt 1 -or $heals.Count -lt 1) {
+    if ($missingSupply.Count -ne 1 -or $flaskSales.Count -ne 1 -or $purchases.Count -lt 1 -or $heals.Count -lt 1) {
         throw "The bot did not refill and consume potions after the missing-supply healing outcome."
     }
     if ($serviceResumed.Count -lt 1) {

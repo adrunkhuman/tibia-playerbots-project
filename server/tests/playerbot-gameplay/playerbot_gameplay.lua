@@ -458,6 +458,7 @@ function login.onLogin(player)
     if mode == "healing_resupply" then
         suppressNearbyMonsters(player:getId())
         assert(player:getItemCount(potionItemId) == 0, "healing resupply fixture expected no seeded potions")
+        assert(player:addItem(7636, 1), "healing resupply fixture could not add an empty potion flask")
         assert(player:setHealth(math.floor(player:getMaxHealth() * 0.5)), "healing resupply fixture could not lower Bot One's health")
         addEvent(verifyHealingResupply, 250, player:getId(), 240)
         print("PLAYERBOT_GAMEPLAY_TEST HEALING_RESUPPLY_START")
