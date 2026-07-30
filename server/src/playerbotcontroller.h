@@ -82,6 +82,9 @@ namespace playerbot {
 	inline constexpr uint32_t maximumRelogAttempts = 3;
 	inline constexpr uint32_t maximumProgressionAttempts = 3;
 	inline constexpr uint16_t genericQuestChestActionId = 2000;
+	inline constexpr uint16_t nonContainerQuestActionId = 2001;
+	inline constexpr uint16_t doubletQuestUniqueId = 56002;
+	inline constexpr uint16_t doubletItemId = 2485;
 	inline constexpr Position rookgaardTemplePosition(32097, 32219, 7);
 	inline constexpr int32_t rookgaardRewardRadius = 180;
 	inline constexpr Position fakeDepotPosition(32105, 32195, 8);
@@ -364,6 +367,8 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		                       RewardInspection& inspection) const;
 
 		RewardInspection inspectRewardBundle(Player& player, const Container& contents) const;
+		RewardInspection inspectKnownReward(Player& player, const Item& item) const;
+		void finalizeRewardInspection(Player& player, RewardInspection& inspection) const;
 
 		std::string rewardInspectionItemsJson(const RewardInspection& inspection) const;
 

@@ -179,6 +179,28 @@ PlayerBotController::RewardInspection PlayerBotController::inspectRewardBundle(P
 		std::vector<uint16_t> path;
 		inspectRewardItem(player, *root, rootOrdinal++, path, signature, inspection);
 	}
+	finalizeRewardInspection(player, inspection);
+	return inspection;
+}
+
+PlayerBotController::RewardInspection PlayerBotController::inspectKnownReward(Player& player, const Item& item) const
+{
+	RewardInspection inspection;
+	const std::string signature = rewardItemSignature(item);
+	inspection.rootSignatures.push_back(signature);
+	if (item.isStackable()) {
+		inspection.stackableRootCounts[item.getID()] += item.getItemCount();
+	} else {
+		inspection.nonStackableRootSignatures.push_back(signature);
+	}
+	std::vector<uint16_t> path;
+	inspectRewardItem(player, item, 0, path, signature, inspection);
+	finalizeRewardInspection(player, inspection);
+	return inspection;
+}
+
+void PlayerBotController::finalizeRewardInspection(Player& player, RewardInspection& inspection) const
+{
 	if (inspection.bestUpgrade) {
 		inspection.knownUtility += inspection.bestUpgrade->benefit * 20;
 	}
@@ -195,7 +217,6 @@ PlayerBotController::RewardInspection PlayerBotController::inspectRewardBundle(P
 	if (inspection.shovelCount != 0 && !g_game.findItemOfType(&player, 2554, true)) {
 		inspection.knownUtility += 100;
 	}
-	return inspection;
 }
 
 std::string PlayerBotController::rewardInspectionItemsJson(const RewardInspection& inspection) const
@@ -523,17 +544,34 @@ bool PlayerBotController::findPickupReward(Player& player, const Position& posit
 	std::deque<PlayerBotNavigationStep> selectedSteps;
 	for (const auto& entry : g_game.getUniqueItems()) {
 		Item* rewardObject = entry.second;
-		if (!rewardObject || !rewardObject->isLoadedFromMap() ||
-		    rewardObject->getActionId() != genericQuestChestActionId) {
+		if (!rewardObject) {
+			continue;
+		}
+		const bool containerReward = rewardObject->getActionId() == genericQuestChestActionId;
+		const bool doubletReward = rewardObject->getActionId() == nonContainerQuestActionId &&
+		                           rewardObject->getUniqueId() == doubletQuestUniqueId;
+		if (!containerReward && !doubletReward) {
+			continue;
+		}
+		if (!rewardObject->isLoadedFromMap() && !doubletReward) {
 			continue;
 		}
 		Tile* tile = rewardObject->getTile();
 		Container* contents = rewardObject->getContainer();
-		if (!tile || !contents || contents->empty() || !isRookgaardRewardPosition(tile->getPosition())) {
+		if (!tile || !isRookgaardRewardPosition(tile->getPosition()) ||
+		    (containerReward && (!contents || contents->empty()))) {
 			continue;
 		}
 
-		RewardInspection inspection = inspectRewardBundle(player, *contents);
+		std::unique_ptr<Item> knownReward;
+		if (doubletReward) {
+			knownReward.reset(Item::CreateItem(doubletItemId));
+			if (!knownReward) {
+				continue;
+			}
+		}
+		RewardInspection inspection = containerReward ? inspectRewardBundle(player, *contents) :
+		                                                inspectKnownReward(player, *knownReward);
 		if (inspection.itemCount != 0) {
 			emitRewardInspection(rewardObject->getUniqueId(), tile->getPosition(), inspection, position);
 		}
@@ -541,14 +579,18 @@ bool PlayerBotController::findPickupReward(Player& player, const Position& posit
 			continue;
 		}
 		uint32_t totalWeight = 0;
-		for (Item* reward : contents->getItemList()) {
-			totalWeight += reward->getWeight();
+		if (containerReward) {
+			for (Item* reward : contents->getItemList()) {
+				totalWeight += reward->getWeight();
+			}
+		} else {
+			totalWeight = knownReward->getWeight();
 		}
 
 		PickupReward candidate;
 		candidate.uniqueId = rewardObject->getUniqueId();
 		candidate.rootOrdinal = inspection.bestUpgrade ? inspection.bestRootOrdinal : inspection.primaryKnownRootOrdinal;
-		Item* selectedRoot = contents->getItemByIndex(candidate.rootOrdinal);
+		Item* selectedRoot = containerReward ? contents->getItemByIndex(candidate.rootOrdinal) : knownReward.get();
 		candidate.rootItemId = selectedRoot->getID();
 		candidate.itemId = inspection.bestUpgrade ? inspection.bestItemId : inspection.primaryKnownItemId;
 		candidate.itemPosition = tile->getPosition();
@@ -572,7 +614,7 @@ bool PlayerBotController::findPickupReward(Player& player, const Position& posit
 		candidate.nonStackableRootSignatures = inspection.nonStackableRootSignatures;
 		candidate.stackableRootCounts = inspection.stackableRootCounts;
 		candidate.estimatedDistance = navigationDistance(position, candidate.itemPosition);
-		candidate.requiredBackpackSlots = static_cast<uint32_t>(contents->size()) +
+		candidate.requiredBackpackSlots = (containerReward ? static_cast<uint32_t>(contents->size()) : 1) +
 		                                  (inspection.bestUpgrade && player.getInventoryItem(candidate.slot) ? 1 : 0);
 		if (isRewardClaimed(player, candidate.uniqueId)) {
 			const bool ownedUpgrade = inspection.bestUpgrade &&
