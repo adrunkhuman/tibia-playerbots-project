@@ -192,13 +192,20 @@ function Assert-CycleEvents {
         $_.destination.x -eq 32084 -and $_.destination.y -eq 32144 -and $_.destination.z -eq 5
     })
     $terminal = @($events | Where-Object { $_.event -eq "terminal" })
+    $defensiveBlockerTargets = @($events | Where-Object {
+        $_.event -eq "target_changed" -and $_.target_name -eq "Playerbot Defensive Threat" -and
+        $_.reason -eq "defensive_path_blocker" -and $_.route_critical -eq $true
+    })
+    $defensiveBlockerIds = @($defensiveBlockerTargets | ForEach-Object { $_.target_id })
     $defensiveStart = @($events | Where-Object {
         $_.event -eq "action_result" -and $_.action -eq "defensive_combat" -and
-        $_.result -eq "started" -and $_.chase -eq $false
+        $_.result -eq "started" -and $_.chase -eq $false -and $_.route_critical -eq $true -and
+        $defensiveBlockerIds -contains $_.target_id
     })
     $defensiveComplete = @($events | Where-Object {
         $_.event -eq "action_result" -and $_.action -eq "defensive_combat" -and
-        $_.result -eq "success" -and $_.reason -eq "target_defeated"
+        $_.result -eq "success" -and $_.reason -eq "target_defeated" -and
+        $defensiveBlockerIds -contains $_.target_id
     })
 
     if ($deposit.Count -ne 1) {
@@ -225,11 +232,8 @@ function Assert-CycleEvents {
     if ($huntPlan.Count -lt 1) {
         throw "The bot did not plan a map-derived route to hunting point A."
     }
-    if ($defensiveStart.Count -lt 1 -or $defensiveComplete.Count -lt 1) {
-        throw "The bot did not complete a non-chasing defensive combat interruption."
-    }
-    if ($defensiveStart[0].route_critical -ne $true) {
-        throw "The bot did not prioritize the attacker occupying its failed navigation step."
+    if ($defensiveBlockerTargets.Count -lt 1 -or $defensiveStart.Count -lt 1 -or $defensiveComplete.Count -lt 1) {
+        throw "The bot did not prioritize and defeat the defensive attacker blocking its navigation step."
     }
     if ($terminal.Count -ne 0) {
         throw "The playerbot emitted a terminal event during the gameplay cycle."
