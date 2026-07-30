@@ -31,6 +31,36 @@ git subtree pull --prefix=client redemption-upstream main --squash
 - Treat tracked configuration that changes gameplay as product behavior, not
   disposable local configuration.
 
+## GitHub Issues
+
+- Write for maintainers who scan before they read. Use concise, natural
+  technical English and apply ASD-STE100 principles where they improve clarity:
+  active voice, short sentences, stable terms, and one main point per sentence.
+- Make titles describe the required outcome or observed problem. Remove scope
+  prefixes and filler unless they help distinguish the issue.
+- Keep each open issue body as the current contract. Preserve requirements,
+  limits, exact values, paths, commands, links, acceptance criteria, explicit
+  exclusions, and unchecked work.
+- Match structure to content. Use descriptive headings, compact checklists,
+  short paragraphs, and small tables only when they improve scanning. Do not
+  force every issue into one template.
+- Separate current behavior, required work, acceptance, and later scope. Move
+  completed implementation history to concise comments instead of repeating it
+  throughout the body.
+- Keep comments as terse chronological records. Preserve commit and PR links,
+  verification evidence, decisions, failures, and remaining limitations. Remove
+  transient narration and repeated conclusions.
+- Keep checklist state honest. A closed issue must show what merged, what was
+  verified, and what was deliberately excluded or remains elsewhere.
+- Prefer precise domain terms and observable results over vague summaries. Do
+  not weaken a concrete fixture, telemetry field, threshold, or failure reason
+  while shortening text.
+- Avoid generated-looking prose: repeated templates, generic report headings,
+  ceremonial introductions, excessive bolding, redundant summaries, and
+  unnaturally clipped fragments.
+- Use `bug` or `enhancement` for type where applicable. Add only useful area
+  labels: `playerbot`, `content`, `client`, `testing`, and `research`.
+
 ## Protocol And Client
 
 - The compatibility target is standard Tibia protocol 8.60.
