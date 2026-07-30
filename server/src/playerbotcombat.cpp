@@ -550,8 +550,7 @@ void PlayerBotController::startHunt(Player* player, const Position& position, co
 	activeGoal = TopLevelGoal::Hunt;
 	setCyclePhase(CyclePhase::Hunt, position, reason);
 	huntRouteIndex = 0;
-	const bool fixedFixtureRoute = std::getenv("PLAYERBOT_GAMEPLAY_MODE") != nullptr;
-	if (!fixedFixtureRoute && !activeHuntRegion && !selectHuntRegion(*player, position, "hunt_started")) {
+	if (!testPolicy.fixedFixtureRoute && !activeHuntRegion && !selectHuntRegion(*player, position, "hunt_started")) {
 		stop("hunt_region_unavailable", position);
 		return;
 	}
@@ -588,7 +587,7 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 	if (cyclePhase == CyclePhase::Hunt &&
 	    (std::chrono::steady_clock::now() >= huntDeadline || player->getFreeCapacity() < returnCapacityThreshold)) {
 		const char* reason = player->getFreeCapacity() < returnCapacityThreshold ? "capacity" : "hunt_deadline";
-		if (progressionEnabled) {
+		if (testPolicy.progressionEnabled) {
 			finishHuntAndSelectGoal(player, currentPosition, reason);
 			return;
 		} else {

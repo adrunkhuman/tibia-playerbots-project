@@ -67,6 +67,10 @@ namespace playerbot {
 	inline constexpr std::chrono::minutes huntRegionCooldown(10);
 	inline constexpr std::chrono::minutes pickupRewardSuccessCooldown(5);
 	inline constexpr std::chrono::seconds pickupRewardFailureCooldown(60);
+	// Top-level utilities are comparable arbitration scores. Baselines encode the default priority:
+	// critical healing > departure > capacity service > useful rewards > ordinary service > hunting >
+	// economic pickup. Dynamic service and reward adjustments may cross these baselines. Equal scores
+	// retain the candidate declaration order.
 	inline constexpr int32_t serviceGoalBaseUtility = 400;
 	inline constexpr int32_t pickupRewardBaseUtility = 650;
 	inline constexpr int32_t economicPickupBaseUtility = 250;
@@ -103,10 +107,17 @@ namespace playerbot {
 	}};
 	inline constexpr const char* botAccountName = "bot-one";
 
+	struct PlayerBotTestPolicy {
+		bool progressionEnabled;
+		bool startInHunt;
+		bool fixedFixtureRoute;
+	};
+
 	std::string jsonString(const std::string& value);
 	std::string utcTimestamp();
 	void emitPlayerbotEvent(const std::string& playerName, uint32_t playerGuid, const char* event,
 	                        const Position& position, const std::string& fields = {});
+	const PlayerBotTestPolicy& testPolicyFromEnvironment();
 }
 
 class PlayerBotController : public std::enable_shared_from_this<PlayerBotController>
@@ -115,7 +126,8 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 
 	public:
 		explicit PlayerBotController(const Player& player,
-		                            std::map<Position, std::chrono::steady_clock::time_point>& sharedHuntRegionCooldowns);
+		                            std::map<Position, std::chrono::steady_clock::time_point>& sharedHuntRegionCooldowns,
+		                            const playerbot::PlayerBotTestPolicy& testPolicy);
 
 		void start(const Position& position, bool recovered, uint32_t recoveryCount);
 
@@ -562,6 +574,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		uint32_t playerId;
 		uint32_t playerGuid;
 		std::string playerName;
+		const playerbot::PlayerBotTestPolicy testPolicy;
 		uint32_t ratId = 0;
 		uint32_t defensiveTargetId = 0;
 		Position lastPosition;
@@ -608,7 +621,6 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		PickupReward pickupReward;
 		DeparturePlan departurePlan;
 		TopLevelGoal activeGoal = TopLevelGoal::Service;
-		bool progressionEnabled = false;
 		uint64_t goalDecisionId = 0;
 		std::chrono::steady_clock::time_point pickupRewardCooldownUntil;
 		uint32_t progressionAttempts = 0;

@@ -829,9 +829,8 @@ bool PlayerBotController::selectTopLevelGoal(Player& player, const Position& pos
 	const bool higherUtilityGoal = (departureCandidate.feasible && departureCandidate.utility > huntGoalUtility) ||
 	                               (service.feasible && service.utility > huntGoalUtility) ||
 	                               (pickup.feasible && pickup.utility > huntGoalUtility);
-	const bool fixedFixtureRoute = std::getenv("PLAYERBOT_GAMEPLAY_MODE") != nullptr;
 	const bool huntFeasible = !higherUtilityGoal &&
-	                          (fixedFixtureRoute || selectHuntRegion(player, position, "goal_feasibility"));
+	                          (testPolicy.fixedFixtureRoute || selectHuntRegion(player, position, "goal_feasibility"));
 	const GoalCandidate hunt{TopLevelGoal::Hunt, huntFeasible, huntGoalUtility,
 	                         higherUtilityGoal ? "deferred_lower_utility" :
 	                         huntFeasible ? "autonomous_hunting_available" : "no_suitable_reachable_region"};
@@ -913,7 +912,7 @@ void PlayerBotController::finishProgressionObjective(Player* player, const Posit
 	pickupRewardCooldownUntil = std::chrono::steady_clock::now() +
 	                            (std::strcmp(result, "success") == 0 ? pickupRewardSuccessCooldown :
 	                                                                    pickupRewardFailureCooldown);
-	if (progressionEnabled && player) {
+	if (testPolicy.progressionEnabled && player) {
 		const char* decisionReason = std::strcmp(result, "success") == 0 ? "pickup_complete" :
 		                             std::strcmp(result, "interrupted") == 0 ? "pickup_interrupted" : "pickup_failed";
 		selectTopLevelGoal(*player, position, decisionReason);
