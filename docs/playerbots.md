@@ -19,9 +19,10 @@ development account `bot-one`, character `Bot One`, and `player_bots` registry.
 Provisioning is idempotent: it does not restore spent money, replace occupied
 equipment slots, or take over an unrelated same-named or deleted character.
 
-A new Bot One starts at level 1 with the development hunt skills, starter
-equipment, backpack, rope, shovel, 100 gp bank balance, and two 100-gp backpack
-stacks. Global `freePremium` supplies premium access.
+A new Bot One starts as a level 8 Knight at the Thais temple with development
+hunt skills, plate equipment, sword, shield, backpack, rope, shovel, five small
+health potions, one meat, 100 gp bank balance, and two 100-gp backpack stacks.
+Global `freePremium` supplies premium access.
 
 Inspect setup and startup with:
 
@@ -60,16 +61,18 @@ interrupted families cool down for 60 seconds.
 Callers provide destinations, not ordered transition checkpoints. The bounded
 navigator searches loaded map state within a 192-tile margin around its
 endpoints and stops after 100,000 expanded nodes. It supports ordinary floor
-changes, configured ladders, rope and shovel holes, direct-use holes, simple
-teleports, and unlocked doors. Cardinal movement costs 10; diagonal movement
-costs 30. Failed steps are excluded for 10 seconds. Repeated A-B oscillation
+changes, configured ladders, rope and shovel holes, direct-use holes, and
+unlocked doors. Arbitrary map teleports are not navigation edges. Cardinal
+movement costs 10; diagonal movement costs 30. Failed steps are excluded for 10
+seconds. Repeated A-B oscillation
 suppresses the implicated transition for two minutes.
 
-Hunt regions come from all loaded hostile spawns on floors 6 through 15; there
-is no player-distance or fixture-radius cap. The shared cache groups overlapping
-eight-tile spawn kernels. Each controller scores candidates in bounded batches
-using its health, equipment, weapon, defense, skill, cooldowns, and observed
-performance. It then validates every suitable candidate incrementally through
+Hunt regions come from all loaded hostile spawns on floors 6 through 15. The
+shared cache groups overlapping eight-tile spawn kernels through spatial
+buckets. Each controller considers regions within 200 weighted tiles of its
+town temple and 300 weighted tiles of its current position, then scores them in
+bounded batches using health, equipment, weapon, defense, skill, cooldowns, and
+observed performance. It validates suitable candidates incrementally through
 the navigator and selects the highest route-adjusted score. Navigation remains
 behind the destination/reachability interface so a later navigator can replace
 tile planning without changing hunt selection.
@@ -81,9 +84,20 @@ minutes. Completed hunts update a per-controller XP correction after at least
 30 seconds and one kill; the sample is clamped to `0.25` through `2.0` and uses
 a 65/35 rolling blend. This state resets on relog or restart.
 
-The planner is a bounded Rookgaard prototype, not whole-map navigation.
-Regression fixtures use fixed destinations and do not validate dynamic region
-selection.
+When an attacked monster leaves normal positional or creature visibility, or
+the attack association is lost, the bot clears chase and pursues a reachable
+tile adjacent to its last observed position. It never updates this goal from a
+hidden creature's live state.
+Visible targets may update the approach goal and can be reacquired within six
+tiles. Pursuit lasts at most five seconds and six tiles of Chebyshev displacement.
+Reaching the approach point or exhausting either budget returns to patrol and
+suppresses that target for ten seconds. A 60-second traversal combat timeout
+retains its separate 120-second suppression.
+
+The map-derived region planner and bounded pursuit are prototypes, not
+whole-map hierarchical navigation or general creature memory. Regression
+fixtures use fixed destinations unless their focused mode explicitly exercises
+dynamic planning or pursuit.
 
 ## Survival, service, and loot
 
@@ -94,17 +108,18 @@ fullness limit.
 
 Service NPCs require an exact `playerbot_service` XML tag of `shop`, `banker`,
 or `oracle`. Shops publish their loaded offers to the bot; untagged shops and
-tagged shops without offers are ignored. Reachable providers remain explicitly
-allowlisted while navigation is bounded. The bot greets the selected NPC,
+tagged shops without offers are ignored. Providers must remain within 200
+weighted tiles of the registered town temple. The bot greets the selected NPC,
 treats a private reply as focus acknowledgement, and opens the normal trade
 window. Reply text is not interpreted.
 
 The service cycle sells known surplus, restores five small health potions and
 one meat, deposits carried money, and withdraws 100 gp. Hunting ends after the
 configured duration or below 30 oz free capacity. Remaining top-level backpack
-loot is dropped at the fake depot south of `(32105, 32195, 8)`. This is a public
-world tile, not private or durable storage; equipped items, the root backpack,
-currency, rope, shovel, and supply reserves are retained.
+loot is moved through a reachable town depot locker into that player's real
+depot chest. Nested containers are opened and deposits are verified through
+normal item movement. Equipped items, the root backpack, currency, rope,
+shovel, and supply reserves are retained.
 
 Item value comes from tagged shop offers. Currency uses intrinsic value; other
 loot must have a known buyer. Corpse contents are ranked by value per weight,
@@ -134,7 +149,7 @@ next decision after restart.
 An unpromoted level 8 through 10 player can select the live tagged Oracle. The
 bot derives a route, says `hi`, `yes`, `thais`, `knight`, `yes`, then verifies
 vocation `4`, town `2`, and the registered Thais temple position. It remains
-server-owned but stops because mainland behavior is not implemented.
+server-owned and continues directly into mainland service.
 
 ## Recovery and configuration
 
@@ -185,6 +200,13 @@ Successful movement is not logged per tile. Repeated identical transitions,
 target changes, and action failures are emitted at most once per 60 seconds;
 `summary.suppressed_events` counts omissions. Counters cover one in-memory
 controller lifetime. Docker retains three 10 MiB server log files.
+
+Target pursuit uses `action_result` with `action="target_pursuit"`.
+`result="started"` includes `target_id` and `last_seen_position`;
+`result="reacquired"` includes `target_id`; and `result="abandoned"` includes
+`target_id` plus `reason`. Current abandonment reasons are
+`last_seen_position_reached` and `pursuit_budget_exhausted`.
+`state_transition` exposes entry to and exit from `target_pursuit`.
 
 When `GOD Admin` is online, selected objectives and verified transactions also
 appear as private messages and orange status text. JSONL remains authoritative.

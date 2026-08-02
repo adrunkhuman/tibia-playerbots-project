@@ -64,6 +64,10 @@ namespace playerbot {
 	inline constexpr uint16_t ropeItemId = 2120;
 	inline constexpr std::chrono::seconds traversalCombatTimeout(60);
 	inline constexpr std::chrono::seconds traversalTargetSuppression(120);
+	inline constexpr std::chrono::seconds lostTargetPursuitTimeout(5);
+	inline constexpr std::chrono::seconds lostTargetSuppression(10);
+	inline constexpr uint32_t maximumLostTargetPursuitDistance = 6;
+	inline constexpr uint32_t maximumTargetReacquisitionDistance = 6;
 	inline constexpr std::chrono::seconds navigationBlockSuppression(10);
 	inline constexpr std::chrono::minutes navigationOscillationSuppression(2);
 	inline constexpr std::chrono::seconds navigationStepTimeout(2);
@@ -315,6 +319,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 			LootCorpse,
 			Traverse,
 			TraversalCombat,
+			TargetPursuit,
 			Stopped,
 		};
 
@@ -480,6 +485,9 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		void finishTraversalCombat(Player* player, const Position& currentPosition, const char* reason);
 
 		void processTraversalCombat(Player* player, const Position& currentPosition);
+		void beginTargetPursuit(Player* player, const Position& currentPosition);
+		void finishTargetPursuit(const Position& currentPosition, const char* reason);
+		void processTargetPursuit(Player* player, const Position& currentPosition);
 
 		std::optional<EquipmentUpgrade> evaluateEquipmentUpgrade(const Player& player, const Item& candidate) const;
 
@@ -716,6 +724,9 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		std::chrono::steady_clock::time_point eatRetryAfter;
 		std::chrono::steady_clock::time_point combatStarted;
 		std::chrono::steady_clock::time_point defensiveCombatStarted;
+		std::chrono::steady_clock::time_point targetPursuitStarted;
+		Position targetPursuitStartPosition;
+		Position targetPursuitDestination;
 		std::unordered_map<uint32_t, std::chrono::steady_clock::time_point> suppressedTraversalTargets;
 		CyclePhase cyclePhase = CyclePhase::ReturnToDepot;
 		ServiceStage serviceStage = ServiceStage::Discover;

@@ -132,6 +132,17 @@ local function activateDefensiveMonster(playerId, monsterId)
     assert(monster and monster:selectTarget(player), "defensive blocker could not target Bot One")
 end
 
+local function hidePursuitMonster(playerId, monsterId, distance)
+    local player = Player(playerId)
+    local monster = Monster(monsterId)
+    assert(player and not player:isRemoved(), "Bot One disappeared before target pursuit")
+    assert(monster and not monster:isRemoved(), "target pursuit monster disappeared before target loss")
+    local position = player:getPosition()
+    assert(monster:teleportTo(Position(position.x + distance, position.y, position.z), true),
+        "target pursuit fixture could not hide the monster")
+    print("PLAYERBOT_GAMEPLAY_TEST TARGET_PURSUIT_HIDDEN " .. monsterId)
+end
+
 local function spawnDefensiveMonsters(playerId)
     local player = Player(playerId)
     assert(player and not player:isRemoved(), "Bot One disappeared before defensive combat test spawn")
@@ -421,7 +432,7 @@ function login.onLogin(player)
     end
 
     local mode = os.getenv("PLAYERBOT_GAMEPLAY_MODE") or "cycle"
-	assert(mode == "mainland" or mode == "cycle" or mode == "depot" or mode == "navigation" or mode == "corpse" or mode == "death" or mode == "healing" or
+	assert(mode == "mainland" or mode == "cycle" or mode == "depot" or mode == "navigation" or mode == "target_pursuit" or mode == "target_pursuit_abandon" or mode == "corpse" or mode == "death" or mode == "healing" or
 		mode == "healing_resupply" or mode == "value" or mode == "progression" or mode == "progression_bundle" or
 		mode == "progression_nested" or
         mode == "progression_resume" or mode == "progression_nested_resume" or mode == "progression_space" or
@@ -671,6 +682,15 @@ function login.onLogin(player)
     end
 
     assert(player:teleportTo(depotPosition), "fake depot position could not be restored")
+    if mode == "target_pursuit" or mode == "target_pursuit_abandon" then
+        suppressNearbyMonsters(player:getId())
+        local position = player:getPosition()
+        local monster = Game.createMonster(emptyMonsterName, Position(position.x + 4, position.y, position.z), true, true)
+        assert(monster, "target pursuit fixture could not create a visible monster")
+        addEvent(hidePursuitMonster, 1100, player:getId(), monster:getId(), mode == "target_pursuit" and 12 or 30)
+        print("PLAYERBOT_GAMEPLAY_TEST TARGET_PURSUIT_START " .. monster:getId())
+        return true
+    end
     if mode == "navigation" then
         createTemporaryBlockers()
         suppressNearbyMonsters(player:getId())

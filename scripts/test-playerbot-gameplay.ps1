@@ -2,6 +2,7 @@ param(
 	[ValidateRange(30, 3600)]
 	[int]$TimeoutSeconds = 300,
     [switch]$FullNavigation,
+	[switch]$TargetPursuit,
     [switch]$CorpseLoot,
     [switch]$DeathTelemetry,
 	[switch]$Healing,
@@ -977,6 +978,73 @@ function Assert-NavigationEvents {
     }
 }
 
+function Assert-TargetPursuitEvents {
+	param([string]$Logs)
+
+	$events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
+	$started = @($events | Where-Object {
+		$_.event -eq "action_result" -and $_.action -eq "target_pursuit" -and $_.result -eq "started"
+	})
+	$reacquired = @($events | Where-Object {
+		$_.event -eq "action_result" -and $_.action -eq "target_pursuit" -and $_.result -eq "reacquired"
+	})
+	$defeated = @($events | Where-Object {
+		$_.event -eq "target_changed" -and $_.reason -eq "target_defeated"
+	})
+	$terminal = @($events | Where-Object { $_.event -eq "terminal" })
+	$firstPlan = @($events | Where-Object {
+		$_.event -eq "action_result" -and $_.action -eq "plan" -and $_.result -eq "success"
+	}) | Select-Object -First 1
+	$lastSeenPlanDistance = $started.Count -eq 1 -and $firstPlan.Count -eq 1 ?
+		[Math]::Max([Math]::Abs($started[0].last_seen_position.x - $firstPlan[0].destination.x),
+			[Math]::Abs($started[0].last_seen_position.y - $firstPlan[0].destination.y)) : 99
+	$distance = $started.Count -eq 1 -and $reacquired.Count -eq 1 ?
+		[Math]::Max([Math]::Abs($started[0].position.x - $reacquired[0].position.x),
+			[Math]::Abs($started[0].position.y - $reacquired[0].position.y)) : 0
+	if ($started.Count -ne 1 -or $reacquired.Count -ne 1 -or $defeated.Count -lt 1 -or
+		$started[0].target_id -ne $reacquired[0].target_id -or
+		$reacquired[0].target_id -ne $defeated[0].previous_target_id -or
+		$distance -lt 1 -or $distance -gt 6 -or $lastSeenPlanDistance -gt 1 -or $terminal.Count -ne 0) {
+		throw "Target pursuit failed. started=$($started.Count), reacquired=$($reacquired.Count), defeated=$($defeated.Count), distance=$distance, lastSeenPlanDistance=$lastSeenPlanDistance, terminal=$($terminal.Count)."
+	}
+}
+
+function Assert-TargetPursuitAbandonEvents {
+	param([string]$Logs)
+
+	$events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
+	$started = @($events | Where-Object {
+		$_.event -eq "action_result" -and $_.action -eq "target_pursuit" -and $_.result -eq "started"
+	})
+	$abandoned = @($events | Where-Object {
+		$_.event -eq "action_result" -and $_.action -eq "target_pursuit" -and $_.result -eq "abandoned" -and
+		$_.reason -in @("last_seen_position_reached", "pursuit_budget_exhausted")
+	})
+	$reacquired = @($events | Where-Object {
+		$_.event -eq "action_result" -and $_.action -eq "target_pursuit" -and $_.result -eq "reacquired"
+	})
+	$routeUnavailable = @($events | Where-Object {
+		$_.event -eq "action_result" -and $_.action -eq "navigate" -and $_.result -eq "failed" -and
+		$_.reason -eq "route_unavailable"
+	})
+	$terminal = @($events | Where-Object { $_.event -eq "terminal" })
+	$firstPlan = @($events | Where-Object {
+		$_.event -eq "action_result" -and $_.action -eq "plan" -and $_.result -eq "success"
+	}) | Select-Object -First 1
+	$lastSeenPlanDistance = $started.Count -eq 1 -and $firstPlan.Count -eq 1 ?
+		[Math]::Max([Math]::Abs($started[0].last_seen_position.x - $firstPlan[0].destination.x),
+			[Math]::Abs($started[0].last_seen_position.y - $firstPlan[0].destination.y)) : 99
+	$distance = $started.Count -eq 1 -and $abandoned.Count -eq 1 ?
+		[Math]::Max([Math]::Abs($started[0].position.x - $abandoned[0].position.x),
+			[Math]::Abs($started[0].position.y - $abandoned[0].position.y)) : 0
+	if ($started.Count -ne 1 -or $abandoned.Count -ne 1 -or
+		$started[0].target_id -ne $abandoned[0].target_id -or $distance -gt 6 -or
+		($distance -eq 0 -and $routeUnavailable.Count -lt 1) -or $lastSeenPlanDistance -gt 1 -or
+		$reacquired.Count -ne 0 -or $terminal.Count -ne 0) {
+		throw "Target pursuit fallback failed. started=$($started.Count), abandoned=$($abandoned.Count), distance=$distance, routeUnavailable=$($routeUnavailable.Count), lastSeenPlanDistance=$lastSeenPlanDistance, reacquired=$($reacquired.Count), terminal=$($terminal.Count)."
+	}
+}
+
 function Assert-CorpseEvents {
     param([string]$Logs)
 
@@ -1144,7 +1212,7 @@ if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
 	throw "Docker is required to run the playerbot gameplay suite."
 }
 
-$focusedScenarioRequested = $FullNavigation -or $CorpseLoot -or $DeathTelemetry -or $Healing -or $ValueLoot -or
+$focusedScenarioRequested = $FullNavigation -or $TargetPursuit -or $CorpseLoot -or $DeathTelemetry -or $Healing -or $ValueLoot -or
 	$PickupProgression -or $GoalArbitration -or $OracleDeparture -or $StaminaProjection -or $HuntRegionPlanning -or
 	$CombatReadiness -or $Depot -or $MainlandLoop
 if ($Focused -and -not $focusedScenarioRequested) {
@@ -1539,6 +1607,28 @@ try {
 			Invoke-Compose up --detach
 			$navigationLogs = Wait-ForPlayerbotEventCount -Action "hunt_waypoint" -Count 5
 			Assert-NavigationEvents -Logs $navigationLogs
+		}
+	}
+
+	if ($TargetPursuit) {
+		Invoke-Scenario -Name "target_pursuit" -DefaultTimeoutSeconds 60 -Body {
+			Invoke-Compose down --volumes --remove-orphans
+			$env:PLAYERBOT_GAMEPLAY_MODE = "target_pursuit"
+			$env:PLAYERBOT_HUNT_DURATION_SECONDS = "900"
+			Invoke-Compose up --detach
+			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST TARGET_PURSUIT_HIDDEN' | Out-Null
+			Wait-ForLog -Pattern '"action":"target_pursuit","result":"reacquired"' | Out-Null
+			$pursuitLogs = Wait-ForLog -Pattern '"reason":"target_defeated"'
+			Assert-TargetPursuitEvents -Logs $pursuitLogs
+		}
+		Invoke-Scenario -Name "target_pursuit_abandon" -DefaultTimeoutSeconds 60 -Body {
+			Invoke-Compose down --volumes --remove-orphans
+			$env:PLAYERBOT_GAMEPLAY_MODE = "target_pursuit_abandon"
+			$env:PLAYERBOT_HUNT_DURATION_SECONDS = "900"
+			Invoke-Compose up --detach
+			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST TARGET_PURSUIT_HIDDEN' | Out-Null
+			$pursuitLogs = Wait-ForLog -Pattern '"action":"target_pursuit","result":"abandoned"'
+			Assert-TargetPursuitAbandonEvents -Logs $pursuitLogs
 		}
 	}
 
