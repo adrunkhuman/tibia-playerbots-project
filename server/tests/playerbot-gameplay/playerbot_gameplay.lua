@@ -11,6 +11,7 @@ local lootMonsterName = "Playerbot Loot Corpse"
 local nonlootableMonsterName = "Playerbot Nonlootable Corpse"
 local containerDeathItemMonsterName = "Playerbot Container Death Item"
 local defensiveMonsterName = "Playerbot Defensive Threat"
+local levelEightMonsterName = "Playerbot Level Eight Target"
 local deathMonsterName = "Playerbot Death Threat"
 local valueMonsterName = "Playerbot Value Corpse"
 local healingPotionCount = 3
@@ -22,6 +23,7 @@ local nestedRewardStorage = 50083
 local nestedRewardRootId = 1994
 local nestedRewardShieldId = 2512
 local economicRewardStorage = 50082
+local departureRecoveryStorage = 50090
 local deathLoginCount = 0
 
 local function verifyOracleDeparture(playerId, attempts)
@@ -146,6 +148,40 @@ local function spawnCorpseMonster(playerId, monsterName)
         end
     end
     error("no adjacent tile was available for corpse test monster")
+end
+
+local function spawnDepartureDefensiveThreat(playerId)
+    local player = Player(playerId)
+    assert(player and not player:isRemoved(), "Bot One disappeared before departure defensive combat")
+    local origin = player:getPosition()
+    for _, position in ipairs({
+        Position(origin.x + 1, origin.y, origin.z),
+        Position(origin.x, origin.y + 1, origin.z),
+        Position(origin.x - 1, origin.y, origin.z),
+        Position(origin.x, origin.y - 1, origin.z),
+    }) do
+        local tile = Tile(position)
+        if tile and tile:isWalkable() then
+            local monster = Game.createMonster(defensiveMonsterName, position, true, true)
+            assert(monster and monster:selectTarget(player), "departure defensive threat could not target Bot One")
+            print("PLAYERBOT_GAMEPLAY_TEST ORACLE_DEPARTURE_DEFENSIVE_THREAT_SPAWNED")
+            return
+        end
+    end
+    error("no adjacent tile was available for the departure defensive threat")
+end
+
+local function prepareLevelEightCombat(player)
+    local targetExperience = Game.getExperienceForLevel(8) - 1
+    assert(player:getExperience() < targetExperience, "level-eight combat fixture expected a low-level player")
+    player:addExperience(targetExperience - player:getExperience())
+    assert(player:getLevel() == 7, "level-eight combat fixture could not prepare level 7")
+    assert(player:teleportTo(depotPosition), "level-eight combat fixture could not leave the temple")
+    removeNearbyMonsters(player)
+    spawnCorpseMonster(player:getId(), levelEightMonsterName)
+    addEvent(spawnDepartureDefensiveThreat, 2500, player:getId())
+    addEvent(verifyOracleDeparture, 500, player:getId(), 360)
+    print("PLAYERBOT_GAMEPLAY_TEST ORACLE_LEVEL_EIGHT_INTERRUPT_START")
 end
 
 local function removeBlockers(firstId, secondId, thirdId)
@@ -300,7 +336,8 @@ function login.onLogin(player)
 		mode == "progression_nested" or
         mode == "progression_resume" or mode == "progression_nested_resume" or mode == "progression_space" or
         mode == "arbitration" or
-        mode == "arbitration_interrupt" or mode == "departure",
+        mode == "arbitration_interrupt" or mode == "departure" or mode == "departure_interrupt" or
+        mode == "departure_recovery",
         "unknown PLAYERBOT_GAMEPLAY_MODE: " .. mode)
     if mode == "death" then
         deathLoginCount = deathLoginCount + 1
@@ -337,6 +374,33 @@ function login.onLogin(player)
         suppressNearbyMonsters(player:getId())
         addEvent(verifyOracleDeparture, 500, player:getId(), 360)
         print("PLAYERBOT_GAMEPLAY_TEST ORACLE_DEPARTURE_START")
+        return true
+    end
+    if mode == "departure_interrupt" then
+        prepareLevelEightCombat(player)
+        return true
+    end
+    if mode == "departure_recovery" then
+        if player:getStorageValue(departureRecoveryStorage) ~= 1 then
+            local targetExperience = Game.getExperienceForLevel(9) - 1
+            assert(player:getExperience() < targetExperience,
+                "Oracle recovery fixture expected a low-level player")
+            player:addExperience(targetExperience - player:getExperience())
+            assert(player:getLevel() == 8, "Oracle recovery fixture could not prepare level 8")
+            assert(player:setStorageValue(departureRecoveryStorage, 1),
+                "Oracle recovery fixture could not persist its restart marker")
+            print("PLAYERBOT_GAMEPLAY_TEST ORACLE_LEVEL_EIGHT_RECOVERY_PREPARED")
+            return true
+        end
+        assert(player:getVocation():getId() == 0 and player:getLevel() == 8,
+            "Oracle recovery fixture did not restore a vocationless level-8 player")
+        assert(player:getExperience() == Game.getExperienceForLevel(9) - 1,
+            "Oracle recovery fixture did not restore the level-9 experience boundary")
+        assert(player:setHealth(math.floor(player:getMaxHealth() * 0.5)),
+            "Oracle recovery fixture could not lower Bot One's health")
+        suppressNearbyMonsters(player:getId())
+        addEvent(verifyOracleDeparture, 500, player:getId(), 360)
+        print("PLAYERBOT_GAMEPLAY_TEST ORACLE_LEVEL_EIGHT_RECOVERY_START")
         return true
     end
     if mode == "arbitration" or mode == "arbitration_interrupt" then

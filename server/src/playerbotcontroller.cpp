@@ -29,11 +29,12 @@ const PlayerBotTestPolicy& playerbot::testPolicyFromEnvironment()
 			 std::strcmp(gameplayMode, "progression_space") == 0 ||
 			 std::strcmp(gameplayMode, "arbitration") == 0 ||
 			 std::strcmp(gameplayMode, "arbitration_interrupt") == 0 ||
-			 std::strcmp(gameplayMode, "departure") == 0);
+			 std::strcmp(gameplayMode, "departure") == 0 ||
+			 std::strcmp(gameplayMode, "departure_recovery") == 0);
 		const bool startInHunt = gameplayMode &&
 			(std::strcmp(gameplayMode, "navigation") == 0 || std::strcmp(gameplayMode, "corpse") == 0 ||
 			 std::strcmp(gameplayMode, "healing") == 0 || std::strcmp(gameplayMode, "healing_resupply") == 0 ||
-			 std::strcmp(gameplayMode, "value") == 0);
+			 std::strcmp(gameplayMode, "value") == 0 || std::strcmp(gameplayMode, "departure_interrupt") == 0);
 		return PlayerBotTestPolicy{
 			!regressionMode && (!gameplayMode || progressionMode),
 			startInHunt,
@@ -57,7 +58,8 @@ void PlayerBotController::start(const Position& position, bool recovered, uint32
 	const bool startInHunt = !recovered && testPolicy.startInHunt;
 	Player* controlledPlayer = g_game.getPlayerByID(playerId);
 	const bool departureComplete = controlledPlayer && hasCompletedRookgaardDeparture(*controlledPlayer);
-	const bool useGoalSelector = !recovered && testPolicy.progressionEnabled && controlledPlayer;
+	const bool departureRequired = controlledPlayer && requiresRookgaardDeparture(*controlledPlayer);
+	const bool useGoalSelector = controlledPlayer && (departureRequired || (!recovered && testPolicy.progressionEnabled));
 	if (useGoalSelector && !departureComplete && !selectTopLevelGoal(*controlledPlayer, position, "startup")) {
 		return;
 	}
@@ -647,6 +649,14 @@ void PlayerBotController::navigate()
 	                                departureStage == DepartureStage::Verify;
 	if (!accessingReward && !verifyingDeparture && handleHealing(player, currentPosition)) {
 		schedule(blockedRouteRetryInterval);
+		return;
+	}
+	const bool waitingForRecovery = cyclePhase == CyclePhase::Service && needsHealing(*player);
+	if (!accessingReward && progressionObjective != ProgressionObjective::OracleDeparture &&
+	    requiresRookgaardDeparture(*player) && !waitingForRecovery) {
+		if (selectTopLevelGoal(*player, currentPosition, "level_eight_interrupt")) {
+			schedule(SCHEDULER_MINTICKS);
+		}
 		return;
 	}
 	if (!accessingReward && !verifyingDeparture && handleFood(player, currentPosition)) {

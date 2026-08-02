@@ -566,7 +566,7 @@ void PlayerBotController::startHunt(Player* player, const Position& position, co
 
 void PlayerBotController::processTraversal(Player* player, const Position& currentPosition)
 {
-	if (cyclePhase != CyclePhase::Hunt) {
+	if (cyclePhase != CyclePhase::Hunt || progressionObjective == ProgressionObjective::OracleDeparture) {
 		if (defensiveTargetId != 0) {
 			processDefensiveCombat(player, currentPosition);
 			return;
