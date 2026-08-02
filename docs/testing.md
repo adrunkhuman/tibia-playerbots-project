@@ -31,12 +31,13 @@ pwsh -File scripts/test-playerbot-gameplay.ps1
 ```
 
 The baseline covers NPC discovery, sale and reserve purchase, bank deposit and
-withdrawal, fake-depot handling, and return to hunting. Add switches that match
+withdrawal, fixture-depot handling, and return to hunting. Add switches that match
 the changed behavior:
 
 | Switch | Coverage |
 | ------ | -------- |
 | `-FullNavigation` | Complete fixed A-B-C-B-A fixture route and temporary blockage recovery. |
+| `-TargetPursuit` | Visible-only last-seen pursuit, bounded reacquisition, and out-of-budget abandonment. |
 | `-CorpseLoot` | Non-corpse, empty, guaranteed-loot, and container death items; open-before-inspect ordering. |
 | `-DeathTelemetry` | Death context, exponential relog, fresh controller state, abandonment, and removal. |
 | `-Healing` | Potion verification, threshold recovery, missing-stock service, purchase, and resume behavior. |
@@ -44,12 +45,21 @@ the changed behavior:
 | `-PickupProgression` | Nested and multi-root reward inspection, claim verification, upgrades, restart recovery, and space rejection. |
 | `-GoalArbitration` | Pickup, service, hunt, and critical-healing precedence across safe boundaries. |
 | `-OracleDeparture` | Tagged Oracle route, dialogue, vocation/town/position verification, and restart persistence. |
+| `-StaminaProjection` | Premium bonus, low-stamina penalty, and ordinary stamina projections. |
+| `-HuntRegionPlanning` | Cached scanner batching, threat rejection, reachability, cooldowns, and observed correction. |
+| `-CombatReadiness` | Equipment, supplies, capacity, service recovery, upgrades, and restart reconstruction. |
+| `-Depot` | Real locker/chest discovery, nested deposits, move verification, retries, and restart checkpoints. |
+| `-MainlandLoop` | Two real Thais hunt/depot cycles, local services, restart recovery, and teleport exclusion. |
 
 Navigation or looting changes require at least:
 
 ```powershell
 pwsh -File scripts/test-playerbot-gameplay.ps1 -FullNavigation -CorpseLoot
+pwsh -File scripts/test-playerbot-gameplay.ps1 -TargetPursuit -Focused
 ```
+
+`-TargetPursuit` runs successful `target_pursuit` reacquisition and bounded
+`target_pursuit_abandon` fallback scenarios.
 
 Use `-Focused` with one or more scenario switches to skip the baseline. Use
 `-SkipBuild` only with a known-current `angelion-server:latest` image; it does

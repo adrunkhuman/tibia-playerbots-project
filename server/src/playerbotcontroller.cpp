@@ -33,6 +33,7 @@ const PlayerBotTestPolicy& playerbot::testPolicyFromEnvironment()
 			 std::strcmp(gameplayMode, "departure_recovery") == 0);
 		const bool startInHunt = gameplayMode &&
 			(std::strcmp(gameplayMode, "navigation") == 0 || std::strcmp(gameplayMode, "corpse") == 0 ||
+			 (std::strcmp(gameplayMode, "target_pursuit") == 0 || std::strcmp(gameplayMode, "target_pursuit_abandon") == 0) ||
 			 std::strcmp(gameplayMode, "healing") == 0 || std::strcmp(gameplayMode, "healing_resupply") == 0 ||
 			 std::strcmp(gameplayMode, "value") == 0 || std::strcmp(gameplayMode, "departure_interrupt") == 0 ||
 			 std::strcmp(gameplayMode, "stamina_bonus") == 0 || std::strcmp(gameplayMode, "stamina_boundary") == 0 ||
@@ -133,6 +134,7 @@ const char* PlayerBotController::stageName(ScenarioStage stage)
 		case ScenarioStage::LootCorpse: return "loot_corpse";
 		case ScenarioStage::Traverse: return "traverse";
 		case ScenarioStage::TraversalCombat: return "traversal_combat";
+		case ScenarioStage::TargetPursuit: return "target_pursuit";
 		case ScenarioStage::Stopped: return "stopped";
 	}
 	return "unknown";
