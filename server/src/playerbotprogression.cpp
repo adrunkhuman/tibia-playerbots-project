@@ -804,6 +804,9 @@ void PlayerBotController::beginPickupReward(Player& player, const Position& posi
 bool PlayerBotController::selectTopLevelGoal(Player& player, const Position& position, const char* decisionReason)
 {
 	++goalDecisionId;
+	if (requiresRookgaardDeparture(player)) {
+		return forceOracleDeparture(player, position, decisionReason);
+	}
 	const GoalCandidate service = serviceGoalCandidate(player);
 	DeparturePlan departure;
 	std::deque<PlayerBotNavigationStep> departureRoute;

@@ -20,6 +20,11 @@ bool PlayerBotController::hasCompletedRookgaardDeparture(const Player& player) c
 	return player.getVocation()->getId() != 0 && player.getTown() && player.getTown()->getID() != rookgaardTownId;
 }
 
+bool PlayerBotController::requiresRookgaardDeparture(const Player& player) const
+{
+	return player.getVocation()->getId() == 0 && player.getLevel() >= oracleMinimumLevel;
+}
+
 bool PlayerBotController::findOracleDeparture(Player& player, const Position& position, DeparturePlan& plan,
 	                                           std::deque<PlayerBotNavigationStep>& departureSteps)
 {
@@ -76,6 +81,65 @@ bool PlayerBotController::findOracleDeparture(Player& player, const Position& po
 		return true;
 	}
 	return false;
+}
+
+bool PlayerBotController::forceOracleDeparture(Player& player, const Position& position, const char* decisionReason)
+{
+	const TopLevelGoal previousGoal = activeGoal;
+	const bool interruptedHunt = previousGoal == TopLevelGoal::Hunt && cyclePhase == CyclePhase::Hunt;
+	if (interruptedHunt) {
+		finishHuntRegion(player, position, "level_eight_interrupt");
+		emit("goal_result", position,
+		     "\"decision_id\":" + std::to_string(goalDecisionId - 1) +
+		         ",\"goal\":\"hunt\",\"result\":\"interrupted\",\"reason\":\"level_eight_interrupt\"");
+	}
+
+	if (defensiveTargetId == 0) {
+		g_game.playerCancelAttackAndFollow(playerId);
+	}
+	clearRatTarget(position, "level_eight_interrupt");
+	clearNavigation();
+	pendingLootItemId = 0;
+	pendingDiscardItemId = 0;
+	expectedCorpseItemId = 0;
+	expectedCorpseLootable = false;
+	player.closeContainer(corpseContainerId);
+	setStage(ScenarioStage::Traverse, position);
+	progressionObjective = ProgressionObjective::None;
+	serviceStage = ServiceStage::Discover;
+
+	DeparturePlan plan;
+	std::deque<PlayerBotNavigationStep> route;
+	const bool withinOracleLevelRange = player.getLevel() <= oracleMaximumLevel;
+	const bool found = withinOracleLevelRange && findOracleDeparture(player, position, plan, route);
+	const GoalCandidate candidate{TopLevelGoal::Departure, found, found ? oracleDepartureUtility : 0,
+	                              !withinOracleLevelRange ? "above_maximum_level" :
+	                              found ? "oracle_reachable" : "oracle_unreachable"};
+	emitGoalCandidate(player, candidate, position, decisionReason, nullptr, found ? &plan : nullptr);
+	if (!found) {
+		emit("goal_selection", position,
+		     "\"decision_id\":" + std::to_string(goalDecisionId) + ",\"decision_reason\":" +
+		         jsonString(decisionReason) + ",\"from_goal\":" + jsonString(topLevelGoalName(previousGoal)) +
+		         ",\"to_goal\":\"oracle_departure\",\"result\":\"failed\",\"reason\":" +
+		         jsonString(candidate.reason) + ",\"forced\":true,\"level\":" + std::to_string(player.getLevel()) +
+		         ",\"player_vocation_id\":" + std::to_string(player.getVocation()->getId()) +
+		         ",\"vocation_id\":" + std::to_string(oracleVocationId));
+		stop("oracle_departure_unavailable", position);
+		return false;
+	}
+
+	activeGoal = TopLevelGoal::Departure;
+	emit("goal_selection", position,
+	     "\"decision_id\":" + std::to_string(goalDecisionId) + ",\"decision_reason\":" +
+	         jsonString(decisionReason) + ",\"from_goal\":" + jsonString(topLevelGoalName(previousGoal)) +
+	         ",\"to_goal\":\"oracle_departure\",\"utility\":" + std::to_string(oracleDepartureUtility) +
+	         ",\"reason\":\"forced_level_eight_departure\",\"forced\":true,\"level\":" +
+	         std::to_string(player.getLevel()) + ",\"player_vocation_id\":" +
+	         std::to_string(player.getVocation()->getId()) + ",\"npc_id\":" + std::to_string(plan.npcId) +
+	         ",\"town_id\":" + std::to_string(oracleTownId) + ",\"vocation_id\":" +
+	         std::to_string(oracleVocationId));
+	beginOracleDeparture(player, position, std::move(plan), std::move(route));
+	return true;
 }
 
 void PlayerBotController::beginOracleDeparture(Player& player, const Position& position, DeparturePlan plan,

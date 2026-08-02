@@ -242,7 +242,7 @@ function Assert-CycleEvents {
 }
 
 function Assert-OracleDepartureEvents {
-    param([string]$Logs, [switch]$Restart)
+    param([string]$Logs, [switch]$Restart, [switch]$InterruptedByRestart)
 
     $events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
     if ($Restart) {
@@ -273,9 +273,71 @@ function Assert-OracleDepartureEvents {
     $stopped = @($events | Where-Object {
         $_.event -eq "state_transition" -and $_.to -eq "stopped"
     })
+    $wrongStoppedCount = if ($InterruptedByRestart) { $stopped.Count -lt 1 } else { $stopped.Count -ne 1 }
     if ($candidate.Count -lt 1 -or $selection.Count -lt 1 -or $result.Count -ne 1 -or
-        $goalResult.Count -ne 1 -or $stopped.Count -ne 1) {
-        throw "The bot did not complete and verify the selected Oracle departure."
+        $goalResult.Count -ne 1 -or $wrongStoppedCount) {
+        throw "The bot did not complete and verify the selected Oracle departure: candidate=$($candidate.Count), selection=$($selection.Count), result=$($result.Count), goalResult=$($goalResult.Count), stopped=$($stopped.Count)."
+    }
+}
+
+function Assert-OracleLevelEightInterruptEvents {
+    param([string]$Logs, [switch]$Recovery)
+
+    $events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
+    $selection = @($events | Where-Object {
+        $_.event -eq "goal_selection" -and $_.to_goal -eq "oracle_departure" -and $_.forced -eq $true -and
+        $_.level -eq 8 -and $_.player_vocation_id -eq 0
+    })
+    $selectionIndex = -1
+    for ($index = 0; $index -lt $events.Count; $index++) {
+        if ($events[$index].event -eq "goal_selection" -and $events[$index].to_goal -eq "oracle_departure" -and
+            $events[$index].forced -eq $true) {
+            $selectionIndex = $index
+            break
+        }
+    }
+    $postInterrupt = if ($selectionIndex -ge 0 -and $selectionIndex + 1 -lt $events.Count) {
+        @($events[($selectionIndex + 1)..($events.Count - 1)])
+    } else {
+        @()
+    }
+    $huntAfterInterrupt = @($postInterrupt | Where-Object {
+        ($_.event -eq "goal_selection" -and $_.to_goal -eq "hunt") -or
+        ($_.event -eq "action_result" -and $_.action -in @("hunt_cycle", "hunt_waypoint", "loot")) -or
+        ($_.event -eq "target_changed" -and $_.reason -eq "visible_monster")
+    })
+    if ($Recovery) {
+        $restored = @($events | Where-Object {
+            $_.event -eq "lifecycle" -and $_.status -eq "online" -and $_.objective -eq "oracle_departure"
+        })
+        $healed = @($events | Where-Object {
+            $_.event -eq "action_result" -and $_.action -eq "heal" -and $_.result -eq "success"
+        })
+        if ($restored.Count -lt 1 -or $selection.Count -lt 1 -or $healed.Count -lt 1 -or
+            $huntAfterInterrupt.Count -ne 0) {
+            throw "The restored level-8 player did not remain committed to Oracle departure."
+        }
+        return
+    }
+
+    $combat = @($events | Where-Object {
+        $_.event -eq "target_changed" -and $_.target_name -eq "Playerbot Level Eight Target"
+    })
+    $interruptedHunt = @($events | Where-Object {
+        $_.event -eq "goal_result" -and $_.goal -eq "hunt" -and $_.result -eq "interrupted" -and
+        $_.reason -eq "level_eight_interrupt"
+    })
+    $loot = @($events | Where-Object { $_.event -eq "action_result" -and $_.action -eq "loot" })
+    $defensiveStart = @($events | Where-Object {
+        $_.event -eq "action_result" -and $_.action -eq "defensive_combat" -and $_.result -eq "started"
+    })
+    $defensiveComplete = @($events | Where-Object {
+        $_.event -eq "action_result" -and $_.action -eq "defensive_combat" -and $_.result -eq "success"
+    })
+    if ($combat.Count -lt 1 -or $interruptedHunt.Count -ne 1 -or $selection.Count -ne 1 -or
+        $loot.Count -ne 0 -or $defensiveStart.Count -lt 1 -or $defensiveComplete.Count -lt 1 -or
+        $huntAfterInterrupt.Count -ne 0) {
+        throw "Level 8 did not interrupt combat, looting, and hunting for Oracle departure."
     }
 }
 
@@ -966,6 +1028,31 @@ try {
             Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST ORACLE_DEPARTURE_RESTART_PASS' | Out-Null
             $restartLogs = Wait-ForLog -Pattern '"objective":"departure_complete"'
             Assert-OracleDepartureEvents -Logs $restartLogs -Restart
+        }
+
+        Invoke-Scenario -Name "oracle_level_eight_interrupt" -DefaultTimeoutSeconds 180 -Body {
+            Invoke-Compose down --volumes --remove-orphans
+            $env:PLAYERBOT_GAMEPLAY_MODE = "departure_interrupt"
+            $env:PLAYERBOT_HUNT_DURATION_SECONDS = "900"
+            Invoke-Compose up --detach
+            Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST ORACLE_LEVEL_EIGHT_INTERRUPT_START' | Out-Null
+            $interruptLogs = Wait-ForLog -Pattern '"action":"oracle_departure","result":"success"'
+            Assert-OracleDepartureEvents -Logs $interruptLogs
+            Assert-OracleLevelEightInterruptEvents -Logs $interruptLogs
+        }
+
+        Invoke-Scenario -Name "oracle_level_eight_recovery" -DefaultTimeoutSeconds 180 -Body {
+            Invoke-Compose down --volumes --remove-orphans
+            $env:PLAYERBOT_GAMEPLAY_MODE = "departure_recovery"
+            $env:PLAYERBOT_HUNT_DURATION_SECONDS = "900"
+            Invoke-Compose up --detach
+            Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST ORACLE_LEVEL_EIGHT_RECOVERY_PREPARED' | Out-Null
+            Invoke-Compose stop server
+            Invoke-Compose up --detach server
+            Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST ORACLE_LEVEL_EIGHT_RECOVERY_START' | Out-Null
+            $recoveryLogs = Wait-ForLog -Pattern '"action":"oracle_departure","result":"success"'
+            Assert-OracleDepartureEvents -Logs $recoveryLogs -InterruptedByRestart
+            Assert-OracleLevelEightInterruptEvents -Logs $recoveryLogs -Recovery
         }
     }
 

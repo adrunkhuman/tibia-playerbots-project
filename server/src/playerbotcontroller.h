@@ -441,9 +441,11 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		                      std::deque<PlayerBotNavigationStep>& rewardSteps);
 
 		bool hasCompletedRookgaardDeparture(const Player& player) const;
+		bool requiresRookgaardDeparture(const Player& player) const;
 
 		bool findOracleDeparture(Player& player, const Position& position, DeparturePlan& plan,
 		                         std::deque<PlayerBotNavigationStep>& departureSteps);
+		bool forceOracleDeparture(Player& player, const Position& position, const char* decisionReason);
 
 		void beginOracleDeparture(Player& player, const Position& position, DeparturePlan plan,
 		                          std::deque<PlayerBotNavigationStep> departureSteps);
