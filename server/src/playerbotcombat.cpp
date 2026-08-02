@@ -818,7 +818,21 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 	}
 
 	if (cyclePhase == CyclePhase::ReturnToDepot) {
-		if (!processNavigation(player, currentPosition, fakeDepotPosition)) {
+		if (testPolicy.fixedFixtureRoute) {
+			if (!processNavigation(player, currentPosition, fakeDepotPosition)) {
+				return;
+			}
+			setCyclePhase(CyclePhase::DepositLoot, currentPosition, "fixture_depot_reached");
+			processFixtureDeposit(player, currentPosition);
+			return;
+		}
+		if (!discoverDepot(*player, currentPosition)) {
+			return;
+		}
+		if (pauseDepotFixtureForRestart(*player, DepotRestartCheckpoint::Approach, currentPosition)) {
+			return;
+		}
+		if (!processNavigation(player, currentPosition, depotApproachPosition)) {
 			return;
 		}
 		setCyclePhase(CyclePhase::DepositLoot, currentPosition, "depot_reached");
@@ -827,10 +841,22 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 	}
 
 	if (cyclePhase == CyclePhase::DepositLoot) {
-		if (currentPosition != fakeDepotPosition) {
+		if (testPolicy.fixedFixtureRoute) {
+			if (currentPosition != fakeDepotPosition) {
+				setCyclePhase(CyclePhase::ReturnToDepot, currentPosition, "fixture_displaced_during_deposit");
+				clearNavigation();
+				return;
+			}
+			processFixtureDeposit(player, currentPosition);
+			return;
+		}
+		if (!discoverDepot(*player, currentPosition)) {
+			return;
+		}
+		if (!Position::areInRange<1, 1, 0>(currentPosition, depotLockerPosition)) {
 			setCyclePhase(CyclePhase::ReturnToDepot, currentPosition, "displaced_during_deposit");
 			clearNavigation();
-			if (!processNavigation(player, currentPosition, fakeDepotPosition)) {
+			if (!processNavigation(player, currentPosition, depotApproachPosition)) {
 				return;
 			}
 			setCyclePhase(CyclePhase::DepositLoot, currentPosition, "depot_reached");

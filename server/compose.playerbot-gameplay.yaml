@@ -2,6 +2,8 @@ services:
   server:
     environment:
       PLAYERBOT_GAMEPLAY_MODE: "${PLAYERBOT_GAMEPLAY_MODE:-cycle}"
+      PLAYERBOT_DEPOT_RESTART_PHASE: "${PLAYERBOT_DEPOT_RESTART_PHASE:-}"
+      PLAYERBOT_DEPOT_MOVE_CASE: "${PLAYERBOT_DEPOT_MOVE_CASE:-normal}"
     volumes:
       - ./tests/playerbot-gameplay:/app/data/scripts/playerbot-gameplay:ro
       - ./tests/playerbot-monsters/corpse.lua:/app/data/monster/lua/playerbot_corpse_monsters.lua:ro

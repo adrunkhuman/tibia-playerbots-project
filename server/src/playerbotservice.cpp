@@ -12,6 +12,9 @@
 
 #include "playerbotcontroller.h"
 
+#include "depotchest.h"
+#include "depotlocker.h"
+
 // NPC service discovery, shopping, banking, and depot handling.
 using namespace playerbot;
 
@@ -50,14 +53,18 @@ void PlayerBotController::beginReturn(Player* player, const Position& position, 
 	clearNavigation();
 	pendingLootItemId = 0;
 	pendingDiscardItemId = 0;
+	pendingDepositItemId = 0;
+	depotAttempts = 0;
+	depotId = 0;
+	depotLockerPosition = Position();
+	depotApproachPosition = Position();
+	depotStage = DepotStage::Discover;
 	player->closeContainer(corpseContainerId);
 	setStage(ScenarioStage::Traverse, position);
 	setCyclePhase(CyclePhase::ReturnToDepot, position, reason);
 	std::ostringstream fields;
 	fields << "\"action\":\"return\",\"result\":\"started\",\"reason\":" << jsonString(reason)
-	       << ",\"previous_target_id\":" << (previousTarget == 0 ? "null" : std::to_string(previousTarget))
-	       << ",\"destination\":{\"x\":" << fakeDepotPosition.x << ",\"y\":" << fakeDepotPosition.y
-	       << ",\"z\":" << static_cast<uint16_t>(fakeDepotPosition.z) << '}';
+	       << ",\"previous_target_id\":" << (previousTarget == 0 ? "null" : std::to_string(previousTarget));
 	emit("action_result", position, fields.str());
 	schedule(navigationInterval);
 }
@@ -615,22 +622,297 @@ void PlayerBotController::processService(Player* player, const Position& current
 
 bool PlayerBotController::isProtectedDepositItem(const Item& item) const
 {
-	return isProtectedInventoryItem(item);
+	const ItemType& type = Item::items[item.getID()];
+	return type.isContainer() || isCombatEquipment(item) || item.getID() == ropeItemId || item.getID() == 2554 ||
+	       item.getWorth() != 0 || itemSellValues.find(item.getID()) == itemSellValues.end();
 }
 
-bool PlayerBotController::findDepositableItem(Container* container, Container*& source, Item*& depositItem) const
+bool PlayerBotController::findDepositableItem(const Player& player, Container* container, Container*& source,
+                                              Item*& depositItem, uint8_t& count) const
 {
 	for (Item* item : container->getItemList()) {
-		if (!isProtectedDepositItem(*item)) {
+		if (Container* nested = item->getContainer(); nested &&
+		    findDepositableItem(player, nested, source, depositItem, count)) {
+			return true;
+		}
+		if (isProtectedDepositItem(*item)) {
+			continue;
+		}
+		const uint32_t carried = getInventoryItemCount(player, item->getID());
+		const uint32_t reserve = protectedItemReserve(item->getID());
+		const uint32_t movable = item->isStackable() && carried > reserve ?
+			std::min<uint32_t>(item->getItemCount(), carried - reserve) : (carried > reserve ? 1 : 0);
+		if (movable != 0 && movable <= UINT8_MAX) {
 			source = container;
 			depositItem = item;
+			count = static_cast<uint8_t>(movable);
 			return true;
 		}
 	}
 	return false;
 }
 
-void PlayerBotController::processDeposit(Player* player, const Position& currentPosition)
+bool PlayerBotController::discoverDepot(Player& player, const Position& currentPosition)
+{
+	Town* town = player.getTown();
+	if (!town || town->getID() > UINT16_MAX) {
+		stop("depot_town_unavailable", currentPosition);
+		return false;
+	}
+	const uint16_t requestedDepotId = static_cast<uint16_t>(town->getID());
+	if (depotId == requestedDepotId && depotApproachPosition != Position()) {
+		Tile* tile = g_game.map.getTile(depotLockerPosition);
+		TileItemVector* items = tile ? tile->getItemList() : nullptr;
+		if (items) {
+			for (Item* item : *items) {
+				Container* container = item->getContainer();
+				if (container && container->getDepotLocker() && container->getDepotLocker()->getDepotId() == depotId) {
+					return true;
+				}
+			}
+		}
+	}
+
+	depotId = requestedDepotId;
+	depotLockerPosition = Position();
+	depotApproachPosition = Position();
+	for (const Position& lockerPosition : g_game.map.getDepotLockerPositions(depotId)) {
+		Tile* lockerTile = g_game.map.getTile(lockerPosition);
+		TileItemVector* lockerItems = lockerTile ? lockerTile->getItemList() : nullptr;
+		if (!lockerItems) {
+			continue;
+		}
+		uint16_t lockerItemId = 0;
+		for (Item* item : *lockerItems) {
+			Container* container = item->getContainer();
+			if (container && container->getDepotLocker() && container->getDepotLocker()->getDepotId() == depotId) {
+				lockerItemId = item->getID();
+				break;
+			}
+		}
+		if (lockerItemId == 0) {
+			continue;
+		}
+		for (int32_t x = -1; x <= 1; ++x) {
+			for (int32_t y = -1; y <= 1; ++y) {
+				if (x == 0 && y == 0) {
+					continue;
+				}
+				const Position approach(lockerPosition.x + x, lockerPosition.y + y, lockerPosition.z);
+				Tile* approachTile = g_game.map.getTile(approach);
+				if (!approachTile || approachTile->queryAdd(0, player, 1, FLAG_IGNOREBLOCKCREATURE) != RETURNVALUE_NOERROR) {
+					continue;
+				}
+				std::deque<PlayerBotNavigationStep> steps;
+				uint64_t expandedNodes = 0;
+				++counters.pathfindingCalls;
+				const auto startedAt = std::chrono::steady_clock::now();
+				const PlayerBotNavigationResult result = navigator.plan(player, approach, {}, steps, expandedNodes);
+				counters.pathfindingTimeUs += std::chrono::duration_cast<std::chrono::microseconds>(
+					std::chrono::steady_clock::now() - startedAt).count();
+				if (result != PlayerBotNavigationResult::Reached) {
+					++counters.pathfindingFailures;
+					continue;
+				}
+				depotLockerPosition = lockerPosition;
+				depotApproachPosition = approach;
+				depotStage = DepotStage::Approach;
+				std::ostringstream fields;
+				fields << "\"action\":\"depot_discover\",\"result\":\"success\",\"depot_id\":" << depotId
+				       << ",\"locker_item_id\":" << lockerItemId << ",\"locker\":{\"x\":" << lockerPosition.x
+				       << ",\"y\":" << lockerPosition.y << ",\"z\":" << static_cast<uint16_t>(lockerPosition.z)
+				       << "},\"approach\":{\"x\":" << approach.x << ",\"y\":" << approach.y
+				       << ",\"z\":" << static_cast<uint16_t>(approach.z) << "},\"expanded_nodes\":" << expandedNodes;
+				emit("action_result", currentPosition, fields.str());
+				return true;
+			}
+		}
+	}
+	if (++depotAttempts >= maximumDepotAttempts) {
+		logActionFailure("depot_discover", "locker_not_reachable", currentPosition);
+		stop("depot_unavailable", currentPosition);
+	} else {
+		emit("action_result", currentPosition, "\"action\":\"depot_discover\",\"result\":\"retry\",\"depot_id\":" +
+		     std::to_string(depotId) + ",\"retry\":" + std::to_string(depotAttempts));
+		schedule(blockedRouteRetryInterval);
+	}
+	return false;
+}
+
+bool PlayerBotController::openContainer(Player& player, Container& container, uint8_t containerId, const Position& currentPosition)
+{
+	if (player.getContainerID(&container) >= 0) {
+		return true;
+	}
+	Container* parent = dynamic_cast<Container*>(container.getParent());
+	if (parent && player.getContainerID(parent) < 0) {
+		return openContainer(player, *parent, containerId, currentPosition);
+	}
+	if (!player.canDoAction()) {
+		schedule(navigationDecisionDelay(player));
+		return false;
+	}
+	Position fromPosition(0xFFFF, CONST_SLOT_BACKPACK, 0);
+	uint8_t fromIndex = 0;
+	if (parent) {
+		const int8_t parentId = player.getContainerID(parent);
+		const int32_t index = parentId < 0 ? -1 : parent->getThingIndex(&container);
+		if (index < 0 || index > UINT8_MAX) {
+			logActionFailure("depot_open_source", "container_parent_unavailable", currentPosition);
+			return false;
+		}
+		fromPosition = Position(0xFFFF, 0x40 | static_cast<uint8_t>(parentId), static_cast<uint8_t>(index));
+		fromIndex = static_cast<uint8_t>(index);
+		if (parentId == containerId) {
+			--containerId;
+		}
+	} else if (player.getInventoryItem(CONST_SLOT_BACKPACK) != &container) {
+		logActionFailure("depot_open_source", "container_not_carried", currentPosition);
+		return false;
+	}
+	player.closeContainer(containerId);
+	++counters.actionsAttempted;
+	g_game.playerUseItem(playerId, fromPosition, fromIndex, containerId, container.getClientID());
+	schedule(navigationDecisionDelay(player));
+	return false;
+}
+
+bool PlayerBotController::openDepotLocker(Player& player, const Position& currentPosition)
+{
+	Container* opened = player.getContainerByID(depotLockerContainerId);
+	if (opened && opened->getDepotLocker() && opened->getDepotLocker()->getDepotId() == depotId) {
+		depotAttempts = 0;
+		depotStage = DepotStage::OpenChest;
+		return true;
+	}
+	Tile* tile = g_game.map.getTile(depotLockerPosition);
+	TileItemVector* items = tile ? tile->getItemList() : nullptr;
+	if (!items) {
+		return false;
+	}
+	if (!player.canDoAction()) {
+		schedule(navigationDecisionDelay(player));
+		return false;
+	}
+	for (Item* item : *items) {
+		Container* container = item->getContainer();
+		if (!container || !container->getDepotLocker() || container->getDepotLocker()->getDepotId() != depotId) {
+			continue;
+		}
+		const int32_t stackPosition = tile->getThingIndex(item);
+		if (stackPosition < 0 || stackPosition > UINT8_MAX) {
+			break;
+		}
+		if (depotAttempts >= maximumDepotAttempts) {
+			logActionFailure("depot_open_locker", "open_not_verified", currentPosition);
+			stop("depot_locker_open_failed", currentPosition);
+			return false;
+		}
+		++depotAttempts;
+		player.closeContainer(depotLockerContainerId);
+		++counters.actionsAttempted;
+		g_game.playerUseItem(playerId, depotLockerPosition, static_cast<uint8_t>(stackPosition), depotLockerContainerId,
+		                     item->getClientID());
+		emit("action_result", currentPosition, "\"action\":\"depot_open_locker\",\"result\":\"requested\",\"depot_id\":" +
+		     std::to_string(depotId) + ",\"container_id\":" + std::to_string(depotLockerContainerId) +
+		     ",\"attempt\":" + std::to_string(depotAttempts));
+		if (pauseDepotFixtureForRestart(player, DepotRestartCheckpoint::Locker, currentPosition)) {
+			return false;
+		}
+		schedule(navigationDecisionDelay(player));
+		return false;
+	}
+	logActionFailure("depot_open_locker", "locker_identity_changed", currentPosition);
+	stop("depot_locker_identity_changed", currentPosition);
+	return false;
+}
+
+bool PlayerBotController::openDepotChest(Player& player, const Position& currentPosition)
+{
+	Container* locker = player.getContainerByID(depotLockerContainerId);
+	if (!locker || !locker->getDepotLocker() || locker->getDepotLocker()->getDepotId() != depotId) {
+		depotStage = DepotStage::OpenLocker;
+		return false;
+	}
+	DepotChest* chest = player.getDepotChest(depotId, false);
+	if (!chest) {
+		logActionFailure("depot_open_chest", "player_chest_missing", currentPosition);
+		stop("depot_chest_missing", currentPosition);
+		return false;
+	}
+	if (testPolicy.depotMoveFixture == DepotMoveFixture::Rejected) {
+		chest->setMaxDepotItems(chest->getItemHoldingCount());
+	}
+	if (player.getContainerByID(depotChestContainerId) == chest) {
+		depotAttempts = 0;
+		depotStage = DepotStage::Deposit;
+		return true;
+	}
+	const int32_t index = locker->getThingIndex(chest);
+	if (index < 0 || index > UINT8_MAX) {
+		logActionFailure("depot_open_chest", "chest_not_in_locker", currentPosition);
+		stop("depot_chest_not_in_locker", currentPosition);
+		return false;
+	}
+	if (!player.canDoAction()) {
+		schedule(navigationDecisionDelay(player));
+		return false;
+	}
+	if (depotAttempts >= maximumDepotAttempts) {
+		logActionFailure("depot_open_chest", "open_not_verified", currentPosition);
+		stop("depot_chest_open_failed", currentPosition);
+		return false;
+	}
+	++depotAttempts;
+	player.closeContainer(depotChestContainerId);
+	++counters.actionsAttempted;
+	g_game.playerUseItem(playerId, Position(0xFFFF, 0x40 | depotLockerContainerId, static_cast<uint8_t>(index)),
+	                     static_cast<uint8_t>(index), depotChestContainerId, chest->getClientID());
+	emit("action_result", currentPosition, "\"action\":\"depot_open_chest\",\"result\":\"requested\",\"depot_id\":" +
+	     std::to_string(depotId) + ",\"container_id\":" + std::to_string(depotChestContainerId) +
+	     ",\"attempt\":" + std::to_string(depotAttempts));
+	if (pauseDepotFixtureForRestart(player, DepotRestartCheckpoint::Chest, currentPosition)) {
+		return false;
+	}
+	schedule(navigationDecisionDelay(player));
+	return false;
+}
+
+bool PlayerBotController::pauseDepotFixtureForRestart(Player& player, DepotRestartCheckpoint checkpoint,
+                                                       const Position& currentPosition)
+{
+	if (testPolicy.depotRestartCheckpoint != checkpoint) {
+		return false;
+	}
+	int32_t consumed = -1;
+	if (player.getStorageValue(depotRestartCheckpointStorage, consumed) && consumed == 1) {
+		return false;
+	}
+	player.addStorageValue(depotRestartCheckpointStorage, 1);
+	const char* phase = checkpoint == DepotRestartCheckpoint::Approach ? "approach" :
+	                    checkpoint == DepotRestartCheckpoint::Locker ? "locker" :
+	                    checkpoint == DepotRestartCheckpoint::Chest ? "chest" :
+	                    checkpoint == DepotRestartCheckpoint::Deposit ? "deposit" : "depart";
+	emit("action_result", currentPosition,
+	     "\"action\":\"depot_restart_checkpoint\",\"result\":\"paused\",\"phase\":" + jsonString(phase));
+	setStage(ScenarioStage::Stopped, currentPosition);
+	return true;
+}
+
+uint8_t PlayerBotController::containerDestinationIndex(const Container& container, const Item& item) const
+{
+	if (item.isStackable()) {
+		const ItemDeque& items = container.getItemList();
+		for (size_t index = 0; index < items.size(); ++index) {
+			if (items[index]->getID() == item.getID() && items[index]->getItemCount() < 100) {
+				return static_cast<uint8_t>(index);
+			}
+		}
+	}
+	return static_cast<uint8_t>(std::min<size_t>(container.size(), UINT8_MAX));
+}
+
+void PlayerBotController::processFixtureDeposit(Player* player, const Position& currentPosition)
 {
 	Item* backpackItem = player->getInventoryItem(CONST_SLOT_BACKPACK);
 	Container* backpack = backpackItem ? backpackItem->getContainer() : nullptr;
@@ -642,43 +924,160 @@ void PlayerBotController::processDeposit(Player* player, const Position& current
 	if (pendingDepositItemId != 0) {
 		const uint32_t destinationCount = destination->getItemTypeCount(pendingDepositItemId);
 		if (destinationCount <= pendingDepositDestinationCount) {
-			logActionFailure("deposit", "item_move_failed", currentPosition);
+			logActionFailure("deposit", "fixture_item_move_failed", currentPosition);
 			stop("fake_depot_rejected_loot", currentPosition);
 			return;
 		}
-		std::ostringstream fields;
-		fields << "\"action\":\"deposit\",\"result\":\"success\",\"item_id\":" << pendingDepositItemId
-		       << ",\"count\":" << (destinationCount - pendingDepositDestinationCount);
-		emit("action_result", currentPosition, fields.str());
+		emit("action_result", currentPosition, "\"action\":\"deposit\",\"result\":\"success\",\"fixture\":true,\"item_id\":" +
+		     std::to_string(pendingDepositItemId) + ",\"count\":" + std::to_string(destinationCount - pendingDepositDestinationCount));
 		pendingDepositItemId = 0;
 	}
-
 	if (player->getContainerByID(backpackContainerId) != backpack) {
 		if (!player->canDoAction()) {
 			schedule(navigationDecisionDelay(*player));
 			return;
 		}
-		const int8_t existingContainerId = player->getContainerID(backpack);
-		if (existingContainerId >= 0) {
+		if (const int8_t existingContainerId = player->getContainerID(backpack); existingContainerId >= 0) {
 			player->closeContainer(static_cast<uint8_t>(existingContainerId));
 		}
-		const Position backpackPosition(0xFFFF, CONST_SLOT_BACKPACK, 0);
 		++counters.actionsAttempted;
-		g_game.playerUseItem(playerId, backpackPosition, 0, backpackContainerId, backpack->getClientID());
+		g_game.playerUseItem(playerId, Position(0xFFFF, CONST_SLOT_BACKPACK, 0), 0, backpackContainerId, backpack->getClientID());
 		schedule(navigationDecisionDelay(*player));
+		return;
+	}
+	Container* source = nullptr;
+	Item* depositItem = nullptr;
+	for (Item* item : backpack->getItemList()) {
+		if (item->getContainer() || !isProtectedInventoryItem(*item)) {
+			source = backpack;
+			depositItem = item;
+			break;
+		}
+	}
+	if (!depositItem) {
+		if (player->getFreeCapacity() < returnCapacityThreshold) {
+			stop("depot_capacity_not_recovered", currentPosition);
+			return;
+		}
+		emit("action_result", currentPosition, "\"action\":\"deposit\",\"result\":\"complete\",\"fixture\":true,\"cycle\":" +
+		     std::to_string(completedCycles));
+		if (testPolicy.progressionEnabled) {
+			selectTopLevelGoal(*player, currentPosition, "fixture_deposit_complete");
+		} else {
+			startHunt(player, currentPosition, "fixture_deposit_complete");
+		}
+		schedule(navigationInterval);
+		return;
+	}
+	const ItemDeque& sourceItems = source->getItemList();
+	auto sourceItem = std::find(sourceItems.begin(), sourceItems.end(), depositItem);
+	if (sourceItem == sourceItems.end() || !player->canDoAction()) {
+		schedule(navigationDecisionDelay(*player));
+		return;
+	}
+	const uint8_t sourceIndex = static_cast<uint8_t>(std::distance(sourceItems.begin(), sourceItem));
+	pendingDepositItemId = depositItem->getID();
+	pendingDepositDestinationCount = destination->getItemTypeCount(pendingDepositItemId);
+	++counters.actionsAttempted;
+	g_game.playerMoveItem(player, Position(0xFFFF, 0x40 | backpackContainerId, sourceIndex), depositItem->getClientID(), sourceIndex,
+	                      fakeDepotTilePosition, static_cast<uint8_t>(depositItem->getItemCount()), depositItem, destination);
+	schedule(navigationDecisionDelay(*player));
+}
+
+void PlayerBotController::processDeposit(Player* player, const Position& currentPosition)
+{
+	Item* backpackItem = player->getInventoryItem(CONST_SLOT_BACKPACK);
+	Container* backpack = backpackItem ? backpackItem->getContainer() : nullptr;
+	if (!backpack) {
+		stop("depot_backpack_unavailable", currentPosition);
+		return;
+	}
+	if (pendingDepositItemId != 0) {
+		Container* chest = player->getContainerByID(depotChestContainerId);
+		if (!chest) {
+			depotStage = DepotStage::OpenChest;
+			schedule(navigationDecisionDelay(*player));
+			return;
+		}
+		const uint32_t inventoryAfter = getInventoryItemCount(*player, pendingDepositItemId);
+		const uint32_t depotAfter = chest->getItemTypeCount(pendingDepositItemId);
+		const uint32_t movedFromInventory = pendingDepositInventoryCount - std::min(pendingDepositInventoryCount, inventoryAfter);
+		const uint32_t movedToDepot = depotAfter - std::min(pendingDepositDestinationCount, depotAfter);
+		if (movedFromInventory != 0 && movedFromInventory == movedToDepot) {
+			std::ostringstream fields;
+			fields << "\"action\":\"deposit\",\"result\":" << jsonString(movedFromInventory == pendingDepositRequestedCount ? "success" : "partial")
+			       << ",\"policy\":\"known_loot\",\"depot_id\":" << depotId << ",\"container_id\":"
+			       << static_cast<uint32_t>(depotChestContainerId) << ",\"item_id\":" << pendingDepositItemId
+			       << ",\"requested\":" << static_cast<uint32_t>(pendingDepositRequestedCount)
+			       << ",\"verified\":" << movedFromInventory << ",\"inventory_before\":" << pendingDepositInventoryCount
+			       << ",\"inventory_after\":" << inventoryAfter << ",\"depot_before\":" << pendingDepositDestinationCount
+			       << ",\"depot_after\":" << depotAfter;
+			emit("action_result", currentPosition, fields.str());
+			pendingDepositItemId = 0;
+			depotAttempts = 0;
+			depotStage = DepotStage::Deposit;
+		} else if (movedFromInventory != 0 || movedToDepot != 0) {
+			logActionFailure("deposit", "move_delta_mismatch", currentPosition);
+			stop("depot_move_delta_mismatch", currentPosition);
+			return;
+		} else if (++depotAttempts >= maximumDepotAttempts) {
+			emit("action_result", currentPosition, "\"action\":\"deposit\",\"result\":\"failed\",\"reason\":\"no_slot_or_move_rejected\",\"policy\":\"known_loot\",\"depot_id\":" +
+			     std::to_string(depotId) + ",\"container_id\":" + std::to_string(depotChestContainerId) +
+			     ",\"item_id\":" + std::to_string(pendingDepositItemId) + ",\"requested\":" +
+			     std::to_string(pendingDepositRequestedCount) + ",\"verified\":0,\"inventory_before\":" +
+			     std::to_string(pendingDepositInventoryCount) + ",\"inventory_after\":" + std::to_string(inventoryAfter) +
+			     ",\"depot_before\":" + std::to_string(pendingDepositDestinationCount) + ",\"depot_after\":" +
+			     std::to_string(depotAfter) + ",\"retry\":" + std::to_string(depotAttempts));
+			stop("depot_no_slot_or_move_rejected", currentPosition);
+			return;
+		} else {
+			emit("action_result", currentPosition, "\"action\":\"deposit\",\"result\":\"retry\",\"reason\":\"not_verified\",\"policy\":\"known_loot\",\"depot_id\":" +
+			     std::to_string(depotId) + ",\"container_id\":" + std::to_string(depotChestContainerId) +
+			     ",\"item_id\":" + std::to_string(pendingDepositItemId) + ",\"requested\":" +
+			     std::to_string(pendingDepositRequestedCount) + ",\"verified\":0,\"inventory_before\":" +
+			     std::to_string(pendingDepositInventoryCount) + ",\"inventory_after\":" + std::to_string(inventoryAfter) +
+			     ",\"depot_before\":" + std::to_string(pendingDepositDestinationCount) + ",\"depot_after\":" +
+			     std::to_string(depotAfter) + ",\"retry\":" + std::to_string(depotAttempts));
+			pendingDepositItemId = 0;
+			schedule(navigationDecisionDelay(*player));
+			return;
+		}
+	}
+
+	if (depotStage == DepotStage::Approach || depotStage == DepotStage::Discover) {
+		depotStage = DepotStage::OpenLocker;
+	}
+	if (depotStage == DepotStage::OpenLocker && !openDepotLocker(*player, currentPosition)) {
+		return;
+	}
+	if (depotStage == DepotStage::OpenChest && !openDepotChest(*player, currentPosition)) {
+		return;
+	}
+	Container* chest = player->getContainerByID(depotChestContainerId);
+	if (!chest || player->getDepotChest(depotId, false) != chest) {
+		depotStage = DepotStage::OpenChest;
 		return;
 	}
 
 	Container* source = nullptr;
 	Item* depositItem = nullptr;
-	if (!findDepositableItem(backpack, source, depositItem)) {
+	uint8_t count = 0;
+	refreshItemValues();
+	if (!findDepositableItem(*player, backpack, source, depositItem, count)) {
 		if (player->getFreeCapacity() < returnCapacityThreshold) {
 			stop("depot_capacity_not_recovered", currentPosition);
 			return;
 		}
 		std::ostringstream fields;
-		fields << "\"action\":\"deposit\",\"result\":\"complete\",\"cycle\":" << completedCycles;
+		fields << "\"action\":\"deposit\",\"result\":\"complete\",\"depot_id\":" << depotId
+		       << ",\"container_id\":" << static_cast<uint32_t>(depotChestContainerId) << ",\"cycle\":" << completedCycles;
 		emit("action_result", currentPosition, fields.str());
+		player->closeContainer(depotChestContainerId);
+		player->closeContainer(depotLockerContainerId);
+		depotStage = DepotStage::Depart;
+		if (pauseDepotFixtureForRestart(*player, DepotRestartCheckpoint::Depart, currentPosition)) {
+			return;
+		}
 		if (testPolicy.progressionEnabled) {
 			emit("goal_result", currentPosition,
 			     "\"decision_id\":" + std::to_string(goalDecisionId) +
@@ -691,12 +1090,15 @@ void PlayerBotController::processDeposit(Player* player, const Position& current
 		return;
 	}
 
+	if (!openContainer(*player, *source, depotSourceContainerId, currentPosition)) {
+		return;
+	}
 	const int8_t sourceContainerId = player->getContainerID(source);
 	const ItemDeque& sourceItems = source->getItemList();
 	auto sourceItem = std::find(sourceItems.begin(), sourceItems.end(), depositItem);
 	if (sourceContainerId < 0 || sourceItem == sourceItems.end() ||
 	    std::distance(sourceItems.begin(), sourceItem) > UINT8_MAX) {
-		stop("fake_depot_source_unavailable", currentPosition);
+		stop("depot_source_unavailable", currentPosition);
 		return;
 	}
 	if (!player->canDoAction()) {
@@ -705,12 +1107,24 @@ void PlayerBotController::processDeposit(Player* player, const Position& current
 	}
 
 	const uint8_t sourceIndex = static_cast<uint8_t>(std::distance(sourceItems.begin(), sourceItem));
-	const uint8_t count = static_cast<uint8_t>(depositItem->getItemCount());
 	const Position sourcePosition(0xFFFF, 0x40 | static_cast<uint8_t>(sourceContainerId), sourceIndex);
 	pendingDepositItemId = depositItem->getID();
-	pendingDepositDestinationCount = destination->getItemTypeCount(pendingDepositItemId);
+	pendingDepositRequestedCount = count;
+	pendingDepositInventoryCount = getInventoryItemCount(*player, pendingDepositItemId);
+	pendingDepositDestinationCount = chest->getItemTypeCount(pendingDepositItemId);
+	depotStage = DepotStage::VerifyMove;
+	const uint8_t submittedCount = testPolicy.depotMoveFixture == DepotMoveFixture::Partial && count > 1 ? count - 1 : count;
 	++counters.actionsAttempted;
 	g_game.playerMoveItem(player, sourcePosition, depositItem->getClientID(), sourceIndex,
-	                      fakeDepotTilePosition, count, depositItem, destination);
+	                      Position(0xFFFF, 0x40 | depotChestContainerId, containerDestinationIndex(*chest, *depositItem)),
+	                      submittedCount, depositItem, chest);
+	emit("action_result", currentPosition, "\"action\":\"deposit\",\"result\":\"requested\",\"policy\":\"known_loot\",\"depot_id\":" +
+	     std::to_string(depotId) + ",\"container_id\":" + std::to_string(depotChestContainerId) + ",\"item_id\":" +
+	     std::to_string(pendingDepositItemId) + ",\"requested\":" + std::to_string(count) + ",\"submitted\":" +
+	     std::to_string(submittedCount) + ",\"inventory_before\":" +
+	     std::to_string(pendingDepositInventoryCount) + ",\"depot_before\":" + std::to_string(pendingDepositDestinationCount));
+	if (pauseDepotFixtureForRestart(*player, DepotRestartCheckpoint::Deposit, currentPosition)) {
+		return;
+	}
 	schedule(navigationDecisionDelay(*player));
 }

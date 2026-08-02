@@ -43,11 +43,27 @@ const PlayerBotTestPolicy& playerbot::testPolicyFromEnvironment()
 		const bool fixedFixtureRoute = gameplayMode && std::strcmp(gameplayMode, "stamina_bonus") != 0 &&
 		                               std::strcmp(gameplayMode, "stamina_boundary") != 0 &&
 		                               std::strcmp(gameplayMode, "stamina_normal") != 0 &&
-		                               std::strcmp(gameplayMode, "hunt_planning") != 0;
+		                               std::strcmp(gameplayMode, "hunt_planning") != 0 &&
+		                               std::strcmp(gameplayMode, "depot") != 0;
+		const char* depotRestartPhase = std::getenv("PLAYERBOT_DEPOT_RESTART_PHASE");
+		const DepotRestartCheckpoint depotRestartCheckpoint = !depotRestartPhase ? DepotRestartCheckpoint::None :
+			std::strcmp(depotRestartPhase, "approach") == 0 ? DepotRestartCheckpoint::Approach :
+			std::strcmp(depotRestartPhase, "locker") == 0 ? DepotRestartCheckpoint::Locker :
+			std::strcmp(depotRestartPhase, "chest") == 0 ? DepotRestartCheckpoint::Chest :
+			std::strcmp(depotRestartPhase, "deposit") == 0 ? DepotRestartCheckpoint::Deposit :
+			std::strcmp(depotRestartPhase, "depart") == 0 ? DepotRestartCheckpoint::Depart :
+			DepotRestartCheckpoint::None;
+		const char* depotMoveCase = std::getenv("PLAYERBOT_DEPOT_MOVE_CASE");
+		const DepotMoveFixture depotMoveFixture = depotMoveCase && std::strcmp(depotMoveCase, "partial") == 0 ?
+			DepotMoveFixture::Partial : depotMoveCase && std::strcmp(depotMoveCase, "rejected") == 0 ?
+			DepotMoveFixture::Rejected : DepotMoveFixture::Normal;
 		return PlayerBotTestPolicy{
 			!regressionMode && (!gameplayMode || progressionMode),
 			startInHunt,
 			fixedFixtureRoute,
+			gameplayMode && std::strcmp(gameplayMode, "depot") == 0,
+			depotRestartCheckpoint,
+			depotMoveFixture,
 			gameplayMode && std::strcmp(gameplayMode, "hunt_planning") == 0,
 			gameplayMode && std::strcmp(gameplayMode, "hunt_planning") == 0,
 			gameplayMode && std::strcmp(gameplayMode, "hunt_planning") == 0,
@@ -92,6 +108,9 @@ void PlayerBotController::start(const Position& position, bool recovered, uint32
 	} else if (startInHunt) {
 		activeGoal = TopLevelGoal::Hunt;
 		startHunt(g_game.getPlayerByID(playerId), position, "focused_fixture");
+	} else if (testPolicy.depotFixture) {
+		activeGoal = TopLevelGoal::Service;
+		cyclePhase = CyclePhase::ReturnToDepot;
 	} else {
 		activeGoal = TopLevelGoal::Service;
 		cyclePhase = CyclePhase::Service;
@@ -622,6 +641,9 @@ bool PlayerBotController::processNavigation(Player* player, const Position& curr
 void PlayerBotController::navigate()
 {
 	DecisionTimer decisionTimer(*this);
+	if (g_game.getGameState() == GAME_STATE_SHUTDOWN) {
+		return;
+	}
 	if (deathObserved) {
 		stop("controlled_player_dead", lastPosition);
 		return;
