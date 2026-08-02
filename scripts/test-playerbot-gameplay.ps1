@@ -12,6 +12,7 @@ param(
 	[switch]$StaminaProjection,
     [switch]$HuntRegionPlanning,
 	[switch]$CombatReadiness,
+	[switch]$Depot,
 	[switch]$Focused,
 	[switch]$SkipBuild,
 	[switch]$KeepStack
@@ -27,6 +28,8 @@ $previousDuration = $env:PLAYERBOT_HUNT_DURATION_SECONDS
 $previousMode = $env:PLAYERBOT_GAMEPLAY_MODE
 $previousRelogDelay = $env:PLAYERBOT_RELOG_DELAY_SECONDS
 $previousMaximumDeaths = $env:PLAYERBOT_MAX_CONSECUTIVE_DEATHS
+$previousDepotRestartPhase = $env:PLAYERBOT_DEPOT_RESTART_PHASE
+$previousDepotMoveCase = $env:PLAYERBOT_DEPOT_MOVE_CASE
 $timeoutOverridden = $PSBoundParameters.ContainsKey("TimeoutSeconds")
 $timings = [ordered]@{}
 $currentWaitTimeoutSeconds = $TimeoutSeconds
@@ -57,6 +60,25 @@ function Get-OnlineBotCount {
         throw "Could not query Bot One's online state."
     }
     return [int]($output | Select-Object -Last 1)
+}
+
+function Invoke-DatabaseScalar {
+	param([string]$Query)
+
+	$output = & docker @composeArguments exec -T database mariadb --host=database --user=angelion --password=angelion --skip-column-names angelion -e $Query
+	if ($LASTEXITCODE -ne 0) {
+		throw "Database query failed."
+	}
+	return [int]($output | Select-Object -Last 1)
+}
+
+function Invoke-DatabaseCommand {
+	param([string]$Query)
+
+	& docker @composeArguments exec -T database mariadb --host=database --user=angelion --password=angelion angelion -e $Query
+	if ($LASTEXITCODE -ne 0) {
+		throw "Database command failed."
+	}
 }
 
 function Throw-WaitTimeout {
@@ -1015,12 +1037,78 @@ function Assert-CorpseEvents {
     }
 }
 
+function Assert-DepotEvents {
+	param([string]$Logs, [int]$ExpectedDepositedCount)
+
+	$events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
+	$discovery = @($events | Where-Object {
+		$_.event -eq "action_result" -and $_.action -eq "depot_discover" -and
+		$_.result -eq "success" -and $_.depot_id -eq 2 -and $_.expanded_nodes -ge 0
+	})
+	$locker = @($events | Where-Object {
+		$_.event -eq "action_result" -and $_.action -eq "depot_open_locker" -and
+		$_.result -eq "requested" -and $_.depot_id -eq 2 -and $_.container_id -eq 14
+	})
+	$chest = @($events | Where-Object {
+		$_.event -eq "action_result" -and $_.action -eq "depot_open_chest" -and
+		$_.result -eq "requested" -and $_.depot_id -eq 2 -and $_.container_id -eq 13
+	})
+	$verified = @($events | Where-Object {
+		$_.event -eq "action_result" -and $_.action -eq "deposit" -and
+		$_.result -eq "success" -and $_.policy -eq "known_loot" -and $_.depot_id -eq 2 -and
+		$_.container_id -eq 13 -and $_.item_id -eq 2684 -and $_.verified -gt 0 -and
+		$_.inventory_after -eq ($_.inventory_before - $_.verified) -and
+		$_.depot_after -eq ($_.depot_before + $_.verified)
+	})
+	$complete = @($events | Where-Object {
+		$_.event -eq "action_result" -and $_.action -eq "deposit" -and
+		$_.result -eq "complete" -and $_.depot_id -eq 2 -and $_.container_id -eq 13
+	})
+	$deposited = ($verified | Measure-Object -Property verified -Sum).Sum
+	$unsafeMoves = @($events | Where-Object {
+		$_.event -eq "action_result" -and $_.action -eq "deposit" -and
+		$_.item_id -in @(2050, 2120, 2554, 2382, 2467, 2666, 7618)
+	})
+	$terminal = @($events | Where-Object { $_.event -eq "terminal" })
+	if ($discovery.Count -lt 1 -or $locker.Count -lt 1 -or $chest.Count -lt 1 -or
+		$deposited -ne $ExpectedDepositedCount -or $complete.Count -lt 1 -or
+		$unsafeMoves.Count -ne 0 -or $terminal.Count -ne 0) {
+		throw "Real depot evidence was incomplete. discovery=$($discovery.Count), locker=$($locker.Count), chest=$($chest.Count), deposited=$deposited, complete=$($complete.Count), unsafe=$($unsafeMoves.Count), terminal=$($terminal.Count)."
+	}
+}
+
+function Assert-DepotRecoveryEvents {
+	param([string]$Logs, [string]$Phase)
+
+	$events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
+	$online = @($events | Where-Object {
+		$_.event -eq "lifecycle" -and $_.status -eq "online" -and $_.objective -eq "service"
+	})
+	$complete = @($events | Where-Object {
+		$_.event -eq "action_result" -and $_.action -eq "deposit" -and
+		$_.result -eq "complete" -and $_.depot_id -eq 2
+	})
+	$verified = @($events | Where-Object {
+		$_.event -eq "action_result" -and $_.action -eq "deposit" -and
+		$_.result -in @("success", "partial") -and $_.item_id -eq 2684
+	})
+	$expectedVerified = if ($Phase -in @("deposit", "depart")) { 0 } else { 2 }
+	$verifiedCount = ($verified | Measure-Object -Property verified -Sum).Sum
+	if ($null -eq $verifiedCount) { $verifiedCount = 0 }
+	$terminal = @($events | Where-Object { $_.event -eq "terminal" })
+	if ($online.Count -ne 1 -or $complete.Count -lt 1 -or $verifiedCount -ne $expectedVerified -or
+		$terminal.Count -ne 0) {
+		throw "Depot $Phase restart recovery failed. online=$($online.Count), complete=$($complete.Count), verified=$verifiedCount, terminal=$($terminal.Count)."
+	}
+}
+
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
 	throw "Docker is required to run the playerbot gameplay suite."
 }
 
 $focusedScenarioRequested = $FullNavigation -or $CorpseLoot -or $DeathTelemetry -or $Healing -or $ValueLoot -or
-	$PickupProgression -or $GoalArbitration -or $OracleDeparture -or $StaminaProjection -or $HuntRegionPlanning -or $CombatReadiness
+	$PickupProgression -or $GoalArbitration -or $OracleDeparture -or $StaminaProjection -or $HuntRegionPlanning -or
+	$CombatReadiness -or $Depot
 if ($Focused -and -not $focusedScenarioRequested) {
 	throw "-Focused requires at least one focused scenario switch."
 }
@@ -1049,6 +1137,113 @@ try {
 			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST SERVICE_PASS' | Out-Null
 			$cycleLogs = Wait-ForLog -Pattern '"action":"hunt_cycle","result":"started","cycle":2'
 			Assert-CycleEvents -Logs $cycleLogs
+		}
+	}
+
+	if ($Depot) {
+		Invoke-Scenario -Name "real_depot" -DefaultTimeoutSeconds 240 -Body {
+			Invoke-Compose down --volumes --remove-orphans
+			$env:PLAYERBOT_GAMEPLAY_MODE = "depot"
+			$env:PLAYERBOT_DEPOT_RESTART_PHASE = ""
+			$env:PLAYERBOT_DEPOT_MOVE_CASE = "normal"
+			Invoke-Compose up --detach
+			Invoke-DatabaseCommand -Query "INSERT INTO player_depotitems (player_id, sid, pid, itemtype, count, attributes) SELECT id, 9001, 2, 2684, 7, X'' FROM players WHERE name = 'Rook Tester'"
+			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST DEPOT_PASS' | Out-Null
+			$firstCycleLogs = Wait-ForLog -Pattern '"action":"deposit","result":"complete","depot_id":2'
+			Assert-DepotEvents -Logs $firstCycleLogs -ExpectedDepositedCount 2
+
+			$restartLineCount = @((Get-ServerLogs) -split "`r?`n").Count
+			Invoke-Compose stop server
+			Invoke-Compose up --detach server
+			$secondCycleLogs = ""
+			for ($attempt = 0; $attempt -lt 180; $attempt++) {
+				Start-Sleep -Seconds 1
+				$secondCycleLogs = ((Get-ServerLogs) -split "`r?`n" | Select-Object -Skip $restartLineCount) -join "`n"
+				if ($secondCycleLogs -match 'PLAYERBOT_GAMEPLAY_TEST DEPOT_PASS' -and
+					$secondCycleLogs -match '"action":"deposit","result":"complete","depot_id":2') { break }
+			}
+			Assert-DepotEvents -Logs $secondCycleLogs -ExpectedDepositedCount 1
+			$sentinelCount = Invoke-DatabaseScalar -Query "SELECT COALESCE(SUM(count), 0) FROM player_depotitems JOIN players ON players.id = player_depotitems.player_id WHERE players.name = 'Rook Tester' AND pid = 2 AND itemtype = 2684"
+			if ($sentinelCount -ne 7) {
+				throw "Bot One's depot cycle changed Rook Tester's persisted depot sentinel."
+			}
+		}
+
+		foreach ($phase in @("approach", "locker", "chest", "deposit", "depart")) {
+			Invoke-Scenario -Name "real_depot_restart_$phase" -DefaultTimeoutSeconds 180 -Body {
+				Invoke-Compose down --volumes --remove-orphans
+				$env:PLAYERBOT_GAMEPLAY_MODE = "depot"
+				$env:PLAYERBOT_DEPOT_RESTART_PHASE = $phase
+				$env:PLAYERBOT_DEPOT_MOVE_CASE = "normal"
+				Invoke-Compose up --detach
+				$checkpointPattern = '"action":"depot_restart_checkpoint","result":"paused","phase":"' + [regex]::Escape($phase) + '"'
+				$checkpointLogs = Wait-ForLog -Pattern $checkpointPattern
+				$checkpointEvents = @(ConvertFrom-PlayerbotLogs -Logs $checkpointLogs | Where-Object {
+					$_.event -eq "action_result" -and $_.action -eq "depot_restart_checkpoint" -and
+					$_.result -eq "paused" -and $_.phase -eq $phase
+				})
+				if ($checkpointEvents.Count -ne 1) {
+					throw "Depot $phase restart checkpoint was not reached exactly once."
+				}
+				$restartLineCount = @((Get-ServerLogs) -split "`r?`n").Count
+				Invoke-Compose stop server
+				Invoke-Compose up --detach server
+				$recoveryLogs = ""
+				for ($attempt = 0; $attempt -lt 150; $attempt++) {
+					Start-Sleep -Seconds 1
+					$recoveryLogs = ((Get-ServerLogs) -split "`r?`n" | Select-Object -Skip $restartLineCount) -join "`n"
+					if ($recoveryLogs -match 'PLAYERBOT_GAMEPLAY_TEST DEPOT_PASS' -and
+						$recoveryLogs -match '"action":"deposit","result":"complete","depot_id":2') { break }
+				}
+				Assert-DepotRecoveryEvents -Logs $recoveryLogs -Phase $phase
+			}
+		}
+
+		Invoke-Scenario -Name "real_depot_partial_move" -DefaultTimeoutSeconds 120 -Body {
+			Invoke-Compose down --volumes --remove-orphans
+			$env:PLAYERBOT_GAMEPLAY_MODE = "depot"
+			$env:PLAYERBOT_DEPOT_RESTART_PHASE = ""
+			$env:PLAYERBOT_DEPOT_MOVE_CASE = "partial"
+			Invoke-Compose up --detach
+			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST DEPOT_PASS' | Out-Null
+			$partialLogs = Wait-ForLog -Pattern '"action":"deposit","result":"complete","depot_id":2'
+			$events = @(ConvertFrom-PlayerbotLogs -Logs $partialLogs)
+			$partial = @($events | Where-Object {
+				$_.action -eq "deposit" -and $_.result -eq "partial" -and $_.item_id -eq 2684 -and
+				$_.requested -eq 2 -and $_.verified -eq 1 -and $_.inventory_before -eq 2 -and
+				$_.inventory_after -eq 1 -and $_.depot_before -eq 0 -and $_.depot_after -eq 1
+			})
+			$submitted = @($events | Where-Object {
+				$_.action -eq "deposit" -and $_.result -eq "requested" -and $_.requested -eq 2 -and $_.submitted -eq 1
+			})
+			if ($partial.Count -ne 1 -or $submitted.Count -ne 1 -or
+				@($events | Where-Object { $_.event -eq "terminal" }).Count -ne 0) {
+				throw "The partial depot move did not emit exact verified deltas and finish the remainder."
+			}
+		}
+
+		Invoke-Scenario -Name "real_depot_rejected_move" -DefaultTimeoutSeconds 90 -Body {
+			Invoke-Compose down --volumes --remove-orphans
+			$env:PLAYERBOT_GAMEPLAY_MODE = "depot"
+			$env:PLAYERBOT_DEPOT_RESTART_PHASE = ""
+			$env:PLAYERBOT_DEPOT_MOVE_CASE = "rejected"
+			Invoke-Compose up --detach
+			$rejectedLogs = Wait-ForLog -Pattern '"event":"terminal".*"reason":"depot_no_slot_or_move_rejected"'
+			$events = @(ConvertFrom-PlayerbotLogs -Logs $rejectedLogs)
+			$requests = @($events | Where-Object { $_.action -eq "deposit" -and $_.result -eq "requested" -and $_.item_id -eq 2684 })
+			$retries = @($events | Where-Object {
+				$_.action -eq "deposit" -and $_.result -eq "retry" -and $_.verified -eq 0 -and
+				$_.inventory_before -eq 2 -and $_.inventory_after -eq 2 -and $_.depot_before -eq 0 -and $_.depot_after -eq 0
+			})
+			$failed = @($events | Where-Object {
+				$_.action -eq "deposit" -and $_.result -eq "failed" -and $_.reason -eq "no_slot_or_move_rejected" -and
+				$_.retry -eq 3 -and $_.verified -eq 0 -and $_.inventory_before -eq 2 -and $_.inventory_after -eq 2 -and
+				$_.depot_before -eq 0 -and $_.depot_after -eq 0
+			})
+			$terminals = @($events | Where-Object { $_.event -eq "terminal" -and $_.reason -eq "depot_no_slot_or_move_rejected" })
+			if ($requests.Count -ne 3 -or $retries.Count -ne 2 -or $failed.Count -ne 1 -or $terminals.Count -ne 1) {
+				throw "Rejected depot moves were not bounded to three attempts with unchanged exact deltas."
+			}
 		}
 	}
 
@@ -1363,6 +1558,8 @@ finally {
 		$env:PLAYERBOT_GAMEPLAY_MODE = $previousMode
 		$env:PLAYERBOT_RELOG_DELAY_SECONDS = $previousRelogDelay
 		$env:PLAYERBOT_MAX_CONSECUTIVE_DEATHS = $previousMaximumDeaths
+		$env:PLAYERBOT_DEPOT_RESTART_PHASE = $previousDepotRestartPhase
+		$env:PLAYERBOT_DEPOT_MOVE_CASE = $previousDepotMoveCase
 		foreach ($timing in $timings.GetEnumerator()) {
 			"PLAYERBOT_GAMEPLAY_TIMING $($timing.Key)=$([Math]::Round($timing.Value.TotalSeconds, 2))s"
 		}

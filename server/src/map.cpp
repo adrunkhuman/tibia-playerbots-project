@@ -23,6 +23,7 @@
 #include "iomapserialize.h"
 #include "combat.h"
 #include "creature.h"
+#include "depotlocker.h"
 #include "game.h"
 #include "monster.h"
 
@@ -44,6 +45,7 @@ bool Map::canSee(const Position& observer, const Position& target)
 
 bool Map::loadMap(const std::string& identifier, bool loadHouses)
 {
+	depotLockerPositions.clear();
 	IOMap loader;
 	if (!loader.loadMap(this, identifier)) {
 		std::cout << "[Fatal - Map::loadMap] " << loader.getLastErrorString() << std::endl;
@@ -107,6 +109,13 @@ Tile* Map::getTile(uint16_t x, uint16_t y, uint8_t z) const
 	return floor->tiles[x & FLOOR_MASK][y & FLOOR_MASK];
 }
 
+const std::vector<Position>& Map::getDepotLockerPositions(uint16_t depotId) const
+{
+	static const std::vector<Position> empty;
+	auto it = depotLockerPositions.find(depotId);
+	return it == depotLockerPositions.end() ? empty : it->second;
+}
+
 void Map::setTile(uint16_t x, uint16_t y, uint8_t z, Tile* newTile)
 {
 	if (z >= MAP_MAX_LAYERS) {
@@ -165,6 +174,23 @@ void Map::setTile(uint16_t x, uint16_t y, uint8_t z, Tile* newTile)
 		delete newTile;
 	} else {
 		tile = newTile;
+	}
+
+	TileItemVector* items = tile->getItemList();
+	if (!items) {
+		return;
+	}
+	for (Item* item : *items) {
+		Container* container = item->getContainer();
+		DepotLocker* locker = container ? container->getDepotLocker() : nullptr;
+		if (!locker) {
+			continue;
+		}
+		auto& positions = depotLockerPositions[locker->getDepotId()];
+		const Position position(x, y, z);
+		if (std::find(positions.begin(), positions.end(), position) == positions.end()) {
+			positions.push_back(position);
+		}
 	}
 }
 

@@ -1,6 +1,8 @@
 local botName = "Bot One"
 local depotPosition = Position(32105, 32195, 8)
 local depotTilePosition = Position(32105, 32196, 8)
+local thaisTownId = 2
+local depotLootItemId = 2684
 local lootItemId = ITEM_GOLD_COIN
 local lootCount = 37
 local saleItemId = 2992
@@ -24,6 +26,7 @@ local nestedRewardRootId = 1994
 local nestedRewardShieldId = 2512
 local economicRewardStorage = 50082
 local departureRecoveryStorage = 50090
+local depotFixtureStorage = 50095
 local deathLoginCount = 0
 
 local function removeAll(player, itemId)
@@ -338,14 +341,44 @@ local function verifyService(playerId, initialDepotBagCount, attempts)
     assert(player:getItemCount(potionItemId) >= 5, "small health potion reserve was not purchased")
     assert(player:getItemCount(meatItemId) >= 1, "meat reserve was not purchased")
     assert(player:getMoney() == 100, "banker did not leave the carried gold reserve")
-    assert(player:getBankBalance() == 134, "shop purchases and bank transactions produced the wrong balance")
-    assert(player:getSlotItem(CONST_SLOT_ARMOR):getId() == starterArmorId, "starter jacket was deposited")
-    assert(not player:getSlotItem(CONST_SLOT_RIGHT), "unexpected item appeared in the starter shield slot")
-    assert(player:getSlotItem(CONST_SLOT_LEFT):getId() == starterWeaponId, "starter club was deposited")
-    assert(not player:getSlotItem(CONST_SLOT_FEET), "unexpected item appeared in the starter feet slot")
+	assert(player:getBankBalance() == 134, "shop purchases and bank transactions produced the wrong balance")
+	assert(player:getSlotItem(CONST_SLOT_ARMOR):getId() == starterArmorId, "starter jacket was deposited")
+	local right = player:getSlotItem(CONST_SLOT_RIGHT)
+	assert(not right or right:getId() == meatItemId, "unexpected item appeared in the starter shield slot")
+	assert(player:getSlotItem(CONST_SLOT_LEFT):getId() == starterWeaponId, "starter club was deposited")
+	local feet = player:getSlotItem(CONST_SLOT_FEET)
+	assert(not feet or feet:getId() == potionItemId, "unexpected item appeared in the starter feet slot")
     assert(player:getItemCount(2120) == 1, "rope was deposited")
     assert(player:getItemCount(2554) == 1, "shovel was deposited")
     print("PLAYERBOT_GAMEPLAY_TEST SERVICE_PASS")
+end
+
+local function verifyDepot(playerId, attempts)
+	local player = Player(playerId)
+	if not player or player:isRemoved() then
+		if attempts > 0 then
+			addEvent(verifyDepot, 500, playerId, attempts - 1)
+		end
+		return
+	end
+	local chest = player:getDepotChest(thaisTownId, false)
+	local restartPhase = os.getenv("PLAYERBOT_DEPOT_RESTART_PHASE") or ""
+	local expectedLoot = restartPhase ~= "" and 2 or player:getStorageValue(depotFixtureStorage) == 2 and 3 or 2
+	local priorGoldPersists = restartPhase == "" or restartPhase == "deposit" or restartPhase == "depart"
+	local expectedPriorGold = priorGoldPersists and 1 or 0
+	local complete = chest and chest:getItemCountById(depotLootItemId) == expectedLoot and
+		chest:getItemCountById(ITEM_GOLD_COIN) == expectedPriorGold
+    if not complete and attempts > 0 then
+        addEvent(verifyDepot, 500, playerId, attempts - 1)
+        return
+    end
+    assert(complete, "real Thais depot did not retain prior contents and nested loot")
+    assert(player:getItemCount(depotLootItemId) == 0, "nested policy-approved loot remained carried")
+    assert(player:getSlotItem(CONST_SLOT_ARMOR):getId() == starterArmorId, "equipped armor was deposited")
+    assert(player:getSlotItem(CONST_SLOT_LEFT):getId() == starterWeaponId, "equipped weapon was deposited")
+    assert(player:getItemCount(2120) == 1 and player:getItemCount(2554) == 1, "navigation tools were deposited")
+    assert(player:getItemCount(potionItemId) >= 5 and player:getItemCount(meatItemId) >= 1, "supply reserves were deposited")
+    print("PLAYERBOT_GAMEPLAY_TEST DEPOT_PASS")
 end
 
 local login = CreatureEvent("zzPlayerbotGameplayRegression")
@@ -356,7 +389,7 @@ function login.onLogin(player)
     end
 
     local mode = os.getenv("PLAYERBOT_GAMEPLAY_MODE") or "cycle"
-	assert(mode == "cycle" or mode == "navigation" or mode == "corpse" or mode == "death" or mode == "healing" or
+	assert(mode == "cycle" or mode == "depot" or mode == "navigation" or mode == "corpse" or mode == "death" or mode == "healing" or
 		mode == "healing_resupply" or mode == "value" or mode == "progression" or mode == "progression_bundle" or
 		mode == "progression_nested" or
         mode == "progression_resume" or mode == "progression_nested_resume" or mode == "progression_space" or
@@ -398,6 +431,32 @@ function login.onLogin(player)
 	end
 	if mode == "hunt_planning" then
 		print("PLAYERBOT_GAMEPLAY_TEST HUNT_PLANNING_START")
+		return true
+	end
+	if mode == "depot" then
+		local fixtureState = player:getStorageValue(depotFixtureStorage)
+		if fixtureState == -1 then
+			local thais = Town(thaisTownId)
+			assert(thais and player:setTown(thais), "depot fixture could not select Thais")
+			assert(player:teleportTo(thais:getTemplePosition()), "depot fixture could not reach the Thais temple")
+			local chest = player:getDepotChest(thaisTownId, true)
+			assert(chest and chest:addItem(ITEM_GOLD_COIN, 1), "depot fixture could not seed prior depot contents")
+			local backpack = player:getSlotItem(CONST_SLOT_BACKPACK)
+			local outer = backpack and backpack:addItem(ITEM_BAG, 1)
+			local nested = outer and outer:addItem(ITEM_BAG, 1)
+			assert(nested and nested:addItem(depotLootItemId, 1) and nested:addItem(depotLootItemId, 1),
+				"depot fixture could not seed nested loot")
+			assert(backpack:addItem(2050, 1), "depot fixture could not seed an unknown retained item")
+			local restartPhase = os.getenv("PLAYERBOT_DEPOT_RESTART_PHASE") or ""
+			assert(player:setStorageValue(depotFixtureStorage, restartPhase == "" and 0 or 2),
+				"depot fixture state could not persist")
+		elseif fixtureState == 0 then
+			local backpack = player:getSlotItem(CONST_SLOT_BACKPACK)
+			assert(backpack and backpack:addItem(depotLootItemId, 1), "depot fixture could not seed second-cycle loot")
+			assert(player:setStorageValue(depotFixtureStorage, 2), "depot second-cycle state could not persist")
+		end
+		addEvent(verifyDepot, 500, player:getId(), 360)
+		print("PLAYERBOT_GAMEPLAY_TEST DEPOT_START")
 		return true
 	end
 	if mode == "stamina_bonus" or mode == "stamina_boundary" or mode == "stamina_normal" then

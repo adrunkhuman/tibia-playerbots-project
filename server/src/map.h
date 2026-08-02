@@ -202,6 +202,7 @@ class Map
 		Tile* getTile(const Position& pos) const {
 			return getTile(pos.x, pos.y, pos.z);
 		}
+		const std::vector<Position>& getDepotLockerPositions(uint16_t depotId) const;
 
 		/**
 		  * Set a single tile.
@@ -294,6 +295,7 @@ class Map
 
 		uint32_t width = 0;
 		uint32_t height = 0;
+		std::map<uint16_t, std::vector<Position>> depotLockerPositions;
 
 		// Actually scans the map for spectators
 		void getSpectatorsInternal(SpectatorVec& spectators, const Position& centerPos,

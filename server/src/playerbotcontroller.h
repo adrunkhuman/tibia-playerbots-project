@@ -56,6 +56,9 @@ namespace playerbot {
 	inline constexpr uint8_t corpseContainerId = 0;
 	inline constexpr uint8_t backpackContainerId = 1;
 	inline constexpr uint8_t rewardContainerIdBase = 2;
+	inline constexpr uint8_t depotSourceContainerId = 12;
+	inline constexpr uint8_t depotChestContainerId = 13;
+	inline constexpr uint8_t depotLockerContainerId = 14;
 	inline constexpr uint8_t maximumContainerId = 0x0F;
 	inline constexpr uint32_t maxCorpseSearchAttempts = 4;
 	inline constexpr uint16_t ropeItemId = 2120;
@@ -101,6 +104,8 @@ namespace playerbot {
 	inline constexpr int32_t rookgaardRewardRadius = 180;
 	inline constexpr Position fakeDepotPosition(32105, 32195, 8);
 	inline constexpr Position fakeDepotTilePosition(32105, 32196, 8);
+	inline constexpr uint32_t maximumDepotAttempts = 3;
+	inline constexpr uint32_t depotRestartCheckpointStorage = 50096;
 	inline constexpr std::array<Position, 4> huntingLoop = {{
 		Position(32084, 32144, 5),
 		Position(32103, 32124, 8),
@@ -109,10 +114,27 @@ namespace playerbot {
 	}};
 	inline constexpr const char* botAccountName = "bot-one";
 
+	enum class DepotRestartCheckpoint : uint8_t {
+		None,
+		Approach,
+		Locker,
+		Chest,
+		Deposit,
+		Depart,
+	};
+	enum class DepotMoveFixture : uint8_t {
+		Normal,
+		Partial,
+		Rejected,
+	};
+
 	struct PlayerBotTestPolicy {
 		bool progressionEnabled;
 		bool startInHunt;
 		bool fixedFixtureRoute;
+		bool depotFixture;
+		DepotRestartCheckpoint depotRestartCheckpoint;
+		DepotMoveFixture depotMoveFixture;
 		bool forceFirstHuntCandidateUnreachable;
 		bool forceSecondHuntCandidateNodeLimit;
 		bool cancelHuntPlanningAtScoreBarrier;
@@ -314,6 +336,16 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 			uint64_t actionsFailed = 0;
 			uint64_t stuckEvents = 0;
 			uint64_t suppressedEvents = 0;
+		};
+
+		enum class DepotStage : uint8_t {
+			Discover,
+			Approach,
+			OpenLocker,
+			OpenChest,
+			Deposit,
+			VerifyMove,
+			Depart,
 		};
 
 		struct HuntRegionPlanning {
@@ -589,8 +621,16 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		bool processNavigation(Player* player, const Position& currentPosition, const Position& destination);
 
 		bool isProtectedDepositItem(const Item& item) const;
-
-		bool findDepositableItem(Container* container, Container*& source, Item*& depositItem) const;
+		bool findDepositableItem(const Player& player, Container* container, Container*& source,
+		                         Item*& depositItem, uint8_t& count) const;
+		bool discoverDepot(Player& player, const Position& currentPosition);
+		bool openDepotLocker(Player& player, const Position& currentPosition);
+		bool openDepotChest(Player& player, const Position& currentPosition);
+		bool pauseDepotFixtureForRestart(Player& player, playerbot::DepotRestartCheckpoint checkpoint,
+		                                 const Position& currentPosition);
+		bool openContainer(Player& player, Container& container, uint8_t containerId, const Position& currentPosition);
+		uint8_t containerDestinationIndex(const Container& container, const Item& item) const;
+		void processFixtureDeposit(Player* player, const Position& currentPosition);
 
 		void emitHuntRegionCandidate(const PlayerBotHuntRegion& region, const Position& position) const;
 		void cancelHuntRegionPlanning();
@@ -655,6 +695,13 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		uint32_t pendingDiscardValue = 0;
 		uint16_t pendingDiscardIncomingItemId = 0;
 		uint32_t pendingDepositDestinationCount = 0;
+		uint32_t pendingDepositInventoryCount = 0;
+		uint8_t pendingDepositRequestedCount = 0;
+		uint32_t depotAttempts = 0;
+		uint16_t depotId = 0;
+		Position depotLockerPosition;
+		Position depotApproachPosition;
+		DepotStage depotStage = DepotStage::Discover;
 		std::set<uint16_t> unavailableLootItemIds;
 		std::map<uint16_t, uint32_t> itemSellValues;
 		bool pendingHeal = false;
