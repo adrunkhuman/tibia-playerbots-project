@@ -10,7 +10,8 @@ param(
 	[switch]$GoalArbitration,
 	[switch]$OracleDeparture,
 	[switch]$StaminaProjection,
-	[switch]$HuntRegionPlanning,
+    [switch]$HuntRegionPlanning,
+	[switch]$CombatReadiness,
 	[switch]$Focused,
 	[switch]$SkipBuild,
 	[switch]$KeepStack
@@ -495,7 +496,7 @@ function Assert-HealingResupplyEvents {
         $_.reason -eq "transaction_delta_mismatch" -or $_.reason -eq "shop_transaction_delta_mismatch"
     })
     if ($missingSupply.Count -ne 1 -or $flaskSales.Count -ne 1 -or $purchases.Count -lt 1 -or $heals.Count -lt 1) {
-        throw "The bot did not refill and consume potions after the missing-supply healing outcome."
+        throw "The bot did not refill and consume potions after the missing-supply healing outcome: missing=$($missingSupply.Count), flaskSales=$($flaskSales.Count), purchases=$($purchases.Count), heals=$($heals.Count)."
     }
     if ($serviceResumed.Count -lt 1) {
         throw "The bot did not resume service after healing with newly purchased potions."
@@ -866,6 +867,47 @@ function Assert-HuntRegionPlanningEvents {
     }
 }
 
+function Assert-CombatReadinessEvents {
+    param([string]$Logs, [string]$Mode)
+
+    $events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
+    $readiness = @($events | Where-Object {
+        $_.event -eq "combat_readiness" -and $_.vocation_id -eq 4 -and $_.requirements.Count -eq 5
+    })
+    if ($readiness.Count -lt 1) {
+        throw "Combat readiness emitted no complete Knight requirement evidence for $Mode."
+    }
+    $latest = $readiness[-1]
+    if ($Mode -eq "missing_weapon") {
+        $terminal = @($events | Where-Object {
+            $_.event -eq "terminal" -and $_.reason -eq "combat_readiness_missing_legal_melee_weapon"
+        })
+        $hunts = @($events | Where-Object { $_.action -eq "hunt_cycle" -or $_.reason -eq "visible_monster" })
+        if ($terminal.Count -ne 1 -or $hunts.Count -ne 0 -or $latest.terminal_reason -ne "missing_legal_melee_weapon") {
+            throw "Missing weapon did not produce the terminal no-naked-hunt state."
+        }
+        return
+    }
+    $ready = @($readiness | Where-Object { $_.result -eq "ready" -and @($_.requirements | Where-Object { -not $_.ready }).Count -eq 0 })
+    if ($ready.Count -lt 1) {
+        throw "Combat readiness did not reach a fully evidenced ready state for $Mode."
+    }
+    if ($Mode -eq "upgrade") {
+        $equip = @($events | Where-Object { $_.event -eq "action_result" -and $_.action -eq "equip_readiness" -and $_.result -eq "success" -and $_.item_id -eq 2384 })
+        if ($equip.Count -ne 1) { throw "Carried legal weapon was not equipped and verified." }
+    }
+    if ($Mode -eq "supplies") {
+        $service = @($events | Where-Object { $_.event -eq "combat_readiness" -and $_.selected_recovery -eq "service" })
+        $potions = @($events | Where-Object { $_.action -eq "buy_potions" -and $_.result -eq "success" })
+        $food = @($events | Where-Object { $_.action -eq "buy_meat" -and $_.result -eq "success" })
+        if ($service.Count -lt 1 -or $potions.Count -lt 1 -or $food.Count -lt 1) { throw "Missing supplies did not select and complete service recovery." }
+    }
+    if ($Mode -eq "retention") {
+        $depositedUnknown = @($events | Where-Object { $_.action -eq "deposit" -and $_.item_id -eq 2050 })
+        if ($depositedUnknown.Count -ne 0) { throw "Depot policy deposited an unknown retained item." }
+    }
+}
+
 function Assert-GoalArbitrationInterruptEvents {
     param([string]$Logs)
 
@@ -978,7 +1020,7 @@ if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
 }
 
 $focusedScenarioRequested = $FullNavigation -or $CorpseLoot -or $DeathTelemetry -or $Healing -or $ValueLoot -or
-	$PickupProgression -or $GoalArbitration -or $OracleDeparture -or $StaminaProjection -or $HuntRegionPlanning
+	$PickupProgression -or $GoalArbitration -or $OracleDeparture -or $StaminaProjection -or $HuntRegionPlanning -or $CombatReadiness
 if ($Focused -and -not $focusedScenarioRequested) {
 	throw "-Focused requires at least one focused scenario switch."
 }
@@ -1135,6 +1177,58 @@ try {
 			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST HUNT_PLANNING_START' | Out-Null
             $planningLogs = Wait-ForLog -Pattern '"event":"hunt_region_scan".*"phase":"selected"'
             Assert-HuntRegionPlanningEvents -Logs $planningLogs
+        }
+    }
+
+    if ($CombatReadiness) {
+        Invoke-Scenario -Name "combat_readiness_ready" -DefaultTimeoutSeconds 60 -Body {
+            Invoke-Compose down --volumes --remove-orphans
+            $env:PLAYERBOT_GAMEPLAY_MODE = "readiness_ready"
+            Invoke-Compose up --detach
+            Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST READINESS_READY_PASS' | Out-Null
+            $readyLogs = Wait-ForLog -Pattern '"event":"combat_readiness".*"result":"ready"'
+            Assert-CombatReadinessEvents -Logs $readyLogs -Mode "ready"
+			$restartLineCount = @((Get-ServerLogs) -split "`r?`n").Count
+            Invoke-Compose stop server
+            Invoke-Compose up --detach server
+			$restartLogs = ""
+			for ($attempt = 0; $attempt -lt 30; $attempt++) {
+				Start-Sleep -Seconds 1
+				$restartLogs = ((Get-ServerLogs) -split "`r?`n" | Select-Object -Skip $restartLineCount) -join "`n"
+				if ($restartLogs -match '"event":"combat_readiness".*"vocation_id":4') { break }
+			}
+            Assert-CombatReadinessEvents -Logs $restartLogs -Mode "ready"
+        }
+        Invoke-Scenario -Name "combat_readiness_upgrade" -DefaultTimeoutSeconds 60 -Body {
+            Invoke-Compose down --volumes --remove-orphans
+            $env:PLAYERBOT_GAMEPLAY_MODE = "readiness_upgrade"
+            Invoke-Compose up --detach
+            Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST READINESS_UPGRADE_PASS' | Out-Null
+            Assert-CombatReadinessEvents -Logs (Get-ServerLogs) -Mode "upgrade"
+        }
+        Invoke-Scenario -Name "combat_readiness_missing_weapon" -DefaultTimeoutSeconds 45 -Body {
+            Invoke-Compose down --volumes --remove-orphans
+            $env:PLAYERBOT_GAMEPLAY_MODE = "readiness_missing_weapon"
+            Invoke-Compose up --detach
+            Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST READINESS_MISSING_WEAPON_START' | Out-Null
+            $missingWeaponLogs = Wait-ForLog -Pattern '"reason":"combat_readiness_missing_legal_melee_weapon"'
+            Assert-CombatReadinessEvents -Logs $missingWeaponLogs -Mode "missing_weapon"
+        }
+        Invoke-Scenario -Name "combat_readiness_supplies" -DefaultTimeoutSeconds 120 -Body {
+            Invoke-Compose down --volumes --remove-orphans
+            $env:PLAYERBOT_GAMEPLAY_MODE = "readiness_supplies"
+            Invoke-Compose up --detach
+            Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST READINESS_SUPPLIES_PASS' | Out-Null
+            $supplyLogs = Wait-ForLog -Pattern '"event":"combat_readiness".*"result":"ready"'
+            Assert-CombatReadinessEvents -Logs $supplyLogs -Mode "supplies"
+        }
+        Invoke-Scenario -Name "combat_readiness_retention" -DefaultTimeoutSeconds 120 -Body {
+            Invoke-Compose down --volumes --remove-orphans
+            $env:PLAYERBOT_GAMEPLAY_MODE = "readiness_retention"
+            Invoke-Compose up --detach
+            Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST READINESS_RETENTION_PASS' | Out-Null
+            $retentionLogs = Wait-ForLog -Pattern '"event":"combat_readiness".*"result":"ready"'
+            Assert-CombatReadinessEvents -Logs $retentionLogs -Mode "retention"
         }
     }
 

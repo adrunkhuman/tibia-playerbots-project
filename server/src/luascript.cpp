@@ -16309,6 +16309,10 @@ int LuaScriptInterface::luaWeaponRegister(lua_State* L)
 			it.vocationString = weapon->getVocationString();
 			it.minReqLevel = weapon->getReqLevel();
 			it.minReqMagicLevel = weapon->getReqMagLv();
+			it.vocationIds.clear();
+			for (const auto& vocation : weapon->vocWeaponMap) {
+				it.vocationIds.insert(vocation.first);
+			}
 		}
 
 		weapon->configureWeapon(it);

@@ -225,6 +225,7 @@ bool PlayerBotController::approachServiceNpc(Player* player, ServiceNpc& service
 void PlayerBotController::resetConversation(uint32_t targetId)
 {
 	serviceTargetId = targetId;
+	serviceGreetingAcknowledged = false;
 	conversationStep = ConversationStep::Greet;
 	serviceAttempts = 0;
 	serviceApproachTarget = Position();
@@ -240,7 +241,6 @@ bool PlayerBotController::openServiceShop(Player* player, ServiceNpc& service, c
 		return false;
 	}
 	if (conversationStep == ConversationStep::Greet) {
-		serviceGreetingAcknowledged = false;
 		++counters.actionsAttempted;
 		npc->receiveSpeech(player, TALKTYPE_PRIVATE_PN, "hi");
 		conversationStep = ConversationStep::Request;
@@ -451,7 +451,6 @@ void PlayerBotController::processBank(Player* player, const Position& currentPos
 		return;
 	}
 	if (conversationStep == ConversationStep::Greet) {
-		serviceGreetingAcknowledged = false;
 		++counters.actionsAttempted;
 		npc->receiveSpeech(player, TALKTYPE_PRIVATE_PN, "hi");
 		conversationStep = ConversationStep::Request;
@@ -616,19 +615,12 @@ void PlayerBotController::processService(Player* player, const Position& current
 
 bool PlayerBotController::isProtectedDepositItem(const Item& item) const
 {
-	return item.getID() == ropeItemId || item.getID() == 2554 || item.getID() == meatItemId ||
-	       item.getID() == smallHealthPotionItemId || item.getWorth() != 0;
+	return isProtectedInventoryItem(item);
 }
 
 bool PlayerBotController::findDepositableItem(Container* container, Container*& source, Item*& depositItem) const
 {
 	for (Item* item : container->getItemList()) {
-		if (Container* child = item->getContainer()) {
-			(void)child;
-			source = container;
-			depositItem = item;
-			return true;
-		}
 		if (!isProtectedDepositItem(*item)) {
 			source = container;
 			depositItem = item;

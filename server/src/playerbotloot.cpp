@@ -116,9 +116,8 @@ uint8_t PlayerBotController::backpackDestinationIndex(const Container& backpack,
 bool PlayerBotController::isReplaceableCargo(const Item& item) const
 {
 	const ItemType& type = Item::items[item.getID()];
-	const Container* container = item.getContainer();
-	return (!container || (type.corpseType != RACE_NONE && container->empty())) && item.getWorth() == 0 && protectedItemReserve(item.getID()) == 0 &&
-	       itemUnitValue(item.getID()) != 0 && item.getBaseWeight() != 0;
+	return !isProtectedInventoryItem(item) && type.corpseType == RACE_NONE && itemUnitValue(item.getID()) != 0 &&
+	       item.getBaseWeight() != 0;
 }
 
 bool PlayerBotController::chooseCargoReplacement(const Container& backpack, const Item& incoming, uint32_t freeCapacity,

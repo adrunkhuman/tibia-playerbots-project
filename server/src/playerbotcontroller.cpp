@@ -36,7 +36,10 @@ const PlayerBotTestPolicy& playerbot::testPolicyFromEnvironment()
 			 std::strcmp(gameplayMode, "healing") == 0 || std::strcmp(gameplayMode, "healing_resupply") == 0 ||
 			 std::strcmp(gameplayMode, "value") == 0 || std::strcmp(gameplayMode, "departure_interrupt") == 0 ||
 			 std::strcmp(gameplayMode, "stamina_bonus") == 0 || std::strcmp(gameplayMode, "stamina_boundary") == 0 ||
-			 std::strcmp(gameplayMode, "stamina_normal") == 0 || std::strcmp(gameplayMode, "hunt_planning") == 0);
+			 std::strcmp(gameplayMode, "stamina_normal") == 0 || std::strcmp(gameplayMode, "hunt_planning") == 0 ||
+			 std::strcmp(gameplayMode, "readiness_ready") == 0 || std::strcmp(gameplayMode, "readiness_upgrade") == 0 ||
+			 std::strcmp(gameplayMode, "readiness_missing_weapon") == 0 || std::strcmp(gameplayMode, "readiness_supplies") == 0 ||
+			 std::strcmp(gameplayMode, "readiness_retention") == 0);
 		const bool fixedFixtureRoute = gameplayMode && std::strcmp(gameplayMode, "stamina_bonus") != 0 &&
 		                               std::strcmp(gameplayMode, "stamina_boundary") != 0 &&
 		                               std::strcmp(gameplayMode, "stamina_normal") != 0 &&
@@ -219,7 +222,9 @@ uint32_t PlayerBotController::protectedItemReserve(uint16_t itemId) const
 uint32_t PlayerBotController::getSaleItemCount(const Player& player, uint16_t itemId) const
 {
 	const ItemType& type = Item::items[itemId];
-	if ((type.isContainer() && type.corpseType == RACE_NONE) || type.isFluidContainer() || type.isSplash()) {
+	if ((type.isContainer() && type.corpseType == RACE_NONE) || type.isFluidContainer() || type.isSplash() ||
+	    type.weaponType != WEAPON_NONE || type.armor > 0 || type.defense > 0 ||
+	    (type.slotPosition & (SLOTP_HEAD | SLOTP_ARMOR | SLOTP_LEGS | SLOTP_FEET)) != 0) {
 		return 0;
 	}
 	Item* backpackItem = player.getInventoryItem(CONST_SLOT_BACKPACK);

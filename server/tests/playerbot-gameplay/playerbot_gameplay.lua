@@ -26,6 +26,31 @@ local economicRewardStorage = 50082
 local departureRecoveryStorage = 50090
 local deathLoginCount = 0
 
+local function removeAll(player, itemId)
+    local count = player:getItemCount(itemId)
+    if count > 0 then
+        assert(player:removeItem(itemId, count), "fixture could not remove item " .. itemId)
+    end
+end
+
+local function verifyReadiness(playerId, mode, attempts)
+    local player = Player(playerId)
+    assert(player and not player:isRemoved(), "Bot One disappeared during readiness fixture")
+    local ready = player:getVocation():getId() == 4 and player:getSlotItem(CONST_SLOT_ARMOR) and
+        player:getSlotItem(CONST_SLOT_LEFT) and player:getItemCount(potionItemId) >= 5 and player:getItemCount(meatItemId) >= 1
+    if mode == "upgrade" then ready = ready and player:getSlotItem(CONST_SLOT_LEFT):getId() == pickupRewardId end
+    if mode == "retention" then ready = ready and player:getItemCount(2050) >= 1 and player:getItemCount(starterWeaponId) >= 1 end
+    if not ready and attempts > 0 then
+        addEvent(verifyReadiness, 500, playerId, mode, attempts - 1)
+        return
+    end
+    assert(ready, "combat readiness fixture did not reach its required state: " .. mode)
+    if mode == "supplies" or mode == "retention" then
+        assert(player:teleportTo(depotPosition), "readiness fixture could not return to the depot")
+    end
+    print("PLAYERBOT_GAMEPLAY_TEST READINESS_" .. string.upper(mode) .. "_PASS")
+end
+
 local function verifyOracleDeparture(playerId, attempts)
     local player = Player(playerId)
     assert(player and not player:isRemoved(), "Bot One disappeared during Oracle departure")
@@ -331,15 +356,46 @@ function login.onLogin(player)
     end
 
     local mode = os.getenv("PLAYERBOT_GAMEPLAY_MODE") or "cycle"
-    assert(mode == "cycle" or mode == "navigation" or mode == "corpse" or mode == "death" or mode == "healing" or
+	assert(mode == "cycle" or mode == "navigation" or mode == "corpse" or mode == "death" or mode == "healing" or
 		mode == "healing_resupply" or mode == "value" or mode == "progression" or mode == "progression_bundle" or
 		mode == "progression_nested" or
         mode == "progression_resume" or mode == "progression_nested_resume" or mode == "progression_space" or
         mode == "arbitration" or
         mode == "arbitration_interrupt" or mode == "departure" or mode == "departure_interrupt" or
         mode == "departure_recovery" or mode == "stamina_bonus" or mode == "stamina_boundary" or
-        mode == "stamina_normal" or mode == "hunt_planning",
+        mode == "stamina_normal" or mode == "hunt_planning" or mode == "readiness_ready" or
+        mode == "readiness_upgrade" or mode == "readiness_missing_weapon" or mode == "readiness_supplies" or
+        mode == "readiness_retention",
         "unknown PLAYERBOT_GAMEPLAY_MODE: " .. mode)
+	if mode == "readiness_ready" or mode == "readiness_upgrade" or mode == "readiness_missing_weapon" or
+		mode == "readiness_supplies" or mode == "readiness_retention" then
+		assert(player:setVocation(4), "readiness fixture could not select Knight vocation")
+		assert(player:teleportTo(depotPosition), "readiness fixture could not reach the depot")
+		suppressNearbyMonsters(player:getId())
+		if mode == "readiness_upgrade" then
+			local backpack = player:getSlotItem(CONST_SLOT_BACKPACK)
+			assert(backpack and backpack:addItem(pickupRewardId, 1), "readiness upgrade fixture could not add carried weapon")
+			addEvent(verifyReadiness, 500, player:getId(), "upgrade", 120)
+		elseif mode == "readiness_missing_weapon" then
+			removeAll(player, starterWeaponId)
+			removeAll(player, pickupRewardId)
+			print("PLAYERBOT_GAMEPLAY_TEST READINESS_MISSING_WEAPON_START")
+		elseif mode == "readiness_supplies" then
+			removeAll(player, potionItemId)
+			removeAll(player, meatItemId)
+			addEvent(verifyReadiness, 500, player:getId(), "supplies", 240)
+		elseif mode == "readiness_retention" then
+			removeAll(player, meatItemId)
+			local backpack = player:getSlotItem(CONST_SLOT_BACKPACK)
+			assert(backpack and backpack:addItem(2050, 1), "retention fixture could not add unknown item")
+			assert(backpack:addItem(saleItemId, 1), "retention fixture could not add sale item")
+			addEvent(verifyReadiness, 500, player:getId(), "retention", 240)
+		else
+			addEvent(verifyReadiness, 500, player:getId(), "ready", 120)
+		end
+		print("PLAYERBOT_GAMEPLAY_TEST READINESS_" .. string.upper(mode:gsub("readiness_", "")) .. "_START")
+		return true
+	end
 	if mode == "hunt_planning" then
 		print("PLAYERBOT_GAMEPLAY_TEST HUNT_PLANNING_START")
 		return true
@@ -524,6 +580,8 @@ function login.onLogin(player)
     end
     if mode == "healing" then
         suppressNearbyMonsters(player:getId())
+		local potions = player:getItemCount(potionItemId)
+		if potions > 0 then assert(player:removeItem(potionItemId, potions), "healing fixture could not remove starter potions") end
         assert(player:getItemCount(potionItemId) == 0, "healing fixture expected no seeded potions")
         assert(player:addItem(potionItemId, healingPotionCount), "healing fixture could not add small health potions")
         assert(player:setHealth(math.floor(player:getMaxHealth() * 0.5)), "healing fixture could not lower Bot One's health")
@@ -533,8 +591,12 @@ function login.onLogin(player)
     end
     if mode == "healing_resupply" then
         suppressNearbyMonsters(player:getId())
+		local potions = player:getItemCount(potionItemId)
+		if potions > 0 then assert(player:removeItem(potionItemId, potions), "healing resupply fixture could not remove starter potions") end
+		removeAll(player, meatItemId)
         assert(player:getItemCount(potionItemId) == 0, "healing resupply fixture expected no seeded potions")
-        assert(player:addItem(7636, 1), "healing resupply fixture could not add an empty potion flask")
+		local backpack = player:getSlotItem(CONST_SLOT_BACKPACK)
+		assert(backpack and backpack:addItem(7636, 1), "healing resupply fixture could not add an empty potion flask")
         assert(player:setHealth(math.floor(player:getMaxHealth() * 0.5)), "healing resupply fixture could not lower Bot One's health")
         addEvent(verifyHealingResupply, 250, player:getId(), 240)
         print("PLAYERBOT_GAMEPLAY_TEST HEALING_RESUPPLY_START")
@@ -570,6 +632,10 @@ function login.onLogin(player)
     assert(player:getMoney() == 200, "Bot One initial backpack purse was not 200 gp")
     assert(player:getBankBalance() == 100, "Bot One initial bank balance was not 100 gp")
     local backpack = player:getSlotItem(CONST_SLOT_BACKPACK)
+	local potions = player:getItemCount(potionItemId)
+	if potions > 0 then assert(player:removeItem(potionItemId, potions), "cycle fixture could not remove starter potions") end
+	local meat = player:getItemCount(meatItemId)
+	if meat > 0 then assert(player:removeItem(meatItemId, meat), "cycle fixture could not remove starter meat") end
     assert(backpack and backpack:getId() == ITEM_BACKPACK, "seeded backpack is missing")
     local lootBag = backpack:addItem(ITEM_BAG, 1)
     assert(lootBag, "test loot bag could not be added")

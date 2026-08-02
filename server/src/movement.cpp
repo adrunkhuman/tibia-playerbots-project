@@ -131,6 +131,10 @@ bool MoveEvents::registerEvent(Event_ptr event, const pugi::xml_node& node)
 				it.minReqLevel = moveEvent->getReqLevel();
 				it.minReqMagicLevel = moveEvent->getReqMagLv();
 				it.vocationString = moveEvent->getVocationString();
+				it.vocationIds.clear();
+				for (const auto& vocation : moveEvent->getVocEquipMap()) {
+					it.vocationIds.insert(vocation.first);
+				}
 			}
 			addEvent(std::move(*moveEvent), id, itemIdMap);
 		}
@@ -146,6 +150,10 @@ bool MoveEvents::registerEvent(Event_ptr event, const pugi::xml_node& node)
 			it.minReqLevel = moveEvent->getReqLevel();
 			it.minReqMagicLevel = moveEvent->getReqMagLv();
 			it.vocationString = moveEvent->getVocationString();
+			it.vocationIds.clear();
+			for (const auto& vocation : moveEvent->getVocEquipMap()) {
+				it.vocationIds.insert(vocation.first);
+			}
 
 			while (++id <= endId) {
 				addEvent(*moveEvent, id, itemIdMap);
@@ -155,6 +163,10 @@ bool MoveEvents::registerEvent(Event_ptr event, const pugi::xml_node& node)
 				tit.minReqLevel = moveEvent->getReqLevel();
 				tit.minReqMagicLevel = moveEvent->getReqMagLv();
 				tit.vocationString = moveEvent->getVocationString();
+				tit.vocationIds.clear();
+				for (const auto& vocation : moveEvent->getVocEquipMap()) {
+					tit.vocationIds.insert(vocation.first);
+				}
 			}
 		} else {
 			while (++id <= endId) {
@@ -231,6 +243,10 @@ bool MoveEvents::registerLuaFunction(MoveEvent* event)
 				it.minReqLevel = moveEvent->getReqLevel();
 				it.minReqMagicLevel = moveEvent->getReqMagLv();
 				it.vocationString = moveEvent->getVocationString();
+				it.vocationIds.clear();
+				for (const auto& vocation : moveEvent->getVocEquipMap()) {
+					it.vocationIds.insert(vocation.first);
+				}
 			}
 		} else {
 			uint32_t iterId = 0;
@@ -241,6 +257,10 @@ bool MoveEvents::registerLuaFunction(MoveEvent* event)
 					it.minReqLevel = moveEvent->getReqLevel();
 					it.minReqMagicLevel = moveEvent->getReqMagLv();
 					it.vocationString = moveEvent->getVocationString();
+					it.vocationIds.clear();
+					for (const auto& vocation : moveEvent->getVocEquipMap()) {
+						it.vocationIds.insert(vocation.first);
+					}
 				}
 				addEvent(*moveEvent, moveEvent->getItemIdRange().at(iterId), itemIdMap);
 			}
@@ -281,6 +301,10 @@ bool MoveEvents::registerLuaEvent(MoveEvent* event)
 				it.minReqLevel = moveEvent->getReqLevel();
 				it.minReqMagicLevel = moveEvent->getReqMagLv();
 				it.vocationString = moveEvent->getVocationString();
+				it.vocationIds.clear();
+				for (const auto& vocation : moveEvent->getVocEquipMap()) {
+					it.vocationIds.insert(vocation.first);
+				}
 			}
 		} else {
 			auto v = moveEvent->getItemIdRange();
@@ -291,6 +315,10 @@ bool MoveEvents::registerLuaEvent(MoveEvent* event)
 					it.minReqLevel = moveEvent->getReqLevel();
 					it.minReqMagicLevel = moveEvent->getReqMagLv();
 					it.vocationString = moveEvent->getVocationString();
+					it.vocationIds.clear();
+					for (const auto& vocation : moveEvent->getVocEquipMap()) {
+						it.vocationIds.insert(vocation.first);
+					}
 				}
 				addEvent(*moveEvent, *i, itemIdMap);
 			}

@@ -747,6 +747,9 @@ void PlayerBotController::startHunt(Player* player, const Position& position, co
 		stop("controlled_player_not_found", position);
 		return;
 	}
+	if (!ensureCombatReady(player, position, reason)) {
+		return;
+	}
 	activeGoal = TopLevelGoal::Hunt;
 	setCyclePhase(CyclePhase::Hunt, position, reason);
 	huntRouteIndex = 0;
@@ -761,6 +764,13 @@ void PlayerBotController::startHunt(Player* player, const Position& position, co
 
 void PlayerBotController::processTraversal(Player* player, const Position& currentPosition)
 {
+	if (readinessEquipmentPending) {
+		processReadinessEquipment(player, currentPosition);
+		return;
+	}
+	if (cyclePhase == CyclePhase::Hunt && !ensureCombatReady(player, currentPosition, "readiness_continuous_check")) {
+		return;
+	}
 	if (cyclePhase != CyclePhase::Hunt || progressionObjective == ProgressionObjective::OracleDeparture) {
 		if (defensiveTargetId != 0) {
 			processDefensiveCombat(player, currentPosition);

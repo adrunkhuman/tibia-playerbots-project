@@ -264,6 +264,10 @@ bool Weapon::configureEvent(const pugi::xml_node& node)
 		it.vocationString = vocationString;
 		it.minReqLevel = getReqLevel();
 		it.minReqMagicLevel = getReqMagLv();
+		it.vocationIds.clear();
+		for (const auto& vocation : vocWeaponMap) {
+			it.vocationIds.insert(vocation.first);
+		}
 	}
 
 	configureWeapon(Item::items[id]);

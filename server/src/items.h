@@ -25,6 +25,8 @@
 #include "itemloader.h"
 #include "position.h"
 
+#include <set>
+
 enum SlotPositionBits : uint32_t {
 	SLOTP_WHEREEVER = 0xFFFFFFFF,
 	SLOTP_HEAD = 1 << 0,
@@ -311,6 +313,7 @@ class ItemType
 		std::string description;
 		std::string runeSpellName;
 		std::string vocationString;
+		std::set<uint16_t> vocationIds;
 
 		std::unique_ptr<Abilities> abilities;
 		std::unique_ptr<ConditionDamage> conditionDamage;
