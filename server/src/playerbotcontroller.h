@@ -404,6 +404,18 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		bool canEatCheese(const Player& player) const;
 
 		bool needsHealing(const Player& player) const;
+		bool requiresKnightCombatReadiness(const Player& player) const;
+		bool isLegalEquipmentItem(const Player& player, const Item& item) const;
+		bool isKnightMeleeWeapon(const Player& player, const Item& item) const;
+		bool isCombatEquipment(const Item& item) const;
+		bool isProtectedInventoryItem(const Item& item) const;
+		bool isCombatReady(const Player& player, std::string& recovery, std::string& terminalReason) const;
+		void emitCombatReadiness(const Player& player, const Position& position, const char* result,
+		                         const std::string& recovery, const std::string& terminalReason) const;
+		bool findCarriedEquipmentUpgrade(Player& player, Item*& item, EquipmentUpgrade& upgrade) const;
+		bool beginReadinessEquipment(Player* player, const Position& position, const char* reason);
+		void processReadinessEquipment(Player* player, const Position& position);
+		bool ensureCombatReady(Player* player, const Position& position, const char* reason);
 
 		void logHealResult(const char* result, const char* reason, int32_t healthAfter,
 		                   uint32_t potionCountAfter, const Position& position);
@@ -678,6 +690,10 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		std::map<uint16_t, std::string> rewardInspectionFingerprints;
 		uint16_t pendingEquipmentItemId = 0;
 		uint32_t pendingEquipmentItemCount = 0;
+		uint16_t pendingReadinessItemId = 0;
+		slots_t pendingReadinessSlot = CONST_SLOT_WHEREEVER;
+		uint32_t pendingReadinessAttempts = 0;
+		bool readinessEquipmentPending = false;
 		std::vector<ServiceNpc> serviceShops;
 		std::vector<ServiceNpc> serviceBankers;
 		uint32_t serviceTargetId = 0;

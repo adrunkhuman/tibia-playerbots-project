@@ -18,6 +18,9 @@ using namespace playerbot;
 std::optional<PlayerBotController::EquipmentUpgrade> PlayerBotController::evaluateEquipmentUpgrade(const Player& player, const Item& candidate) const
 {
 	const ItemType& type = Item::items[candidate.getID()];
+	if (!isLegalEquipmentItem(player, candidate)) {
+		return std::nullopt;
+	}
 	slots_t slot = CONST_SLOT_WHEREEVER;
 	const char* metric = nullptr;
 	int32_t candidateValue = 0;
@@ -47,7 +50,7 @@ std::optional<PlayerBotController::EquipmentUpgrade> PlayerBotController::evalua
 		metric = "attack";
 		candidateValue = candidate.getAttack();
 	}
-	if (slot == CONST_SLOT_WHEREEVER || candidateValue <= 0 || player.getLevel() < type.minReqLevel) {
+	if (slot == CONST_SLOT_WHEREEVER || candidateValue <= 0) {
 		return std::nullopt;
 	}
 
@@ -66,6 +69,284 @@ std::optional<PlayerBotController::EquipmentUpgrade> PlayerBotController::evalua
 		return std::nullopt;
 	}
 	return EquipmentUpgrade{slot, candidateValue - currentValue, metric, currentValue, candidateValue};
+}
+
+bool PlayerBotController::requiresKnightCombatReadiness(const Player& player) const
+{
+	return player.getVocationId() == oracleVocationId;
+}
+
+bool PlayerBotController::isLegalEquipmentItem(const Player& player, const Item& item) const
+{
+	const ItemType& type = Item::items[item.getID()];
+	if (!item.isPickupable() || player.getLevel() < type.minReqLevel ||
+	    player.getMagicLevel() < type.minReqMagicLevel ||
+	    ((type.wieldInfo & WIELDINFO_PREMIUM) != 0 && !player.isPremium())) {
+		return false;
+	}
+	return type.vocationIds.empty() || type.vocationIds.find(player.getVocationId()) != type.vocationIds.end();
+}
+
+bool PlayerBotController::isKnightMeleeWeapon(const Player& player, const Item& item) const
+{
+	const WeaponType_t weaponType = item.getWeaponType();
+	const int32_t slots = item.getSlotPosition();
+	return isLegalEquipmentItem(player, item) && item.getAttack() > 0 &&
+	       (weaponType == WEAPON_SWORD || weaponType == WEAPON_CLUB || weaponType == WEAPON_AXE) &&
+	       (slots & (SLOTP_LEFT | SLOTP_RIGHT)) != 0;
+}
+
+bool PlayerBotController::isCombatEquipment(const Item& item) const
+{
+	const ItemType& type = Item::items[item.getID()];
+	return (type.slotPosition & (SLOTP_HEAD | SLOTP_ARMOR | SLOTP_LEGS | SLOTP_FEET)) != 0 ||
+	       type.weaponType != WEAPON_NONE || item.getArmor() > 0 || item.getDefense() > 0;
+}
+
+bool PlayerBotController::isProtectedInventoryItem(const Item& item) const
+{
+	const ItemType& type = Item::items[item.getID()];
+	return type.isContainer() || isCombatEquipment(item) || item.getID() == ropeItemId || item.getID() == 2554 ||
+	       item.getID() == meatItemId || item.getID() == smallHealthPotionItemId || item.getWorth() != 0 ||
+	       itemSellValues.find(item.getID()) == itemSellValues.end();
+}
+
+bool PlayerBotController::isCombatReady(const Player& player, std::string& recovery, std::string& terminalReason) const
+{
+	recovery.clear();
+	terminalReason.clear();
+	if (!requiresKnightCombatReadiness(player)) {
+		return true;
+	}
+	Item* left = player.getInventoryItem(CONST_SLOT_LEFT);
+	Item* right = player.getInventoryItem(CONST_SLOT_RIGHT);
+	Item* armor = player.getInventoryItem(CONST_SLOT_ARMOR);
+	Item* backpack = player.getInventoryItem(CONST_SLOT_BACKPACK);
+	const bool weaponReady = (left && isKnightMeleeWeapon(player, *left)) || (right && isKnightMeleeWeapon(player, *right));
+	const bool armorReady = armor && isLegalEquipmentItem(player, *armor) &&
+	                        (armor->getSlotPosition() & SLOTP_ARMOR) != 0 && armor->getArmor() > 0;
+	const bool loadoutReady = backpack && backpack->getContainer();
+	const bool suppliesReady = getInventoryItemCount(player, smallHealthPotionItemId) >= minimumSmallHealthPotions &&
+	                           getInventoryItemCount(player, meatItemId) >= minimumMeat;
+	const bool capacityReady = player.getFreeCapacity() >= returnCapacityThreshold;
+	Item* upgrade = nullptr;
+	EquipmentUpgrade upgradeInfo{};
+	if (findCarriedEquipmentUpgrade(const_cast<Player&>(player), upgrade, upgradeInfo)) {
+		recovery = "equip_carried";
+		return false;
+	}
+	if (weaponReady && armorReady && loadoutReady && suppliesReady && capacityReady) {
+		return true;
+	}
+	if (!weaponReady) {
+		terminalReason = "missing_legal_melee_weapon";
+	} else if (!armorReady) {
+		terminalReason = "missing_legal_armor";
+	} else if (!loadoutReady) {
+		terminalReason = "missing_backpack";
+	} else {
+		recovery = "service";
+	}
+	return false;
+}
+
+void PlayerBotController::emitCombatReadiness(const Player& player, const Position& position, const char* result,
+                                              const std::string& recovery, const std::string& terminalReason) const
+{
+	Item* left = player.getInventoryItem(CONST_SLOT_LEFT);
+	Item* right = player.getInventoryItem(CONST_SLOT_RIGHT);
+	Item* armor = player.getInventoryItem(CONST_SLOT_ARMOR);
+	Item* backpack = player.getInventoryItem(CONST_SLOT_BACKPACK);
+	const bool weaponReady = (left && isKnightMeleeWeapon(player, *left)) || (right && isKnightMeleeWeapon(player, *right));
+	const bool armorReady = armor && isLegalEquipmentItem(player, *armor) && armor->getArmor() > 0;
+	std::ostringstream fields;
+	fields << "\"result\":" << jsonString(result)
+	       << ",\"vocation_id\":" << player.getVocationId()
+	       << ",\"requirements\":[{\"name\":\"legal_melee_weapon\",\"ready\":" << (weaponReady ? "true" : "false")
+	       << ",\"left_item_id\":" << (left ? std::to_string(left->getID()) : "null")
+	       << ",\"right_item_id\":" << (right ? std::to_string(right->getID()) : "null") << '}'
+	       << ",{\"name\":\"armor_loadout\",\"ready\":" << (armorReady && backpack && backpack->getContainer() ? "true" : "false")
+	       << ",\"armor_item_id\":" << (armor ? std::to_string(armor->getID()) : "null")
+	       << ",\"armor\":" << (armor ? armor->getArmor() : 0) << '}'
+	       << ",{\"name\":\"small_health_potions\",\"ready\":" <<
+	          (getInventoryItemCount(player, smallHealthPotionItemId) >= minimumSmallHealthPotions ? "true" : "false")
+	       << ",\"count\":" << getInventoryItemCount(player, smallHealthPotionItemId)
+	       << ",\"minimum\":" << minimumSmallHealthPotions << '}'
+	       << ",{\"name\":\"food\",\"ready\":" << (getInventoryItemCount(player, meatItemId) >= minimumMeat ? "true" : "false")
+	       << ",\"count\":" << getInventoryItemCount(player, meatItemId) << ",\"minimum\":" << minimumMeat << '}'
+	       << ",{\"name\":\"free_capacity\",\"ready\":" << (player.getFreeCapacity() >= returnCapacityThreshold ? "true" : "false")
+	       << ",\"current\":" << player.getFreeCapacity() << ",\"minimum\":" << returnCapacityThreshold << "}]"
+	       << ",\"selected_recovery\":" << (recovery.empty() ? "null" : jsonString(recovery))
+	       << ",\"terminal_reason\":" << (terminalReason.empty() ? "null" : jsonString(terminalReason));
+	emit("combat_readiness", position, fields.str());
+}
+
+bool PlayerBotController::findCarriedEquipmentUpgrade(Player& player, Item*& selectedItem, EquipmentUpgrade& selectedUpgrade) const
+{
+	selectedItem = nullptr;
+	for (int32_t slot = CONST_SLOT_FIRST; slot <= CONST_SLOT_LAST; ++slot) {
+		Item* root = player.getInventoryItem(static_cast<slots_t>(slot));
+		Container* container = root ? root->getContainer() : nullptr;
+		if (!container) {
+			continue;
+		}
+		for (ContainerIterator it = container->iterator(); it.hasNext(); it.advance()) {
+			Item* candidate = *it;
+			std::optional<EquipmentUpgrade> upgrade = evaluateEquipmentUpgrade(player, *candidate);
+			if (!upgrade || (requiresKnightCombatReadiness(player) &&
+			                 candidate->getWeaponType() != WEAPON_NONE && !isKnightMeleeWeapon(player, *candidate))) {
+				continue;
+			}
+			Position source;
+			uint8_t index = 0;
+			g_game.internalGetPosition(candidate, source, index);
+			if (source.x != 0xFFFF || (source.y & 0x40) == 0 ||
+			    (selectedItem && upgrade->benefit <= selectedUpgrade.benefit)) {
+				continue;
+			}
+			selectedItem = candidate;
+			selectedUpgrade = *upgrade;
+		}
+	}
+	return selectedItem != nullptr;
+}
+
+bool PlayerBotController::beginReadinessEquipment(Player* player, const Position& position, const char* reason)
+{
+	Item* item = nullptr;
+	EquipmentUpgrade upgrade{};
+	if (!player || !findCarriedEquipmentUpgrade(*player, item, upgrade) || !player->canDoAction()) {
+		return false;
+	}
+	Position source;
+	uint8_t sourceIndex = 0;
+	g_game.internalGetPosition(item, source, sourceIndex);
+	Container* sourceContainer = dynamic_cast<Container*>(item->getParent());
+	if (sourceContainer && player->getContainerID(sourceContainer) < 0) {
+		Container* containerToOpen = sourceContainer;
+		while (Container* parent = dynamic_cast<Container*>(containerToOpen->getParent())) {
+			if (player->getContainerID(parent) >= 0) {
+				break;
+			}
+			containerToOpen = parent;
+		}
+		Position containerPosition;
+		uint8_t containerIndex = 0;
+		Item* containerItem = static_cast<Item*>(containerToOpen);
+		g_game.internalGetPosition(containerItem, containerPosition, containerIndex);
+		uint8_t containerId = rewardContainerIdBase;
+		while (containerId <= maximumContainerId && player->getContainerByID(containerId)) {
+			++containerId;
+		}
+		++pendingReadinessAttempts;
+		if (containerId > maximumContainerId || containerPosition.x != 0xFFFF ||
+		    pendingReadinessAttempts > maximumProgressionAttempts) {
+			return false;
+		}
+		++counters.actionsAttempted;
+		g_game.playerUseItem(playerId, containerPosition, containerIndex, containerId, containerItem->getClientID());
+		emit("action_result", position, "\"action\":\"open_readiness_container\",\"result\":\"requested\",\"item_id\":" +
+		     std::to_string(containerItem->getID()) + ",\"container_id\":" + std::to_string(containerId));
+		schedule(navigationDecisionDelay(*player));
+		return true;
+	}
+	pendingReadinessItemId = item->getID();
+	pendingReadinessSlot = upgrade.slot;
+	readinessEquipmentPending = true;
+	pendingReadinessAttempts = 0;
+	++counters.actionsAttempted;
+	g_game.playerMoveItem(player, source, item->getClientID(), sourceIndex,
+	                      Position(0xFFFF, upgrade.slot, 0), item->getItemCount(), item, nullptr);
+	emit("action_result", position, "\"action\":\"equip_readiness\",\"result\":\"requested\",\"item_id\":" +
+	     std::to_string(item->getID()) + ",\"slot\":" + std::to_string(upgrade.slot) +
+	     ",\"reason\":" + jsonString(reason));
+	schedule(navigationDecisionDelay(*player));
+	return true;
+}
+
+void PlayerBotController::processReadinessEquipment(Player* player, const Position& position)
+{
+	Item* equipped = pendingReadinessSlot == CONST_SLOT_WHEREEVER ? nullptr : player->getInventoryItem(pendingReadinessSlot);
+	if (equipped && equipped->getID() == pendingReadinessItemId) {
+		std::string recovery;
+		std::string terminalReason;
+		const bool ready = isCombatReady(*player, recovery, terminalReason);
+		emit("action_result", position, "\"action\":\"equip_readiness\",\"result\":\"success\",\"item_id\":" +
+		     std::to_string(pendingReadinessItemId) + ",\"slot\":" + std::to_string(pendingReadinessSlot));
+		emitCombatReadiness(*player, position, ready ? "ready" : "recovery", recovery, terminalReason);
+		readinessEquipmentPending = false;
+		pendingReadinessAttempts = 0;
+		if (ready) {
+			startHunt(player, position, "readiness_carried_upgrade");
+			return;
+		}
+		ensureCombatReady(player, position, "readiness_upgrade_incomplete");
+		return;
+	}
+	if (++pendingReadinessAttempts >= maximumProgressionAttempts) {
+		std::string recovery;
+		std::string terminalReason;
+		isCombatReady(*player, recovery, terminalReason);
+		readinessEquipmentPending = false;
+		emit("action_result", position, "\"action\":\"equip_readiness\",\"result\":\"failed\",\"reason\":\"move_not_verified\"");
+		emitCombatReadiness(*player, position, "failed", recovery, terminalReason);
+		if (!terminalReason.empty()) {
+			stop(("combat_readiness_" + terminalReason).c_str(), position);
+		} else {
+			beginService(player, position, "readiness_equipment_move_failed");
+			schedule(navigationInterval);
+		}
+		return;
+	}
+	readinessEquipmentPending = false;
+	if (!beginReadinessEquipment(player, position, "readiness_retry")) {
+		if (pendingReadinessAttempts >= maximumProgressionAttempts) {
+			emit("action_result", position,
+			     "\"action\":\"open_readiness_container\",\"result\":\"failed\",\"reason\":\"access_attempts_exhausted\"");
+			pendingReadinessAttempts = 0;
+			beginService(player, position, "readiness_container_access_failed");
+			schedule(navigationInterval);
+		} else {
+			schedule(navigationDecisionDelay(*player));
+		}
+	}
+}
+
+bool PlayerBotController::ensureCombatReady(Player* player, const Position& position, const char* reason)
+{
+	if (!player || !requiresKnightCombatReadiness(*player)) {
+		return true;
+	}
+	std::string recovery;
+	std::string terminalReason;
+	if (isCombatReady(*player, recovery, terminalReason)) {
+		if (std::strcmp(reason, "readiness_continuous_check") != 0) {
+			emitCombatReadiness(*player, position, "ready", {}, {});
+		}
+		return true;
+	}
+	emitCombatReadiness(*player, position, "recovery", recovery, terminalReason);
+	if (recovery == "equip_carried") {
+		if (!beginReadinessEquipment(player, position, reason)) {
+			if (pendingReadinessAttempts >= maximumProgressionAttempts) {
+				emit("action_result", position,
+				     "\"action\":\"open_readiness_container\",\"result\":\"failed\",\"reason\":\"access_attempts_exhausted\"");
+				pendingReadinessAttempts = 0;
+				beginService(player, position, "readiness_container_access_failed");
+				schedule(navigationInterval);
+			} else {
+				schedule(navigationDecisionDelay(*player));
+			}
+		}
+		return false;
+	}
+	if (recovery == "service") {
+		beginService(player, position, "combat_readiness_service");
+		schedule(navigationInterval);
+		return false;
+	}
+	stop(("combat_readiness_" + terminalReason).c_str(), position);
+	return false;
 }
 
 std::string PlayerBotController::rewardItemSignature(const Item& item) const
