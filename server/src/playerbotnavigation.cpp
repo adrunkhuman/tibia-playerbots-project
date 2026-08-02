@@ -17,7 +17,6 @@
 #include "house.h"
 #include "item.h"
 #include "player.h"
-#include "teleport.h"
 #include "tile.h"
 
 #include <array>
@@ -71,20 +70,6 @@ namespace {
 		return tile && tile->queryAdd(0, player, 1, flags) == RETURNVALUE_NOERROR;
 	}
 
-	Position resolveTeleportDestination(Position position)
-	{
-		std::set<Position> visited;
-		while (visited.insert(position).second) {
-			Tile* tile = g_game.map.getTile(position);
-			Teleport* teleport = tile ? tile->getTeleportItem() : nullptr;
-			if (!teleport) {
-				break;
-			}
-			position = teleport->getDestPos();
-		}
-		return position;
-	}
-
 	bool resolveWalk(Player& player, const Position& from, Direction direction,
 	                 const std::set<Position>& blockedPositions, Position& destination)
 	{
@@ -127,7 +112,7 @@ namespace {
 		}
 
 		Tile* tile = g_game.map.getTile(destination);
-		if (!canOccupy(player, tile, flags)) {
+		if (!canOccupy(player, tile, flags) || tile->getTeleportItem()) {
 			return false;
 		}
 
@@ -139,9 +124,12 @@ namespace {
 			if (!nextTile || nextTile == tile) {
 				break;
 			}
+			if (nextTile->getTeleportItem()) {
+				return false;
+			}
 			tile = nextTile;
 		}
-		destination = resolveTeleportDestination(tile->getPosition());
+		destination = tile->getPosition();
 		return g_game.map.getTile(destination) != nullptr && blockedPositions.find(destination) == blockedPositions.end();
 	}
 

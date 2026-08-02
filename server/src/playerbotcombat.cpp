@@ -541,7 +541,7 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 		cancelHuntRegionPlanning();
 	}
 	if (!huntRegionPlanning) {
-		PlayerBotHuntRegionScan scan = huntRegionPlanner.beginScan();
+		PlayerBotHuntRegionScan scan = huntRegionPlanner.beginScan(player);
 		HuntRegionPlanning planning;
 		planning.regions.reserve(scan.candidateCount);
 		planning.reason = reason;
@@ -550,6 +550,7 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 		planning.snapshotTimeUs = scan.snapshotTimeUs;
 		planning.clusteringTimeUs = scan.clusteringTimeUs;
 		planning.cacheRevision = scan.revision;
+		planning.candidateIndices = std::move(scan.candidateIndices);
 		planning.totalCandidates = static_cast<uint32_t>(scan.candidateCount);
 		planning.playerPosition = player.getPosition();
 		planning.playerLevel = player.getLevel();
@@ -571,7 +572,8 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 		     scoredThisTurn < huntRegionScoringCandidatesPerTurn && planning.nextScoringCandidate < planning.totalCandidates;
 		     ++scoredThisTurn, ++planning.nextScoringCandidate) {
 			PlayerBotHuntRegion region;
-			if (!huntRegionPlanner.score(player, planning.cacheRevision, planning.nextScoringCandidate, excludedRegions,
+			if (!huntRegionPlanner.score(player, planning.cacheRevision,
+			                             planning.candidateIndices[planning.nextScoringCandidate], excludedRegions,
 			                             huntRegionPerformance, huntDurationSeconds, region)) {
 				emitHuntRegionPlanning(planning, position, "stale_revision");
 				cancelHuntRegionPlanning();
@@ -768,9 +770,6 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 		processReadinessEquipment(player, currentPosition);
 		return;
 	}
-	if (cyclePhase == CyclePhase::Hunt && !ensureCombatReady(player, currentPosition, "readiness_continuous_check")) {
-		return;
-	}
 	if (cyclePhase != CyclePhase::Hunt || progressionObjective == ProgressionObjective::OracleDeparture) {
 		if (defensiveTargetId != 0) {
 			processDefensiveCombat(player, currentPosition);
@@ -783,6 +782,9 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 	}
 	if (progressionObjective != ProgressionObjective::None) {
 		processProgression(player, currentPosition);
+		return;
+	}
+	if (cyclePhase == CyclePhase::Hunt && !ensureCombatReady(player, currentPosition, "readiness_continuous_check")) {
 		return;
 	}
 	if (cyclePhase == CyclePhase::Hunt && !testPolicy.fixedFixtureRoute && !activeHuntRegion && !huntRegionPlanning) {
@@ -804,7 +806,7 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 	if (cyclePhase == CyclePhase::Hunt &&
 	    (std::chrono::steady_clock::now() >= huntDeadline || player->getFreeCapacity() < returnCapacityThreshold)) {
 		const char* reason = player->getFreeCapacity() < returnCapacityThreshold ? "capacity" : "hunt_deadline";
-		if (testPolicy.progressionEnabled) {
+		if (testPolicy.progressionEnabled && !hasCompletedRookgaardDeparture(*player)) {
 			finishHuntAndSelectGoal(player, currentPosition, reason);
 			return;
 		} else {

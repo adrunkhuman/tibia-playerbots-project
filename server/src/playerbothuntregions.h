@@ -67,6 +67,7 @@ struct PlayerBotHuntRegionScan {
 	uint64_t snapshotTimeUs = 0;
 	uint64_t clusteringTimeUs = 0;
 	size_t candidateCount = 0;
+	std::vector<size_t> candidateIndices;
 };
 
 class PlayerBotHuntRegionPlanner
@@ -74,7 +75,7 @@ class PlayerBotHuntRegionPlanner
 	public:
 		static void invalidateCache();
 		static uint64_t getCacheRevision();
-		PlayerBotHuntRegionScan beginScan() const;
+		PlayerBotHuntRegionScan beginScan(const Player& player) const;
 		bool score(Player& player, uint64_t revision, size_t candidateIndex, const std::set<Position>& excludedRegions,
 		           const std::map<Position, PlayerBotHuntRegionPerformance>& performance,
 		           uint32_t huntDurationSeconds, PlayerBotHuntRegion& region) const;

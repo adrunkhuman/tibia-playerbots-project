@@ -13,6 +13,7 @@ param(
     [switch]$HuntRegionPlanning,
 	[switch]$CombatReadiness,
 	[switch]$Depot,
+	[switch]$MainlandLoop,
 	[switch]$Focused,
 	[switch]$SkipBuild,
 	[switch]$KeepStack
@@ -272,7 +273,7 @@ function Assert-OracleDepartureEvents {
     $events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
     if ($Restart) {
         $restored = @($events | Where-Object {
-            $_.event -eq "lifecycle" -and $_.status -eq "online" -and $_.objective -eq "departure_complete"
+            $_.event -eq "lifecycle" -and $_.status -eq "online" -and $_.objective -eq "service"
         })
         if ($restored.Count -lt 1) {
             throw "The persisted Oracle departure state was not restored."
@@ -295,13 +296,12 @@ function Assert-OracleDepartureEvents {
     $goalResult = @($events | Where-Object {
         $_.event -eq "goal_result" -and $_.goal -eq "oracle_departure" -and $_.result -eq "success"
     })
-    $stopped = @($events | Where-Object {
-        $_.event -eq "state_transition" -and $_.to -eq "stopped"
+    $continued = @($events | Where-Object {
+        $_.event -eq "objective_transition" -and $_.to -eq "service" -and $_.reason -eq "departure_complete"
     })
-    $wrongStoppedCount = if ($InterruptedByRestart) { $stopped.Count -lt 1 } else { $stopped.Count -ne 1 }
     if ($candidate.Count -lt 1 -or $selection.Count -lt 1 -or $result.Count -ne 1 -or
-        $goalResult.Count -ne 1 -or $wrongStoppedCount) {
-        throw "The bot did not complete and verify the selected Oracle departure: candidate=$($candidate.Count), selection=$($selection.Count), result=$($result.Count), goalResult=$($goalResult.Count), stopped=$($stopped.Count)."
+        $goalResult.Count -ne 1 -or $continued.Count -ne 1) {
+        throw "The bot did not complete and continue after the selected Oracle departure: candidate=$($candidate.Count), selection=$($selection.Count), result=$($result.Count), goalResult=$($goalResult.Count), continued=$($continued.Count)."
     }
 }
 
@@ -1102,13 +1102,51 @@ function Assert-DepotRecoveryEvents {
 	}
 }
 
+function Assert-MainlandLoopEvents {
+	param([string]$Logs, [int]$MinimumCycles = 3, [int]$MinimumDeposits = 2)
+
+	$events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
+	$hunts = @($events | Where-Object {
+		$_.event -eq "action_result" -and $_.action -eq "hunt_cycle" -and $_.result -eq "started"
+	})
+	$deposits = @($events | Where-Object {
+		$_.event -eq "action_result" -and $_.action -eq "deposit" -and $_.result -eq "complete" -and $_.depot_id -eq 2
+	})
+	$realDepot = @($events | Where-Object {
+		$_.event -eq "action_result" -and $_.action -eq "depot_discover" -and $_.result -eq "success" -and
+		$_.locker.x -eq 32344 -and $_.locker.y -eq 32218 -and $_.locker.z -eq 5
+	})
+	$trainingRoomDepot = @($events | Where-Object {
+		$_.event -eq "action_result" -and $_.action -eq "depot_discover" -and $_.result -eq "success" -and
+		$_.locker.x -eq 32276 -and $_.locker.y -eq 32218 -and $_.locker.z -eq 11
+	})
+	$selection = @($events | Where-Object {
+		$_.event -eq "hunt_region_selection" -and $_.result -eq "selected" -and
+		[Math]::Abs($_.center.x - 32369) + [Math]::Abs($_.center.y - 32241) +
+		20 * [Math]::Abs($_.center.z - 7) -le 200
+	})
+	$cheeseDeposit = @($events | Where-Object {
+		$_.event -eq "action_result" -and $_.action -eq "deposit" -and $_.result -in @("success", "partial") -and
+		$_.item_id -eq 2696
+	})
+	$rookService = @($events | Where-Object {
+		$_.event -eq "npc_reply" -and $_.npc_name -in @("Billy", "Willie", "Lily", "Paulie")
+	})
+	$terminal = @($events | Where-Object { $_.event -eq "terminal" })
+	if ($hunts.Count -lt $MinimumCycles -or $deposits.Count -lt $MinimumDeposits -or $realDepot.Count -lt 1 -or
+		$trainingRoomDepot.Count -ne 0 -or
+		$selection.Count -lt 1 -or $cheeseDeposit.Count -lt 1 -or $rookService.Count -ne 0 -or $terminal.Count -ne 0) {
+		throw "Mainland loop failed. hunts=$($hunts.Count), deposits=$($deposits.Count), realDepot=$($realDepot.Count), trainingRoomDepot=$($trainingRoomDepot.Count), localSelections=$($selection.Count), cheeseDeposits=$($cheeseDeposit.Count), rookService=$($rookService.Count), terminal=$($terminal.Count)."
+	}
+}
+
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
 	throw "Docker is required to run the playerbot gameplay suite."
 }
 
 $focusedScenarioRequested = $FullNavigation -or $CorpseLoot -or $DeathTelemetry -or $Healing -or $ValueLoot -or
 	$PickupProgression -or $GoalArbitration -or $OracleDeparture -or $StaminaProjection -or $HuntRegionPlanning -or
-	$CombatReadiness -or $Depot
+	$CombatReadiness -or $Depot -or $MainlandLoop
 if ($Focused -and -not $focusedScenarioRequested) {
 	throw "-Focused requires at least one focused scenario switch."
 }
@@ -1137,6 +1175,30 @@ try {
 			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST SERVICE_PASS' | Out-Null
 			$cycleLogs = Wait-ForLog -Pattern '"action":"hunt_cycle","result":"started","cycle":2'
 			Assert-CycleEvents -Logs $cycleLogs
+		}
+	}
+
+	if ($MainlandLoop) {
+		Invoke-Scenario -Name "mainland_loop" -DefaultTimeoutSeconds 600 -Body {
+			Invoke-Compose down --volumes --remove-orphans
+			$env:PLAYERBOT_GAMEPLAY_MODE = "mainland"
+			$env:PLAYERBOT_HUNT_DURATION_SECONDS = "10"
+			Invoke-Compose up --detach
+			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST MAINLAND_START' | Out-Null
+			$loopLogs = Wait-ForLog -Pattern '"action":"hunt_cycle","result":"started","cycle":3'
+			Assert-MainlandLoopEvents -Logs $loopLogs
+
+			$restartLineCount = @((Get-ServerLogs) -split "`r?`n").Count
+			Invoke-Compose stop server
+			Invoke-Compose up --detach server
+			$restartLogs = ""
+			for ($attempt = 0; $attempt -lt 300; $attempt++) {
+				Start-Sleep -Seconds 1
+				$restartLogs = ((Get-ServerLogs) -split "`r?`n" | Select-Object -Skip $restartLineCount) -join "`n"
+				if ($restartLogs -match '"action":"deposit","result":"complete","depot_id":2' -and
+					$restartLogs -match '"action":"hunt_cycle","result":"started","cycle":1') { break }
+			}
+			Assert-MainlandLoopEvents -Logs $restartLogs -MinimumCycles 1 -MinimumDeposits 1
 		}
 	}
 
@@ -1439,7 +1501,7 @@ try {
             Invoke-Compose stop server
             Invoke-Compose up --detach server
             Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST ORACLE_DEPARTURE_RESTART_PASS' | Out-Null
-            $restartLogs = Wait-ForLog -Pattern '"objective":"departure_complete"'
+            $restartLogs = Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST ORACLE_DEPARTURE_RESTART_PASS'
             Assert-OracleDepartureEvents -Logs $restartLogs -Restart
         }
 

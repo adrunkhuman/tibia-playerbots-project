@@ -355,6 +355,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 			};
 
 			std::vector<PlayerBotHuntRegion> regions;
+			std::vector<size_t> candidateIndices;
 			std::string reason;
 			std::chrono::steady_clock::time_point started;
 			size_t nextCandidate = 0;

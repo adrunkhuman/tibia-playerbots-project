@@ -3,13 +3,15 @@
 	<health now="100" max="100" />
 	<look type="130" head="19" body="86" legs="87" feet="95" addons="0" />
 	<parameters>
+		<parameter key="playerbot_service" value="shop" />
 		<parameter key="module_shop" value="1" />
 		<parameter key="shop_buyable" value="
 			blank rune,2260,10;			
 			great health potion,7591,190;
 			great mana potion,7590,120;
 			great spirit potion,8472,190;
-			health potion,7618,45;			
+			health potion,7618,45;
+			small health potion,8704,20;
 			mana potion,7620,50;
 			moonlight rod,2186,1000;
 			necrotic rod,2185,5000;			

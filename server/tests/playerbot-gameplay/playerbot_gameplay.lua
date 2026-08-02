@@ -28,8 +28,40 @@ local economicRewardStorage = 50082
 local departureRecoveryStorage = 50090
 local depotFixtureStorage = 50095
 local deathLoginCount = 0
+local removeAll
 
-local function removeAll(player, itemId)
+local function restoreRookgaardBaseline(player)
+    local armor = player:getSlotItem(CONST_SLOT_ARMOR)
+    if player:getLevel() ~= 8 or player:getVocation():getId() ~= 4 or not armor or armor:getId() ~= 2463 then
+        return
+    end
+
+    assert(player:setVocation(0), "fixture could not restore the vocationless baseline")
+    local experience = player:getExperience()
+    if experience > 0 then
+        assert(player:removeExperience(experience), "fixture could not restore level 1")
+    end
+    local rookgaard = Town(6)
+    assert(rookgaard and player:setTown(rookgaard), "fixture could not restore Rookgaard")
+    assert(player:teleportTo(rookgaard:getTemplePosition()), "fixture could not reach the Rookgaard temple")
+    for _, slot in ipairs({CONST_SLOT_HEAD, CONST_SLOT_ARMOR, CONST_SLOT_RIGHT, CONST_SLOT_LEFT, CONST_SLOT_LEGS, CONST_SLOT_FEET}) do
+        local item = player:getSlotItem(slot)
+        if item then
+            assert(item:remove(), "fixture could not clear equipment slot " .. slot)
+        end
+    end
+    for _, itemId in ipairs({2457, 2463, 2525, 2376, 2647, 2643}) do
+        removeAll(player, itemId)
+    end
+    assert(player:addItem(starterArmorId, 1, false, 1, CONST_SLOT_ARMOR), "fixture could not restore starter armor")
+    assert(player:addItem(starterWeaponId, 1, false, 1, CONST_SLOT_LEFT), "fixture could not restore starter weapon")
+    assert(player:getSlotItem(CONST_SLOT_ARMOR) and player:getSlotItem(CONST_SLOT_ARMOR):getId() == starterArmorId,
+        "fixture did not equip starter armor")
+    assert(player:getSlotItem(CONST_SLOT_LEFT) and player:getSlotItem(CONST_SLOT_LEFT):getId() == starterWeaponId,
+        "fixture did not equip starter weapon")
+end
+
+removeAll = function(player, itemId)
     local count = player:getItemCount(itemId)
     if count > 0 then
         assert(player:removeItem(itemId, count), "fixture could not remove item " .. itemId)
@@ -389,7 +421,7 @@ function login.onLogin(player)
     end
 
     local mode = os.getenv("PLAYERBOT_GAMEPLAY_MODE") or "cycle"
-	assert(mode == "cycle" or mode == "depot" or mode == "navigation" or mode == "corpse" or mode == "death" or mode == "healing" or
+	assert(mode == "mainland" or mode == "cycle" or mode == "depot" or mode == "navigation" or mode == "corpse" or mode == "death" or mode == "healing" or
 		mode == "healing_resupply" or mode == "value" or mode == "progression" or mode == "progression_bundle" or
 		mode == "progression_nested" or
         mode == "progression_resume" or mode == "progression_nested_resume" or mode == "progression_space" or
@@ -400,6 +432,18 @@ function login.onLogin(player)
         mode == "readiness_upgrade" or mode == "readiness_missing_weapon" or mode == "readiness_supplies" or
         mode == "readiness_retention",
         "unknown PLAYERBOT_GAMEPLAY_MODE: " .. mode)
+	if mode == "mainland" then
+		local town = player:getTown()
+		assert(player:getLevel() == 8 and player:getVocation():getId() == 4 and town and town:getId() == thaisTownId,
+			"mainland fixture did not load the level-8 Thais Knight")
+		assert(player:getSlotItem(CONST_SLOT_ARMOR) and player:getSlotItem(CONST_SLOT_ARMOR):getId() == 2463,
+			"mainland fixture did not load plate armor")
+		local backpack = player:getSlotItem(CONST_SLOT_BACKPACK)
+		assert(backpack and backpack:addItem(2696, 1), "mainland fixture could not seed local-service loot")
+		print("PLAYERBOT_GAMEPLAY_TEST MAINLAND_START")
+		return true
+	end
+	restoreRookgaardBaseline(player)
 	if mode == "readiness_ready" or mode == "readiness_upgrade" or mode == "readiness_missing_weapon" or
 		mode == "readiness_supplies" or mode == "readiness_retention" then
 		assert(player:setVocation(4), "readiness fixture could not select Knight vocation")
@@ -484,12 +528,8 @@ function login.onLogin(player)
     if mode == "departure" then
         if player:getVocation():getId() ~= 0 then
             local town = player:getTown()
-            local position = player:getPosition()
-            local temple = Town(2):getTemplePosition()
             assert(player:getVocation():getId() == 4 and town and town:getId() == 2,
                 "Oracle departure restart restored the wrong vocation or town")
-            assert(position.x == temple.x and position.y == temple.y and position.z == temple.z,
-                "Oracle departure restart restored the wrong position")
             print("PLAYERBOT_GAMEPLAY_TEST ORACLE_DEPARTURE_RESTART_PASS")
             return true
         end
