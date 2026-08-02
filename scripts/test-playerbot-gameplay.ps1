@@ -10,6 +10,7 @@ param(
 	[switch]$GoalArbitration,
 	[switch]$OracleDeparture,
 	[switch]$StaminaProjection,
+	[switch]$HuntRegionPlanning,
 	[switch]$Focused,
 	[switch]$SkipBuild,
 	[switch]$KeepStack
@@ -816,6 +817,55 @@ function Assert-StaminaProjectionEvents {
     }
 }
 
+function Assert-HuntRegionPlanningEvents {
+    param([string]$Logs)
+
+    $events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
+    $scored = @($events | Where-Object {
+        $_.event -eq "hunt_region_scan" -and $_.phase -in @("scoring_started", "scored")
+    })
+    $build = @($scored | Where-Object { $_.cache -eq "build" })
+    $hit = @($scored | Where-Object { $_.cache -eq "hit" })
+	$cancelled = @($events | Where-Object { $_.event -eq "hunt_region_scan" -and $_.phase -eq "cancelled" })
+	$staleRevision = @($events | Where-Object { $_.event -eq "hunt_region_scan" -and $_.phase -eq "stale_revision" })
+	$scoringYields = @($events | Where-Object { $_.event -eq "hunt_region_scan" -and $_.phase -eq "scoring_yield" })
+    $yields = @($events | Where-Object {
+        $_.event -eq "hunt_region_scan" -and $_.phase -eq "reachability_yield" -and
+        $_.pathfinding_calls -ge 1 -and $_.batch_pathfinding_calls -le 1 -and $_.yields -ge 1
+    })
+    $selections = @($events | Where-Object { $_.event -eq "hunt_region_selection" -and $_.result -eq "selected" })
+    $selection = if ($selections.Count -gt 0) { $selections[$selections.Count - 1] } else { $null }
+    $candidates = @($events | Where-Object { $_.event -eq "hunt_region_candidate" })
+    $unreachableBeforeSelection = @($candidates | Where-Object {
+        $_.rejection_reason -eq "unreachable" -and $selection -and $_.region_id -lt $selection.region_id
+    })
+    $outsideLocalFixture = @($candidates | Where-Object {
+        [Math]::Max([Math]::Abs($_.center.x - 32105), [Math]::Abs($_.center.y - 32195)) -gt 32
+    })
+    $completed = @($events | Where-Object {
+        $_.event -eq "hunt_region_scan" -and $_.phase -eq "selected" -and $_.decision_latency_us -gt 0 -and
+        $_.expanded_nodes -ge 0
+    })
+    $selectedCandidate = if ($selection) { @($candidates | Where-Object { $_.region_id -eq $selection.region_id }) } else { @() }
+    $reachableCandidates = @($candidates | Where-Object { $_.suitable -and $_.reachable })
+    $bestScore = if ($reachableCandidates.Count -gt 0) { ($reachableCandidates | Measure-Object -Property score -Maximum).Maximum } else { $null }
+    $nodeBudget = @($candidates | Where-Object { $_.rejection_reason -eq "navigation_node_budget" })
+    $nodeBudgetMisclassified = @($nodeBudget | Where-Object {
+        $regionId = $_.region_id
+        @($candidates | Where-Object { $_.region_id -eq $regionId -and $_.rejection_reason -eq "unreachable" }).Count -gt 0
+    })
+    $tooManyPathCalls = @($events | Where-Object {
+        $_.event -eq "hunt_region_scan" -and $_.phase -eq "reachability_yield" -and $_.batch_pathfinding_calls -gt 1
+    })
+	if ($build.Count -lt 2 -or $hit.Count -lt 1 -or $cancelled.Count -ne 1 -or $staleRevision.Count -ne 1 -or $scoringYields.Count -lt 1 -or
+        $yields.Count -lt 1 -or $tooManyPathCalls.Count -ne 0 -or -not $selection -or $selectedCandidate.Count -ne 1 -or
+        $bestScore -eq $null -or [Math]::Abs($selectedCandidate[0].score - $bestScore) -gt 0.01 -or
+        $nodeBudget.Count -lt 1 -or $nodeBudgetMisclassified.Count -ne 0 -or
+        $unreachableBeforeSelection.Count -lt 1 -or $outsideLocalFixture.Count -lt 1 -or $completed.Count -lt 1) {
+		throw "Hunt planning telemetry was incomplete. build=$($build.Count), hit=$($hit.Count), cancelled=$($cancelled.Count), stale=$($staleRevision.Count), scoring_yields=$($scoringYields.Count), yields=$($yields.Count), over_budget=$($tooManyPathCalls.Count), selection=$($selection.Count), fallback=$($unreachableBeforeSelection.Count), outside=$($outsideLocalFixture.Count), completed=$($completed.Count)."
+    }
+}
+
 function Assert-GoalArbitrationInterruptEvents {
     param([string]$Logs)
 
@@ -928,7 +978,7 @@ if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
 }
 
 $focusedScenarioRequested = $FullNavigation -or $CorpseLoot -or $DeathTelemetry -or $Healing -or $ValueLoot -or
-    $PickupProgression -or $GoalArbitration -or $OracleDeparture -or $StaminaProjection
+	$PickupProgression -or $GoalArbitration -or $OracleDeparture -or $StaminaProjection -or $HuntRegionPlanning
 if ($Focused -and -not $focusedScenarioRequested) {
 	throw "-Focused requires at least one focused scenario switch."
 }
@@ -1073,6 +1123,18 @@ try {
             Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST STAMINA_PROJECTION_START 2400' | Out-Null
             $normalLogs = Wait-ForLog -Pattern '"event":"hunt_region_selection".*"result":"selected"'
             Assert-StaminaProjectionEvents -Logs $normalLogs -StaminaMinutes 2400
+        }
+    }
+
+    if ($HuntRegionPlanning) {
+        Invoke-Scenario -Name "hunt_region_planning" -DefaultTimeoutSeconds 180 -Body {
+            Invoke-Compose down --volumes --remove-orphans
+            $env:PLAYERBOT_GAMEPLAY_MODE = "hunt_planning"
+            $env:PLAYERBOT_HUNT_DURATION_SECONDS = "900"
+            Invoke-Compose up --detach
+			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST HUNT_PLANNING_START' | Out-Null
+            $planningLogs = Wait-ForLog -Pattern '"event":"hunt_region_scan".*"phase":"selected"'
+            Assert-HuntRegionPlanningEvents -Logs $planningLogs
         }
     }
 

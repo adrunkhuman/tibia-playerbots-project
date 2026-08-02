@@ -31,7 +31,6 @@ namespace {
 	constexpr uint32_t cardinalCost = 10;
 	constexpr uint32_t diagonalCost = 30;
 	constexpr uint32_t transitionCost = 20;
-	constexpr uint32_t maximumExpandedNodes = 100000;
 	constexpr int32_t searchMargin = 192;
 	constexpr uint16_t ropeItemId = 2120;
 	constexpr uint16_t shovelItemId = 2554;
@@ -198,14 +197,15 @@ namespace {
 	};
 }
 
-bool PlayerBotNavigator::plan(Player& player, const Position& destination, const std::set<Position>& blockedPositions,
-                              std::deque<PlayerBotNavigationStep>& steps, uint64_t& expandedNodes) const
+PlayerBotNavigationResult PlayerBotNavigator::plan(Player& player, const Position& destination, const std::set<Position>& blockedPositions,
+                                                   std::deque<PlayerBotNavigationStep>& steps, uint64_t& expandedNodes,
+                                                   uint64_t maximumExpandedNodes) const
 {
 	steps.clear();
 	expandedNodes = 0;
 	const Position start = player.getPosition();
 	if (start == destination) {
-		return true;
+		return PlayerBotNavigationResult::Reached;
 	}
 
 	std::priority_queue<QueueNode, std::vector<QueueNode>, std::greater<QueueNode>> open;
@@ -246,12 +246,12 @@ bool PlayerBotNavigator::plan(Player& player, const Position& destination, const
 				auto parent = parents.find(positionKey(cursor));
 				if (parent == parents.end()) {
 					steps.clear();
-					return false;
+					return PlayerBotNavigationResult::Unreachable;
 				}
 				steps.push_front(parent->second.step);
 				cursor = parent->second.position;
 			}
-			return true;
+			return PlayerBotNavigationResult::Reached;
 		}
 
 		for (Direction direction : directions) {
@@ -327,5 +327,5 @@ bool PlayerBotNavigator::plan(Player& player, const Position& destination, const
 			}
 		}
 	}
-	return false;
+	return open.empty() ? PlayerBotNavigationResult::Unreachable : PlayerBotNavigationResult::NodeLimit;
 }

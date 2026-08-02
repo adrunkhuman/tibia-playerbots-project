@@ -99,6 +99,7 @@ class Spawns
 		void startup();
 		void clear();
 		std::vector<SpawnBlockSnapshot> getMonsterSpawnSnapshots() const;
+		uint64_t getGeneration() const { return generation; }
 
 		bool isStarted() const {
 			return started;
@@ -110,6 +111,7 @@ class Spawns
 		std::string filename;
 		bool loaded = false;
 		bool started = false;
+		uint64_t generation = 0;
 };
 
 #endif // FS_SPAWN_H

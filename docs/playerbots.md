@@ -65,12 +65,14 @@ teleports, and unlocked doors. Cardinal movement costs 10; diagonal movement
 costs 30. Failed steps are excluded for 10 seconds. Repeated A-B oscillation
 suppresses the implicated transition for two minutes.
 
-Rookgaard hunt regions come from loaded spawns on floors 6 through 15 within
-180 tiles on each axis of temple `(32097, 32219, 7)`. The planner groups
-overlapping eight-tile spawn kernels, then scores loaded health, attacks, armor,
-experience, spawn chance, and interval against the bot's health, equipment,
-weapon, defense, and skill. The navigator validates the highest-scoring
-candidates and supplies spawn-adjacent patrol destinations.
+Hunt regions come from all loaded hostile spawns on floors 6 through 15; there
+is no player-distance or fixture-radius cap. The shared cache groups overlapping
+eight-tile spawn kernels. Each controller scores candidates in bounded batches
+using its health, equipment, weapon, defense, skill, cooldowns, and observed
+performance. It then validates every suitable candidate incrementally through
+the navigator and selects the highest route-adjusted score. Navigation remains
+behind the destination/reachability interface so a later navigator can replace
+tile planning without changing hunt selection.
 
 Predicted threat rejects a region above `0.35` expected fight damage per maximum
 health. It models up to three overlapping hostile spawns. Taking one maximum

@@ -34,6 +34,7 @@
 #include "items.h"
 #include "monster.h"
 #include "movement.h"
+#include "playerbothuntregions.h"
 #include "scheduler.h"
 #include "server.h"
 #include "spells.h"
@@ -5026,7 +5027,13 @@ bool Game::reload(ReloadTypes_t reloadType)
 		case RELOAD_TYPE_EVENTS: return g_events->load();
 		case RELOAD_TYPE_GLOBALEVENTS: return g_globalEvents->reload();
 		case RELOAD_TYPE_ITEMS: return Item::items.reload();
-		case RELOAD_TYPE_MONSTERS: return g_monsters.reload();
+		case RELOAD_TYPE_MONSTERS: {
+			const bool reloaded = g_monsters.reload();
+			if (reloaded) {
+				PlayerBotHuntRegionPlanner::invalidateCache();
+			}
+			return reloaded;
+		}
 		case RELOAD_TYPE_MOVEMENTS: return g_moveEvents->reload();
 		case RELOAD_TYPE_NPCS: {
 			Npcs::reload();
@@ -5044,6 +5051,7 @@ bool Game::reload(ReloadTypes_t reloadType)
 				std::cout << "[Error - Game::reload] Failed to reload monsters." << std::endl;
 				std::terminate();
 			}
+			PlayerBotHuntRegionPlanner::invalidateCache();
 			return true;
 		}
 
@@ -5087,6 +5095,7 @@ bool Game::reload(ReloadTypes_t reloadType)
 				std::cout << "[Error - Game::reload] Failed to reload monsters." << std::endl;
 				std::terminate();
 			}
+			PlayerBotHuntRegionPlanner::invalidateCache();
 
 			g_actions->reload();
 			g_config.reload();
