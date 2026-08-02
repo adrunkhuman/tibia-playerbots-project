@@ -65,7 +65,9 @@ bool PlayerBotController::findOracleDeparture(Player& player, const Position& po
 		uint64_t expandedNodes = 0;
 		++counters.pathfindingCalls;
 		const auto startedAt = std::chrono::steady_clock::now();
-		const bool planned = candidate == position || navigator.plan(player, candidate, {}, steps, expandedNodes);
+		const PlayerBotNavigationResult planResult = candidate == position ? PlayerBotNavigationResult::Reached :
+			navigator.plan(player, candidate, {}, steps, expandedNodes);
+		const bool planned = planResult == PlayerBotNavigationResult::Reached;
 		counters.pathfindingTimeUs += std::chrono::duration_cast<std::chrono::microseconds>(
 			std::chrono::steady_clock::now() - startedAt).count();
 		if (!planned) {

@@ -20,12 +20,20 @@
 
 class Player;
 
+inline constexpr uint64_t playerBotNavigationMaximumExpandedNodes = 100000;
+
 enum class PlayerBotNavigationAction : uint8_t {
 	Move,
 	Use,
 	UseRope,
 	UseShovel,
 	UseDoor,
+};
+
+enum class PlayerBotNavigationResult : uint8_t {
+	Reached,
+	Unreachable,
+	NodeLimit,
 };
 
 struct PlayerBotNavigationStep {
@@ -39,9 +47,10 @@ struct PlayerBotNavigationStep {
 class PlayerBotNavigator
 {
 	public:
-		bool plan(Player& player, const Position& destination, const std::set<Position>& blockedPositions,
-		          std::deque<PlayerBotNavigationStep>& steps,
-		          uint64_t& expandedNodes) const;
+		PlayerBotNavigationResult plan(Player& player, const Position& destination, const std::set<Position>& blockedPositions,
+		                               std::deque<PlayerBotNavigationStep>& steps,
+		                               uint64_t& expandedNodes,
+		                               uint64_t maximumExpandedNodes = playerBotNavigationMaximumExpandedNodes) const;
 };
 
 #endif

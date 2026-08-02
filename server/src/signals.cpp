@@ -28,6 +28,7 @@
 #include "spells.h"
 #include "talkaction.h"
 #include "movement.h"
+#include "playerbothuntregions.h"
 #include "weapons.h"
 #include "raids.h"
 #include "quests.h"
@@ -103,6 +104,7 @@ void sighupHandler()
 	std::cout << "Reloaded raids." << std::endl;
 
 	g_monsters.reload();
+	PlayerBotHuntRegionPlanner::invalidateCache();
 	std::cout << "Reloaded monsters." << std::endl;
 
 	g_spells->reload();

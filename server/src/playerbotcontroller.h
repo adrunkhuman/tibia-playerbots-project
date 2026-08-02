@@ -40,6 +40,8 @@ extern ConfigManager g_config;
 
 namespace playerbot {
 	inline constexpr uint32_t navigationInterval = 1000;
+	inline constexpr uint32_t huntRegionPathfindingCallsPerTurn = 1;
+	inline constexpr uint32_t huntRegionScoringCandidatesPerTurn = 32;
 	inline constexpr uint32_t blockedRouteRetryInterval = 500;
 	inline constexpr std::chrono::seconds summaryInterval(60);
 	inline constexpr std::chrono::seconds repeatedEventInterval(60);
@@ -111,6 +113,9 @@ namespace playerbot {
 		bool progressionEnabled;
 		bool startInHunt;
 		bool fixedFixtureRoute;
+		bool forceFirstHuntCandidateUnreachable;
+		bool forceSecondHuntCandidateNodeLimit;
+		bool cancelHuntPlanningAtScoreBarrier;
 	};
 
 	std::string jsonString(const std::string& value);
@@ -309,6 +314,41 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 			uint64_t actionsFailed = 0;
 			uint64_t stuckEvents = 0;
 			uint64_t suppressedEvents = 0;
+		};
+
+		struct HuntRegionPlanning {
+			enum class Phase : uint8_t {
+				Scoring,
+				Reachability,
+			};
+
+			std::vector<PlayerBotHuntRegion> regions;
+			std::string reason;
+			std::chrono::steady_clock::time_point started;
+			size_t nextCandidate = 0;
+			size_t nextScoringCandidate = 0;
+			Phase phase = Phase::Scoring;
+			uint32_t pathfindingCalls = 0;
+			uint32_t batchPathfindingCalls = 0;
+			uint64_t expandedNodes = 0;
+			uint32_t yields = 0;
+			uint32_t suitableCandidates = 0;
+			uint32_t scoredCandidates = 0;
+			uint32_t totalCandidates = 0;
+			bool cacheHit = false;
+			uint64_t snapshotTimeUs = 0;
+			uint64_t clusteringTimeUs = 0;
+			uint64_t scoringTimeUs = 0;
+			Position playerPosition;
+			uint32_t playerLevel = 0;
+			int32_t playerHealth = 0;
+			int32_t playerArmor = 0;
+			int32_t playerDefense = 0;
+			uint16_t staminaMinutes = 0;
+			bool fixtureForcedUnreachable = false;
+			bool fixtureForcedNodeLimit = false;
+			uint64_t cacheRevision = 0;
+			std::set<Position> excludedRegions;
 		};
 
 		class DecisionTimer
@@ -541,10 +581,13 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		bool findDepositableItem(Container* container, Container*& source, Item*& depositItem) const;
 
 		void emitHuntRegionCandidate(const PlayerBotHuntRegion& region, const Position& position) const;
+		void cancelHuntRegionPlanning();
+		void emitHuntRegionPlanning(const HuntRegionPlanning& planning, const Position& position, const char* phase) const;
 
 		void finishHuntRegion(const Player& player, const Position& position, const char* reason);
 
 		bool selectHuntRegion(Player& player, const Position& position, const char* reason);
+		void beginHuntCycle(Player* player, const Position& position, const char* reason);
 
 		void startHunt(Player* player, const Position& position, const char* reason);
 
@@ -653,6 +696,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		std::chrono::steady_clock::time_point huntDeadline;
 		PlayerBotNavigator navigator;
 		PlayerBotHuntRegionPlanner huntRegionPlanner;
+		std::optional<HuntRegionPlanning> huntRegionPlanning;
 		std::optional<PlayerBotHuntRegion> activeHuntRegion;
 		std::map<Position, std::chrono::steady_clock::time_point>& huntRegionCooldowns;
 		std::map<Position, PlayerBotHuntRegionPerformance> huntRegionPerformance;
@@ -671,6 +715,8 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		uint32_t navigationBestDistance = std::numeric_limits<uint32_t>::max();
 		uint32_t navigationOscillationCount = 0;
 		bool navigationOscillationDetected = false;
+		bool huntPlanningFixtureCancelled = false;
+		bool huntPlanningFixtureStaleRevisionTriggered = false;
 		Position blockedNavigationTarget;
 		std::chrono::steady_clock::time_point navigationStepStarted;
 		std::chrono::steady_clock::time_point blockedNavigationTargetExpires;

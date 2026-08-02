@@ -61,13 +61,23 @@ struct PlayerBotHuntRegionPerformance {
 	uint32_t samples = 0;
 };
 
+struct PlayerBotHuntRegionScan {
+	bool cacheHit = false;
+	uint64_t revision = 0;
+	uint64_t snapshotTimeUs = 0;
+	uint64_t clusteringTimeUs = 0;
+	size_t candidateCount = 0;
+};
+
 class PlayerBotHuntRegionPlanner
 {
 	public:
-		std::vector<PlayerBotHuntRegion> evaluate(Player& player, const PlayerBotNavigator& navigator,
-		                                              const std::set<Position>& excludedRegions,
-		                                              const std::map<Position, PlayerBotHuntRegionPerformance>& performance,
-		                                              uint32_t huntDurationSeconds) const;
+		static void invalidateCache();
+		static uint64_t getCacheRevision();
+		PlayerBotHuntRegionScan beginScan() const;
+		bool score(Player& player, uint64_t revision, size_t candidateIndex, const std::set<Position>& excludedRegions,
+		           const std::map<Position, PlayerBotHuntRegionPerformance>& performance,
+		           uint32_t huntDurationSeconds, PlayerBotHuntRegion& region) const;
 };
 
 #endif

@@ -198,7 +198,8 @@ bool PlayerBotController::approachServiceNpc(Player* player, ServiceNpc& service
 		uint64_t expandedNodes = 0;
 		++counters.pathfindingCalls;
 		const auto startedAt = std::chrono::steady_clock::now();
-		const bool planned = navigator.plan(*player, candidate, {}, candidateSteps, expandedNodes);
+		const bool planned = navigator.plan(*player, candidate, {}, candidateSteps, expandedNodes) ==
+		                     PlayerBotNavigationResult::Reached;
 		counters.pathfindingTimeUs += std::chrono::duration_cast<std::chrono::microseconds>(
 			std::chrono::steady_clock::now() - startedAt).count();
 		if (!planned || candidateSteps.empty()) {

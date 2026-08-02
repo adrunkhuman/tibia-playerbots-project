@@ -51,6 +51,7 @@ bool Spawns::loadFromXml(const std::string& filename)
 
 	this->filename = filename;
 	loaded = true;
+	++generation;
 
 	for (auto spawnNode : doc.child("spawns").children()) {
 		Position centerPos(
@@ -240,6 +241,7 @@ void Spawns::clear()
 	loaded = false;
 	started = false;
 	filename.clear();
+	++generation;
 }
 
 std::vector<SpawnBlockSnapshot> Spawns::getMonsterSpawnSnapshots() const

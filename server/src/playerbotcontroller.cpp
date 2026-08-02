@@ -36,14 +36,18 @@ const PlayerBotTestPolicy& playerbot::testPolicyFromEnvironment()
 			 std::strcmp(gameplayMode, "healing") == 0 || std::strcmp(gameplayMode, "healing_resupply") == 0 ||
 			 std::strcmp(gameplayMode, "value") == 0 || std::strcmp(gameplayMode, "departure_interrupt") == 0 ||
 			 std::strcmp(gameplayMode, "stamina_bonus") == 0 || std::strcmp(gameplayMode, "stamina_boundary") == 0 ||
-			 std::strcmp(gameplayMode, "stamina_normal") == 0);
+			 std::strcmp(gameplayMode, "stamina_normal") == 0 || std::strcmp(gameplayMode, "hunt_planning") == 0);
 		const bool fixedFixtureRoute = gameplayMode && std::strcmp(gameplayMode, "stamina_bonus") != 0 &&
 		                               std::strcmp(gameplayMode, "stamina_boundary") != 0 &&
-		                               std::strcmp(gameplayMode, "stamina_normal") != 0;
+		                               std::strcmp(gameplayMode, "stamina_normal") != 0 &&
+		                               std::strcmp(gameplayMode, "hunt_planning") != 0;
 		return PlayerBotTestPolicy{
 			!regressionMode && (!gameplayMode || progressionMode),
 			startInHunt,
 			fixedFixtureRoute,
+			gameplayMode && std::strcmp(gameplayMode, "hunt_planning") == 0,
+			gameplayMode && std::strcmp(gameplayMode, "hunt_planning") == 0,
+			gameplayMode && std::strcmp(gameplayMode, "hunt_planning") == 0,
 		};
 	}();
 	return policy;
@@ -306,6 +310,7 @@ void PlayerBotController::stop(const char* reason, const Position& position)
 		return;
 	}
 
+	cancelHuntRegionPlanning();
 	setStage(ScenarioStage::Stopped, position);
 	logSummary(position, true);
 	emit("terminal", position, std::string("\"reason\":") + jsonString(reason));
@@ -327,6 +332,7 @@ bool PlayerBotController::findPath(Player* player, const Position& target, std::
 
 void PlayerBotController::clearNavigation()
 {
+	cancelHuntRegionPlanning();
 	navigationSteps.clear();
 	navigationPending = false;
 	worldChangePending = false;
@@ -558,7 +564,8 @@ bool PlayerBotController::processNavigation(Player* player, const Position& curr
 		uint64_t expandedNodes = 0;
 		++counters.pathfindingCalls;
 		const auto startedAt = std::chrono::steady_clock::now();
-		const bool planned = navigator.plan(*player, destination, blockedPositions, navigationSteps, expandedNodes);
+		const PlayerBotNavigationResult planResult = navigator.plan(*player, destination, blockedPositions, navigationSteps, expandedNodes);
+		const bool planned = planResult == PlayerBotNavigationResult::Reached;
 		counters.pathfindingTimeUs += std::chrono::duration_cast<std::chrono::microseconds>(
 			std::chrono::steady_clock::now() - startedAt).count();
 		if (!planned || navigationSteps.empty()) {

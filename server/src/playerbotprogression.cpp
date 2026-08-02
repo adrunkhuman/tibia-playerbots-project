@@ -459,7 +459,9 @@ bool PlayerBotController::planSimpleRewardApproach(Player& player, const Positio
 			uint64_t candidateExpandedNodes = 0;
 			++counters.pathfindingCalls;
 			const auto startedAt = std::chrono::steady_clock::now();
-			const bool planned = candidate == currentPosition || navigator.plan(player, candidate, {}, steps, candidateExpandedNodes);
+			const PlayerBotNavigationResult planResult = candidate == currentPosition ? PlayerBotNavigationResult::Reached :
+				navigator.plan(player, candidate, {}, steps, candidateExpandedNodes);
+			const bool planned = planResult == PlayerBotNavigationResult::Reached;
 			counters.pathfindingTimeUs += std::chrono::duration_cast<std::chrono::microseconds>(
 				std::chrono::steady_clock::now() - startedAt).count();
 			if (!planned || (candidate != currentPosition && steps.empty())) {
@@ -832,8 +834,7 @@ bool PlayerBotController::selectTopLevelGoal(Player& player, const Position& pos
 	const bool higherUtilityGoal = (departureCandidate.feasible && departureCandidate.utility > huntGoalUtility) ||
 	                               (service.feasible && service.utility > huntGoalUtility) ||
 	                               (pickup.feasible && pickup.utility > huntGoalUtility);
-	const bool huntFeasible = !higherUtilityGoal &&
-	                          (testPolicy.fixedFixtureRoute || selectHuntRegion(player, position, "goal_feasibility"));
+	const bool huntFeasible = !higherUtilityGoal;
 	const GoalCandidate hunt{TopLevelGoal::Hunt, huntFeasible, huntGoalUtility,
 	                         higherUtilityGoal ? "deferred_lower_utility" :
 	                         huntFeasible ? "autonomous_hunting_available" : "no_suitable_reachable_region"};

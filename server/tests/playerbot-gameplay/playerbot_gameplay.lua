@@ -338,8 +338,12 @@ function login.onLogin(player)
         mode == "arbitration" or
         mode == "arbitration_interrupt" or mode == "departure" or mode == "departure_interrupt" or
         mode == "departure_recovery" or mode == "stamina_bonus" or mode == "stamina_boundary" or
-        mode == "stamina_normal",
+        mode == "stamina_normal" or mode == "hunt_planning",
         "unknown PLAYERBOT_GAMEPLAY_MODE: " .. mode)
+	if mode == "hunt_planning" then
+		print("PLAYERBOT_GAMEPLAY_TEST HUNT_PLANNING_START")
+		return true
+	end
 	if mode == "stamina_bonus" or mode == "stamina_boundary" or mode == "stamina_normal" then
 		local staminaMinutes = mode == "stamina_bonus" and 2520 or mode == "stamina_boundary" and 2401 or 2400
 		assert(player:setStamina(staminaMinutes), "stamina projection fixture could not set stamina")
