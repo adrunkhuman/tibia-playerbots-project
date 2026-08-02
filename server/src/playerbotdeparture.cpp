@@ -173,9 +173,10 @@ void PlayerBotController::finishOracleDeparture(Player* player, const Position& 
 	serviceTargetId = 0;
 	clearNavigation();
 	if (std::strcmp(result, "success") == 0) {
-		setStage(ScenarioStage::Stopped, position);
 		if (player) {
-			say(*player, "Rookgaard departure complete. Awaiting mainland behavior.");
+			say(*player, "Rookgaard departure complete. Starting mainland service.");
+			beginService(player, position, "departure_complete");
+			schedule(navigationInterval);
 		}
 		return;
 	}

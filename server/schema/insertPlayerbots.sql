@@ -2,8 +2,8 @@ INSERT INTO `accounts` (`name`, `password`, `type`, `premium_ends_at`, `email`, 
 VALUES ('bot-one', SHA1('bot-one'), 1, 0, '', 0)
 ON DUPLICATE KEY UPDATE `id` = `id`;
 
--- This idempotent kit remains valid through the deterministic Rookgaard-to-Knight
--- transition. Focused gameplay fixtures add any stronger equipment they need.
+-- Bot One starts ready for the first mainland hunt. Focused Rookgaard fixtures
+-- replace this state when they exercise the earlier progression stages.
 
 CREATE TABLE IF NOT EXISTS `player_bots` (
     `player_id` int NOT NULL,
@@ -21,11 +21,11 @@ INSERT INTO `players` (
     `cap`, `sex`, `stamina`, `skill_sword`, `skill_shielding`, `balance`
 )
 SELECT
-    'Bot One', 1, `id`, 1, 0, 150,
-    150, 0, 68, 76, 78,
-    39, 128, 0, 2, 0, 0,
-    0, 0, 100, 6, 32097, 32219, 7,
-    400, 1, 2520, 70, 60, 100
+    'Bot One', 1, `id`, 8, 4, 185,
+    185, 4200, 68, 76, 78,
+    39, 128, 0, 2, 0, 35,
+    35, 0, 100, 2, 32369, 32241, 7,
+    470, 1, 2520, 70, 60, 100
 FROM `accounts`
 WHERE `name` = 'bot-one'
   AND NOT EXISTS (SELECT 1 FROM `players` WHERE `name` = 'Bot One');
@@ -62,8 +62,12 @@ SET @bot_next_sid = (
 INSERT INTO `player_items` (`player_id`, `pid`, `sid`, `itemtype`, `count`, `attributes`)
 SELECT @bot_player_id, `loadout`.`pid`, @bot_next_sid + `loadout`.`offset`, `loadout`.`itemtype`, `loadout`.`count`, ''
 FROM (
-    SELECT 4 AS `pid`, 1 AS `offset`, 2650 AS `itemtype`, 1 AS `count`
-    UNION ALL SELECT 6, 2, 2382, 1
+    SELECT 1 AS `pid`, 1 AS `offset`, 2457 AS `itemtype`, 1 AS `count`
+    UNION ALL SELECT 4, 2, 2463, 1
+    UNION ALL SELECT 5, 3, 2525, 1
+    UNION ALL SELECT 6, 4, 2376, 1
+    UNION ALL SELECT 7, 5, 2647, 1
+    UNION ALL SELECT 8, 6, 2643, 1
 ) AS `loadout`
 WHERE NOT EXISTS (
     SELECT 1 FROM `player_items`

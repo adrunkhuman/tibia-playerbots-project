@@ -30,18 +30,17 @@ extern Game g_game;
 extern ConfigManager g_config;
 
 namespace {
-	constexpr Position rookTemple(32097, 32219, 7);
-	constexpr int32_t rookRadius = 180;
 	constexpr int32_t heatRadius = 8;
 	constexpr int32_t maximumRegionRadius = 24;
 	constexpr uint16_t spawnBucketSize = heatRadius * 2 + 1;
+	constexpr uint32_t maximumRegionDistancePadding = maximumRegionRadius * 2;
+	constexpr uint32_t maximumHuntDistanceFromTemple = 200;
+	constexpr uint32_t maximumHuntTravelDistance = 300;
 	constexpr double maximumThreatRatio = 0.35;
 
 	bool isRookgaardSpawn(const Position& position)
 	{
-		return position.z >= 6 && position.z <= 15 &&
-		       Position::getDistanceX(position, rookTemple) <= rookRadius &&
-		       Position::getDistanceY(position, rookTemple) <= rookRadius;
+		return position.z >= 6 && position.z <= 15;
 	}
 
 	bool heatOverlaps(const Position& left, const Position& right)
@@ -301,11 +300,22 @@ namespace {
 			(void)name;
 			region.monsters.push_back(std::move(profile));
 		}
+		const uint32_t geometricDistance = Position::getDistanceX(player.getPosition(), region.destination) +
+		                                   Position::getDistanceY(player.getPosition(), region.destination) +
+		                                   Position::getDistanceZ(player.getPosition(), region.destination) * 20;
+		const Position& templePosition = player.getTemplePosition();
+		const uint32_t templeDistance = Position::getDistanceX(templePosition, region.destination) +
+		                                Position::getDistanceY(templePosition, region.destination) +
+		                                Position::getDistanceZ(templePosition, region.destination) * 20;
 		region.threatRatio = worstFightDamage / std::max<int32_t>(player.getMaxHealth(), 1);
-		region.suitable = region.threatRatio <= maximumThreatRatio;
+		region.suitable = region.threatRatio <= maximumThreatRatio &&
+		                  templeDistance <= maximumHuntDistanceFromTemple &&
+		                  geometricDistance <= maximumHuntTravelDistance;
 		if (excludedRegions.find(region.center) != excludedRegions.end()) {
 			region.suitable = false;
 			region.rejectionReason = "observed_danger_cooldown";
+		} else if (templeDistance > maximumHuntDistanceFromTemple || geometricDistance > maximumHuntTravelDistance) {
+			region.rejectionReason = "travel_distance";
 		} else if (!region.suitable) {
 			region.rejectionReason = "predicted_damage";
 		}
@@ -315,9 +325,6 @@ namespace {
 			region.observedExperiencePerMinute = observed->second.observedExperiencePerMinute;
 			region.observedCorrection = observed->second.correction;
 		}
-		const uint32_t geometricDistance = Position::getDistanceX(player.getPosition(), region.destination) +
-		                                   Position::getDistanceY(player.getPosition(), region.destination) +
-		                                   Position::getDistanceZ(player.getPosition(), region.destination) * 20;
 		region.estimatedTravelSeconds = geometricDistance * player.getStepDuration() / 1000.0;
 		region.availableHuntSeconds = std::max(0.0, huntDurationSeconds - region.estimatedTravelSeconds);
 		region.staminaExperienceMultiplier = projectedStaminaExperienceMultiplier(player, region.availableHuntSeconds);
@@ -343,7 +350,7 @@ uint64_t PlayerBotHuntRegionPlanner::getCacheRevision()
 	return huntRegionCacheRevision;
 }
 
-PlayerBotHuntRegionScan PlayerBotHuntRegionPlanner::beginScan() const
+PlayerBotHuntRegionScan PlayerBotHuntRegionPlanner::beginScan(const Player& player) const
 {
 	PlayerBotHuntRegionScan scan;
 	scan.cacheHit = huntRegionCache.initialized && huntRegionCache.generation == g_game.map.spawns.getGeneration();
@@ -351,7 +358,21 @@ PlayerBotHuntRegionScan PlayerBotHuntRegionPlanner::beginScan() const
 		buildHuntRegionCache(scan.snapshotTimeUs, scan.clusteringTimeUs);
 	}
 	scan.revision = huntRegionCacheRevision;
-	scan.candidateCount = huntRegionCache.regions.size();
+	const Position& templePosition = player.getTemplePosition();
+	for (size_t index = 0; index < huntRegionCache.regions.size(); ++index) {
+		const Position& center = huntRegionCache.regions[index].center;
+		const uint32_t templeDistance = Position::getDistanceX(templePosition, center) +
+		                                Position::getDistanceY(templePosition, center) +
+		                                Position::getDistanceZ(templePosition, center) * 20;
+		const uint32_t travelDistance = Position::getDistanceX(player.getPosition(), center) +
+		                                Position::getDistanceY(player.getPosition(), center) +
+		                                Position::getDistanceZ(player.getPosition(), center) * 20;
+		if (templeDistance <= maximumHuntDistanceFromTemple + maximumRegionDistancePadding &&
+		    travelDistance <= maximumHuntTravelDistance + maximumRegionDistancePadding) {
+			scan.candidateIndices.push_back(index);
+		}
+	}
+	scan.candidateCount = scan.candidateIndices.size();
 	return scan;
 }
 

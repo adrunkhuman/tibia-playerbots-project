@@ -18,6 +18,10 @@
 // NPC service discovery, shopping, banking, and depot handling.
 using namespace playerbot;
 
+namespace {
+	constexpr uint32_t maximumServiceDistanceFromTemple = 200;
+}
+
 const char* PlayerBotController::cyclePhaseName() const
 {
 	switch (cyclePhase) {
@@ -82,7 +86,8 @@ void PlayerBotController::onNpcReply(uint32_t replyingPlayerId, uint32_t npcId, 
 
 void PlayerBotController::beginService(Player* player, const Position& position, const char* reason)
 {
-	const bool interruptedHunt = testPolicy.progressionEnabled && activeGoal == TopLevelGoal::Hunt;
+	const bool interruptedHunt = testPolicy.progressionEnabled && activeGoal == TopLevelGoal::Hunt &&
+	                             !hasCompletedRookgaardDeparture(*player);
 	finishHuntRegion(*player, position, reason);
 	if (interruptedHunt) {
 		emit("goal_result", position,
@@ -131,10 +136,12 @@ void PlayerBotController::finishHuntAndSelectGoal(Player* player, const Position
 void PlayerBotController::discoverServices(const Position& position)
 {
 	refreshItemValues();
+	Player* player = g_game.getPlayerByID(playerId);
 	for (const auto& entry : g_game.getNpcs()) {
 		Npc* npc = entry.second;
 		const std::string* capability = npc && !npc->isRemoved() ? npc->getParameter("playerbot_service") : nullptr;
-		if (!capability) {
+		if (!capability || !player ||
+		    serviceDistance(player->getTemplePosition(), {npc->getID(), npc->getPosition()}) > maximumServiceDistanceFromTemple) {
 			continue;
 		}
 		std::vector<ServiceNpc>* services = *capability == "shop" ? &serviceShops :
@@ -961,7 +968,7 @@ void PlayerBotController::processFixtureDeposit(Player* player, const Position& 
 		}
 		emit("action_result", currentPosition, "\"action\":\"deposit\",\"result\":\"complete\",\"fixture\":true,\"cycle\":" +
 		     std::to_string(completedCycles));
-		if (testPolicy.progressionEnabled) {
+		if (testPolicy.progressionEnabled && !hasCompletedRookgaardDeparture(*player)) {
 			selectTopLevelGoal(*player, currentPosition, "fixture_deposit_complete");
 		} else {
 			startHunt(player, currentPosition, "fixture_deposit_complete");
@@ -1078,7 +1085,7 @@ void PlayerBotController::processDeposit(Player* player, const Position& current
 		if (pauseDepotFixtureForRestart(*player, DepotRestartCheckpoint::Depart, currentPosition)) {
 			return;
 		}
-		if (testPolicy.progressionEnabled) {
+		if (testPolicy.progressionEnabled && !hasCompletedRookgaardDeparture(*player)) {
 			emit("goal_result", currentPosition,
 			     "\"decision_id\":" + std::to_string(goalDecisionId) +
 			         ",\"goal\":\"service\",\"result\":\"success\",\"reason\":\"service_complete\"");

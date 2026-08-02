@@ -44,6 +44,7 @@ const PlayerBotTestPolicy& playerbot::testPolicyFromEnvironment()
 		                               std::strcmp(gameplayMode, "stamina_boundary") != 0 &&
 		                               std::strcmp(gameplayMode, "stamina_normal") != 0 &&
 		                               std::strcmp(gameplayMode, "hunt_planning") != 0 &&
+		                               std::strcmp(gameplayMode, "mainland") != 0 &&
 		                               std::strcmp(gameplayMode, "depot") != 0;
 		const char* depotRestartPhase = std::getenv("PLAYERBOT_DEPOT_RESTART_PHASE");
 		const DepotRestartCheckpoint depotRestartCheckpoint = !depotRestartPhase ? DepotRestartCheckpoint::None :
@@ -87,23 +88,20 @@ void PlayerBotController::start(const Position& position, bool recovered, uint32
 	Player* controlledPlayer = g_game.getPlayerByID(playerId);
 	const bool departureComplete = controlledPlayer && hasCompletedRookgaardDeparture(*controlledPlayer);
 	const bool departureRequired = controlledPlayer && requiresRookgaardDeparture(*controlledPlayer);
-	const bool useGoalSelector = controlledPlayer && (departureRequired || (!recovered && testPolicy.progressionEnabled));
-	if (useGoalSelector && !departureComplete && !selectTopLevelGoal(*controlledPlayer, position, "startup")) {
+	const bool useGoalSelector = controlledPlayer && !departureComplete &&
+	                             (departureRequired || (!recovered && testPolicy.progressionEnabled));
+	if (useGoalSelector && !selectTopLevelGoal(*controlledPlayer, position, "startup")) {
 		return;
 	}
 	std::ostringstream lifecycle;
 	lifecycle << "\"status\":\"online\",\"message\":\"Playerbot online\""
 	          << ",\"recovered\":" << (recovered ? "true" : "false")
 	          << ",\"recovery_count\":" << recoveryCount
-	          << ",\"objective\":" << jsonString(departureComplete ? "departure_complete" :
-	                                                    useGoalSelector ? topLevelGoalName(activeGoal) :
+	          << ",\"objective\":" << jsonString(useGoalSelector ? topLevelGoalName(activeGoal) :
 	                                                    (startInHunt ? "hunt" : "service"))
 	          << ",\"step_speed\":" << (g_game.getPlayerByID(playerId) ? g_game.getPlayerByID(playerId)->getSpeed() : 0);
 	emit("lifecycle", position, lifecycle.str());
-	if (departureComplete) {
-		setStage(ScenarioStage::Stopped, position);
-		return;
-	} else if (useGoalSelector) {
+	if (useGoalSelector) {
 		// The selected goal initialized its own executor state.
 	} else if (startInHunt) {
 		activeGoal = TopLevelGoal::Hunt;
