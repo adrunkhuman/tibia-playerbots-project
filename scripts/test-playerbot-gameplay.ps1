@@ -9,6 +9,7 @@ param(
 	[switch]$PickupProgression,
 	[switch]$GoalArbitration,
 	[switch]$OracleDeparture,
+	[switch]$StaminaProjection,
 	[switch]$Focused,
 	[switch]$SkipBuild,
 	[switch]$KeepStack
@@ -786,6 +787,35 @@ function Assert-GoalArbitrationEvents {
     }
 }
 
+function Assert-StaminaProjectionEvents {
+    param([string]$Logs, [int]$StaminaMinutes)
+
+    $candidates = @(ConvertFrom-PlayerbotLogs -Logs $Logs | Where-Object {
+        $_.event -eq "hunt_region_candidate" -and $_.reachable -and $_.suitable
+    })
+    if ($candidates.Count -lt 1) {
+        throw "Stamina projection emitted no suitable reachable hunt candidate."
+    }
+    foreach ($candidate in $candidates) {
+        $bonusSeconds = [Math]::Min($candidate.available_hunt_seconds,
+            [Math]::Max(0, $StaminaMinutes - 2402) * 60.0)
+        $multiplier = if ($candidate.available_hunt_seconds -gt 0) {
+            1.0 + 0.5 * $bonusSeconds / $candidate.available_hunt_seconds
+        } else {
+            1.0
+        }
+        $expected = $candidate.experience_per_minute * $candidate.observed_correction * $multiplier *
+            $candidate.available_hunt_seconds / 60.0
+        $tolerance = [Math]::Max(0.1, [Math]::Abs($expected) * 0.01)
+        if ($candidate.stamina_minutes -ne $StaminaMinutes -or
+            [Math]::Abs($candidate.stamina_experience_multiplier - $multiplier) -gt 0.01 -or
+            [Math]::Abs($candidate.projected_experience - $expected) -gt $tolerance -or
+            [Math]::Abs($candidate.score - $candidate.projected_experience) -gt 0.01) {
+            throw "Hunt projection did not apply the weighted stamina multiplier at $StaminaMinutes minutes."
+        }
+    }
+}
+
 function Assert-GoalArbitrationInterruptEvents {
     param([string]$Logs)
 
@@ -898,7 +928,7 @@ if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
 }
 
 $focusedScenarioRequested = $FullNavigation -or $CorpseLoot -or $DeathTelemetry -or $Healing -or $ValueLoot -or
-    $PickupProgression -or $GoalArbitration -or $OracleDeparture
+    $PickupProgression -or $GoalArbitration -or $OracleDeparture -or $StaminaProjection
 if ($Focused -and -not $focusedScenarioRequested) {
 	throw "-Focused requires at least one focused scenario switch."
 }
@@ -1011,6 +1041,38 @@ try {
             Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST GOAL_ARBITRATION_INTERRUPT_TRIGGERED' | Out-Null
             $interruptLogs = Wait-ForLog -Pattern '"event":"goal_selection".*"decision_id":2.*"to_goal":"service"'
             Assert-GoalArbitrationInterruptEvents -Logs $interruptLogs
+        }
+    }
+
+    if ($StaminaProjection) {
+        Invoke-Scenario -Name "stamina_bonus_projection" -DefaultTimeoutSeconds 90 -Body {
+            Invoke-Compose down --volumes --remove-orphans
+            $env:PLAYERBOT_GAMEPLAY_MODE = "stamina_bonus"
+            $env:PLAYERBOT_HUNT_DURATION_SECONDS = "900"
+            Invoke-Compose up --detach
+            Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST STAMINA_PROJECTION_START 2520' | Out-Null
+            $bonusLogs = Wait-ForLog -Pattern '"event":"hunt_region_selection".*"result":"selected"'
+            Assert-StaminaProjectionEvents -Logs $bonusLogs -StaminaMinutes 2520
+        }
+
+        Invoke-Scenario -Name "stamina_boundary_projection" -DefaultTimeoutSeconds 90 -Body {
+            Invoke-Compose down --volumes --remove-orphans
+            $env:PLAYERBOT_GAMEPLAY_MODE = "stamina_boundary"
+            $env:PLAYERBOT_HUNT_DURATION_SECONDS = "300"
+            Invoke-Compose up --detach
+            Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST STAMINA_PROJECTION_START 2401' | Out-Null
+            $boundaryLogs = Wait-ForLog -Pattern '"event":"hunt_region_selection".*"result":"selected"'
+            Assert-StaminaProjectionEvents -Logs $boundaryLogs -StaminaMinutes 2401
+        }
+
+        Invoke-Scenario -Name "stamina_normal_projection" -DefaultTimeoutSeconds 90 -Body {
+            Invoke-Compose down --volumes --remove-orphans
+            $env:PLAYERBOT_GAMEPLAY_MODE = "stamina_normal"
+            $env:PLAYERBOT_HUNT_DURATION_SECONDS = "900"
+            Invoke-Compose up --detach
+            Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST STAMINA_PROJECTION_START 2400' | Out-Null
+            $normalLogs = Wait-ForLog -Pattern '"event":"hunt_region_selection".*"result":"selected"'
+            Assert-StaminaProjectionEvents -Logs $normalLogs -StaminaMinutes 2400
         }
     }
 

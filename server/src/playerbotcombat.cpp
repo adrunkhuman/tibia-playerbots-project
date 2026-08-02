@@ -386,6 +386,8 @@ void PlayerBotController::emitHuntRegionCandidate(const PlayerBotHuntRegion& reg
 	       << ",\"available_hunt_seconds\":" << region.availableHuntSeconds
 	       << ",\"observed_experience_per_minute\":" << region.observedExperiencePerMinute
 	       << ",\"observed_correction\":" << region.observedCorrection
+	       << ",\"stamina_minutes\":" << region.staminaMinutes
+	       << ",\"stamina_experience_multiplier\":" << region.staminaExperienceMultiplier
 	       << ",\"projected_experience\":" << region.projectedExperience
 	       << ",\"threat_ratio\":" << region.threatRatio
 	       << ",\"score\":" << region.score

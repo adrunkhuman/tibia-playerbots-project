@@ -43,6 +43,8 @@ struct PlayerBotHuntRegion {
 	double availableHuntSeconds = 0;
 	double observedExperiencePerMinute = 0;
 	double observedCorrection = 1;
+	uint16_t staminaMinutes = 0;
+	double staminaExperienceMultiplier = 1;
 	double projectedExperience = 0;
 	double threatRatio = 0;
 	double score = 0;

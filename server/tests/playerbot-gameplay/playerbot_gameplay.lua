@@ -337,8 +337,16 @@ function login.onLogin(player)
         mode == "progression_resume" or mode == "progression_nested_resume" or mode == "progression_space" or
         mode == "arbitration" or
         mode == "arbitration_interrupt" or mode == "departure" or mode == "departure_interrupt" or
-        mode == "departure_recovery",
+        mode == "departure_recovery" or mode == "stamina_bonus" or mode == "stamina_boundary" or
+        mode == "stamina_normal",
         "unknown PLAYERBOT_GAMEPLAY_MODE: " .. mode)
+	if mode == "stamina_bonus" or mode == "stamina_boundary" or mode == "stamina_normal" then
+		local staminaMinutes = mode == "stamina_bonus" and 2520 or mode == "stamina_boundary" and 2401 or 2400
+		assert(player:setStamina(staminaMinutes), "stamina projection fixture could not set stamina")
+		suppressNearbyMonsters(player:getId())
+		print("PLAYERBOT_GAMEPLAY_TEST STAMINA_PROJECTION_START " .. staminaMinutes)
+		return true
+	end
     if mode == "death" then
         deathLoginCount = deathLoginCount + 1
         removeNearbyMonsters(player)

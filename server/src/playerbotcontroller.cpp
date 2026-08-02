@@ -34,11 +34,16 @@ const PlayerBotTestPolicy& playerbot::testPolicyFromEnvironment()
 		const bool startInHunt = gameplayMode &&
 			(std::strcmp(gameplayMode, "navigation") == 0 || std::strcmp(gameplayMode, "corpse") == 0 ||
 			 std::strcmp(gameplayMode, "healing") == 0 || std::strcmp(gameplayMode, "healing_resupply") == 0 ||
-			 std::strcmp(gameplayMode, "value") == 0 || std::strcmp(gameplayMode, "departure_interrupt") == 0);
+			 std::strcmp(gameplayMode, "value") == 0 || std::strcmp(gameplayMode, "departure_interrupt") == 0 ||
+			 std::strcmp(gameplayMode, "stamina_bonus") == 0 || std::strcmp(gameplayMode, "stamina_boundary") == 0 ||
+			 std::strcmp(gameplayMode, "stamina_normal") == 0);
+		const bool fixedFixtureRoute = gameplayMode && std::strcmp(gameplayMode, "stamina_bonus") != 0 &&
+		                               std::strcmp(gameplayMode, "stamina_boundary") != 0 &&
+		                               std::strcmp(gameplayMode, "stamina_normal") != 0;
 		return PlayerBotTestPolicy{
 			!regressionMode && (!gameplayMode || progressionMode),
 			startInHunt,
-			gameplayMode != nullptr,
+			fixedFixtureRoute,
 		};
 	}();
 	return policy;

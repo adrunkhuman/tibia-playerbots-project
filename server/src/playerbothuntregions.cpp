@@ -114,6 +114,24 @@ namespace {
 		}
 		return seconds;
 	}
+
+	double projectedStaminaExperienceMultiplier(const Player& player, double availableHuntSeconds)
+	{
+		const uint16_t staminaMinutes = player.getStaminaMinutes();
+		if (staminaMinutes == 0) {
+			return 0;
+		}
+		if (!g_config.getBoolean(ConfigManager::STAMINA_SYSTEM)) {
+			return 1;
+		}
+		if (staminaMinutes > 2400 && player.isPremium() && availableHuntSeconds > 0) {
+			// The award callback can consume two minutes before it checks the premium threshold.
+			const double bonusSeconds = std::min(availableHuntSeconds,
+			                                     std::max<int32_t>(0, staminaMinutes - 2402) * 60.0);
+			return 1 + 0.5 * bonusSeconds / availableHuntSeconds;
+		}
+		return staminaMinutes <= 840 ? 0.5 : 1;
+	}
 }
 
 std::vector<PlayerBotHuntRegion> PlayerBotHuntRegionPlanner::evaluate(Player& player,
@@ -122,6 +140,7 @@ std::vector<PlayerBotHuntRegion> PlayerBotHuntRegionPlanner::evaluate(Player& pl
 	                                                                  const std::map<Position, PlayerBotHuntRegionPerformance>& performance,
 	                                                                  uint32_t huntDurationSeconds) const
 {
+	const uint16_t staminaMinutes = player.getStaminaMinutes();
 	std::vector<SpawnBlockSnapshot> spawns;
 	for (SpawnBlockSnapshot& spawn : g_game.map.spawns.getMonsterSpawnSnapshots()) {
 		spawn.monsterTypes.erase(std::remove_if(spawn.monsterTypes.begin(), spawn.monsterTypes.end(),
@@ -246,6 +265,7 @@ std::vector<PlayerBotHuntRegion> PlayerBotHuntRegionPlanner::evaluate(Player& pl
 			region.rejectionReason = "predicted_damage";
 		}
 		region.experiencePerMinute *= g_config.getExperienceStage(player.getLevel());
+		region.staminaMinutes = staminaMinutes;
 		if (auto observed = performance.find(region.center); observed != performance.end()) {
 			region.observedExperiencePerMinute = observed->second.observedExperiencePerMinute;
 			region.observedCorrection = observed->second.correction;
@@ -255,7 +275,9 @@ std::vector<PlayerBotHuntRegion> PlayerBotHuntRegionPlanner::evaluate(Player& pl
 		                                   Position::getDistanceZ(player.getPosition(), region.destination) * 20;
 		region.estimatedTravelSeconds = geometricDistance * player.getStepDuration() / 1000.0;
 		region.availableHuntSeconds = std::max(0.0, huntDurationSeconds - region.estimatedTravelSeconds);
+		region.staminaExperienceMultiplier = projectedStaminaExperienceMultiplier(player, region.availableHuntSeconds);
 		region.projectedExperience = region.experiencePerMinute * region.observedCorrection *
+		                             region.staminaExperienceMultiplier *
 		                             region.availableHuntSeconds / 60.0;
 		region.score = region.projectedExperience;
 		regions.push_back(std::move(region));
@@ -288,7 +310,9 @@ std::vector<PlayerBotHuntRegion> PlayerBotHuntRegionPlanner::evaluate(Player& pl
 		region.travelSteps = static_cast<uint32_t>(route.size());
 		region.estimatedTravelSeconds = estimateTravelSeconds(player, route);
 		region.availableHuntSeconds = std::max(0.0, huntDurationSeconds - region.estimatedTravelSeconds);
+		region.staminaExperienceMultiplier = projectedStaminaExperienceMultiplier(player, region.availableHuntSeconds);
 		region.projectedExperience = region.experiencePerMinute * region.observedCorrection *
+		                             region.staminaExperienceMultiplier *
 		                             region.availableHuntSeconds / 60.0;
 		region.score = region.projectedExperience;
 	}
