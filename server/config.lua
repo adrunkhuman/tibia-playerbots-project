@@ -95,7 +95,7 @@ mysqlSock = ""
 -- You can disable it to save some memory if you don't see any errors at startup.
 -- checkDuplicateStorageKeys checks the values stored in the variables for duplicates.
 allowChangeOutfit = true
-freePremium = true
+freePremium = os.getenv("FREE_PREMIUM") ~= "false"
 kickIdlePlayerAfterMinutes = 15
 maxMessageBuffer = 4
 emoteSpells = false

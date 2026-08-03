@@ -10,7 +10,7 @@ function onThink()		npcHandler:onThink()		end
 local voices = { {text = 'Hello there, adventurer! Need a deal in spells? I\'m your man!'} }
 npcHandler:addModule(VoiceModule:new(voices))
 
-local PremiumSpells = false
+local PremiumSpells = true
 local AllSpells = false
 -- 1,5 Sorcerer
 -- 2,6 Druid
@@ -18,12 +18,10 @@ local AllSpells = false
 -- 4,8 Knight
 
 local spells = {	
-	[11426]={ buy =1500, spell = "Whirlwind Throw", name = "Whirlwind Throw", vocations = {4,8}, level = 28, premium = 0},
-	[1505]={ buy =1500, spell = "Groundshaker", name = "Groundshaker", vocations = {4,8}, level = 33, premium = 0},
-	[2393]={ buy =2500, spell = "Berserk", name = "Berserk", vocations = {4,8}, level = 35, premium = 0},
-	[2421]={ buy =7500, spell = "Fierce Berserk", name = "Fierce Berserk", vocations = {4,8}, level = 90, premium = 0},
-	[2207]={ buy =1000, spell = "Brutal Strike", name = "Brutal Strike", vocations = {4,8}, level = 16, premium = 0},
-	[7402]={ buy =20000, spell = "Annihilation", name = "Annihilation", vocations = {4,8}, level = 110, premium = 0}
+	[11426]={ buy =800, spell = "Whirlwind Throw", name = "Whirlwind Throw", vocations = {4,8}, level = 15, premium = 1},
+	[1505]={ buy =1500, spell = "Groundshaker", name = "Groundshaker", vocations = {4,8}, level = 33, premium = 1},
+	[2393]={ buy =2500, spell = "Berserk", name = "Berserk", vocations = {4,8}, level = 35, premium = 1},
+	[2421]={ buy =5000, spell = "Fierce Berserk", name = "Fierce Berserk", vocations = {4,8}, level = 70, premium = 1}
 }
 
 

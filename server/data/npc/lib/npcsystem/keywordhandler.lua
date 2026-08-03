@@ -244,20 +244,28 @@ if not KeywordHandler then
 		keys.callback = FocusModule.messageMatcherDefault
 
 		local npcHandler, spellName, price, vocationId = parameters.npcHandler, parameters.spellName, parameters.price, parameters.vocation
-		local spellKeyword = self:addKeyword(keys, StdModule.say, {npcHandler = npcHandler, text = string.format("Do you want to learn the spell %s for %s?", spellName, price > 0 and price .. " gold" or "free")},
+		local spellKeyword = self:addKeyword(keys, StdModule.say, {npcHandler = npcHandler, spellName = spellName, text = string.format("Do you want to learn the spell %s for %s?", spellName, price > 0 and price .. " gold" or "free")},
 			function(player)
 				local baseVocationId = player:getVocation():getBase():getId()
 				if type(vocationId) == 'table' then
-					-- Using a more efficient way to check if the player meets the vocation requirements
-					return table.find(vocationId, baseVocationId) ~= nil
+					return table.contains(vocationId, baseVocationId)
 				else
 					return vocationId == baseVocationId
 				end
 			end
 		)
+		local children = self:getRoot().children
+		for i = 1, #children - 1 do
+			local other = children[i]
+			if other.parameters and other.parameters.spellName and #keys > #other.keywords then
+				table.remove(children)
+				table.insert(children, i, spellKeyword)
+				break
+			end
+		end
 
 		-- It is not necessary to check if the player already has the spell, the check is done in modules.lua
-		spellKeyword:addChildKeyword({"yes"}, StdModule.learnSpell, {npcHandler = npcHandler, spellName = spellName, level = parameters.level, price = price})
+		spellKeyword:addChildKeyword({"yes"}, StdModule.learnSpell, {npcHandler = npcHandler, spellName = spellName, level = parameters.level, price = price, premium = parameters.premium})
 		spellKeyword:addChildKeyword({"no"}, StdModule.say, {npcHandler = npcHandler, text = "Maybe next time.", reset = true})
 	end
 end

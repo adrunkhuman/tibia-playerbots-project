@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <spells>
 	<!-- Attack Spells -->
-	<instant group="attack" name="Berserk" words="exori" level="35" mana="115" premium="1" needweapon="1" cooldown="4000" needlearn="0" script="attack/berserk.lua">
+	<instant group="attack" name="Berserk" words="exori" level="35" mana="115" premium="1" needweapon="1" cooldown="4000" needlearn="1" script="attack/berserk.lua">
 		<vocation name="Knight" />
 		<vocation name="Elite Knight" />
 	</instant>
@@ -39,7 +39,7 @@
 		<vocation name="Paladin" />
 		<vocation name="Royal Paladin" />
 	</instant>
-	<instant group="attack" name="Fierce Berserk" words="exori gran" level="90" mana="340" premium="1" needweapon="1" cooldown="6000" needlearn="0" script="attack/fierce_berserk.lua">
+	<instant group="attack" name="Fierce Berserk" words="exori gran" level="70" mana="340" premium="1" needweapon="1" cooldown="6000" needlearn="1" script="attack/fierce_berserk.lua">
 		<vocation name="Knight" />
 		<vocation name="Elite Knight" />
 	</instant>
@@ -57,7 +57,7 @@
 		<vocation name="Sorcerer" />
 		<vocation name="Master Sorcerer" />
 	</instant>
-	<instant group="attack" name="Groundshaker" words="exori mas" level="33" mana="160" premium="1" needweapon="1" cooldown="8000" needlearn="0" script="attack/groundshaker.lua">
+	<instant group="attack" name="Groundshaker" words="exori mas" level="33" mana="160" premium="1" needweapon="1" cooldown="8000" needlearn="1" script="attack/groundshaker.lua">
 		<vocation name="Knight" />
 		<vocation name="Elite Knight" />
 	</instant>
@@ -89,7 +89,7 @@
 		<vocation name="Druid" />
 		<vocation name="Elder Druid" />
 	</instant>
-	<instant group="attack" name="Whirlwind Throw" words="exori hur" level="28" mana="40" premium="1" range="5" needtarget="1" blockwalls="1" needweapon="1" cooldown="6000" needlearn="0" script="attack/whirlwind_throw.lua">
+	<instant group="attack" name="Whirlwind Throw" words="exori hur" level="15" mana="40" premium="1" range="5" needtarget="1" blockwalls="1" needweapon="1" cooldown="6000" needlearn="1" script="attack/whirlwind_throw.lua">
 		<vocation name="Knight" />
 		<vocation name="Elite Knight" />
 	</instant>
@@ -99,7 +99,7 @@
 	</instant>
 
 	<!-- Healing Spells -->
-	<instant group="healing" name="Cure Poison" words="exana pox" level="10" mana="30" aggressive="0" selftarget="1" cooldown="6000" needlearn="0" script="healing/cure_poison.lua">
+	<instant group="healing" name="Cure Poison" words="exana pox" level="10" mana="30" aggressive="0" selftarget="1" cooldown="6000" needlearn="1" script="healing/cure_poison.lua">
 		<vocation name="Sorcerer" />
 		<vocation name="Druid" />
 		<vocation name="Paladin" />
@@ -125,13 +125,19 @@
 		<vocation name="Elder Druid" />
 		<vocation name="Royal Paladin" />
 	</instant>
-	<instant group="healing" name="Light Healing" words="exura" level="8" mana="20" aggressive="0" selftarget="1" cooldown="1000" needlearn="0" script="healing/light_healing.lua">
+	<instant group="healing" name="Light Healing" words="exura" level="9" mana="20" aggressive="0" selftarget="1" cooldown="1000" needlearn="1" script="healing/light_healing.lua">
 		<vocation name="Sorcerer" />
 		<vocation name="Druid" />
 		<vocation name="Paladin" />
 		<vocation name="Master Sorcerer" />
 		<vocation name="Elder Druid" />
 		<vocation name="Royal Paladin" />
+		<vocation name="Knight" />
+		<vocation name="Elite Knight" />
+	</instant>
+	<instant group="healing" name="Wound Cleansing" words="exana mort" level="30" mana="65" premium="1" aggressive="0" selftarget="1" cooldown="1000" needlearn="1" script="healing/wound_cleansing.lua">
+		<vocation name="Knight" />
+		<vocation name="Elite Knight" />
 	</instant>
 	<instant group="healing" name="Mass Healing" words="exura gran mas res" level="36" mana="150" premium="1" aggressive="0" cooldown="2000" needlearn="0" script="healing/mass_healing.lua">
 		<vocation name="Druid" />
@@ -145,7 +151,7 @@
 	</instant>
 
 	<!-- Support Spells -->
-	<instant group="support" name="Blood Rage" words="utito tempo" level="60" mana="290" premium="1" aggressive="0" selftarget="1" cooldown="2000" needlearn="0" script="support/blood_rage.lua">
+	<instant group="support" name="Blood Rage" words="utito tempo" level="60" mana="290" premium="1" aggressive="0" selftarget="1" cooldown="2000" needlearn="1" script="support/blood_rage.lua">
 		<vocation name="Knight" />
 		<vocation name="Elite Knight" />
 	</instant>
@@ -153,10 +159,10 @@
 		<vocation name="Paladin" />
 		<vocation name="Royal Paladin" />
 	</instant>
-	<instant group="support" name="Challenge" words="exeta res" level="20" mana="30" premium="1" aggressive="0" cooldown="2000" needlearn="0" script="support/challenge.lua">
+	<instant group="support" name="Challenge" words="exeta res" level="20" mana="30" premium="1" aggressive="0" cooldown="2000" needlearn="1" script="support/challenge.lua">
 		<vocation name="Elite Knight" />
 	</instant>
-	<instant group="support" name="Charge" words="utani tempo hur" level="25" mana="100" premium="1" aggressive="0" selftarget="1" cooldown="2000" needlearn="0" script="support/charge.lua">
+	<instant group="support" name="Charge" words="utani tempo hur" level="25" mana="100" premium="1" aggressive="0" selftarget="1" cooldown="2000" needlearn="1" script="support/charge.lua">
 		<vocation name="Knight" />
 		<vocation name="Elite Knight" />
 	</instant>
@@ -166,7 +172,7 @@
 		<vocation name="Master Sorcerer" />
 		<vocation name="Elder Druid" />
 	</instant>
-	<instant group="support" name="Find Person" words="exiva" level="8" mana="20" aggressive="0" playernameparam="1" params="1" cooldown="2000" needlearn="0" script="support/find_person.lua">
+	<instant group="support" name="Find Person" words="exiva" level="8" mana="20" aggressive="0" playernameparam="1" params="1" cooldown="2000" needlearn="1" script="support/find_person.lua">
 		<vocation name="Sorcerer" />
 		<vocation name="Druid" />
 		<vocation name="Paladin" />
@@ -180,7 +186,7 @@
 		<vocation name="Druid" />
 		<vocation name="Elder Druid" />
 	</instant>
-	<instant group="support" name="Great Light" words="utevo gran lux" level="13" mana="60" aggressive="0" selftarget="1" cooldown="2000" needlearn="0" script="support/great_light.lua">
+	<instant group="support" name="Great Light" words="utevo gran lux" level="13" mana="60" aggressive="0" selftarget="1" cooldown="2000" needlearn="1" script="support/great_light.lua">
 		<vocation name="Sorcerer" />
 		<vocation name="Druid" />
 		<vocation name="Paladin" />
@@ -190,7 +196,7 @@
 		<vocation name="Royal Paladin" />
 		<vocation name="Elite Knight" />
 	</instant>
-	<instant group="support" name="Haste" words="utani hur" level="14" mana="60" premium="1" aggressive="0" selftarget="1" cooldown="2000" needlearn="0" script="support/haste.lua">
+	<instant group="support" name="Haste" words="utani hur" level="14" mana="60" premium="1" aggressive="0" selftarget="1" cooldown="2000" needlearn="1" script="support/haste.lua">
 		<vocation name="Sorcerer" />
 		<vocation name="Druid" />
 		<vocation name="Paladin" />
@@ -206,7 +212,7 @@
 		<vocation name="Master Sorcerer" />
 		<vocation name="Elder Druid" />
 	</instant>
-	<instant group="support" name="Levitate" words="exani hur" level="12" mana="50" premium="1" aggressive="0" cooldown="2000" params="1" needlearn="0" script="support/levitate.lua">
+	<instant group="support" name="Levitate" words="exani hur" level="12" mana="50" premium="1" aggressive="0" cooldown="2000" params="1" needlearn="1" script="support/levitate.lua">
 		<vocation name="Sorcerer" />
 		<vocation name="Druid" />
 		<vocation name="Paladin" />
@@ -216,7 +222,7 @@
 		<vocation name="Royal Paladin" />
 		<vocation name="Elite Knight" />
 	</instant>
-	<instant group="support" name="Light" words="utevo lux" level="8" mana="20" aggressive="0" selftarget="1" cooldown="2000" needlearn="0" script="support/light.lua">
+	<instant group="support" name="Light" words="utevo lux" level="8" mana="20" aggressive="0" selftarget="1" cooldown="2000" needlearn="1" script="support/light.lua">
 		<vocation name="Sorcerer" />
 		<vocation name="Druid" />
 		<vocation name="Paladin" />
@@ -226,7 +232,7 @@
 		<vocation name="Royal Paladin" />
 		<vocation name="Elite Knight" />
 	</instant>
-	<instant group="support" name="Magic Rope" words="exani tera" level="9" mana="20" premium="1" aggressive="0" selftarget="1" cooldown="2000" needlearn="0" script="support/magic_rope.lua">
+	<instant group="support" name="Magic Rope" words="exani tera" level="9" mana="20" premium="1" aggressive="0" selftarget="1" cooldown="2000" needlearn="1" script="support/magic_rope.lua">
 		<vocation name="Sorcerer" />
 		<vocation name="Druid" />
 		<vocation name="Paladin" />
@@ -242,7 +248,7 @@
 		<vocation name="Master Sorcerer" />
 		<vocation name="Elder Druid" />
 	</instant>
-	<instant group="support" name="Protector" words="utamo tempo" level="55" mana="200" premium="1" aggressive="0" selftarget="1" cooldown="2000" needlearn="0" script="support/protector.lua">
+	<instant group="support" name="Protector" words="utamo tempo" level="55" mana="200" premium="1" aggressive="0" selftarget="1" cooldown="2000" needlearn="1" script="support/protector.lua">
 		<vocation name="Knight" />
 		<vocation name="Elite Knight" />
 	</instant>
@@ -286,7 +292,7 @@
 		<vocation name="Paladin" />
 		<vocation name="Royal Paladin" />
 	</instant>
-	<instant group="support" name="Train Party" words="utito mas sio" level="32" mana="0" premium="1" aggressive="0" selftarget="1" cooldown="2000" needlearn="0" script="party/train_party.lua">
+	<instant group="support" name="Train Party" words="utito mas sio" level="32" mana="0" premium="1" aggressive="0" selftarget="1" cooldown="2000" needlearn="1" script="party/train_party.lua">
 		<vocation name="Knight" />
 		<vocation name="Elite Knight" />
 	</instant>
