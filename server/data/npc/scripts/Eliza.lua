@@ -17,9 +17,6 @@ npcHandler:addModule(FocusModule:new())
 	keywordHandler:addSpellKeyword({'enchant','party'}, {npcHandler = npcHandler, spellName = 'Enchant Party', price = 4000, level = 32, vocation ={1,2,3,4}})
 	keywordHandler:addSpellKeyword({'heal','party'}, {npcHandler = npcHandler, spellName = 'Heal Party', price = 4000, level = 32, vocation ={1,2,3,4}})
 	keywordHandler:addSpellKeyword({'protect','party'}, {npcHandler = npcHandler, spellName = 'Protect Party', price = 4000, level = 32, vocation ={1,2,3,4}})
-	keywordHandler:addSpellKeyword({'train','party'}, {npcHandler = npcHandler, spellName = 'Train Party', price = 4000, level = 32, vocation ={1,2,3,4}})
+	keywordHandler:addSpellKeyword({'train','party'}, {npcHandler = npcHandler, spellName = 'Train Party', price = 4000, level = 32, premium = true, vocation ={1,2,3,4}})
 	keywordHandler:addKeyword({'support', 'spells'}, StdModule.say, {npcHandler = npcHandler, text = "In this category I have '{Conjure Bolt}', '{Conjure Piercing Bolt}', '{Conjure Poisoned Arrow}', '{Conjure Sniper Arrow}', '{Enchant Party}', '{Heal Party}', '{Protect Party}' and '{Train Party}'."})
 	keywordHandler:addKeyword({'spells'}, StdModule.say, {npcHandler = npcHandler, text = 'I can teach you {Support spells}.'})
-	
-	
-	

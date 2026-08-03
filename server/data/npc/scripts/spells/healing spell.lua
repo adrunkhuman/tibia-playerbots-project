@@ -18,7 +18,7 @@ local AllSpells = false
 -- 4,8 Knight
 
 local spells = {
-	[8704]={ buy =1, spell = "Light Healing", name = "Light Healing", vocations = {1,2,3,4,5,6,7,8}, level = 8, premium = 0},
+	[8704]={ buy =170, spell = "Light Healing", name = "Light Healing", vocations = {1,2,3,4,5,6,7,8}, level = 9, premium = 0},
 	[8474]={ buy =150, spell = "Cure Poison", name = "Cure Poison", vocations = {1,2,3,4,5,6,7,8}, level = 10, premium = 0},	
 	[7488]={ buy =800, spell = "Heal Friend", name = "Heal Friend", vocations = {2,6}, level = 18, premium = 0},
 	[2265]={ buy =350, spell = "Intense Healing", name = "Intense Healing", vocations = {1,2,3,4,5,6,7,8}, level = 20, premium = 0},	

@@ -49,7 +49,7 @@ npcHandler:setMessage(MESSAGE_WALKAWAY, 'Good bye, and don\'t come back too soon
 npcHandler:addModule(FocusModule:new())
 
 
-keywordHandler:addSpellKeyword({'blood','rage'}, {npcHandler = npcHandler, spellName = 'Blood Rage', price = 8000, level = 60, vocation ={4}})
+keywordHandler:addSpellKeyword({'blood','rage'}, {npcHandler = npcHandler, spellName = 'Blood Rage', price = 8000, level = 60, premium = true, vocation ={4}})
 keywordHandler:addSpellKeyword({'conjure','bolt'}, {npcHandler = npcHandler, spellName = 'Conjure Bolt', price = 750, level = 17, vocation ={3}})
 keywordHandler:addSpellKeyword({'conjure','piercing','bolt'}, {npcHandler = npcHandler, spellName = 'Conjure Piercing Bolt', price = 850, level = 33, vocation ={3}})
 keywordHandler:addSpellKeyword({'conjure','poisoned','arrow'}, {npcHandler = npcHandler, spellName = 'Conjure Poisoned Arrow', price = 700, level = 16, vocation ={3}})
@@ -57,11 +57,11 @@ keywordHandler:addSpellKeyword({'conjure','sniper','arrow'}, {npcHandler = npcHa
 keywordHandler:addSpellKeyword({'divine','caldera'}, {npcHandler = npcHandler, spellName = 'Divine Caldera', price = 3000, level = 50, vocation ={3}})
 keywordHandler:addSpellKeyword({'energy','bomb'}, {npcHandler = npcHandler, spellName = 'Energy Bomb', price = 2300, level = 37, vocation ={1}})
 keywordHandler:addSpellKeyword({'eternal','winter'}, {npcHandler = npcHandler, spellName = 'Eternal Winter', price = 8000, level = 60, vocation ={2}})
-keywordHandler:addSpellKeyword({'fierce','berserk'}, {npcHandler = npcHandler, spellName = 'Fierce Berserk', price = 7500, level = 90, vocation ={4}})
+keywordHandler:addSpellKeyword({'fierce','berserk'}, {npcHandler = npcHandler, spellName = 'Fierce Berserk', price = 5000, level = 70, premium = true, vocation ={4}})
 keywordHandler:addSpellKeyword({'hell\'s','core'}, {npcHandler = npcHandler, spellName = 'Hell\'s Core', price = 8000, level = 60, vocation ={1}})
 keywordHandler:addSpellKeyword({'mass','healing'}, {npcHandler = npcHandler, spellName = 'Mass Healing', price = 2200, level = 36, vocation ={2}})
 keywordHandler:addSpellKeyword({'paralyse'}, {npcHandler = npcHandler, spellName = 'Paralyse', price = 1900, level = 54, vocation ={2}})
-keywordHandler:addSpellKeyword({'protector'}, {npcHandler = npcHandler, spellName = 'Protector', price = 6000, level = 55, vocation ={4}})
+keywordHandler:addSpellKeyword({'protector'}, {npcHandler = npcHandler, spellName = 'Protector', price = 6000, level = 55, premium = true, vocation ={4}})
 keywordHandler:addSpellKeyword({'rage','of','the','skies'}, {npcHandler = npcHandler, spellName = 'Rage of the Skies', price = 6000, level = 55, vocation ={1}})
 keywordHandler:addSpellKeyword({'sharpshooter'}, {npcHandler = npcHandler, spellName = 'Sharpshooter', price = 8000, level = 60, vocation ={3}})
 keywordHandler:addSpellKeyword({'swift','foot'}, {npcHandler = npcHandler, spellName = 'Swift Foot', price = 6000, level = 55, vocation ={3}})

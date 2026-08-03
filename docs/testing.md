@@ -86,8 +86,15 @@ Remove the environment override and recreate the server afterward.
 
 The optional regression overlay exercises representative Lua UI/network calls,
 temporary inventory and container mutation, death, explicit removal, rejected
-login, and clean-shutdown persistence. Supported modes are `interactions`,
-`death`, `remove`, and `reject`.
+login, learned-spell state, and clean-shutdown persistence. Supported modes are
+`interactions`, `death`, `remove`, `reject`, `spellTrainer`, `spellReset`,
+`spellLearning`, `spellPersistence`, and `spellFailures`. `spellTrainer` buys
+Light Healing and Light from Gregor through normal dialogue and verifies keyword
+selection and both prices. `spellFailures` covers level, vocation, promotion,
+premium, and money rejection without changing learned state or money. Run
+`spellReset`, `spellLearning`, and `spellPersistence` in that order against the
+same database volume, stopping the server cleanly between each mode; this also
+verifies the learned casting gate, duplicate rejection, and persistence.
 
 ```powershell
 $env:PLAYERBOT_REGRESSION_MODE = "interactions"

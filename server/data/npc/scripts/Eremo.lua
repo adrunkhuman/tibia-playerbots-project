@@ -74,7 +74,7 @@ npcHandler:setMessage(MESSAGE_WALKAWAY, 'It was a pleasure to help you, |PLAYERN
 npcHandler:addModule(FocusModule:new())
 
 
-	keywordHandler:addSpellKeyword({'challenge'}, {npcHandler = npcHandler, spellName = 'Challenge', price = 2000, level = 20, vocation ={4}})
+	keywordHandler:addSpellKeyword({'challenge'}, {npcHandler = npcHandler, spellName = 'Challenge', price = 2000, level = 20, premium = true, vocation ={4}})
 	keywordHandler:addSpellKeyword({'conjure','power','bolt'}, {npcHandler = npcHandler, spellName = 'Conjure Power Bolt', price = 2000, level = 59, vocation ={3}})
 	keywordHandler:addSpellKeyword({'enchant','staff'}, {npcHandler = npcHandler, spellName = 'Enchant Staff', price = 2000, level = 41, vocation ={1}})
 	keywordHandler:addSpellKeyword({'wild','growth'}, {npcHandler = npcHandler, spellName = 'Wild Growth', price = 2000, level = 27, vocation ={2}})

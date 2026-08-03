@@ -1,6 +1,7 @@
 services:
   server:
     environment:
+      FREE_PREMIUM: "${FREE_PREMIUM:-false}"
       PLAYERBOT_REGRESSION_MODE: "${PLAYERBOT_REGRESSION_MODE:-interactions}"
     volumes:
-      - ./tests:/app/data/scripts/playerbot-regression:ro
+      - ./tests/playerbot_connectionless.lua:/app/data/scripts/creaturescripts/player_login_logout_message.lua:ro
