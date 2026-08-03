@@ -15,6 +15,7 @@ param(
 	[switch]$CombatReadiness,
 	[switch]$Depot,
 	[switch]$MainlandLoop,
+	[switch]$SpellTraining,
 	[switch]$Focused,
 	[switch]$SkipBuild,
 	[switch]$KeepStack
@@ -1208,13 +1209,45 @@ function Assert-MainlandLoopEvents {
 	}
 }
 
+function Assert-SpellTrainingEvents {
+	param([string]$Logs, [switch]$Restart)
+
+	$events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
+	$discovery = @($events | Where-Object { $_.event -eq "spell_trainer_discovered" -and $_.offers -gt 0 -and $_.in_scope })
+	$selected = @($events | Where-Object {
+		$_.event -eq "goal_selection" -and $_.to_goal -eq "learn_spell" -and $_.spell -eq "Find Person" -and $_.price -eq 80
+	})
+	$rejected = @($events | Where-Object {
+		$_.event -eq "spell_candidate" -and $_.spell -eq "Light" -and $_.result -eq "rejected" -and
+		$_.reason -eq "unaffordable_after_reserves"
+	})
+	$purchase = @($events | Where-Object {
+		$_.event -eq "action_result" -and $_.action -eq "learn_spell" -and $_.result -eq "success" -and
+		$_.spell -eq "Find Person" -and $_.price -eq 80 -and $_.money_before -eq 300 -and $_.money_after -eq 220
+	})
+	$completed = @($events | Where-Object {
+		$_.event -eq "goal_result" -and $_.goal -eq "learn_spell" -and $_.result -eq "success"
+	})
+	$terminal = @($events | Where-Object { $_.event -eq "terminal" })
+	if ($Restart) {
+		if ($purchase.Count -ne 1 -or $terminal.Count -ne 0) {
+			throw "Spell training restart repeated or failed the completed purchase. purchases=$($purchase.Count), terminal=$($terminal.Count)."
+		}
+		return
+	}
+	if ($discovery.Count -lt 1 -or $selected.Count -ne 1 -or $rejected.Count -lt 1 -or $purchase.Count -ne 1 -or
+		$completed.Count -ne 1 -or $terminal.Count -ne 0) {
+		throw "Spell training failed. discovery=$($discovery.Count), selected=$($selected.Count), rejected=$($rejected.Count), purchases=$($purchase.Count), completed=$($completed.Count), terminal=$($terminal.Count)."
+	}
+}
+
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
 	throw "Docker is required to run the playerbot gameplay suite."
 }
 
 $focusedScenarioRequested = $FullNavigation -or $TargetPursuit -or $CorpseLoot -or $DeathTelemetry -or $Healing -or $ValueLoot -or
 	$PickupProgression -or $GoalArbitration -or $OracleDeparture -or $StaminaProjection -or $HuntRegionPlanning -or
-	$CombatReadiness -or $Depot -or $MainlandLoop
+	$CombatReadiness -or $Depot -or $MainlandLoop -or $SpellTraining
 if ($Focused -and -not $focusedScenarioRequested) {
 	throw "-Focused requires at least one focused scenario switch."
 }
@@ -1629,6 +1662,23 @@ try {
 			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST TARGET_PURSUIT_HIDDEN' | Out-Null
 			$pursuitLogs = Wait-ForLog -Pattern '"action":"target_pursuit","result":"abandoned"'
 			Assert-TargetPursuitAbandonEvents -Logs $pursuitLogs
+		}
+	}
+
+	if ($SpellTraining) {
+		Invoke-Scenario -Name "spell_training" -DefaultTimeoutSeconds 180 -Body {
+			Invoke-Compose down --volumes --remove-orphans
+			$env:PLAYERBOT_GAMEPLAY_MODE = "spell_training"
+			$env:PLAYERBOT_HUNT_DURATION_SECONDS = "900"
+			Invoke-Compose up --detach
+			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST SPELL_TRAINING_PASS' | Out-Null
+			$trainingLogs = Wait-ForLog -Pattern '"action":"learn_spell","result":"success"'
+			Assert-SpellTrainingEvents -Logs $trainingLogs
+			Invoke-Compose stop server
+			Invoke-Compose up --detach server
+			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST SPELL_TRAINING_RESTART_PASS' | Out-Null
+			$restartLogs = Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST SPELL_TRAINING_RESTART_PASS'
+			Assert-SpellTrainingEvents -Logs $restartLogs -Restart
 		}
 	}
 

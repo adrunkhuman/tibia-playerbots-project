@@ -968,7 +968,7 @@ void PlayerBotController::processFixtureDeposit(Player* player, const Position& 
 		}
 		emit("action_result", currentPosition, "\"action\":\"deposit\",\"result\":\"complete\",\"fixture\":true,\"cycle\":" +
 		     std::to_string(completedCycles));
-		if (testPolicy.progressionEnabled && !hasCompletedRookgaardDeparture(*player)) {
+		if (testPolicy.progressionEnabled) {
 			selectTopLevelGoal(*player, currentPosition, "fixture_deposit_complete");
 		} else {
 			startHunt(player, currentPosition, "fixture_deposit_complete");
@@ -1085,7 +1085,7 @@ void PlayerBotController::processDeposit(Player* player, const Position& current
 		if (pauseDepotFixtureForRestart(*player, DepotRestartCheckpoint::Depart, currentPosition)) {
 			return;
 		}
-		if (testPolicy.progressionEnabled && !hasCompletedRookgaardDeparture(*player)) {
+		if (testPolicy.progressionEnabled) {
 			emit("goal_result", currentPosition,
 			     "\"decision_id\":" + std::to_string(goalDecisionId) +
 			         ",\"goal\":\"service\",\"result\":\"success\",\"reason\":\"service_complete\"");

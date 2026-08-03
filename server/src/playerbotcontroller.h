@@ -76,12 +76,15 @@ namespace playerbot {
 	inline constexpr std::chrono::minutes huntRegionCooldown(10);
 	inline constexpr std::chrono::minutes pickupRewardSuccessCooldown(5);
 	inline constexpr std::chrono::seconds pickupRewardFailureCooldown(60);
+	inline constexpr std::chrono::minutes spellTrainingSuccessCooldown(5);
+	inline constexpr std::chrono::seconds spellTrainingFailureCooldown(60);
 	// Top-level utilities are comparable arbitration scores. Baselines encode the default priority:
 	// critical healing > departure > capacity service > useful rewards > ordinary service > hunting >
 	// economic pickup. Dynamic service and reward adjustments may cross these baselines. Equal scores
 	// retain the candidate declaration order.
 	inline constexpr int32_t serviceGoalBaseUtility = 400;
 	inline constexpr int32_t pickupRewardBaseUtility = 650;
+	inline constexpr int32_t spellTrainingGoalUtility = 550;
 	inline constexpr int32_t economicPickupBaseUtility = 250;
 	inline constexpr int32_t huntGoalUtility = 300;
 	inline constexpr int32_t oracleDepartureUtility = 950;
@@ -191,12 +194,14 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 			None,
 			PickupReward,
 			OracleDeparture,
+			LearnSpell,
 		};
 
 		enum class TopLevelGoal : uint8_t {
 			Departure,
 			Service,
 			PickupReward,
+			LearnSpell,
 			Hunt,
 		};
 
@@ -222,6 +227,14 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 			ChooseTown,
 			ChooseVocation,
 			ConfirmVocation,
+			Verify,
+		};
+
+		enum class SpellTrainingStage : uint8_t {
+			Travel,
+			Greet,
+			Request,
+			Confirm,
 			Verify,
 		};
 
@@ -313,6 +326,19 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		struct ServiceNpc {
 			uint32_t id;
 			Position position;
+		};
+
+		struct SpellTrainingPlan {
+			uint32_t npcId = 0;
+			Position npcPosition;
+			Position approachPosition;
+			std::string spellName;
+			std::string keyword;
+			uint32_t price = 0;
+			uint32_t level = 0;
+			uint32_t travelSteps = 0;
+			uint64_t reserve = 0;
+			uint64_t moneyBefore = 0;
 		};
 
 		enum class ScenarioStage : uint8_t {
@@ -547,6 +573,16 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 
 		void finishOracleDeparture(Player* player, const Position& position, const char* result, const char* reason);
 
+		uint64_t spellTrainingReserve(const Player& player) const;
+		void emitSpellCandidate(const Npc& npc, const NpcSpellOffer& offer, const Position& position, const char* result,
+		                        const char* reason, uint64_t reserve = 0, uint32_t travelSteps = 0) const;
+		bool findSpellTraining(Player& player, const Position& position, SpellTrainingPlan& plan,
+		                       std::deque<PlayerBotNavigationStep>& steps);
+		void beginSpellTraining(Player& player, const Position& position, SpellTrainingPlan plan,
+		                        std::deque<PlayerBotNavigationStep> steps);
+		void finishSpellTraining(Player* player, const Position& position, const char* result, const char* reason);
+		void processSpellTraining(Player* player, const Position& currentPosition);
+
 		const char* topLevelGoalName(TopLevelGoal goal) const;
 
 		uint32_t saleableItemCount(const Player& player) const;
@@ -734,11 +770,14 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		ProgressionObjective progressionObjective = ProgressionObjective::None;
 		ProgressionStage progressionStage = ProgressionStage::Travel;
 		DepartureStage departureStage = DepartureStage::Travel;
+		SpellTrainingStage spellTrainingStage = SpellTrainingStage::Travel;
 		PickupReward pickupReward;
 		DeparturePlan departurePlan;
+		SpellTrainingPlan spellTrainingPlan;
 		TopLevelGoal activeGoal = TopLevelGoal::Service;
 		uint64_t goalDecisionId = 0;
 		std::chrono::steady_clock::time_point pickupRewardCooldownUntil;
+		std::chrono::steady_clock::time_point spellTrainingCooldownUntil;
 		uint32_t progressionAttempts = 0;
 		uint32_t pendingRewardItemCount = 0;
 		uint32_t pendingRewardRootCount = 0;

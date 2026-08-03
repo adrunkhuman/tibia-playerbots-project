@@ -47,14 +47,15 @@ Utilities are deterministic arbitration scores, not probabilities:
 | Oracle departure | 950 |
 | Capacity service | 900 |
 | Equipment reward | 650 |
+| Spell training | 550 |
 | Ordinary service | 400 |
 | Hunt | 300 |
 | Economic reward | 250 |
 
 Service needs and reward value adjust these baselines, so candidates can cross
 nominal tiers. Equal scores keep declaration order: departure, service, pickup,
-then hunt. Successful pickup families cool down for five minutes; failed or
-interrupted families cool down for 60 seconds.
+spell training, then hunt. Successful pickup and spell-training families cool
+down for five minutes; failed or interrupted families cool down for 60 seconds.
 
 ## Navigation and hunting
 
@@ -107,11 +108,22 @@ stock redirects it to service. Food use preserves one meat and respects the
 fullness limit.
 
 Service NPCs require an exact `playerbot_service` XML tag of `shop`, `banker`,
-or `oracle`. Shops publish their loaded offers to the bot; untagged shops and
-tagged shops without offers are ignored. Providers must remain within 200
-weighted tiles of the registered town temple. The bot greets the selected NPC,
-treats a private reply as focus acknowledgement, and opens the normal trade
-window. Reply text is not interpreted.
+`oracle`, or `spell_trainer`. Shops publish their loaded offers to the bot;
+trainers publish each spell registered through `addSpellKeyword`. Untagged
+providers and tagged providers without offers are ignored. Providers must remain
+within 200 weighted tiles of the registered town temple. The bot greets the
+selected NPC, treats a private reply as focus acknowledgement, and opens the
+normal trade window. Reply text is not interpreted.
+
+Spell training currently considers tagged providers within the Thais temple
+scope; Gregor is the initial tag. It derives trainer offers from loaded NPC
+scripts and rejects offers with a registry mismatch, wrong vocation, level,
+premium status, learned state, missing supply reserve, insufficient funds after
+the 100 gp carried reserve plus five potion and one meat replacement costs, or
+an unavailable route. A selected spell uses normal `hi`, keyword, and `yes`
+dialogue. Completion requires both learned state and the exact total-money
+delta. Learned-spell persistence reconstructs completion after restart and
+prevents a repurchase.
 
 The service cycle sells known surplus, restores five small health potions and
 one meat, deposits carried money, and withdraws 100 gp. Hunting ends after the
@@ -191,6 +203,7 @@ States, actions, results, statuses, and reasons use stable lowercase values.
 | Lifecycle | `lifecycle`, `state_transition`, `objective_transition`, `terminal` record ownership and controller state. |
 | Goals | `goal_candidate`, `goal_selection`, `goal_result` expose arbitration evidence and decision IDs. |
 | Rewards | `strategy_candidate`, `reward_inspection`, `strategy_selection`, `strategy_objective_result` expose bundle selection and verification. |
+| Spell training | `spell_trainer_discovered`, `spell_candidate`, `strategy_selection`, `action_result`, and `goal_result` expose loaded offers, eligibility rejections, provider/route choice, and exact payment verification. |
 | Actions | `action_result`, `target_changed`, `service_discovered`, `npc_reply`, `stuck` record externally relevant attempts and outcomes. |
 | Hunting | `hunt_region_candidate`, `hunt_region_scan`, `hunt_region_selection`, `hunt_region_outcome`, `hunt_region_patrol` expose planner inputs and results. |
 | Navigation | `navigation_progress` records bounded recovery such as oscillation suppression. |

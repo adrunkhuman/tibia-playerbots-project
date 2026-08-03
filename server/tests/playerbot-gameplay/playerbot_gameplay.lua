@@ -27,6 +27,7 @@ local nestedRewardShieldId = 2512
 local economicRewardStorage = 50082
 local departureRecoveryStorage = 50090
 local depotFixtureStorage = 50095
+local spellTrainingStorage = 50097
 local deathLoginCount = 0
 local removeAll
 
@@ -100,6 +101,22 @@ local function verifyOracleDeparture(playerId, attempts)
     end
     assert(complete, "Bot One did not become a Thais knight at the Oracle")
     print("PLAYERBOT_GAMEPLAY_TEST ORACLE_DEPARTURE_PASS")
+end
+
+local function verifySpellTraining(playerId, attempts)
+    local player = Player(playerId)
+    assert(player and not player:isRemoved(), "Bot One disappeared during spell training")
+    local complete = player:hasLearnedSpell("Find Person") and player:getMoney() + player:getBankBalance() == 220
+    if not complete and attempts > 0 then
+        addEvent(verifySpellTraining, 500, playerId, attempts - 1)
+        return
+    end
+    assert(player:hasLearnedSpell("Find Person"), "spell training did not learn Find Person")
+    assert(player:getMoney() + player:getBankBalance() == 220, "spell training charged an unexpected amount")
+    assert(player:getItemCount(potionItemId) >= 5 and player:getItemCount(meatItemId) >= 1,
+        "spell training spent the recovery supplies")
+    assert(player:setStorageValue(spellTrainingStorage, 1), "spell training completion marker could not persist")
+    print("PLAYERBOT_GAMEPLAY_TEST SPELL_TRAINING_PASS")
 end
 
 local function removeNearbyMonsters(player)
@@ -438,7 +455,7 @@ function login.onLogin(player)
         mode == "progression_resume" or mode == "progression_nested_resume" or mode == "progression_space" or
         mode == "arbitration" or
         mode == "arbitration_interrupt" or mode == "departure" or mode == "departure_interrupt" or
-        mode == "departure_recovery" or mode == "stamina_bonus" or mode == "stamina_boundary" or
+        mode == "departure_recovery" or mode == "spell_training" or mode == "stamina_bonus" or mode == "stamina_boundary" or
         mode == "stamina_normal" or mode == "hunt_planning" or mode == "readiness_ready" or
         mode == "readiness_upgrade" or mode == "readiness_missing_weapon" or mode == "readiness_supplies" or
         mode == "readiness_retention",
@@ -607,6 +624,35 @@ function login.onLogin(player)
 		print("PLAYERBOT_GAMEPLAY_TEST PICKUP_PROGRESSION_BUNDLE_START")
 		return true
 	end
+    if mode == "spell_training" then
+        if player:getStorageValue(spellTrainingStorage) == 1 then
+            assert(player:hasLearnedSpell("Find Person"), "spell training did not persist across restart")
+            print("PLAYERBOT_GAMEPLAY_TEST SPELL_TRAINING_RESTART_PASS")
+            return true
+        end
+        local thais = Town(thaisTownId)
+        assert(thais and player:setTown(thais), "spell training fixture could not select Thais")
+        assert(player:setVocation(4), "spell training fixture could not select Knight")
+        local requiredExperience = Game.getExperienceForLevel(8) - player:getExperience()
+        if requiredExperience > 0 then player:addExperience(requiredExperience) end
+        assert(player:getLevel() == 8, "spell training fixture could not select level 8")
+        assert(player:teleportTo(thais:getTemplePosition()), "spell training fixture could not reach the Thais temple")
+        for _, spellName in ipairs({"Find Person", "Light", "Light Healing", "Cure Poison", "Great Light"}) do
+            player:forgetSpell(spellName)
+        end
+        removeAll(player, potionItemId)
+        removeAll(player, meatItemId)
+        assert(player:addItem(potionItemId, 5), "spell training fixture could not supply potions")
+        assert(player:addItem(meatItemId, 1), "spell training fixture could not supply food")
+        local totalMoney = player:getMoney() + player:getBankBalance()
+        if totalMoney < 300 then assert(player:addMoney(300 - totalMoney), "spell training fixture could not fund Bot One") end
+        if totalMoney > 300 then assert(player:removeTotalMoney(totalMoney - 300), "spell training fixture could not normalize funding") end
+        assert(player:getMoney() + player:getBankBalance() == 300, "spell training fixture has the wrong starting money")
+        suppressNearbyMonsters(player:getId())
+        addEvent(verifySpellTraining, 500, player:getId(), 360)
+        print("PLAYERBOT_GAMEPLAY_TEST SPELL_TRAINING_START")
+        return true
+    end
 
 	if mode == "progression_nested" then
 		assert(player:setStorageValue(50082, 1), "nested progression fixture could not suppress the nearby currency reward")

@@ -50,6 +50,7 @@ the changed behavior:
 | `-CombatReadiness` | Equipment, supplies, capacity, service recovery, upgrades, and restart reconstruction. |
 | `-Depot` | Real locker/chest discovery, nested deposits, move verification, retries, and restart checkpoints. |
 | `-MainlandLoop` | Two real Thais hunt/depot cycles, local services, restart recovery, and teleport exclusion. |
+| `-SpellTraining` | Tagged trainer discovery, reserve-backed affordability rejection, normal spell dialogue/payment, and restart persistence. |
 
 Navigation or looting changes require at least:
 
