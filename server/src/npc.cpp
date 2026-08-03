@@ -112,6 +112,7 @@ void Npc::reset()
 
 	parameters.clear();
 	shopOffers.clear();
+	spellOffers.clear();
 	shopPlayerSet.clear();
 	spectators.clear();
 }
@@ -394,6 +395,22 @@ void Npc::addShopOffer(uint16_t itemId, int32_t subType, uint32_t buyPrice, uint
 	it->sellPrice = sellPrice;
 }
 
+void Npc::addSpellOffer(std::string spellName, std::string keyword, uint32_t price, uint32_t level, bool premium,
+                        uint16_t vocationId)
+{
+	auto it = std::find_if(spellOffers.begin(), spellOffers.end(), [&spellName, &keyword, price, level, premium](const NpcSpellOffer& offer) {
+		return offer.spellName == spellName && offer.keyword == keyword && offer.price == price && offer.level == level &&
+		       offer.premium == premium;
+	});
+	if (it == spellOffers.end()) {
+		spellOffers.push_back({std::move(spellName), std::move(keyword), price, level, premium, {vocationId}});
+		return;
+	}
+	if (std::find(it->vocationIds.begin(), it->vocationIds.end(), vocationId) == it->vocationIds.end()) {
+		it->vocationIds.push_back(vocationId);
+	}
+}
+
 void Npc::onPlayerTrade(Player* player, int32_t callback, uint16_t itemId, uint8_t count,
                         uint8_t amount, bool ignore/* = false*/, bool inBackpacks/* = false*/)
 {
@@ -658,6 +675,7 @@ void NpcScriptInterface::registerFunctions()
 	registerMethod("Npc", "getParameter", NpcScriptInterface::luaNpcGetParameter);
 	registerMethod("Npc", "setFocus", NpcScriptInterface::luaNpcSetFocus);
 	registerMethod("Npc", "addShopOffer", NpcScriptInterface::luaNpcAddShopOffer);
+	registerMethod("Npc", "addSpellOffer", NpcScriptInterface::luaNpcAddSpellOffer);
 
 	registerMethod("Npc", "openShopWindow", NpcScriptInterface::luaNpcOpenShopWindow);
 	registerMethod("Npc", "closeShopWindow", NpcScriptInterface::luaNpcCloseShopWindow);
@@ -1040,6 +1058,17 @@ int NpcScriptInterface::luaNpcAddShopOffer(lua_State* L)
 	if (npc) {
 		npc->addShopOffer(getNumber<uint16_t>(L, 2), getNumber<int32_t>(L, 3),
 		                  getNumber<uint32_t>(L, 4), getNumber<uint32_t>(L, 5));
+	}
+	return 0;
+}
+
+int NpcScriptInterface::luaNpcAddSpellOffer(lua_State* L)
+{
+	// npc:addSpellOffer(spellName, keyword, price, level, premium, vocationId)
+	Npc* npc = getUserdata<Npc>(L, 1);
+	if (npc) {
+		npc->addSpellOffer(getString(L, 2), getString(L, 3), getNumber<uint32_t>(L, 4), getNumber<uint32_t>(L, 5),
+		                   getBoolean(L, 6), getNumber<uint16_t>(L, 7));
 	}
 	return 0;
 }

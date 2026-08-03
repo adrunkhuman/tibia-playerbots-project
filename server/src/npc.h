@@ -29,6 +29,15 @@
 class Npc;
 class Player;
 
+struct NpcSpellOffer {
+	std::string spellName;
+	std::string keyword;
+	uint32_t price;
+	uint32_t level;
+	bool premium;
+	std::vector<uint16_t> vocationIds;
+};
+
 class Npcs
 {
 	public:
@@ -62,6 +71,7 @@ class NpcScriptInterface final : public LuaScriptInterface
 		static int luaNpcGetParameter(lua_State* L);
 		static int luaNpcSetFocus(lua_State* L);
 		static int luaNpcAddShopOffer(lua_State* L);
+		static int luaNpcAddSpellOffer(lua_State* L);
 
 		static int luaNpcOpenShopWindow(lua_State* L);
 		static int luaNpcCloseShopWindow(lua_State* L);
@@ -156,6 +166,8 @@ class Npc final : public Creature
 			onCreatureSay(creature, type, text);
 		}
 		void addShopOffer(uint16_t itemId, int32_t subType, uint32_t buyPrice, uint32_t sellPrice);
+		void addSpellOffer(std::string spellName, std::string keyword, uint32_t price, uint32_t level, bool premium,
+		                   uint16_t vocationId);
 
 		bool doMoveTo(const Position& pos, int32_t minTargetDist = 1, int32_t maxTargetDist = 1,
 		              bool fullPathSearch = true, bool clearSight = true, int32_t maxSearchDist = 0);
@@ -187,6 +199,7 @@ class Npc final : public Creature
 
 		const auto& getSpectators() { return spectators; }
 		const std::vector<ShopInfo>& getShopOffers() const { return shopOffers; }
+		const std::vector<NpcSpellOffer>& getSpellOffers() const { return spellOffers; }
 		const std::string* getParameter(const std::string& key) const {
 			auto it = parameters.find(key);
 			return it == parameters.end() ? nullptr : &it->second;
@@ -229,6 +242,7 @@ class Npc final : public Creature
 
 		std::map<std::string, std::string> parameters;
 		std::vector<ShopInfo> shopOffers;
+		std::vector<NpcSpellOffer> spellOffers;
 
 		std::set<Player*> shopPlayerSet;
 		std::set<Player*> spectators;

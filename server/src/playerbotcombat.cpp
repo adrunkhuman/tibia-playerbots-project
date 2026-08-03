@@ -860,7 +860,7 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 		processReadinessEquipment(player, currentPosition);
 		return;
 	}
-	if (cyclePhase != CyclePhase::Hunt || progressionObjective == ProgressionObjective::OracleDeparture) {
+	if (cyclePhase != CyclePhase::Hunt || progressionObjective != ProgressionObjective::None) {
 		if (defensiveTargetId != 0) {
 			processDefensiveCombat(player, currentPosition);
 			return;
@@ -896,7 +896,7 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 	if (cyclePhase == CyclePhase::Hunt &&
 	    (std::chrono::steady_clock::now() >= huntDeadline || player->getFreeCapacity() < returnCapacityThreshold)) {
 		const char* reason = player->getFreeCapacity() < returnCapacityThreshold ? "capacity" : "hunt_deadline";
-		if (testPolicy.progressionEnabled && !hasCompletedRookgaardDeparture(*player)) {
+		if (testPolicy.progressionEnabled) {
 			finishHuntAndSelectGoal(player, currentPosition, reason);
 			return;
 		} else {

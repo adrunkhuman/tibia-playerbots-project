@@ -30,7 +30,8 @@ const PlayerBotTestPolicy& playerbot::testPolicyFromEnvironment()
 			 std::strcmp(gameplayMode, "arbitration") == 0 ||
 			 std::strcmp(gameplayMode, "arbitration_interrupt") == 0 ||
 			 std::strcmp(gameplayMode, "departure") == 0 ||
-			 std::strcmp(gameplayMode, "departure_recovery") == 0);
+			 std::strcmp(gameplayMode, "departure_recovery") == 0 ||
+			 std::strcmp(gameplayMode, "spell_training") == 0);
 		const bool startInHunt = gameplayMode &&
 			(std::strcmp(gameplayMode, "navigation") == 0 || std::strcmp(gameplayMode, "corpse") == 0 ||
 			 (std::strcmp(gameplayMode, "target_pursuit") == 0 || std::strcmp(gameplayMode, "target_pursuit_abandon") == 0) ||
@@ -89,8 +90,7 @@ void PlayerBotController::start(const Position& position, bool recovered, uint32
 	Player* controlledPlayer = g_game.getPlayerByID(playerId);
 	const bool departureComplete = controlledPlayer && hasCompletedRookgaardDeparture(*controlledPlayer);
 	const bool departureRequired = controlledPlayer && requiresRookgaardDeparture(*controlledPlayer);
-	const bool useGoalSelector = controlledPlayer && !departureComplete &&
-	                             (departureRequired || (!recovered && testPolicy.progressionEnabled));
+	const bool useGoalSelector = controlledPlayer && (departureRequired || (!recovered && testPolicy.progressionEnabled));
 	if (useGoalSelector && !selectTopLevelGoal(*controlledPlayer, position, "startup")) {
 		return;
 	}
