@@ -39,6 +39,7 @@ registerCorpseTestMonster("Playerbot Level Eight Target", {}, nil, false, 1, nil
 registerCorpseTestMonster("Playerbot Value Corpse", {
     {id = 2826, chance = 100000, maxCount = 1},
 })
+registerCorpseTestMonster("Playerbot Spell Target", {}, nil, false, 1000)
 registerCorpseTestMonster("Playerbot Death Threat", {}, nil, true, 100000, {
     {name = "combat", type = COMBAT_PHYSICALDAMAGE, interval = 100, chance = 100,
         minDamage = -10000, maxDamage = -10000, target = true, range = 1},

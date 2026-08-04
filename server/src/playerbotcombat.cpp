@@ -122,6 +122,9 @@ bool PlayerBotController::handleHealing(Player* player, const Position& currentP
 	if (now < healRetryAfter || !player->canDoAction()) {
 		return true;
 	}
+	if (handleSpellHealing(player, currentPosition)) {
+		return true;
+	}
 
 	const uint32_t potionCount = getInventoryItemCount(*player, smallHealthPotionItemId);
 	if (potionCount == 0) {
@@ -476,6 +479,10 @@ void PlayerBotController::processTraversalCombat(Player* player, const Position&
 		finishTraversalCombat(player, currentPosition, "combat_timeout");
 	} else {
 		ratPosition = target->getPosition();
+		if (tryOffensiveSpell(player, currentPosition)) {
+			schedule(navigationDecisionDelay(*player));
+			return;
+		}
 	}
 	schedule(navigationInterval);
 }
@@ -967,6 +974,10 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 	}
 	if (attackVisibleMonster(player, currentPosition)) {
 		schedule(navigationInterval);
+		return;
+	}
+	if (trySupportSpell(player, currentPosition)) {
+		schedule(navigationDecisionDelay(*player));
 		return;
 	}
 

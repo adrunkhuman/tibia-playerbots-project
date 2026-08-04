@@ -130,11 +130,12 @@ provisioning, startup, lifecycle telemetry, and local game ports.
 The gameplay suite is local and PowerShell-based. It boots scenario worlds with
 fixture monsters and asserts on the event stream, covering corpse handling,
 value looting, healing, death recovery, goal arbitration and interruption,
-reward claiming, Oracle departure, and spell training.
+reward claiming, Oracle departure, spell training, and spell use.
 
 ```powershell
 pwsh -File scripts/test-playerbot-gameplay.ps1 -FullNavigation -CorpseLoot
 pwsh -File scripts/test-playerbot-gameplay.ps1 -Focused -SpellTraining
+pwsh -File scripts/test-playerbot-gameplay.ps1 -Focused -SpellUse
 ```
 
 Gameplay fixtures use fixed destinations and do not prove whole-map navigation

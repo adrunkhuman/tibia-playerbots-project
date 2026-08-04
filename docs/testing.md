@@ -51,12 +51,14 @@ the changed behavior:
 | `-Depot` | Real locker/chest discovery, nested deposits, move verification, retries, and restart checkpoints. |
 | `-MainlandLoop` | Two real Thais hunt/depot cycles, local services, restart recovery, and teleport exclusion. |
 | `-SpellTraining` | Tagged trainer discovery, reserve-backed affordability rejection, normal spell dialogue/payment, and restart persistence. |
+| `-SpellUse` | Light Healing preemption, Haste, Whirlwind Throw, unlearned-spell potion fallback, and mana-reserve melee fallback. |
 
 Navigation or looting changes require at least:
 
 ```powershell
 pwsh -File scripts/test-playerbot-gameplay.ps1 -FullNavigation -CorpseLoot
 pwsh -File scripts/test-playerbot-gameplay.ps1 -TargetPursuit -Focused
+pwsh -File scripts/test-playerbot-gameplay.ps1 -SpellUse -Focused
 ```
 
 `-TargetPursuit` runs successful `target_pursuit` reacquisition and bounded

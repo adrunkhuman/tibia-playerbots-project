@@ -40,8 +40,8 @@ const PlayerBotTestPolicy& playerbot::testPolicyFromEnvironment()
 			 std::strcmp(gameplayMode, "stamina_bonus") == 0 || std::strcmp(gameplayMode, "stamina_boundary") == 0 ||
 			 std::strcmp(gameplayMode, "stamina_normal") == 0 || std::strcmp(gameplayMode, "hunt_planning") == 0 ||
 			 std::strcmp(gameplayMode, "readiness_ready") == 0 || std::strcmp(gameplayMode, "readiness_upgrade") == 0 ||
-			 std::strcmp(gameplayMode, "readiness_missing_weapon") == 0 || std::strcmp(gameplayMode, "readiness_supplies") == 0 ||
-			 std::strcmp(gameplayMode, "readiness_retention") == 0);
+			std::strcmp(gameplayMode, "readiness_missing_weapon") == 0 || std::strcmp(gameplayMode, "readiness_supplies") == 0 ||
+			std::strcmp(gameplayMode, "readiness_retention") == 0 || std::strcmp(gameplayMode, "spell_use") == 0);
 		const bool fixedFixtureRoute = gameplayMode && std::strcmp(gameplayMode, "stamina_bonus") != 0 &&
 		                               std::strcmp(gameplayMode, "stamina_boundary") != 0 &&
 		                               std::strcmp(gameplayMode, "stamina_normal") != 0 &&
@@ -671,6 +671,7 @@ void PlayerBotController::navigate()
 	const Position currentPosition = player->getPosition();
 	lastPosition = currentPosition;
 	maybeLogSummary(currentPosition);
+	verifySpellCast(*player, currentPosition);
 	if (activeHuntRegion && cyclePhase == CyclePhase::Hunt) {
 		if (huntRegionDamageTaken >= static_cast<uint32_t>(player->getMaxHealth()) &&
 		    std::chrono::steady_clock::now() - huntRegionStarted < std::chrono::minutes(2)) {

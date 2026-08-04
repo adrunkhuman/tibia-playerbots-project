@@ -16,6 +16,7 @@ param(
 	[switch]$Depot,
 	[switch]$MainlandLoop,
 	[switch]$SpellTraining,
+	[switch]$SpellUse,
 	[switch]$Focused,
 	[switch]$SkipBuild,
 	[switch]$KeepStack
@@ -1241,13 +1242,76 @@ function Assert-SpellTrainingEvents {
 	}
 }
 
+function Assert-SpellUseEvents {
+	param([string]$Logs)
+
+	$events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
+	$casts = @($events | Where-Object { $_.event -eq "action_result" -and $_.action -eq "cast_spell" -and $_.result -eq "success" })
+	$healing = @($casts | Where-Object {
+		$_.policy_candidate.spell -eq "Light Healing" -and $_.policy_candidate.role -eq "healing" -and $_.need -eq "recovery" -and
+		$_.mana_after -eq ($_.mana_before - 20) -and $_.health_after -gt $_.health_before
+	})
+	$support = @($casts | Where-Object {
+		$_.policy_candidate.spell -eq "Haste" -and $_.policy_candidate.role -eq "support" -and $_.need -eq "safe_route" -and
+		$_.mana_after -eq ($_.mana_before - 60) -and $_.mana_after -ge $_.mana_reserve -and $_.reserve_survives
+	})
+	$offense = @($casts | Where-Object {
+		$_.policy_candidate.spell -eq "Whirlwind Throw" -and $_.policy_candidate.role -eq "ranged_offense" -and $_.need -eq "offense" -and
+		$_.mana_after -eq ($_.mana_before - 40) -and $_.target_id -gt 0
+	})
+	$unlearned = @($events | Where-Object {
+		$_.event -eq "action_result" -and $_.action -eq "cast_spell" -and $_.result -eq "skipped" -and
+		$_.policy_candidate.spell -eq "Light Healing" -and $_.reason -eq "unlearned" -and $_.engine_result -eq "not_attempted" -and
+		$_.fallback -eq "small_health_potion" -and @($_.legal_candidates).Count -eq 0
+	})
+	$fallbackPotion = @($events | Where-Object {
+		$_.event -eq "action_result" -and $_.action -eq "heal" -and $_.result -eq "success" -and
+		$_.method -eq "small_health_potion" -and $_.resource_before -eq 6 -and $_.resource_after -eq 5
+	})
+	$manaFallback = @($events | Where-Object {
+		$_.event -eq "action_result" -and $_.action -eq "cast_spell" -and $_.result -eq "skipped" -and
+		$_.policy_candidate.spell -eq "Whirlwind Throw" -and $_.reason -eq "insufficient_mana_reserve" -and
+		$_.fallback -eq "normal_melee" -and @($_.legal_candidates).Count -eq 0
+	})
+	$invalidLegalCandidates = @($events | Where-Object {
+		$_.event -eq "action_result" -and $_.action -eq "cast_spell" -and $_.engine_result -ne "accepted" -and
+		@($_.legal_candidates).Count -ne 0
+	})
+	$failed = @($events | Where-Object { $_.event -eq "action_result" -and $_.action -eq "cast_spell" -and $_.result -eq "failed" })
+	$terminal = @($events | Where-Object { $_.event -eq "terminal" })
+	$targetIndex = -1
+	$preemptingHealIndex = -1
+	$offenseIndex = -1
+	for ($index = 0; $index -lt $events.Count; $index++) {
+		$event = $events[$index]
+		if ($targetIndex -lt 0 -and $event.event -eq "target_changed" -and $event.target_name -eq "Playerbot Spell Target") {
+			$targetIndex = $index
+		} elseif ($targetIndex -ge 0 -and $preemptingHealIndex -lt 0 -and $event.event -eq "action_result" -and
+			$event.action -eq "cast_spell" -and $event.result -eq "success" -and
+			$event.policy_candidate.spell -eq "Light Healing" -and $event.need -eq "recovery") {
+			$preemptingHealIndex = $index
+		} elseif ($preemptingHealIndex -ge 0 -and $offenseIndex -lt 0 -and $event.event -eq "action_result" -and
+			$event.action -eq "cast_spell" -and $event.result -eq "success" -and
+			$event.policy_candidate.spell -eq "Whirlwind Throw") {
+			$offenseIndex = $index
+		}
+	}
+	$preempted = $targetIndex -ge 0 -and $preemptingHealIndex -gt $targetIndex -and $offenseIndex -gt $preemptingHealIndex
+	if ($healing.Count -ge 2 -and $support.Count -eq 1 -and $offense.Count -eq 1 -and $unlearned.Count -eq 1 -and
+		$fallbackPotion.Count -eq 1 -and $manaFallback.Count -ge 1 -and $preempted -and $invalidLegalCandidates.Count -eq 0 -and
+		$failed.Count -eq 0 -and $terminal.Count -eq 0) {
+		return
+	}
+	throw "Spell use failed. healing=$($healing.Count), support=$($support.Count), offense=$($offense.Count), unlearned=$($unlearned.Count), fallbackPotion=$($fallbackPotion.Count), manaFallback=$($manaFallback.Count), preempted=$preempted, invalidLegalCandidates=$($invalidLegalCandidates.Count), failed=$($failed.Count), terminal=$($terminal.Count)."
+}
+
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
 	throw "Docker is required to run the playerbot gameplay suite."
 }
 
 $focusedScenarioRequested = $FullNavigation -or $TargetPursuit -or $CorpseLoot -or $DeathTelemetry -or $Healing -or $ValueLoot -or
 	$PickupProgression -or $GoalArbitration -or $OracleDeparture -or $StaminaProjection -or $HuntRegionPlanning -or
-	$CombatReadiness -or $Depot -or $MainlandLoop -or $SpellTraining
+	$CombatReadiness -or $Depot -or $MainlandLoop -or $SpellTraining -or $SpellUse
 if ($Focused -and -not $focusedScenarioRequested) {
 	throw "-Focused requires at least one focused scenario switch."
 }
@@ -1679,6 +1743,17 @@ try {
 			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST SPELL_TRAINING_RESTART_PASS' | Out-Null
 			$restartLogs = Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST SPELL_TRAINING_RESTART_PASS'
 			Assert-SpellTrainingEvents -Logs $restartLogs -Restart
+		}
+	}
+
+	if ($SpellUse) {
+		Invoke-Scenario -Name "spell_use" -DefaultTimeoutSeconds 90 -Body {
+			Invoke-Compose down --volumes --remove-orphans
+			$env:PLAYERBOT_GAMEPLAY_MODE = "spell_use"
+			$env:PLAYERBOT_HUNT_DURATION_SECONDS = "900"
+			Invoke-Compose up --detach
+			$spellLogs = Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST SPELL_USE_PASS'
+			Assert-SpellUseEvents -Logs $spellLogs
 		}
 	}
 

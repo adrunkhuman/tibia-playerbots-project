@@ -20,6 +20,235 @@ extern Spells* g_spells;
 
 namespace {
 	constexpr uint32_t maximumSpellTrainerDistanceFromTemple = 200;
+	constexpr uint32_t higherPriorityRecoveryManaReserve = 20;
+	constexpr uint32_t minimumHasteRouteSteps = 20;
+	constexpr int32_t smallHealthPotionMaximumHealing = 90;
+
+	enum class KnightSpellRole : uint8_t {
+		Healing,
+		Support,
+		MeleeOffense,
+		RangedOffense,
+	};
+
+	struct AuditedKnightSpellDescriptor {
+		const char* name;
+		const char* words;
+		KnightSpellRole role;
+	};
+
+	constexpr std::array<AuditedKnightSpellDescriptor, 4> auditedKnightSpells = {{
+		{"Light Healing", "exura", KnightSpellRole::Healing},
+		{"Haste", "utani hur", KnightSpellRole::Support},
+		{"Berserk", "exori", KnightSpellRole::MeleeOffense},
+		{"Whirlwind Throw", "exori hur", KnightSpellRole::RangedOffense},
+	}};
+
+	const AuditedKnightSpellDescriptor* findAuditedKnightSpell(const char* name)
+	{
+		auto it = std::find_if(auditedKnightSpells.begin(), auditedKnightSpells.end(), [name](const auto& descriptor) {
+			return std::strcmp(descriptor.name, name) == 0;
+		});
+		return it == auditedKnightSpells.end() ? nullptr : &*it;
+	}
+
+	const char* roleName(KnightSpellRole role)
+	{
+		switch (role) {
+			case KnightSpellRole::Healing: return "healing";
+			case KnightSpellRole::Support: return "support";
+			case KnightSpellRole::MeleeOffense: return "melee_offense";
+			case KnightSpellRole::RangedOffense: return "ranged_offense";
+		}
+		return "unsupported";
+	}
+
+	const char* fallbackForRole(KnightSpellRole role)
+	{
+		return role == KnightSpellRole::Healing ? "small_health_potion" :
+		       role == KnightSpellRole::Support ? "continue_route" : "normal_melee";
+	}
+
+	const char* fallbackForNeed(const char* need)
+	{
+		return std::strcmp(need, "recovery") == 0 ? "small_health_potion" :
+		       std::strcmp(need, "safe_route") == 0 ? "continue_route" : "normal_melee";
+	}
+
+}
+
+void PlayerBotController::emitSpellCastEvent(const Position& position, const char* spellName, const char* words, const char* role,
+                                             const char* need, const char* result, const char* engineResult, const char* reason,
+                                             const PendingSpellCast* pending, const Player* player, const char* fallback) const
+{
+	std::ostringstream fields;
+	fields << "\"action\":\"cast_spell\",\"result\":" << jsonString(result)
+	       << ",\"need\":" << jsonString(need)
+	       << ",\"selected_method\":" << jsonString(spellName ? "spell" : "none")
+	       << ",\"policy_candidate\":";
+	if (spellName) {
+		fields << "{\"spell\":" << jsonString(spellName) << ",\"words\":" << jsonString(words)
+		       << ",\"role\":" << jsonString(role) << '}';
+	} else {
+		fields << "null";
+	}
+	fields << ",\"legal_candidates\":[";
+	if (spellName && std::strcmp(engineResult, "accepted") == 0) {
+		fields << jsonString(spellName);
+	}
+	fields << "],\"engine_result\":" << jsonString(engineResult);
+	if (pending) {
+		fields << ",\"mana_before\":" << pending->manaBefore
+		       << ",\"mana_after\":" << (player ? player->getMana() : pending->manaBefore)
+		       << ",\"mana_reserve\":" << pending->manaReserve
+		       << ",\"reserve_survives\":" << ((player && player->getMana() >= pending->manaReserve) ? "true" : "false")
+		       << ",\"health_before\":" << pending->healthBefore
+		       << ",\"health_after\":" << (player ? player->getHealth() : pending->healthBefore);
+		if (pending->targetId != 0) {
+			fields << ",\"target_id\":" << pending->targetId
+			       << ",\"target_health_before\":" << pending->targetHealthBefore;
+		}
+	}
+	if (reason) {
+		fields << ",\"reason\":" << jsonString(reason);
+	}
+	fields << ",\"fallback\":" << (fallback ? jsonString(fallback) : "null");
+	emit("action_result", position, fields.str());
+}
+
+bool PlayerBotController::startSpellCast(Player& player, const Position& position, const char* spellName, const char* need,
+                                         Creature* target)
+{
+	const AuditedKnightSpellDescriptor* descriptor = findAuditedKnightSpell(spellName);
+	if (!descriptor) {
+		emitSpellCastEvent(position, nullptr, nullptr, nullptr, need, "skipped", "not_attempted", "unsupported_descriptor", nullptr,
+		                   &player, fallbackForNeed(need));
+		return false;
+	}
+	InstantSpell* spell = g_spells ? g_spells->getInstantSpellByName(descriptor->name) : nullptr;
+	if (!spell || spell->getWords() != descriptor->words || !spell->isLearnable()) {
+		emitSpellCastEvent(position, descriptor->name, descriptor->words, roleName(descriptor->role), need, "skipped",
+		                   "not_attempted", "unsupported_metadata", nullptr, &player, fallbackForRole(descriptor->role));
+		return false;
+	}
+	if (!player.hasLearnedInstantSpell(descriptor->name)) {
+		if (shouldEmitRepeated("cast_spell:unlearned:" + std::string(descriptor->name))) {
+			emitSpellCastEvent(position, descriptor->name, descriptor->words, roleName(descriptor->role), need, "skipped",
+			                   "not_attempted", "unlearned", nullptr, &player, fallbackForRole(descriptor->role));
+		}
+		return false;
+	}
+	if (!player.canDoAction() || !pendingSpellCast.name.empty()) {
+		return false;
+	}
+	const bool healingGroup = descriptor->role == KnightSpellRole::Healing || descriptor->role == KnightSpellRole::Support;
+	if (player.hasCondition(healingGroup ? CONDITION_EXHAUST_HEAL : CONDITION_EXHAUST_COMBAT)) {
+		if (shouldEmitRepeated("cast_spell:cooldown:" + std::string(descriptor->name))) {
+			emitSpellCastEvent(position, descriptor->name, descriptor->words, roleName(descriptor->role), need, "skipped",
+			                   "not_attempted", "cooldown", nullptr, &player, fallbackForRole(descriptor->role));
+		}
+		return false;
+	}
+	if ((descriptor->role == KnightSpellRole::MeleeOffense || descriptor->role == KnightSpellRole::RangedOffense) &&
+		(!target || target->isRemoved() || target->isDead() || player.getAttackedCreature() != target ||
+		 !player.canSeeCreature(target) || !player.canSee(target->getPosition()) ||
+		 !Position::areInRange<1, 1, 0>(position, target->getPosition()))) {
+		if (shouldEmitRepeated("cast_spell:lost_target:" + std::string(descriptor->name))) {
+			emitSpellCastEvent(position, descriptor->name, descriptor->words, roleName(descriptor->role), need, "skipped",
+			                   "not_attempted", "lost_target", nullptr, &player, "normal_melee");
+		}
+		return false;
+	}
+	if (spell->getNeedTarget() && !spell->canThrowSpell(&player, target)) {
+		if (shouldEmitRepeated("cast_spell:target_unreachable:" + std::string(descriptor->name))) {
+			emitSpellCastEvent(position, descriptor->name, descriptor->words, roleName(descriptor->role), need, "skipped",
+			                   "not_attempted", "target_unreachable", nullptr, &player, "normal_melee");
+		}
+		return false;
+	}
+	const uint32_t manaCost = spell->getManaCost(&player);
+	const uint32_t reserve = descriptor->role == KnightSpellRole::Healing ? 0 : higherPriorityRecoveryManaReserve;
+	if (player.getMana() < manaCost + reserve) {
+		if (shouldEmitRepeated("cast_spell:insufficient_mana_reserve:" + std::string(descriptor->name))) {
+			emitSpellCastEvent(position, descriptor->name, descriptor->words, roleName(descriptor->role), need, "skipped",
+			                   "not_attempted", "insufficient_mana_reserve", nullptr, &player, fallbackForRole(descriptor->role));
+		}
+		return false;
+	}
+
+	pendingSpellCast = {descriptor->name, roleName(descriptor->role), need, player.getMana(), reserve, player.getHealth(),
+	                    target ? target->getID() : 0, target ? target->getHealth() : 0};
+	++counters.actionsAttempted;
+	emitSpellCastEvent(position, descriptor->name, descriptor->words, roleName(descriptor->role), need, "requested", "unchecked",
+	                   nullptr, &pendingSpellCast, &player, nullptr);
+	// Route through the normal player speech handler so the live spell engine owns legality and costs.
+	g_game.playerSay(playerId, 0, TALKTYPE_SAY, "", spell->getWords());
+	return true;
+}
+
+void PlayerBotController::verifySpellCast(Player& player, const Position& position)
+{
+	if (pendingSpellCast.name.empty()) {
+		return;
+	}
+	const AuditedKnightSpellDescriptor* descriptor = findAuditedKnightSpell(pendingSpellCast.name.c_str());
+	const bool manaSpent = player.getMana() < pendingSpellCast.manaBefore;
+	bool observed = false;
+	if (pendingSpellCast.role == "healing") {
+		observed = player.getHealth() > pendingSpellCast.healthBefore;
+	} else if (pendingSpellCast.role == "support") {
+		observed = player.hasCondition(CONDITION_HASTE);
+	} else {
+		Creature* target = g_game.getCreatureByID(pendingSpellCast.targetId);
+		observed = !target || target->isRemoved() || target->isDead() || target->getHealth() < pendingSpellCast.targetHealthBefore;
+	}
+	const bool success = manaSpent && observed;
+	const char* reason = success ? nullptr : !manaSpent ? "cast_not_verified" : "ineffective_result";
+	const char* fallback = success ? nullptr : pendingSpellCast.role == "healing" ? "small_health_potion" :
+	                       pendingSpellCast.role == "support" ? "continue_route" : "normal_melee";
+	emitSpellCastEvent(position, descriptor ? descriptor->name : nullptr, descriptor ? descriptor->words : nullptr,
+	                   descriptor ? roleName(descriptor->role) : nullptr, pendingSpellCast.need.c_str(),
+	                   success ? "success" : "failed", manaSpent ? "accepted" : "rejected", reason,
+	                   &pendingSpellCast, &player, fallback);
+	if (!success) {
+		++counters.actionsFailed;
+		spellRetryAfter = std::chrono::steady_clock::now() + healingRetryInterval;
+	}
+	pendingSpellCast = PendingSpellCast{};
+}
+
+bool PlayerBotController::handleSpellHealing(Player* player, const Position& currentPosition)
+{
+	if (!player || !pendingSpellCast.name.empty() || std::chrono::steady_clock::now() < spellRetryAfter) {
+		return false;
+	}
+	const int32_t missingHealth = player->getMaxHealth() - player->getHealth();
+	if (missingHealth > smallHealthPotionMaximumHealing && getInventoryItemCount(*player, smallHealthPotionItemId) != 0) {
+		return false;
+	}
+	return startSpellCast(*player, currentPosition, "Light Healing", "recovery");
+}
+
+bool PlayerBotController::trySupportSpell(Player* player, const Position& currentPosition)
+{
+	if (!player || !pendingSpellCast.name.empty() || player->hasCondition(CONDITION_HASTE) ||
+		std::chrono::steady_clock::now() < spellRetryAfter || navigationSteps.size() < minimumHasteRouteSteps ||
+		needsHealing(*player)) {
+		return false;
+	}
+	return startSpellCast(*player, currentPosition, "Haste", "safe_route");
+}
+
+bool PlayerBotController::tryOffensiveSpell(Player* player, const Position& currentPosition)
+{
+	if (!player || !pendingSpellCast.name.empty() || std::chrono::steady_clock::now() < spellRetryAfter || needsHealing(*player)) {
+		return false;
+	}
+	Creature* target = g_game.getCreatureByID(ratId);
+	if (player->hasLearnedInstantSpell("Berserk") && player->getLevel() >= 35) {
+		return startSpellCast(*player, currentPosition, "Berserk", "offense", target);
+	}
+	return startSpellCast(*player, currentPosition, "Whirlwind Throw", "offense", target);
 }
 
 uint64_t PlayerBotController::spellTrainingReserve(const Player& player) const
