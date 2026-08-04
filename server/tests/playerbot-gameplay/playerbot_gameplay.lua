@@ -15,6 +15,7 @@ local containerDeathItemMonsterName = "Playerbot Container Death Item"
 local defensiveMonsterName = "Playerbot Defensive Threat"
 local levelEightMonsterName = "Playerbot Level Eight Target"
 local deathMonsterName = "Playerbot Death Threat"
+local spellTargetMonsterName = "Playerbot Spell Target"
 local valueMonsterName = "Playerbot Value Corpse"
 local healingPotionCount = 3
 local starterArmorId = 2650
@@ -29,6 +30,8 @@ local departureRecoveryStorage = 50090
 local depotFixtureStorage = 50095
 local spellTrainingStorage = 50097
 local deathLoginCount = 0
+local spellTargetId = 0
+local spellSupportObserved = false
 local removeAll
 
 local function restoreRookgaardBaseline(player)
@@ -135,7 +138,7 @@ local function suppressNearbyMonsters(playerId)
     for _, creature in ipairs(Game.getSpectators(player:getPosition(), true, false, 10, 10, 10, 10)) do
         if creature:isMonster() and creature:getName() ~= emptyMonsterName and creature:getName() ~= lootMonsterName and
             creature:getName() ~= nonlootableMonsterName and creature:getName() ~= containerDeathItemMonsterName and
-            creature:getName() ~= valueMonsterName then
+            creature:getName() ~= valueMonsterName and creature:getName() ~= spellTargetMonsterName then
             creature:remove()
         end
     end
@@ -206,6 +209,109 @@ local function spawnDeathMonster(playerId)
         end
     end
     error("no adjacent tile was available for death telemetry test monster")
+end
+
+local function spawnSpellTarget(playerId)
+    local player = Player(playerId)
+    assert(player and not player:isRemoved(), "Bot One disappeared before spell target spawn")
+    local origin = player:getPosition()
+    for _, position in ipairs({
+        Position(origin.x + 1, origin.y, origin.z),
+        Position(origin.x, origin.y + 1, origin.z),
+        Position(origin.x - 1, origin.y, origin.z),
+        Position(origin.x, origin.y - 1, origin.z),
+    }) do
+        local tile = Tile(position)
+        if tile and tile:isWalkable() then
+            local monster = Game.createMonster(spellTargetMonsterName, position, true, true)
+            assert(monster, "spell-use fixture could not create a target")
+            spellTargetId = monster:getId()
+            print("PLAYERBOT_GAMEPLAY_TEST SPELL_TARGET_SPAWNED " .. spellTargetId)
+            return
+        end
+    end
+    error("no adjacent tile was available for the spell-use target")
+end
+
+local function triggerSpellRecoveryPreemption(playerId)
+    local player = Player(playerId)
+    assert(player and not player:isRemoved(), "Bot One disappeared before spell recovery preemption")
+    assert(player:addMana(200 - player:getMana()), "spell-use fixture could not restore recovery mana")
+    assert(player:setHealth(110), "spell-use fixture could not trigger emergency recovery")
+    print("PLAYERBOT_GAMEPLAY_TEST SPELL_RECOVERY_PREEMPTION_TRIGGERED")
+end
+
+local function waitForSpellAttackTarget(playerId, attempts)
+    local player = Player(playerId)
+    local target = spellTargetId ~= 0 and Monster(spellTargetId) or nil
+    local attacked = player and player:getTarget() or nil
+    assert(player and not player:isRemoved(), "Bot One disappeared before spell target acquisition")
+    if target and attacked and attacked:getId() == target:getId() then
+        addEvent(triggerSpellRecoveryPreemption, 1800, playerId)
+        return
+    end
+    if attempts > 0 then
+        addEvent(waitForSpellAttackTarget, 250, playerId, attempts - 1)
+        return
+    end
+    error("spell-use fixture did not establish an attacked target")
+end
+
+local function prepareSpellRecoveryPreemption(playerId)
+    local player = Player(playerId)
+    assert(player and not player:isRemoved(), "Bot One disappeared before spell target preparation")
+    assert(player:addMana(50 - player:getMana()), "spell-use fixture could not reserve too little mana for offense")
+    spawnSpellTarget(playerId)
+    addEvent(waitForSpellAttackTarget, 250, playerId, 120)
+end
+
+local function waitForSpellSupport(playerId, attempts)
+    local player = Player(playerId)
+    assert(player and not player:isRemoved(), "Bot One disappeared before spell support")
+    if not player:hasCondition(CONDITION_HASTE) and attempts > 0 then
+        addEvent(waitForSpellSupport, 250, playerId, attempts - 1)
+        return
+    end
+    assert(player:hasCondition(CONDITION_HASTE), "spell-use fixture did not apply Haste before low-mana combat")
+	spellSupportObserved = true
+    prepareSpellRecoveryPreemption(playerId)
+end
+
+local function restoreLightHealing(playerId)
+    local player = Player(playerId)
+    assert(player and not player:isRemoved(), "Bot One disappeared before Light Healing restoration")
+    assert(player:learnSpell("Light Healing"), "spell-use fixture could not restore Light Healing")
+end
+
+local function triggerSpellFallback(playerId)
+    local player = Player(playerId)
+    assert(player and not player:isRemoved(), "Bot One disappeared before spell fallback")
+    assert(player:forgetSpell("Light Healing"), "spell-use fixture could not forget Light Healing")
+    assert(player:addItem(potionItemId, 1), "spell-use fixture could not preserve the potion reserve")
+    assert(player:setHealth(110), "spell-use fixture could not trigger spell fallback")
+    print("PLAYERBOT_GAMEPLAY_TEST SPELL_FALLBACK_TRIGGERED")
+end
+
+local function verifySpellUse(playerId, attempts)
+    local player = Player(playerId)
+    assert(player and not player:isRemoved(), "Bot One disappeared during spell-use fixture")
+    local target = spellTargetId ~= 0 and Monster(spellTargetId) or nil
+    local recovered = player:getHealth() > 110
+    local hasted = spellSupportObserved
+    local damaged = spellTargetId ~= 0 and (not target or target:isRemoved() or target:getHealth() < 1000)
+    local offenseCast = player:getMana() == 140
+    if (not recovered or not hasted or not damaged or not offenseCast) and attempts > 0 then
+        addEvent(verifySpellUse, 500, playerId, attempts - 1)
+        return
+    end
+    assert(recovered, "Light Healing did not restore Bot One")
+    assert(hasted, "Haste did not apply its normal condition")
+    assert(damaged, "Whirlwind Throw did not damage its visible target")
+    assert(offenseCast, "Whirlwind Throw did not consume its normal mana cost")
+    if target then
+        target:remove()
+    end
+    print("PLAYERBOT_GAMEPLAY_TEST SPELL_USE_PASS")
 end
 
 local function prepareDeath(playerId)
@@ -449,7 +555,7 @@ function login.onLogin(player)
     end
 
     local mode = os.getenv("PLAYERBOT_GAMEPLAY_MODE") or "cycle"
-	assert(mode == "mainland" or mode == "cycle" or mode == "depot" or mode == "navigation" or mode == "target_pursuit" or mode == "target_pursuit_abandon" or mode == "corpse" or mode == "death" or mode == "healing" or
+	assert(mode == "mainland" or mode == "cycle" or mode == "depot" or mode == "navigation" or mode == "target_pursuit" or mode == "target_pursuit_abandon" or mode == "corpse" or mode == "death" or mode == "healing" or mode == "spell_use" or
 		mode == "healing_resupply" or mode == "value" or mode == "progression" or mode == "progression_bundle" or
 		mode == "progression_nested" or
         mode == "progression_resume" or mode == "progression_nested_resume" or mode == "progression_space" or
@@ -469,6 +575,27 @@ function login.onLogin(player)
 		local backpack = player:getSlotItem(CONST_SLOT_BACKPACK)
 		assert(backpack and backpack:addItem(2696, 1), "mainland fixture could not seed local-service loot")
 		print("PLAYERBOT_GAMEPLAY_TEST MAINLAND_START")
+		return true
+	end
+	if mode == "spell_use" then
+		assert(player:setVocation(4), "spell-use fixture could not select Knight")
+		local requiredExperience = Game.getExperienceForLevel(20) - player:getExperience()
+		if requiredExperience > 0 then player:addExperience(requiredExperience) end
+		assert(player:getLevel() == 20, "spell-use fixture could not select level 20")
+		assert(player:teleportTo(depotPosition), "spell-use fixture could not reach the depot")
+		for _, spellName in ipairs({"Light Healing", "Haste", "Whirlwind Throw"}) do
+			assert(player:learnSpell(spellName), "spell-use fixture could not prelearn " .. spellName)
+		end
+		assert(player:setMaxHealth(200), "spell-use fixture could not normalize health")
+		assert(player:setHealth(110), "spell-use fixture could not lower health")
+		assert(player:setMaxMana(200), "spell-use fixture could not normalize mana")
+		assert(player:addMana(player:getMaxMana() - player:getMana()), "spell-use fixture could not restore mana")
+		suppressNearbyMonsters(player:getId())
+		addEvent(triggerSpellFallback, 4000, player:getId())
+		addEvent(restoreLightHealing, 6000, player:getId())
+		addEvent(waitForSpellSupport, 6000, player:getId(), 120)
+		addEvent(verifySpellUse, 500, player:getId(), 120)
+		print("PLAYERBOT_GAMEPLAY_TEST SPELL_USE_START")
 		return true
 	end
 	restoreRookgaardBaseline(player)

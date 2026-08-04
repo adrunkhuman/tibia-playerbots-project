@@ -341,6 +341,17 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 			uint64_t moneyBefore = 0;
 		};
 
+		struct PendingSpellCast {
+			std::string name;
+			std::string role;
+			std::string need;
+			uint32_t manaBefore = 0;
+			uint32_t manaReserve = 0;
+			int32_t healthBefore = 0;
+			uint32_t targetId = 0;
+			int32_t targetHealthBefore = 0;
+		};
+
 		enum class ScenarioStage : uint8_t {
 			LootCorpse,
 			Traverse,
@@ -485,6 +496,15 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		                   uint32_t potionCountAfter, const Position& position);
 
 		bool handleHealing(Player* player, const Position& currentPosition);
+		bool handleSpellHealing(Player* player, const Position& currentPosition);
+		bool trySupportSpell(Player* player, const Position& currentPosition);
+		bool tryOffensiveSpell(Player* player, const Position& currentPosition);
+		bool startSpellCast(Player& player, const Position& position, const char* spellName, const char* need,
+		                    Creature* target = nullptr);
+		void verifySpellCast(Player& player, const Position& position);
+		void emitSpellCastEvent(const Position& position, const char* spellName, const char* words, const char* role,
+		                        const char* need, const char* result, const char* engineResult, const char* reason,
+		                        const PendingSpellCast* pending, const Player* player, const char* fallback) const;
 
 		void logEatSuccess(uint32_t inventoryCount, int32_t foodTicks, const Position& position);
 
@@ -754,6 +774,8 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		int32_t pendingHealHealthMax = 0;
 		uint32_t pendingHealPotionCount = 0;
 		std::chrono::steady_clock::time_point healRetryAfter;
+		PendingSpellCast pendingSpellCast;
+		std::chrono::steady_clock::time_point spellRetryAfter;
 		bool pendingEat = false;
 		uint32_t pendingEatInventoryCount = 0;
 		int32_t pendingEatFoodTicks = 0;

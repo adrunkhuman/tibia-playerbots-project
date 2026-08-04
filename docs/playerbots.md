@@ -125,6 +125,19 @@ dialogue. Completion requires both learned state and the exact total-money
 delta. Learned-spell persistence reconstructs completion after restart and
 prevents a repurchase.
 
+The casting policy has four audited descriptors: `healing`, `support`,
+`melee_offense`, and `ranged_offense`. It currently uses Light Healing for
+recovery, Haste on a safe route with at least 20 remaining steps, Berserk at
+level 35, and Whirlwind Throw before then against a visible adjacent combat
+target. Casts use the normal player speech spell path. The live spell
+engine remains authoritative for eligibility, costs, targeting, line of sight,
+weapon requirements, aggression, cooldowns, and action constraints. Support
+and offense retain 20 mana for recovery. Recovery runs before discretionary
+casting; when missing at most 90 health, Light Healing avoids a potentially
+wasteful small health potion. If potions are unavailable, it also attempts
+Light Healing for larger deficits. Each cast verifies mana plus health, haste
+condition, or target damage before falling back to a potion or normal melee.
+
 The service cycle sells known surplus, restores five small health potions and
 one meat, deposits carried money, and withdraws 100 gp. Hunting ends after the
 configured duration or below 30 oz free capacity. Remaining top-level backpack
@@ -204,6 +217,7 @@ States, actions, results, statuses, and reasons use stable lowercase values.
 | Goals | `goal_candidate`, `goal_selection`, `goal_result` expose arbitration evidence and decision IDs. |
 | Rewards | `strategy_candidate`, `reward_inspection`, `strategy_selection`, `strategy_objective_result` expose bundle selection and verification. |
 | Spell training | `spell_trainer_discovered`, `spell_candidate`, `strategy_selection`, `action_result`, and `goal_result` expose loaded offers, eligibility rejections, provider/route choice, and exact payment verification. |
+| Spell casting | `action_result` with `action="cast_spell"` records the need, semantic `policy_candidate`, selected method, mana reserve, normal-path request, engine result, observed outcome, and fallback. `legal_candidates` contains only normal-path casts confirmed by resource evidence. |
 | Actions | `action_result`, `target_changed`, `service_discovered`, `npc_reply`, `stuck` record externally relevant attempts and outcomes. |
 | Hunting | `hunt_region_candidate`, `hunt_region_scan`, `hunt_region_selection`, `hunt_region_outcome`, `hunt_region_patrol` expose planner inputs and results. |
 | Navigation | `navigation_progress` records bounded recovery such as oscillation suppression. |
