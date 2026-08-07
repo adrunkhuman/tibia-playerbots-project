@@ -50,10 +50,10 @@ namespace {
 		       Position::getDistanceY(left, right) <= heatRadius * 2;
 	}
 
-	double expectedMonsterDamagePerSecond(const MonsterType& monsterType, const Player& player)
+	double expectedMonsterDamagePerSecond(const MonsterType& monsterType, const PlayerBotCombatProfile& profile)
 	{
 		double damagePerSecond = 0;
-		const double mitigation = player.getArmor() * 0.35 + player.getDefense() * 0.08;
+		const double mitigation = profile.armor * 0.35 + profile.defense * 0.08;
 		for (const spellBlock_t& attack : monsterType.info.attackSpells) {
 			const double averageDamage = (std::abs(attack.minCombatValue) + std::abs(attack.maxCombatValue)) / 2.0;
 			if (averageDamage <= 0 || attack.speed == 0) {
@@ -66,13 +66,10 @@ namespace {
 		return std::max(0.5, damagePerSecond);
 	}
 
-	double expectedPlayerDamagePerSecond(const Player& player, const MonsterType& monsterType)
+	double expectedPlayerDamagePerSecond(const PlayerBotCombatProfile& profile, const MonsterType& monsterType)
 	{
-		const Item* weapon = player.getWeapon(true);
-		const int32_t attackValue = weapon ? weapon->getAttack() : 7;
-		const int32_t attackSkill = weapon ? player.getWeaponSkill(weapon) : player.getSkillLevel(SKILL_FIST);
-		const int32_t maximumDamage = Weapons::getMaxWeaponDamage(player.getLevel(), attackSkill, attackValue,
-		                                                            player.getAttackFactor());
+		const int32_t maximumDamage = Weapons::getMaxWeaponDamage(profile.level, profile.attackSkill, profile.attack,
+		                                                            profile.attackFactor);
 		const double averageDamage = std::max(1.0, maximumDamage / 2.0 -
 		                                             monsterType.info.armor * 0.25 - monsterType.info.defense * 0.15);
 		return averageDamage / 2.0;
@@ -224,7 +221,8 @@ namespace {
 		++huntRegionCacheRevision;
 	}
 
-	PlayerBotHuntRegion scoreRegion(Player& player, size_t candidateIndex, const std::set<Position>& excludedRegions,
+	PlayerBotHuntRegion scoreRegion(Player& player, const PlayerBotCombatProfile& profile, size_t candidateIndex,
+	                                const std::set<Position>& excludedRegions,
 	                                const std::map<Position, PlayerBotHuntRegionPerformance>& performance,
 	                                uint32_t huntDurationSeconds)
 	{
@@ -238,15 +236,15 @@ namespace {
 			const CachedSpawnBlock& spawn = huntRegionCache.spawns[member];
 			region.patrolPoints.push_back(nearestApproach(player, spawn.position));
 			for (const auto& [monsterType, chance] : spawn.monsters) {
-				PlayerBotHuntMonsterProfile& profile = profiles[monsterType->name];
-				profile.name = monsterType->name;
-				profile.expectedSpawns += chance / 100.0;
-				profile.experience = monsterType->info.experience;
-				profile.health = monsterType->info.healthMax;
-				profile.expectedDamagePerSecond = expectedMonsterDamagePerSecond(*monsterType, player);
+				PlayerBotHuntMonsterProfile& monsterProfile = profiles[monsterType->name];
+				monsterProfile.name = monsterType->name;
+				monsterProfile.expectedSpawns += chance / 100.0;
+				monsterProfile.experience = monsterType->info.experience;
+				monsterProfile.health = monsterType->info.healthMax;
+				monsterProfile.expectedDamagePerSecond = expectedMonsterDamagePerSecond(*monsterType, profile);
 				const double fightSeconds = monsterType->info.healthMax /
-				                            expectedPlayerDamagePerSecond(player, *monsterType);
-				profile.predictedFightDamage = profile.expectedDamagePerSecond * fightSeconds;
+				                            expectedPlayerDamagePerSecond(profile, *monsterType);
+				monsterProfile.predictedFightDamage = monsterProfile.expectedDamagePerSecond * fightSeconds;
 				region.experiencePerMinute += monsterType->info.experience * (chance / 100.0) *
 				                              (60000.0 / std::max<uint32_t>(spawn.interval, 1));
 			}
@@ -265,9 +263,9 @@ namespace {
 			for (size_t neighbor : huntRegionCache.spawns[anchor].neighbors) {
 				for (const auto& [monsterType, chance] : huntRegionCache.spawns[neighbor].monsters) {
 					(void)chance;
-					localAttackers.push_back({expectedMonsterDamagePerSecond(*monsterType, player),
+					localAttackers.push_back({expectedMonsterDamagePerSecond(*monsterType, profile),
 					                          monsterType->info.healthMax /
-					                              expectedPlayerDamagePerSecond(player, *monsterType)});
+					                              expectedPlayerDamagePerSecond(profile, *monsterType)});
 				}
 			}
 			std::sort(localAttackers.begin(), localAttackers.end(), [](const LocalAttacker& left, const LocalAttacker& right) {
@@ -307,7 +305,7 @@ namespace {
 		const uint32_t templeDistance = Position::getDistanceX(templePosition, region.destination) +
 		                                Position::getDistanceY(templePosition, region.destination) +
 		                                Position::getDistanceZ(templePosition, region.destination) * 20;
-		region.threatRatio = worstFightDamage / std::max<int32_t>(player.getMaxHealth(), 1);
+		region.threatRatio = worstFightDamage / std::max<int32_t>(profile.maximumHealth, 1);
 		region.suitable = region.threatRatio <= maximumThreatRatio &&
 		                  templeDistance <= maximumHuntDistanceFromTemple &&
 		                  geometricDistance <= maximumHuntTravelDistance;
@@ -377,13 +375,26 @@ PlayerBotHuntRegionScan PlayerBotHuntRegionPlanner::beginScan(const Player& play
 }
 
 bool PlayerBotHuntRegionPlanner::score(Player& player, uint64_t revision, size_t candidateIndex,
-	                                    const std::set<Position>& excludedRegions,
-	                                    const std::map<Position, PlayerBotHuntRegionPerformance>& performance,
-	                                    uint32_t huntDurationSeconds, PlayerBotHuntRegion& region) const
+	                                      const std::set<Position>& excludedRegions,
+	                                      const std::map<Position, PlayerBotHuntRegionPerformance>& performance,
+	                                      uint32_t huntDurationSeconds, PlayerBotHuntRegion& region) const
+{
+	const Item* weapon = player.getWeapon(true);
+	const PlayerBotCombatProfile profile{
+		player.getLevel(), player.getMaxHealth(), player.getArmor(), player.getDefense(), weapon ? weapon->getAttack() : 7,
+		weapon ? player.getWeaponSkill(weapon) : player.getSkillLevel(SKILL_FIST), player.getAttackFactor(),
+	};
+	return score(player, profile, revision, candidateIndex, excludedRegions, performance, huntDurationSeconds, region);
+}
+
+bool PlayerBotHuntRegionPlanner::score(Player& player, const PlayerBotCombatProfile& profile, uint64_t revision,
+	                                      size_t candidateIndex, const std::set<Position>& excludedRegions,
+	                                      const std::map<Position, PlayerBotHuntRegionPerformance>& performance,
+	                                      uint32_t huntDurationSeconds, PlayerBotHuntRegion& region) const
 {
 	if (revision != getCacheRevision() || candidateIndex >= huntRegionCache.regions.size()) {
 		return false;
 	}
-	region = scoreRegion(player, candidateIndex, excludedRegions, performance, huntDurationSeconds);
+	region = scoreRegion(player, profile, candidateIndex, excludedRegions, performance, huntDurationSeconds);
 	return true;
 }

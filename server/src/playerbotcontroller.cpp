@@ -31,7 +31,9 @@ const PlayerBotTestPolicy& playerbot::testPolicyFromEnvironment()
 			 std::strcmp(gameplayMode, "arbitration_interrupt") == 0 ||
 			 std::strcmp(gameplayMode, "departure") == 0 ||
 			 std::strcmp(gameplayMode, "departure_recovery") == 0 ||
-			 std::strcmp(gameplayMode, "spell_training") == 0);
+				 std::strcmp(gameplayMode, "spell_training") == 0 || std::strcmp(gameplayMode, "equipment_shadow") == 0 ||
+				 std::strcmp(gameplayMode, "equipment_shadow_unaffordable") == 0 ||
+				 std::strcmp(gameplayMode, "equipment_shadow_no_upgrade") == 0);
 		const bool startInHunt = gameplayMode &&
 			(std::strcmp(gameplayMode, "navigation") == 0 || std::strcmp(gameplayMode, "corpse") == 0 ||
 			 (std::strcmp(gameplayMode, "target_pursuit") == 0 || std::strcmp(gameplayMode, "target_pursuit_abandon") == 0) ||
@@ -44,9 +46,12 @@ const PlayerBotTestPolicy& playerbot::testPolicyFromEnvironment()
 			std::strcmp(gameplayMode, "readiness_retention") == 0 || std::strcmp(gameplayMode, "spell_use") == 0);
 		const bool fixedFixtureRoute = gameplayMode && std::strcmp(gameplayMode, "stamina_bonus") != 0 &&
 		                               std::strcmp(gameplayMode, "stamina_boundary") != 0 &&
-		                               std::strcmp(gameplayMode, "stamina_normal") != 0 &&
-		                               std::strcmp(gameplayMode, "hunt_planning") != 0 &&
-		                               std::strcmp(gameplayMode, "mainland") != 0 &&
+			                               std::strcmp(gameplayMode, "stamina_normal") != 0 &&
+			                               std::strcmp(gameplayMode, "hunt_planning") != 0 &&
+			                               std::strcmp(gameplayMode, "equipment_shadow") != 0 &&
+			                               std::strcmp(gameplayMode, "equipment_shadow_unaffordable") != 0 &&
+			                               std::strcmp(gameplayMode, "equipment_shadow_no_upgrade") != 0 &&
+			                               std::strcmp(gameplayMode, "mainland") != 0 &&
 		                               std::strcmp(gameplayMode, "depot") != 0;
 		const char* depotRestartPhase = std::getenv("PLAYERBOT_DEPOT_RESTART_PHASE");
 		const DepotRestartCheckpoint depotRestartCheckpoint = !depotRestartPhase ? DepotRestartCheckpoint::None :

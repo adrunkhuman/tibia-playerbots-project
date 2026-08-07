@@ -76,15 +76,19 @@ bool PlayerBotController::requiresKnightCombatReadiness(const Player& player) co
 	return player.getVocationId() == oracleVocationId;
 }
 
-bool PlayerBotController::isLegalEquipmentItem(const Player& player, const Item& item) const
+bool PlayerBotController::isLegalEquipmentType(const Player& player, const ItemType& type) const
 {
-	const ItemType& type = Item::items[item.getID()];
-	if (!item.isPickupable() || player.getLevel() < type.minReqLevel ||
+	if (!type.isPickupable() || player.getLevel() < type.minReqLevel ||
 	    player.getMagicLevel() < type.minReqMagicLevel ||
 	    ((type.wieldInfo & WIELDINFO_PREMIUM) != 0 && !player.isPremium())) {
 		return false;
 	}
 	return type.vocationIds.empty() || type.vocationIds.find(player.getVocationId()) != type.vocationIds.end();
+}
+
+bool PlayerBotController::isLegalEquipmentItem(const Player& player, const Item& item) const
+{
+	return !item.isRemoved() && isLegalEquipmentType(player, Item::items[item.getID()]);
 }
 
 bool PlayerBotController::isKnightMeleeWeapon(const Player& player, const Item& item) const
@@ -1091,6 +1095,7 @@ bool PlayerBotController::selectTopLevelGoal(Player& player, const Position& pos
 	if (requiresRookgaardDeparture(player)) {
 		return forceOracleDeparture(player, position, decisionReason);
 	}
+	evaluateEquipmentOffers(player, position);
 	const GoalCandidate service = serviceGoalCandidate(player);
 	DeparturePlan departure;
 	std::deque<PlayerBotNavigationStep> departureRoute;

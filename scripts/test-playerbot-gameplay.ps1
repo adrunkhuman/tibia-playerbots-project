@@ -11,8 +11,9 @@ param(
 	[switch]$GoalArbitration,
 	[switch]$OracleDeparture,
 	[switch]$StaminaProjection,
-    [switch]$HuntRegionPlanning,
+	[switch]$HuntRegionPlanning,
 	[switch]$CombatReadiness,
+	[switch]$EquipmentOffers,
 	[switch]$Depot,
 	[switch]$MainlandLoop,
 	[switch]$SpellTraining,
@@ -933,6 +934,40 @@ function Assert-CombatReadinessEvents {
     }
 }
 
+function Assert-EquipmentOfferEvents {
+    param([string]$Logs, [string]$Mode)
+
+    $events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
+    $shadow = @($events | Where-Object { $_.event -eq "equipment_offer_shadow" })
+    $candidates = @($events | Where-Object { $_.event -eq "equipment_offer_candidate" })
+    $purchases = @($events | Where-Object { $_.event -eq "action_result" -and $_.action -eq "buy_equipment" })
+    $equipmentMoves = @($events | Where-Object { $_.event -eq "action_result" -and $_.action -eq "equip_equipment" })
+    if ($shadow.Count -ne 1 -or $candidates.Count -lt 1 -or $purchases.Count -ne 0 -or $equipmentMoves.Count -ne 0) {
+        throw "Equipment shadow telemetry was incomplete or mutated player state. shadow=$($shadow.Count), candidates=$($candidates.Count), purchases=$($purchases.Count), equipmentMoves=$($equipmentMoves.Count)."
+    }
+    if ($Mode -eq "upgrade") {
+        $selected = @($candidates | Where-Object {
+            $_.result -eq "feasible" -and $_.npc_id -eq $shadow[0].npc_id -and $_.item_id -eq $shadow[0].item_id
+        })
+        if ($shadow[0].result -ne "would_buy" -or $selected.Count -ne 1 -or $selected[0].replaced_item_id -ne 2382 -or
+            -not $selected[0].current -or -not $selected[0].candidate -or $selected[0].rule -notin @("pareto_improvement", "unlocks_suitable_hunt")) {
+            throw "Equipment shadow did not select a loaded strict weapon improvement."
+        }
+    } elseif ($Mode -eq "unaffordable") {
+        $unaffordable = @($candidates | Where-Object { $_.result -eq "rejected" -and $_.reason -eq "unaffordable_after_reserves" })
+        if ($shadow[0].result -ne "no_decision" -or $unaffordable.Count -lt 1) {
+            throw "Equipment shadow did not preserve the supply reserve before evaluating a purchase."
+        }
+    } else {
+        $nonImproving = @($candidates | Where-Object { $_.result -eq "rejected" -and $_.reason -eq "non_improving" })
+        $illegal = @($candidates | Where-Object { $_.result -eq "rejected" -and $_.reason -eq "unsupported_weapon_type" })
+        $affordable = @($candidates | Where-Object { $_.reason -eq "unaffordable_after_reserves" })
+        if ($shadow[0].result -ne "no_decision" -or $nonImproving.Count -lt 1 -or $illegal.Count -lt 1 -or $affordable.Count -ne 0) {
+            throw "Equipment shadow did not abstain from non-improving or two-handed tradeoff offers."
+        }
+    }
+}
+
 function Assert-GoalArbitrationInterruptEvents {
     param([string]$Logs)
 
@@ -1311,7 +1346,7 @@ if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
 
 $focusedScenarioRequested = $FullNavigation -or $TargetPursuit -or $CorpseLoot -or $DeathTelemetry -or $Healing -or $ValueLoot -or
 	$PickupProgression -or $GoalArbitration -or $OracleDeparture -or $StaminaProjection -or $HuntRegionPlanning -or
-	$CombatReadiness -or $Depot -or $MainlandLoop -or $SpellTraining -or $SpellUse
+	$CombatReadiness -or $EquipmentOffers -or $Depot -or $MainlandLoop -or $SpellTraining -or $SpellUse
 if ($Focused -and -not $focusedScenarioRequested) {
 	throw "-Focused requires at least one focused scenario switch."
 }
@@ -1651,6 +1686,36 @@ try {
             Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST READINESS_RETENTION_PASS' | Out-Null
             $retentionLogs = Wait-ForLog -Pattern '"event":"combat_readiness".*"result":"ready"'
             Assert-CombatReadinessEvents -Logs $retentionLogs -Mode "retention"
+        }
+    }
+
+    if ($EquipmentOffers) {
+        Invoke-Scenario -Name "equipment_offer_shadow_upgrade" -DefaultTimeoutSeconds 90 -Body {
+            Invoke-Compose down --volumes --remove-orphans
+            $env:PLAYERBOT_GAMEPLAY_MODE = "equipment_shadow"
+            Invoke-Compose up --detach
+            Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST EQUIPMENT_SHADOW_START' | Out-Null
+			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST EQUIPMENT_SHADOW_PASS' | Out-Null
+            $upgradeLogs = Wait-ForPlayerbotEvent { $_.event -eq "equipment_offer_shadow" }
+            Assert-EquipmentOfferEvents -Logs $upgradeLogs -Mode "upgrade"
+        }
+        Invoke-Scenario -Name "equipment_offer_shadow_unaffordable" -DefaultTimeoutSeconds 90 -Body {
+            Invoke-Compose down --volumes --remove-orphans
+            $env:PLAYERBOT_GAMEPLAY_MODE = "equipment_shadow_unaffordable"
+            Invoke-Compose up --detach
+            Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST EQUIPMENT_SHADOW_UNAFFORDABLE_START' | Out-Null
+			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST EQUIPMENT_SHADOW_UNAFFORDABLE_PASS' | Out-Null
+            $unaffordableLogs = Wait-ForPlayerbotEvent { $_.event -eq "equipment_offer_shadow" }
+            Assert-EquipmentOfferEvents -Logs $unaffordableLogs -Mode "unaffordable"
+        }
+        Invoke-Scenario -Name "equipment_offer_shadow_no_upgrade" -DefaultTimeoutSeconds 90 -Body {
+            Invoke-Compose down --volumes --remove-orphans
+            $env:PLAYERBOT_GAMEPLAY_MODE = "equipment_shadow_no_upgrade"
+            Invoke-Compose up --detach
+            Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST EQUIPMENT_SHADOW_NO_UPGRADE_START' | Out-Null
+			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST EQUIPMENT_SHADOW_NO_UPGRADE_PASS' | Out-Null
+            $noUpgradeLogs = Wait-ForPlayerbotEvent { $_.event -eq "equipment_offer_shadow" }
+            Assert-EquipmentOfferEvents -Logs $noUpgradeLogs -Mode "no_upgrade"
         }
     }
 
