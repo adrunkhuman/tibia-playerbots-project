@@ -90,6 +90,20 @@ local function verifyReadiness(playerId, mode, attempts)
     print("PLAYERBOT_GAMEPLAY_TEST READINESS_" .. string.upper(mode) .. "_PASS")
 end
 
+local function verifyEquipmentShadow(playerId, mode, money, leftItemId, rightItemId, armorItemId, position)
+    local player = Player(playerId)
+    assert(player and not player:isRemoved(), "Bot One disappeared during equipment shadow fixture")
+    local left = player:getSlotItem(CONST_SLOT_LEFT)
+    local right = player:getSlotItem(CONST_SLOT_RIGHT)
+    local armor = player:getSlotItem(CONST_SLOT_ARMOR)
+    local current = player:getPosition()
+    assert(player:getMoney() == money and left and left:getId() == leftItemId and
+        ((rightItemId == 0 and not right) or (right and right:getId() == rightItemId)) and
+        armor and armor:getId() == armorItemId and current.x == position.x and current.y == position.y and current.z == position.z,
+        "equipment shadow fixture mutated player state")
+    print("PLAYERBOT_GAMEPLAY_TEST " .. string.upper(mode) .. "_PASS")
+end
+
 local function verifyOracleDeparture(playerId, attempts)
     local player = Player(playerId)
     assert(player and not player:isRemoved(), "Bot One disappeared during Oracle departure")
@@ -564,8 +578,42 @@ function login.onLogin(player)
         mode == "departure_recovery" or mode == "spell_training" or mode == "stamina_bonus" or mode == "stamina_boundary" or
         mode == "stamina_normal" or mode == "hunt_planning" or mode == "readiness_ready" or
         mode == "readiness_upgrade" or mode == "readiness_missing_weapon" or mode == "readiness_supplies" or
-        mode == "readiness_retention",
-        "unknown PLAYERBOT_GAMEPLAY_MODE: " .. mode)
+		mode == "readiness_retention" or mode == "equipment_shadow" or mode == "equipment_shadow_unaffordable" or
+		mode == "equipment_shadow_no_upgrade",
+		"unknown PLAYERBOT_GAMEPLAY_MODE: " .. mode)
+	if mode == "equipment_shadow" or mode == "equipment_shadow_unaffordable" or mode == "equipment_shadow_no_upgrade" then
+		local town = player:getTown()
+		assert(player:getLevel() == 8 and player:getVocation():getId() == 4 and town and town:getId() == thaisTownId,
+			"equipment shadow fixture did not load the level-8 Thais Knight")
+		if mode ~= "equipment_shadow_no_upgrade" then
+			local weapon = player:getSlotItem(CONST_SLOT_LEFT)
+			assert(weapon and weapon:remove(), "equipment shadow fixture could not clear the equipped sword")
+			assert(player:addItem(starterWeaponId, 1, false, 1, CONST_SLOT_LEFT),
+				"equipment shadow fixture could not equip the starter weapon")
+		else
+			local left = player:getSlotItem(CONST_SLOT_LEFT)
+			local right = player:getSlotItem(CONST_SLOT_RIGHT)
+			assert(left and left:remove() and right and right:remove(),
+				"equipment shadow fixture could not clear the one-handed loadout")
+			assert(player:addItem(2377, 1, false, 1, CONST_SLOT_LEFT),
+				"equipment shadow fixture could not equip the two-handed sword")
+		end
+		if mode == "equipment_shadow" or mode == "equipment_shadow_no_upgrade" then
+			local backpack = player:getSlotItem(CONST_SLOT_BACKPACK)
+			assert(backpack and backpack:addItem(2152, 20), "equipment shadow fixture could not add surplus money")
+		elseif mode == "equipment_shadow_unaffordable" then
+			removeAll(player, ITEM_GOLD_COIN)
+		end
+		suppressNearbyMonsters(player:getId())
+		local left = player:getSlotItem(CONST_SLOT_LEFT)
+		local right = player:getSlotItem(CONST_SLOT_RIGHT)
+		local armor = player:getSlotItem(CONST_SLOT_ARMOR)
+		assert(left and armor, "equipment shadow fixture lost required equipment")
+		addEvent(verifyEquipmentShadow, 250, player:getId(), mode, player:getMoney(), left:getId(),
+			right and right:getId() or 0, armor:getId(), player:getPosition())
+		print("PLAYERBOT_GAMEPLAY_TEST " .. string.upper(mode) .. "_START")
+		return true
+	end
 	if mode == "mainland" then
 		local town = player:getTown()
 		assert(player:getLevel() == 8 and player:getVocation():getId() == 4 and town and town:getId() == thaisTownId,

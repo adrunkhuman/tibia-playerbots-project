@@ -216,6 +216,7 @@ States, actions, results, statuses, and reasons use stable lowercase values.
 | Lifecycle | `lifecycle`, `state_transition`, `objective_transition`, `terminal` record ownership and controller state. |
 | Goals | `goal_candidate`, `goal_selection`, `goal_result` expose arbitration evidence and decision IDs. |
 | Rewards | `strategy_candidate`, `reward_inspection`, `strategy_selection`, `strategy_objective_result` expose bundle selection and verification. |
+| Equipment offers | `equipment_offer_candidate` and `equipment_offer_shadow` expose loaded tagged-shop offers, loadout and hunt deltas, reserve and route checks, and the non-mutating shadow decision. |
 | Spell training | `spell_trainer_discovered`, `spell_candidate`, `strategy_selection`, `action_result`, and `goal_result` expose loaded offers, eligibility rejections, provider/route choice, and exact payment verification. |
 | Spell casting | `action_result` with `action="cast_spell"` records the need, semantic `policy_candidate`, selected method, mana reserve, normal-path request, engine result, observed outcome, and fallback. `legal_candidates` contains only normal-path casts confirmed by resource evidence. |
 | Actions | `action_result`, `target_changed`, `service_discovered`, `npc_reply`, `stuck` record externally relevant attempts and outcomes. |

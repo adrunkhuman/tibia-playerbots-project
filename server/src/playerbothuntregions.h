@@ -22,6 +22,16 @@
 class Player;
 class PlayerBotNavigator;
 
+struct PlayerBotCombatProfile {
+	uint32_t level = 0;
+	int32_t maximumHealth = 0;
+	int32_t armor = 0;
+	int32_t defense = 0;
+	int32_t attack = 0;
+	int32_t attackSkill = 0;
+	float attackFactor = 1.0f;
+};
+
 struct PlayerBotHuntMonsterProfile {
 	std::string name;
 	double expectedSpawns = 0;
@@ -77,6 +87,10 @@ class PlayerBotHuntRegionPlanner
 		static uint64_t getCacheRevision();
 		PlayerBotHuntRegionScan beginScan(const Player& player) const;
 		bool score(Player& player, uint64_t revision, size_t candidateIndex, const std::set<Position>& excludedRegions,
+		           const std::map<Position, PlayerBotHuntRegionPerformance>& performance,
+		           uint32_t huntDurationSeconds, PlayerBotHuntRegion& region) const;
+		bool score(Player& player, const PlayerBotCombatProfile& profile, uint64_t revision, size_t candidateIndex,
+		           const std::set<Position>& excludedRegions,
 		           const std::map<Position, PlayerBotHuntRegionPerformance>& performance,
 		           uint32_t huntDurationSeconds, PlayerBotHuntRegion& region) const;
 };
