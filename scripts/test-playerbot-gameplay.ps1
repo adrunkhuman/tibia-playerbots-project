@@ -1015,6 +1015,31 @@ function Assert-NavigationEvents {
     }
 }
 
+function Assert-NavigationRecoveryEvents {
+	param([string]$Logs)
+
+	$events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
+	$mismatches = @($events | Where-Object {
+		$_.event -eq "action_result" -and $_.action -eq "navigate" -and
+		$_.result -eq "failed" -and $_.reason -eq "step_result_mismatch"
+	})
+	$recovery = @($events | Where-Object {
+		$_.event -eq "hunt_region_patrol" -and $_.result -eq "skipped" -and
+		$_.reason -eq "repeated_step_failure" -and $_.step_failures -eq 3 -and $_.region_id -eq $null
+	})
+	$waypoints = @($events | Where-Object {
+		$_.event -eq "action_result" -and $_.action -eq "hunt_waypoint" -and $_.result -eq "reached"
+	})
+	$terminal = @($events | Where-Object { $_.event -eq "terminal" })
+	$firstWaypoint = if ($waypoints.Count -gt 0) {
+		"$($waypoints[0].position.x),$($waypoints[0].position.y),$($waypoints[0].position.z)"
+	} else { "" }
+	if ($mismatches.Count -lt 1 -or $recovery.Count -ne 1 -or $firstWaypoint -ne "32103,32124,8" -or
+		$terminal.Count -ne 0) {
+		throw "Repeated route execution recovery failed. mismatches=$($mismatches.Count), recovery=$($recovery.Count), firstWaypoint=$firstWaypoint, terminal=$($terminal.Count)."
+	}
+}
+
 function Assert-TargetPursuitEvents {
 	param([string]$Logs)
 
@@ -1769,6 +1794,15 @@ try {
 			Invoke-Compose up --detach
 			$navigationLogs = Wait-ForPlayerbotEventCount -Action "hunt_waypoint" -Count 5
 			Assert-NavigationEvents -Logs $navigationLogs
+		}
+		Invoke-Scenario -Name "navigation_recovery" -DefaultTimeoutSeconds 150 -Body {
+			Invoke-Compose down --volumes --remove-orphans
+			$env:PLAYERBOT_GAMEPLAY_MODE = "navigation_recovery"
+			$env:PLAYERBOT_HUNT_DURATION_SECONDS = "900"
+			Invoke-Compose up --detach
+			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST NAVIGATION_RECOVERY_START' | Out-Null
+			$recoveryLogs = Wait-ForPlayerbotEventCount -Action "hunt_waypoint" -Count 1
+			Assert-NavigationRecoveryEvents -Logs $recoveryLogs
 		}
 	}
 

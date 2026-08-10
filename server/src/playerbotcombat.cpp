@@ -985,22 +985,36 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 	const Position& target = patrolPoints && !patrolPoints->empty() ?
 	                         (*patrolPoints)[huntRouteIndex % patrolPoints->size()] : huntingLoop[huntRouteIndex];
 	if (!processNavigation(player, currentPosition, target)) {
-		if (activeHuntRegion && (navigationOscillationDetected || fixedTargetRouteFailureCount >= 3)) {
+		const bool repeatedStepFailure = blockedStepCount >= maximumRepeatedNavigationStepFailures;
+		if (navigationOscillationDetected || repeatedStepFailure ||
+		    (activeHuntRegion && fixedTargetRouteFailureCount >= 3)) {
+			const char* reason = navigationOscillationDetected ? "position_oscillation" :
+			                     repeatedStepFailure ? "repeated_step_failure" : "unreachable";
 			emit("hunt_region_patrol", currentPosition,
 			     "\"result\":\"skipped\",\"reason\":" +
-			         jsonString(navigationOscillationDetected ? "position_oscillation" : "unreachable") +
+			         jsonString(reason) +
+			         ",\"step_failures\":" + std::to_string(blockedStepCount) +
 			         ",\"region_id\":" +
-			         std::to_string(activeHuntRegion->id) + ",\"destination\":{\"x\":" +
+			         (activeHuntRegion ? std::to_string(activeHuntRegion->id) : "null") +
+			         ",\"destination\":{\"x\":" +
 			         std::to_string(target.x) + ",\"y\":" + std::to_string(target.y) +
 			         ",\"z\":" + std::to_string(target.z) + "}");
+			if (repeatedStepFailure) {
+				++counters.stuckEvents;
+			}
 			fixedTargetRouteFailureCount = 0;
+			blockedStepCount = 0;
 			clearNavigation();
-			activeHuntRegion->patrolPoints.erase(activeHuntRegion->patrolPoints.begin() + huntRouteIndex);
-			if (activeHuntRegion->patrolPoints.empty()) {
-				huntRegionCooldowns[activeHuntRegion->center] = std::chrono::steady_clock::now() + huntRegionCooldown;
-				beginService(player, currentPosition, "hunt_region_patrol_unreachable");
+			if (activeHuntRegion) {
+				activeHuntRegion->patrolPoints.erase(activeHuntRegion->patrolPoints.begin() + huntRouteIndex);
+				if (activeHuntRegion->patrolPoints.empty()) {
+					huntRegionCooldowns[activeHuntRegion->center] = std::chrono::steady_clock::now() + huntRegionCooldown;
+					beginService(player, currentPosition, "hunt_region_patrol_unreachable");
+				} else {
+					huntRouteIndex %= activeHuntRegion->patrolPoints.size();
+				}
 			} else {
-				huntRouteIndex %= activeHuntRegion->patrolPoints.size();
+				huntRouteIndex = (huntRouteIndex + 1) % huntingLoop.size();
 			}
 		}
 		return;

@@ -35,7 +35,8 @@ const PlayerBotTestPolicy& playerbot::testPolicyFromEnvironment()
 				 std::strcmp(gameplayMode, "equipment_shadow_unaffordable") == 0 ||
 				 std::strcmp(gameplayMode, "equipment_shadow_no_upgrade") == 0);
 		const bool startInHunt = gameplayMode &&
-			(std::strcmp(gameplayMode, "navigation") == 0 || std::strcmp(gameplayMode, "corpse") == 0 ||
+			(std::strcmp(gameplayMode, "navigation") == 0 || std::strcmp(gameplayMode, "navigation_recovery") == 0 ||
+			 std::strcmp(gameplayMode, "corpse") == 0 ||
 			 (std::strcmp(gameplayMode, "target_pursuit") == 0 || std::strcmp(gameplayMode, "target_pursuit_abandon") == 0) ||
 			 std::strcmp(gameplayMode, "healing") == 0 || std::strcmp(gameplayMode, "healing_resupply") == 0 ||
 			 std::strcmp(gameplayMode, "value") == 0 || std::strcmp(gameplayMode, "departure_interrupt") == 0 ||
@@ -75,6 +76,7 @@ const PlayerBotTestPolicy& playerbot::testPolicyFromEnvironment()
 			gameplayMode && std::strcmp(gameplayMode, "hunt_planning") == 0,
 			gameplayMode && std::strcmp(gameplayMode, "hunt_planning") == 0,
 			gameplayMode && std::strcmp(gameplayMode, "hunt_planning") == 0,
+			gameplayMode && std::strcmp(gameplayMode, "navigation_recovery") == 0,
 		};
 	}();
 	return policy;
@@ -85,7 +87,11 @@ PlayerBotController::PlayerBotController(const Player& player,
                             const PlayerBotTestPolicy& testPolicy) :
 	playerId(player.getID()), playerGuid(player.getGUID()), playerName(player.getName()), testPolicy(testPolicy),
 	huntRegionCooldowns(sharedHuntRegionCooldowns)
-{}
+{
+	if (testPolicy.forceRepeatedNavigationStepFailures) {
+		forcedNavigationStepFailuresRemaining = maximumRepeatedNavigationStepFailures;
+	}
+}
 
 void PlayerBotController::start(const Position& position, bool recovered, uint32_t recoveryCount)
 {
@@ -366,6 +372,7 @@ void PlayerBotController::clearNavigation()
 	navigationPending = false;
 	worldChangePending = false;
 	navigationTarget = Position();
+	blockedStepCount = 0;
 }
 
 void PlayerBotController::onDeath(const Player& player, const Creature* killer, const Creature* mostDamageKiller)
@@ -417,6 +424,10 @@ bool PlayerBotController::executeNavigationStep(Player* player, const PlayerBotN
 {
 	++counters.actionsAttempted;
 	if (step.action == PlayerBotNavigationAction::Move) {
+		if (forcedNavigationStepFailuresRemaining > 0) {
+			--forcedNavigationStepFailuresRemaining;
+			return true;
+		}
 		g_game.playerMove(playerId, step.direction);
 		return true;
 	}
@@ -561,6 +572,10 @@ bool PlayerBotController::processNavigation(Player* player, const Position& curr
 				std::chrono::steady_clock::now() + navigationBlockSuppression;
 			logActionFailure("navigate", "step_result_mismatch", currentPosition);
 			++blockedStepCount;
+			if (blockedStepCount >= maximumRepeatedNavigationStepFailures) {
+				schedule(blockedRouteRetryInterval);
+				return false;
+			}
 		}
 	}
 	if (worldChangePending) {
@@ -576,6 +591,7 @@ bool PlayerBotController::processNavigation(Player* player, const Position& curr
 	if (navigationTarget != destination) {
 		navigationSteps.clear();
 		navigationTarget = destination;
+		blockedStepCount = 0;
 	}
 	if (navigationSteps.empty()) {
 		const auto now = std::chrono::steady_clock::now();
