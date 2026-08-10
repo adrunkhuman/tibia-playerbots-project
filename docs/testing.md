@@ -48,6 +48,7 @@ the changed behavior:
 | `-StaminaProjection` | Premium bonus, low-stamina penalty, and ordinary stamina projections. |
 | `-HuntRegionPlanning` | Cached scanner batching, threat rejection, reachability, cooldowns, and observed correction. |
 | `-CombatReadiness` | Equipment, supplies, capacity, service recovery, upgrades, and restart reconstruction. |
+| `-EquipmentPurchases` | Justified purchase and equip verification, clean restart persistence, carried-upgrade recovery, displaced-item-space rejection, and rejected transactions. |
 | `-Depot` | Real locker/chest discovery, nested deposits, move verification, retries, and restart checkpoints. |
 | `-MainlandLoop` | Two real Thais hunt/depot cycles, local services, restart recovery, and teleport exclusion. |
 | `-SpellTraining` | Tagged trainer discovery, reserve-backed affordability rejection, normal spell dialogue/payment, and restart persistence. |
