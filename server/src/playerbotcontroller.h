@@ -71,6 +71,7 @@ namespace playerbot {
 	inline constexpr std::chrono::seconds navigationBlockSuppression(10);
 	inline constexpr std::chrono::minutes navigationOscillationSuppression(2);
 	inline constexpr std::chrono::seconds navigationStepTimeout(2);
+	inline constexpr uint32_t maximumRepeatedNavigationStepFailures = 3;
 	inline constexpr std::chrono::seconds healingRetryInterval(2);
 	inline constexpr std::chrono::minutes stableLifetimeReset(5);
 	inline constexpr std::chrono::minutes huntRegionCooldown(10);
@@ -145,6 +146,7 @@ namespace playerbot {
 		bool forceFirstHuntCandidateUnreachable;
 		bool forceSecondHuntCandidateNodeLimit;
 		bool cancelHuntPlanningAtScoreBarrier;
+		bool forceRepeatedNavigationStepFailures;
 	};
 
 	std::string jsonString(const std::string& value);
@@ -796,6 +798,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		ScenarioStage scenarioStage = ScenarioStage::Traverse;
 		uint32_t fixedTargetRouteFailureCount = 0;
 		uint32_t blockedStepCount = 0;
+		uint32_t forcedNavigationStepFailuresRemaining = 0;
 		uint32_t corpseSearchAttempts = 0;
 		uint32_t corpseOpenAttempts = 0;
 		uint16_t pendingLootItemId = 0;
