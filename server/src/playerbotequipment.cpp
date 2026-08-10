@@ -47,7 +47,7 @@ PlayerBotController::EquipmentLoadout PlayerBotController::equipmentLoadout(cons
 	return loadout;
 }
 
-bool PlayerBotController::applyEquipmentOffer(const Player& player, EquipmentLoadout& loadout, uint16_t itemId,
+bool PlayerBotController::applyEquipmentOffer(const Player& player, EquipmentLoadout& loadout, uint16_t itemId, slots_t& slot,
                                               uint16_t& replacedItemId, uint16_t& displacedLeftItemId,
                                               uint16_t& displacedRightItemId,
                                               std::string& rejection) const
@@ -91,7 +91,7 @@ bool PlayerBotController::applyEquipmentOffer(const Player& player, EquipmentLoa
 		return equipped && equipped->weaponType == WEAPON_SHIELD;
 	};
 
-	slots_t slot = CONST_SLOT_WHEREEVER;
+	slot = CONST_SLOT_WHEREEVER;
 	if (type.slotPosition & SLOTP_HEAD) {
 		slot = CONST_SLOT_HEAD;
 	} else if (type.slotPosition & SLOTP_ARMOR) {
@@ -291,6 +291,7 @@ void PlayerBotController::emitEquipmentOffer(const Player& player, const Equipme
 	       << ",\"lowest_threat_ratio\":" << evaluation.hunts.lowestThreatRatio
 	       << ",\"combat_ready\":" << (evaluation.candidateReady ? "true" : "false") << '}'
 	       << ",\"rule\":" << jsonString(equipmentDecisionRuleName(evaluation.rule))
+	       << ",\"carried\":" << (evaluation.carried ? "true" : "false")
 	       << ",\"provider_position\":{\"x\":" << evaluation.npcPosition.x << ",\"y\":" << evaluation.npcPosition.y
 	       << ",\"z\":" << static_cast<uint16_t>(evaluation.npcPosition.z) << '}';
 	if (reason) {
@@ -299,10 +300,11 @@ void PlayerBotController::emitEquipmentOffer(const Player& player, const Equipme
 	emit("equipment_offer_candidate", position, fields.str());
 }
 
-void PlayerBotController::evaluateEquipmentOffers(Player& player, const Position& position)
+std::optional<PlayerBotController::EquipmentOfferEvaluation> PlayerBotController::evaluateEquipmentOffers(
+	Player& player, const Position& position)
 {
 	if (!requiresKnightCombatReadiness(player)) {
-		return;
+		return std::nullopt;
 	}
 	const uint64_t reserve = spellTrainingReserve(player);
 	const uint64_t totalMoney = player.getMoney() + player.getBankBalance();
@@ -311,15 +313,16 @@ void PlayerBotController::evaluateEquipmentOffers(Player& player, const Position
 	const EquipmentHuntSummary currentHunts = equipmentHuntSummary(player, currentProfile);
 	const bool currentReady = equipmentLoadoutReady(player, currentLoadout);
 	std::map<uint16_t, EquipmentOfferEvaluation> evaluatedItems;
-	std::map<uint32_t, std::optional<uint32_t>> providerRoutes;
+	std::map<uint32_t, std::optional<std::pair<Position, uint32_t>>> providerRoutes;
 	std::set<uint32_t> providerRouteNodeLimits;
 	std::optional<EquipmentOfferEvaluation> selected;
 	uint32_t feasibleCandidates = 0;
+	size_t simulatedItems = 0;
 	bool providerRouteBudgetExhausted = false;
 	size_t catalogOffers = 0;
 	bool catalogTruncated = false;
 
-	auto providerRoute = [&](Npc& npc) -> std::optional<uint32_t> {
+	auto providerRoute = [&](Npc& npc) -> std::optional<std::pair<Position, uint32_t>> {
 		if (auto route = providerRoutes.find(npc.getID()); route != providerRoutes.end()) {
 			return route->second;
 		}
@@ -340,13 +343,17 @@ void PlayerBotController::evaluateEquipmentOffers(Player& player, const Position
 			const int32_t rightDistance = std::max(Position::getDistanceX(position, right), Position::getDistanceY(position, right));
 			return leftDistance == rightDistance ? left < right : leftDistance < rightDistance;
 		});
-		for (size_t approachIndex = 0; approachIndex < approaches.size() && approachIndex < maximumEquipmentProviderApproaches;
-		     ++approachIndex) {
+		size_t evaluatedApproaches = 0;
+		for (size_t approachIndex = 0; approachIndex < approaches.size(); ++approachIndex) {
 			const Position& approach = approaches[approachIndex];
 			Tile* tile = g_game.map.getTile(approach);
 			if (!tile || tile->queryAdd(0, player, 1, 0) != RETURNVALUE_NOERROR) {
 				continue;
 			}
+			if (evaluatedApproaches >= maximumEquipmentProviderApproaches) {
+				break;
+			}
+			++evaluatedApproaches;
 			std::deque<PlayerBotNavigationStep> steps;
 			uint64_t expandedNodes = 0;
 			++counters.pathfindingCalls;
@@ -354,7 +361,7 @@ void PlayerBotController::evaluateEquipmentOffers(Player& player, const Position
 			                                        navigator.plan(player, approach, {}, steps, expandedNodes,
 			                                                       maximumEquipmentProviderPathNodes);
 			if (result == PlayerBotNavigationResult::Reached) {
-				return providerRoutes.emplace(npc.getID(), static_cast<uint32_t>(steps.size())).first->second;
+				return providerRoutes.emplace(npc.getID(), std::make_pair(approach, static_cast<uint32_t>(steps.size()))).first->second;
 			}
 			if (result == PlayerBotNavigationResult::NodeLimit) {
 				providerRouteNodeLimits.insert(npc.getID());
@@ -362,6 +369,14 @@ void PlayerBotController::evaluateEquipmentOffers(Player& player, const Position
 			++counters.pathfindingFailures;
 		}
 		return providerRoutes.emplace(npc.getID(), std::nullopt).first->second;
+	};
+	auto preferCandidate = [](const EquipmentOfferEvaluation& candidate, const EquipmentOfferEvaluation& current) {
+		return candidate.rule > current.rule ||
+		       (candidate.rule == current.rule && (candidate.carried != current.carried ? candidate.carried :
+		        candidate.price < current.price ||
+		        (candidate.price == current.price && (candidate.travelSteps < current.travelSteps ||
+		         (candidate.travelSteps == current.travelSteps && (candidate.itemId < current.itemId ||
+		          (candidate.itemId == current.itemId && candidate.npcId < current.npcId)))))));
 	};
 
 	for (const auto& entry : g_game.getNpcs()) {
@@ -389,22 +404,16 @@ void PlayerBotController::evaluateEquipmentOffers(Player& player, const Position
 			evaluation.itemId = offer.itemId;
 			evaluation.price = offer.buyPrice;
 			evaluation.currentReady = currentReady;
+			evaluation.carried = g_game.findItemOfType(&player, offer.itemId, true) != nullptr;
 			if (auto item = evaluatedItems.find(offer.itemId); item != evaluatedItems.end()) {
 				evaluation = item->second;
 				evaluation.npcId = npc->getID();
 				evaluation.npcPosition = npc->getPosition();
 				evaluation.price = offer.buyPrice;
 			} else {
-				if (evaluatedItems.size() >= maximumEquipmentUniqueItems) {
-					evaluation.profile = currentProfile;
-					evaluation.hunts = currentHunts;
-					emitEquipmentOffer(player, evaluation, currentProfile, currentHunts, reserve, position, "rejected",
-					                   "unique_item_evaluation_budget_exhausted");
-					continue;
-				}
 				EquipmentLoadout candidateLoadout = currentLoadout;
 				std::string rejection;
-				if (!applyEquipmentOffer(player, candidateLoadout, offer.itemId, evaluation.replacedItemId,
+				if (!applyEquipmentOffer(player, candidateLoadout, offer.itemId, evaluation.slot, evaluation.replacedItemId,
 				                         evaluation.displacedLeftItemId,
 				                         evaluation.displacedRightItemId, rejection)) {
 					evaluation.profile = currentProfile;
@@ -414,7 +423,7 @@ void PlayerBotController::evaluateEquipmentOffers(Player& player, const Position
 					emitEquipmentOffer(player, evaluation, currentProfile, currentHunts, reserve, position, "rejected", rejection.c_str());
 					continue;
 				}
-				if (Item::items[offer.itemId].weight > player.getFreeCapacity()) {
+				if (!evaluation.carried && Item::items[offer.itemId].weight > player.getFreeCapacity()) {
 					evaluation.profile = currentProfile;
 					evaluation.hunts = currentHunts;
 					evaluation.rejection = "insufficient_capacity";
@@ -422,9 +431,18 @@ void PlayerBotController::evaluateEquipmentOffers(Player& player, const Position
 					emitEquipmentOffer(player, evaluation, currentProfile, currentHunts, reserve, position, "rejected", "insufficient_capacity");
 					continue;
 				}
+				if (simulatedItems >= maximumEquipmentUniqueItems) {
+					evaluation.profile = currentProfile;
+					evaluation.hunts = currentHunts;
+					emitEquipmentOffer(player, evaluation, currentProfile, currentHunts, reserve, position, "rejected",
+					                   "unique_item_evaluation_budget_exhausted");
+					continue;
+				}
+				++simulatedItems;
 				evaluation.profile = equipmentCombatProfile(player, candidateLoadout);
 				evaluation.hunts = equipmentHuntSummary(player, evaluation.profile);
-				evaluation.candidateReady = equipmentLoadoutReady(player, candidateLoadout, Item::items[offer.itemId].weight);
+				evaluation.candidateReady = equipmentLoadoutReady(
+				    player, candidateLoadout, evaluation.carried ? 0 : Item::items[offer.itemId].weight);
 				const int32_t currentMaximumDamage = Weapons::getMaxWeaponDamage(currentProfile.level, currentProfile.attackSkill,
 				                                                                   currentProfile.attack, currentProfile.attackFactor);
 				const int32_t candidateMaximumDamage = Weapons::getMaxWeaponDamage(evaluation.profile.level,
@@ -472,6 +490,34 @@ void PlayerBotController::evaluateEquipmentOffers(Player& player, const Position
 				                   evaluation.rejection.c_str());
 				continue;
 			}
+			Item* backpackItem = player.getInventoryItem(CONST_SLOT_BACKPACK);
+			Container* backpack = backpackItem ? backpackItem->getContainer() : nullptr;
+			const uint32_t freeBackpackSlots = backpack ? backpack->capacity() -
+			                                  std::min<uint32_t>(backpack->capacity(), backpack->size()) : 0;
+			uint32_t displacedSlots = 0;
+			std::set<slots_t> countedSlots;
+			for (const auto& displaced : {std::pair<slots_t, uint16_t>{evaluation.slot, evaluation.replacedItemId},
+			                              {CONST_SLOT_LEFT, evaluation.displacedLeftItemId},
+			                              {CONST_SLOT_RIGHT, evaluation.displacedRightItemId}}) {
+				if (displaced.second != 0 && countedSlots.insert(displaced.first).second) {
+					++displacedSlots;
+				}
+			}
+			const uint32_t requiredBackpackSlots = displacedSlots + (evaluation.carried ? 0 : 1);
+			if (!backpack || freeBackpackSlots < requiredBackpackSlots) {
+				emitEquipmentOffer(player, evaluation, currentProfile, currentHunts, reserve, position, "rejected",
+				                   "insufficient_displaced_item_space");
+				continue;
+			}
+			if (evaluation.carried) {
+				evaluation.travelSteps = 0;
+				emitEquipmentOffer(player, evaluation, currentProfile, currentHunts, reserve, position, "feasible", "carried_upgrade");
+				++feasibleCandidates;
+				if (!selected || preferCandidate(evaluation, *selected)) {
+					selected = evaluation;
+				}
+				continue;
+			}
 			if (reserve == std::numeric_limits<uint64_t>::max()) {
 				emitEquipmentOffer(player, evaluation, currentProfile, currentHunts, reserve, position, "rejected", "recovery_reserve_unavailable");
 				continue;
@@ -480,28 +526,25 @@ void PlayerBotController::evaluateEquipmentOffers(Player& player, const Position
 				emitEquipmentOffer(player, evaluation, currentProfile, currentHunts, reserve, position, "rejected", "unaffordable_after_reserves");
 				continue;
 			}
-			const std::optional<uint32_t> travelSteps = providerRoute(*npc);
-			if (!travelSteps) {
+			const std::optional<std::pair<Position, uint32_t>> route = providerRoute(*npc);
+			if (!route) {
 				const char* reason = providerRouteBudgetExhausted ? "provider_evaluation_budget_exhausted" :
 				                     providerRouteNodeLimits.find(npc->getID()) != providerRouteNodeLimits.end() ?
 				                     "provider_route_node_budget_exhausted" : "provider_unreachable";
 				emitEquipmentOffer(player, evaluation, currentProfile, currentHunts, reserve, position, "rejected", reason);
 				continue;
 			}
-			evaluation.travelSteps = *travelSteps;
+			evaluation.approachPosition = route->first;
+			evaluation.travelSteps = route->second;
 			emitEquipmentOffer(player, evaluation, currentProfile, currentHunts, reserve, position, "feasible", nullptr);
 			++feasibleCandidates;
-			if (!selected || evaluation.rule > selected->rule ||
-			    (evaluation.rule == selected->rule && (evaluation.price < selected->price ||
-			     (evaluation.price == selected->price && (evaluation.travelSteps < selected->travelSteps ||
-			      (evaluation.travelSteps == selected->travelSteps && (evaluation.itemId < selected->itemId ||
-			       (evaluation.itemId == selected->itemId && evaluation.npcId < selected->npcId)))))))) {
+			if (!selected || preferCandidate(evaluation, *selected)) {
 				selected = evaluation;
 			}
 		}
 	}
 	std::ostringstream fields;
-	fields << "\"result\":" << jsonString(selected ? "would_buy" : "no_decision")
+	fields << "\"result\":" << jsonString(selected ? (selected->carried ? "would_equip" : "would_buy") : "no_decision")
 	       << ",\"feasible_candidates\":" << feasibleCandidates
 	       << ",\"catalog_offers_evaluated\":" << catalogOffers
 	       << ",\"catalog_truncated\":" << (catalogTruncated ? "true" : "false")
@@ -511,4 +554,308 @@ void PlayerBotController::evaluateEquipmentOffers(Player& player, const Position
 		       << ",\"price\":" << selected->price << ",\"travel_steps\":" << selected->travelSteps;
 	}
 	emit("equipment_offer_shadow", position, fields.str());
+	return selected;
+}
+
+void PlayerBotController::beginEquipmentPurchase(Player& player, const Position& position,
+	EquipmentOfferEvaluation evaluation)
+{
+	equipmentPurchase = std::move(evaluation);
+	progressionObjective = ProgressionObjective::BuyEquipment;
+	equipmentPurchaseStage = equipmentPurchase.carried ? EquipmentPurchaseStage::Equip : EquipmentPurchaseStage::Travel;
+	progressionAttempts = 0;
+	pendingEquipmentDisplacedCounts.clear();
+	if (!equipmentPurchase.carried) {
+		resetConversation(equipmentPurchase.npcId);
+	}
+	std::ostringstream fields;
+	fields << "\"goal\":\"buy_equipment\",\"reason\":"
+	       << jsonString(equipmentDecisionRuleName(equipmentPurchase.rule))
+	       << ",\"npc_id\":" << equipmentPurchase.npcId << ",\"item_id\":" << equipmentPurchase.itemId
+	       << ",\"price\":" << equipmentPurchase.price << ",\"travel_steps\":" << equipmentPurchase.travelSteps
+	       << ",\"acquisition\":" << jsonString(equipmentPurchase.carried ? "carried" : "purchase");
+	emit("strategy_selection", position, fields.str());
+	say(player, equipmentPurchase.carried ? "Equipping a carried equipment upgrade." :
+	                                      "Going to buy a justified equipment upgrade.");
+}
+
+void PlayerBotController::finishEquipmentPurchase(Player* player, const Position& position, const char* result,
+	const char* reason)
+{
+	std::ostringstream fields;
+	fields << "\"goal\":\"buy_equipment\",\"npc_id\":" << equipmentPurchase.npcId
+	       << ",\"item_id\":" << equipmentPurchase.itemId << ",\"price\":" << equipmentPurchase.price
+	       << ",\"rule\":" << jsonString(equipmentDecisionRuleName(equipmentPurchase.rule))
+	       << ",\"result\":" << jsonString(result) << ",\"reason\":" << jsonString(reason);
+	emit("strategy_objective_result", position, fields.str());
+	emit("goal_result", position,
+	     "\"decision_id\":" + std::to_string(goalDecisionId) +
+	         ",\"goal\":\"buy_equipment\",\"result\":" + jsonString(result) +
+	         ",\"reason\":" + jsonString(reason));
+	if (player) {
+		player->closeShopWindow();
+		say(*player, std::string("Equipment purchase ") + result + ": " + reason + '.');
+	}
+	const bool succeeded = std::strcmp(result, "success") == 0;
+	equipmentPurchaseCooldownUntil = std::chrono::steady_clock::now() +
+	                                 (succeeded ? equipmentPurchaseSuccessCooldown : equipmentPurchaseFailureCooldown);
+	progressionObjective = ProgressionObjective::None;
+	equipmentPurchaseStage = EquipmentPurchaseStage::Travel;
+	equipmentPurchase = EquipmentOfferEvaluation{};
+	progressionAttempts = 0;
+	pendingEquipmentDisplacedCounts.clear();
+	serviceTargetId = 0;
+	conversationStep = ConversationStep::Greet;
+	clearNavigation();
+	cyclePhase = CyclePhase::Service;
+	if (testPolicy.progressionEnabled && player) {
+		selectTopLevelGoal(*player, position, succeeded ? "equipment_purchase_complete" : "equipment_purchase_failed");
+	} else {
+		activeGoal = TopLevelGoal::Service;
+	}
+	schedule(SCHEDULER_MINTICKS);
+}
+
+void PlayerBotController::processEquipmentPurchase(Player* player, const Position& position)
+{
+	Npc* npc = nullptr;
+	const ShopInfo* offer = nullptr;
+	ServiceNpc provider;
+	if (!equipmentPurchase.carried) {
+		npc = g_game.getNpcByID(equipmentPurchase.npcId);
+		const std::string* capability = npc && !npc->isRemoved() ? npc->getParameter("playerbot_service") : nullptr;
+		if (!npc || !capability || *capability != "shop") {
+			finishEquipmentPurchase(player, position, "failed", "provider_unavailable");
+			return;
+		}
+		provider = {equipmentPurchase.npcId, npc->getPosition()};
+		offer = findOffer(provider, equipmentPurchase.itemId, true);
+		if (!offer || offer->buyPrice != equipmentPurchase.price) {
+			finishEquipmentPurchase(player, position, "failed", "offer_changed");
+			return;
+		}
+	}
+
+	if (equipmentPurchaseStage == EquipmentPurchaseStage::Travel) {
+		if (!processNavigation(player, position, equipmentPurchase.approachPosition)) {
+			if (fixedTargetRouteFailureCount >= maximumProgressionAttempts ||
+			    blockedStepCount >= maximumRepeatedNavigationStepFailures) {
+				finishEquipmentPurchase(player, position, "failed", "route_unavailable");
+			}
+			return;
+		}
+		equipmentPurchaseStage = EquipmentPurchaseStage::Purchase;
+		clearNavigation();
+		schedule(SCHEDULER_MINTICKS);
+		return;
+	}
+
+	if (equipmentPurchaseStage == EquipmentPurchaseStage::Purchase) {
+		if (!Position::areInRange<3, 3, 0>(position, npc->getPosition())) {
+			finishEquipmentPurchase(player, position, "failed", "provider_moved");
+			return;
+		}
+		if (!openServiceShop(player, provider, position)) {
+			if (serviceAttempts >= maximumServiceAttempts) {
+				finishEquipmentPurchase(player, position, "failed", "shop_window_unavailable");
+			}
+			return;
+		}
+		const uint64_t reserve = spellTrainingReserve(*player);
+		const uint64_t totalMoney = player->getMoney() + player->getBankBalance();
+		if (reserve == std::numeric_limits<uint64_t>::max() || totalMoney < equipmentPurchase.price ||
+		    totalMoney - equipmentPurchase.price < reserve) {
+			finishEquipmentPurchase(player, position, "failed", "reserve_changed");
+			return;
+		}
+		serviceBeforeItemCount = getInventoryItemCount(*player, equipmentPurchase.itemId);
+		serviceBeforeMoney = player->getMoney();
+		serviceBeforeBalance = player->getBankBalance();
+		equipmentPurchaseStage = EquipmentPurchaseStage::VerifyPurchase;
+		++counters.actionsAttempted;
+		if (!testPolicy.forceEquipmentPurchaseRejected) {
+			g_game.playerPurchaseItem(playerId, Item::items[equipmentPurchase.itemId].clientId,
+			                          static_cast<uint8_t>(offer->subType), 1, false, false);
+		}
+		schedule(navigationDecisionDelay(*player));
+		return;
+	}
+
+	if (equipmentPurchaseStage == EquipmentPurchaseStage::VerifyPurchase) {
+		const uint32_t currentCount = getInventoryItemCount(*player, equipmentPurchase.itemId);
+		const uint64_t expectedMoney = serviceBeforeMoney > equipmentPurchase.price ?
+		                               serviceBeforeMoney - equipmentPurchase.price : 0;
+		const uint64_t expectedBalance = equipmentPurchase.price > serviceBeforeMoney ?
+		                                 serviceBeforeBalance - (equipmentPurchase.price - serviceBeforeMoney) :
+		                                 serviceBeforeBalance;
+		const bool itemChanged = currentCount == serviceBeforeItemCount + 1;
+		const bool economyChanged = player->getMoney() == expectedMoney && player->getBankBalance() == expectedBalance;
+		if (itemChanged && economyChanged) {
+			emit("action_result", position,
+			     "\"action\":\"buy_equipment\",\"result\":\"success\",\"item_id\":" +
+			         std::to_string(equipmentPurchase.itemId) + ",\"price\":" + std::to_string(equipmentPurchase.price) +
+			         ",\"carried_before\":" + std::to_string(serviceBeforeMoney) +
+			         ",\"carried_after\":" + std::to_string(player->getMoney()) +
+			         ",\"bank_before\":" + std::to_string(serviceBeforeBalance) +
+			         ",\"bank_after\":" + std::to_string(player->getBankBalance()));
+			progressionAttempts = 0;
+			equipmentPurchaseStage = EquipmentPurchaseStage::Equip;
+			schedule(SCHEDULER_MINTICKS);
+			return;
+		}
+		if (currentCount != serviceBeforeItemCount || player->getMoney() != serviceBeforeMoney ||
+		    player->getBankBalance() != serviceBeforeBalance) {
+			logActionFailure("buy_equipment", "transaction_delta_mismatch", position);
+			stop("equipment_purchase_delta_mismatch", position);
+			return;
+		}
+		if (++progressionAttempts >= maximumProgressionAttempts) {
+			logActionFailure("buy_equipment", "transaction_rejected", position);
+			finishEquipmentPurchase(player, position, "failed", "transaction_rejected");
+			return;
+		}
+		equipmentPurchaseStage = EquipmentPurchaseStage::Purchase;
+		conversationStep = ConversationStep::Ready;
+		schedule(navigationDecisionDelay(*player));
+		return;
+	}
+
+	if (equipmentPurchaseStage == EquipmentPurchaseStage::Equip) {
+		Item* equipped = player->getInventoryItem(equipmentPurchase.slot);
+		if (equipped && equipped->getID() == equipmentPurchase.itemId) {
+			equipmentPurchaseStage = EquipmentPurchaseStage::VerifyEquipment;
+			schedule(SCHEDULER_MINTICKS);
+			return;
+		}
+		Item* purchased = g_game.findItemOfType(player, equipmentPurchase.itemId, true);
+		if (!purchased) {
+			if (++progressionAttempts >= maximumProgressionAttempts) {
+				finishEquipmentPurchase(player, position, "failed", "purchased_item_unavailable");
+			} else {
+				schedule(navigationDecisionDelay(*player));
+			}
+			return;
+		}
+		if (!player->canDoAction()) {
+			schedule(navigationDecisionDelay(*player));
+			return;
+		}
+		Item* displaced = nullptr;
+		slots_t displacedSlot = CONST_SLOT_WHEREEVER;
+		for (const auto& entry : {std::pair<slots_t, uint16_t>{equipmentPurchase.slot, equipmentPurchase.replacedItemId},
+		                         {CONST_SLOT_LEFT, equipmentPurchase.displacedLeftItemId},
+		                         {CONST_SLOT_RIGHT, equipmentPurchase.displacedRightItemId}}) {
+			Item* equippedItem = entry.second == 0 ? nullptr : player->getInventoryItem(entry.first);
+			if (equippedItem && equippedItem->getID() == entry.second && equippedItem != purchased) {
+				displaced = equippedItem;
+				displacedSlot = entry.first;
+				break;
+			}
+		}
+		if (displaced) {
+			if (progressionAttempts >= maximumProgressionAttempts) {
+				finishEquipmentPurchase(player, position, "failed", "displaced_item_move_not_verified");
+				return;
+			}
+			Position displacedPosition;
+			uint8_t displacedIndex = 0;
+			g_game.internalGetPosition(displaced, displacedPosition, displacedIndex);
+			++progressionAttempts;
+			++counters.actionsAttempted;
+			emit("action_result", position,
+			     "\"action\":\"preserve_displaced_equipment\",\"result\":\"requested\",\"item_id\":" +
+			         std::to_string(displaced->getID()) + ",\"slot\":" + std::to_string(displacedSlot));
+			g_game.playerMoveItem(player, displacedPosition, displaced->getClientID(), displacedIndex,
+			                      Position(0xFFFF, 0, 0), displaced->getItemCount(), displaced, nullptr);
+			schedule(navigationDecisionDelay(*player));
+			return;
+		}
+		Container* sourceContainer = dynamic_cast<Container*>(purchased->getParent());
+		if (sourceContainer && player->getContainerID(sourceContainer) < 0) {
+			if (progressionAttempts >= maximumProgressionAttempts) {
+				finishEquipmentPurchase(player, position, "failed", "purchased_item_container_unavailable");
+				return;
+			}
+			Container* containerToOpen = sourceContainer;
+			while (Container* parent = dynamic_cast<Container*>(containerToOpen->getParent())) {
+				if (player->getContainerID(parent) >= 0) {
+					break;
+				}
+				containerToOpen = parent;
+			}
+			uint8_t containerId = rewardContainerIdBase;
+			while (containerId <= maximumContainerId && player->getContainerByID(containerId)) {
+				++containerId;
+			}
+			Position containerPosition;
+			uint8_t containerIndex = 0;
+			Item* containerItem = static_cast<Item*>(containerToOpen);
+			g_game.internalGetPosition(containerItem, containerPosition, containerIndex);
+			if (containerId > maximumContainerId || containerPosition.x != 0xFFFF) {
+				finishEquipmentPurchase(player, position, "failed", "purchased_item_container_unavailable");
+				return;
+			}
+			++progressionAttempts;
+			++counters.actionsAttempted;
+			g_game.playerUseItem(playerId, containerPosition, containerIndex, containerId, containerItem->getClientID());
+			emit("action_result", position,
+			     "\"action\":\"open_equipment_container\",\"result\":\"requested\",\"item_id\":" +
+			         std::to_string(containerItem->getID()) + ",\"container_id\":" + std::to_string(containerId));
+			schedule(navigationDecisionDelay(*player));
+			return;
+		}
+		Position sourcePosition;
+		uint8_t sourceIndex = 0;
+		g_game.internalGetPosition(purchased, sourcePosition, sourceIndex);
+		if (sourcePosition.x != 0xFFFF) {
+			finishEquipmentPurchase(player, position, "failed", "purchased_item_position_unavailable");
+			return;
+		}
+		pendingEquipmentDisplacedCounts.clear();
+		for (uint16_t itemId : {equipmentPurchase.replacedItemId, equipmentPurchase.displacedLeftItemId,
+		                        equipmentPurchase.displacedRightItemId}) {
+			if (itemId != 0) {
+				pendingEquipmentDisplacedCounts[itemId] = getInventoryItemCount(*player, itemId);
+			}
+		}
+		++counters.actionsAttempted;
+		emit("action_result", position,
+		     "\"action\":\"equip_equipment\",\"result\":\"requested\",\"item_id\":" +
+		         std::to_string(purchased->getID()) + ",\"slot\":" + std::to_string(equipmentPurchase.slot) +
+		         ",\"source_y\":" + std::to_string(sourcePosition.y) +
+		         ",\"source_z\":" + std::to_string(sourcePosition.z) +
+		         ",\"source_container\":" + (sourceContainer ? "true" : "false"));
+		g_game.playerMoveItem(player, sourcePosition, purchased->getClientID(), sourceIndex,
+		                      Position(0xFFFF, equipmentPurchase.slot, 0), purchased->getItemCount(), purchased, nullptr);
+		equipmentPurchaseStage = EquipmentPurchaseStage::VerifyEquipment;
+		schedule(navigationDecisionDelay(*player));
+		return;
+	}
+
+	Item* equipped = player->getInventoryItem(equipmentPurchase.slot);
+	const bool displacedPreserved = std::all_of(pendingEquipmentDisplacedCounts.begin(),
+	                                           pendingEquipmentDisplacedCounts.end(),
+	                                           [this, player](const auto& entry) {
+		                                           return getInventoryItemCount(*player, entry.first) >= entry.second;
+	                                           });
+	if (!equipped || equipped->getID() != equipmentPurchase.itemId || !displacedPreserved) {
+		if (++progressionAttempts >= maximumProgressionAttempts) {
+			finishEquipmentPurchase(player, position, "failed",
+			                        displacedPreserved ? "equip_not_verified" : "displaced_item_lost");
+			return;
+		}
+		equipmentPurchaseStage = EquipmentPurchaseStage::Equip;
+		schedule(navigationDecisionDelay(*player));
+		return;
+	}
+	const EquipmentLoadout actualLoadout = equipmentLoadout(*player);
+	const PlayerBotCombatProfile actualProfile = equipmentCombatProfile(*player, actualLoadout);
+	const EquipmentHuntSummary actualHunts = equipmentHuntSummary(*player, actualProfile);
+	emit("action_result", position,
+	     "\"action\":\"equip_equipment\",\"result\":\"success\",\"item_id\":" +
+	         std::to_string(equipmentPurchase.itemId) + ",\"slot\":" + std::to_string(equipmentPurchase.slot) +
+	         ",\"combat_ready\":" + (equipmentLoadoutReady(*player, actualLoadout) ? "true" : "false") +
+	         ",\"suitable_regions\":" + std::to_string(actualHunts.suitableRegions) +
+	         ",\"displaced_items_preserved\":true");
+	finishEquipmentPurchase(player, position, "success", "upgrade_equipped");
 }

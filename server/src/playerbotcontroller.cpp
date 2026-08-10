@@ -33,7 +33,11 @@ const PlayerBotTestPolicy& playerbot::testPolicyFromEnvironment()
 			 std::strcmp(gameplayMode, "departure_recovery") == 0 ||
 				 std::strcmp(gameplayMode, "spell_training") == 0 || std::strcmp(gameplayMode, "equipment_shadow") == 0 ||
 				 std::strcmp(gameplayMode, "equipment_shadow_unaffordable") == 0 ||
-				 std::strcmp(gameplayMode, "equipment_shadow_no_upgrade") == 0);
+				 std::strcmp(gameplayMode, "equipment_shadow_no_upgrade") == 0 ||
+				 std::strcmp(gameplayMode, "equipment_buy") == 0 ||
+				 std::strcmp(gameplayMode, "equipment_buy_resume") == 0 ||
+				 std::strcmp(gameplayMode, "equipment_buy_space") == 0 ||
+				 std::strcmp(gameplayMode, "equipment_buy_rejected") == 0);
 		const bool startInHunt = gameplayMode &&
 			(std::strcmp(gameplayMode, "navigation") == 0 || std::strcmp(gameplayMode, "navigation_recovery") == 0 ||
 			 std::strcmp(gameplayMode, "corpse") == 0 ||
@@ -77,6 +81,10 @@ const PlayerBotTestPolicy& playerbot::testPolicyFromEnvironment()
 			gameplayMode && std::strcmp(gameplayMode, "hunt_planning") == 0,
 			gameplayMode && std::strcmp(gameplayMode, "hunt_planning") == 0,
 			gameplayMode && std::strcmp(gameplayMode, "navigation_recovery") == 0,
+			!gameplayMode || (std::strcmp(gameplayMode, "equipment_shadow") != 0 &&
+			                  std::strcmp(gameplayMode, "equipment_shadow_unaffordable") != 0 &&
+			                  std::strcmp(gameplayMode, "equipment_shadow_no_upgrade") != 0),
+			gameplayMode && std::strcmp(gameplayMode, "equipment_buy_rejected") == 0,
 		};
 	}();
 	return policy;

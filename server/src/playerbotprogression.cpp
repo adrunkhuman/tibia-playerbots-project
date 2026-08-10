@@ -994,6 +994,7 @@ const char* PlayerBotController::topLevelGoalName(TopLevelGoal goal) const
 		case TopLevelGoal::Service: return "service";
 		case TopLevelGoal::PickupReward: return "pickup_reward";
 		case TopLevelGoal::LearnSpell: return "learn_spell";
+		case TopLevelGoal::BuyEquipment: return "buy_equipment";
 		case TopLevelGoal::Hunt: return "hunt";
 	}
 	return "unknown";
@@ -1038,7 +1039,8 @@ PlayerBotController::GoalCandidate PlayerBotController::serviceGoalCandidate(con
 }
 
 void PlayerBotController::emitGoalCandidate(const Player& player, const GoalCandidate& candidate, const Position& position, const char* decisionReason,
-	                       const PickupReward* reward, const DeparturePlan* departure) const
+	                       const PickupReward* reward, const DeparturePlan* departure,
+	                       const EquipmentOfferEvaluation* equipment) const
 {
 	std::ostringstream fields;
 	const bool evaluated = candidate.reason != "deferred_lower_utility";
@@ -1060,6 +1062,12 @@ void PlayerBotController::emitGoalCandidate(const Player& player, const GoalCand
 		fields << ",\"npc_id\":" << departure->npcId << ",\"town\":\"thais\",\"town_id\":" << oracleTownId
 		       << ",\"vocation\":\"knight\",\"vocation_id\":" << oracleVocationId
 		       << ",\"travel_steps\":" << departure->travelSteps;
+	}
+	if (equipment) {
+		fields << ",\"npc_id\":" << equipment->npcId << ",\"item_id\":" << equipment->itemId
+		       << ",\"price\":" << equipment->price << ",\"rule\":"
+		       << jsonString(equipmentDecisionRuleName(equipment->rule))
+		       << ",\"travel_steps\":" << equipment->travelSteps;
 	}
 	emit("goal_candidate", position, fields.str());
 }
@@ -1095,7 +1103,6 @@ bool PlayerBotController::selectTopLevelGoal(Player& player, const Position& pos
 	if (requiresRookgaardDeparture(player)) {
 		return forceOracleDeparture(player, position, decisionReason);
 	}
-	evaluateEquipmentOffers(player, position);
 	const GoalCandidate service = serviceGoalCandidate(player);
 	DeparturePlan departure;
 	std::deque<PlayerBotNavigationStep> departureRoute;
@@ -1126,10 +1133,20 @@ bool PlayerBotController::selectTopLevelGoal(Player& player, const Position& pos
 	                               spellTrainingFound ? spellTrainingGoalUtility : 0,
 	                               spellTrainingCoolingDown ? "cooldown" : spellTrainingFound ? "eligible_reachable_spell" :
 	                                                          "no_eligible_spell"};
+	const bool equipmentPurchaseCoolingDown = equipmentPurchaseCooldownUntil > now;
+	const std::optional<EquipmentOfferEvaluation> equipment = equipmentPurchaseCoolingDown ? std::nullopt :
+	                                                        evaluateEquipmentOffers(player, position);
+	const bool equipmentFound = testPolicy.equipmentPurchasesEnabled && equipment.has_value();
+	const GoalCandidate buyEquipment{TopLevelGoal::BuyEquipment, equipmentFound,
+	                                 equipmentFound ? equipmentPurchaseGoalUtility : 0,
+	                                 equipmentPurchaseCoolingDown ? "cooldown" :
+	                                 !testPolicy.equipmentPurchasesEnabled ? "shadow_only" :
+	                                 equipmentFound ? equipmentDecisionRuleName(equipment->rule) : "no_justified_offer"};
 	const bool higherUtilityGoal = (departureCandidate.feasible && departureCandidate.utility > huntGoalUtility) ||
 	                               (service.feasible && service.utility > huntGoalUtility) ||
 	                               (pickup.feasible && pickup.utility > huntGoalUtility) ||
-	                               (learnSpell.feasible && learnSpell.utility > huntGoalUtility);
+	                               (learnSpell.feasible && learnSpell.utility > huntGoalUtility) ||
+	                               (buyEquipment.feasible && buyEquipment.utility > huntGoalUtility);
 	const bool huntFeasible = !higherUtilityGoal;
 	const GoalCandidate hunt{TopLevelGoal::Hunt, huntFeasible, huntGoalUtility,
 	                         higherUtilityGoal ? "deferred_lower_utility" :
@@ -1139,10 +1156,14 @@ bool PlayerBotController::selectTopLevelGoal(Player& player, const Position& pos
 	emitGoalCandidate(player, service, position, decisionReason);
 	emitGoalCandidate(player, pickup, position, decisionReason, pickupFound ? &reward : nullptr);
 	emitGoalCandidate(player, learnSpell, position, decisionReason);
+	emitGoalCandidate(player, buyEquipment, position, decisionReason, nullptr, nullptr,
+	                  equipmentFound ? &*equipment : nullptr);
 	emitGoalCandidate(player, hunt, position, decisionReason);
 
 	const GoalCandidate* selected = nullptr;
-	const std::array<const GoalCandidate*, 5> candidates = {&departureCandidate, &service, &pickup, &learnSpell, &hunt};
+	const std::array<const GoalCandidate*, 6> candidates = {
+		&departureCandidate, &service, &pickup, &learnSpell, &buyEquipment, &hunt,
+	};
 	for (const GoalCandidate* candidate : candidates) {
 		if (candidate->feasible && (!selected || candidate->utility > selected->utility)) {
 			selected = candidate;
@@ -1170,6 +1191,10 @@ bool PlayerBotController::selectTopLevelGoal(Player& player, const Position& pos
 	} else if (selected->goal == TopLevelGoal::LearnSpell) {
 		fields << ",\"npc_id\":" << spellTraining.npcId << ",\"spell\":" << jsonString(spellTraining.spellName)
 		       << ",\"price\":" << spellTraining.price;
+	} else if (selected->goal == TopLevelGoal::BuyEquipment) {
+		fields << ",\"npc_id\":" << equipment->npcId << ",\"item_id\":" << equipment->itemId
+		       << ",\"price\":" << equipment->price << ",\"rule\":"
+		       << jsonString(equipmentDecisionRuleName(equipment->rule));
 	}
 	emit("goal_selection", position, fields.str());
 	if (selected->goal == TopLevelGoal::Departure) {
@@ -1178,6 +1203,8 @@ bool PlayerBotController::selectTopLevelGoal(Player& player, const Position& pos
 		beginPickupReward(player, position, std::move(reward), std::move(rewardSteps));
 	} else if (selected->goal == TopLevelGoal::LearnSpell) {
 		beginSpellTraining(player, position, std::move(spellTraining), std::move(spellTrainingSteps));
+	} else if (selected->goal == TopLevelGoal::BuyEquipment) {
+		beginEquipmentPurchase(player, position, *equipment);
 	} else if (selected->goal == TopLevelGoal::Service) {
 		beginService(&player, position, "goal_selected");
 	} else {
@@ -1190,7 +1217,8 @@ const char* PlayerBotController::objectiveName() const
 {
 	return progressionObjective == ProgressionObjective::OracleDeparture ? "oracle_departure" :
 	       progressionObjective == ProgressionObjective::PickupReward ? "pickup_reward" :
-	       progressionObjective == ProgressionObjective::LearnSpell ? "learn_spell" : cyclePhaseName();
+	       progressionObjective == ProgressionObjective::LearnSpell ? "learn_spell" :
+	       progressionObjective == ProgressionObjective::BuyEquipment ? "buy_equipment" : cyclePhaseName();
 }
 
 void PlayerBotController::finishProgressionObjective(Player* player, const Position& position, const char* result, const char* reason,
@@ -1387,5 +1415,7 @@ void PlayerBotController::processProgression(Player* player, const Position& cur
 		processPickupReward(player, currentPosition);
 	} else if (progressionObjective == ProgressionObjective::LearnSpell) {
 		processSpellTraining(player, currentPosition);
+	} else if (progressionObjective == ProgressionObjective::BuyEquipment) {
+		processEquipmentPurchase(player, currentPosition);
 	}
 }

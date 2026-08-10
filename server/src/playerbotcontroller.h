@@ -79,6 +79,8 @@ namespace playerbot {
 	inline constexpr std::chrono::seconds pickupRewardFailureCooldown(60);
 	inline constexpr std::chrono::minutes spellTrainingSuccessCooldown(5);
 	inline constexpr std::chrono::seconds spellTrainingFailureCooldown(60);
+	inline constexpr std::chrono::minutes equipmentPurchaseSuccessCooldown(5);
+	inline constexpr std::chrono::seconds equipmentPurchaseFailureCooldown(60);
 	// Top-level utilities are comparable arbitration scores. Baselines encode the default priority:
 	// critical healing > departure > capacity service > useful rewards > ordinary service > hunting >
 	// economic pickup. Dynamic service and reward adjustments may cross these baselines. Equal scores
@@ -86,6 +88,7 @@ namespace playerbot {
 	inline constexpr int32_t serviceGoalBaseUtility = 400;
 	inline constexpr int32_t pickupRewardBaseUtility = 650;
 	inline constexpr int32_t spellTrainingGoalUtility = 550;
+	inline constexpr int32_t equipmentPurchaseGoalUtility = 500;
 	inline constexpr int32_t economicPickupBaseUtility = 250;
 	inline constexpr int32_t huntGoalUtility = 300;
 	inline constexpr int32_t oracleDepartureUtility = 950;
@@ -147,6 +150,8 @@ namespace playerbot {
 		bool forceSecondHuntCandidateNodeLimit;
 		bool cancelHuntPlanningAtScoreBarrier;
 		bool forceRepeatedNavigationStepFailures;
+		bool equipmentPurchasesEnabled;
+		bool forceEquipmentPurchaseRejected;
 	};
 
 	std::string jsonString(const std::string& value);
@@ -197,6 +202,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 			PickupReward,
 			OracleDeparture,
 			LearnSpell,
+			BuyEquipment,
 		};
 
 		enum class TopLevelGoal : uint8_t {
@@ -204,6 +210,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 			Service,
 			PickupReward,
 			LearnSpell,
+			BuyEquipment,
 			Hunt,
 		};
 
@@ -270,8 +277,10 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		struct EquipmentOfferEvaluation {
 			uint32_t npcId = 0;
 			Position npcPosition;
+			Position approachPosition;
 			uint16_t itemId = 0;
 			uint32_t price = 0;
+			slots_t slot = CONST_SLOT_WHEREEVER;
 			uint16_t replacedItemId = 0;
 			uint16_t displacedLeftItemId = 0;
 			uint16_t displacedRightItemId = 0;
@@ -279,9 +288,18 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 			EquipmentHuntSummary hunts;
 			bool currentReady = false;
 			bool candidateReady = false;
+			bool carried = false;
 			std::string rejection;
 			EquipmentDecisionRule rule = EquipmentDecisionRule::None;
 			uint32_t travelSteps = 0;
+		};
+
+		enum class EquipmentPurchaseStage : uint8_t {
+			Travel,
+			Purchase,
+			VerifyPurchase,
+			Equip,
+			VerifyEquipment,
 		};
 
 		struct RewardItemInspection {
@@ -576,7 +594,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 
 		std::optional<EquipmentUpgrade> evaluateEquipmentUpgrade(const Player& player, const Item& candidate) const;
 		EquipmentLoadout equipmentLoadout(const Player& player) const;
-		bool applyEquipmentOffer(const Player& player, EquipmentLoadout& loadout, uint16_t itemId,
+		bool applyEquipmentOffer(const Player& player, EquipmentLoadout& loadout, uint16_t itemId, slots_t& slot,
 		                         uint16_t& replacedItemId, uint16_t& displacedLeftItemId, uint16_t& displacedRightItemId,
 		                         std::string& rejection) const;
 		PlayerBotCombatProfile equipmentCombatProfile(const Player& player, const EquipmentLoadout& loadout) const;
@@ -587,7 +605,10 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		void emitEquipmentOffer(const Player& player, const EquipmentOfferEvaluation& evaluation,
 		                       const PlayerBotCombatProfile& currentProfile, const EquipmentHuntSummary& currentHunts,
 		                       uint64_t reserve, const Position& position, const char* result, const char* reason) const;
-		void evaluateEquipmentOffers(Player& player, const Position& position);
+		std::optional<EquipmentOfferEvaluation> evaluateEquipmentOffers(Player& player, const Position& position);
+		void beginEquipmentPurchase(Player& player, const Position& position, EquipmentOfferEvaluation evaluation);
+		void processEquipmentPurchase(Player* player, const Position& position);
+		void finishEquipmentPurchase(Player* player, const Position& position, const char* result, const char* reason);
 
 		std::string rewardItemSignature(const Item& item) const;
 
@@ -662,7 +683,8 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		GoalCandidate serviceGoalCandidate(const Player& player) const;
 
 		void emitGoalCandidate(const Player& player, const GoalCandidate& candidate, const Position& position, const char* decisionReason,
-		                       const PickupReward* reward = nullptr, const DeparturePlan* departure = nullptr) const;
+		                       const PickupReward* reward = nullptr, const DeparturePlan* departure = nullptr,
+		                       const EquipmentOfferEvaluation* equipment = nullptr) const;
 
 		void beginPickupReward(Player& player, const Position& position, PickupReward reward,
 		                       std::deque<PlayerBotNavigationStep> rewardSteps);
@@ -849,10 +871,13 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		PickupReward pickupReward;
 		DeparturePlan departurePlan;
 		SpellTrainingPlan spellTrainingPlan;
+		EquipmentOfferEvaluation equipmentPurchase;
+		EquipmentPurchaseStage equipmentPurchaseStage = EquipmentPurchaseStage::Travel;
 		TopLevelGoal activeGoal = TopLevelGoal::Service;
 		uint64_t goalDecisionId = 0;
 		std::chrono::steady_clock::time_point pickupRewardCooldownUntil;
 		std::chrono::steady_clock::time_point spellTrainingCooldownUntil;
+		std::chrono::steady_clock::time_point equipmentPurchaseCooldownUntil;
 		uint32_t progressionAttempts = 0;
 		uint32_t pendingRewardItemCount = 0;
 		uint32_t pendingRewardRootCount = 0;
@@ -863,6 +888,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		std::map<uint16_t, std::string> rewardInspectionFingerprints;
 		uint16_t pendingEquipmentItemId = 0;
 		uint32_t pendingEquipmentItemCount = 0;
+		std::map<uint16_t, uint32_t> pendingEquipmentDisplacedCounts;
 		uint16_t pendingReadinessItemId = 0;
 		slots_t pendingReadinessSlot = CONST_SLOT_WHEREEVER;
 		uint32_t pendingReadinessAttempts = 0;

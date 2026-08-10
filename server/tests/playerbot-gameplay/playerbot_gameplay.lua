@@ -21,6 +21,7 @@ local healingPotionCount = 3
 local starterArmorId = 2650
 local starterWeaponId = 2382
 local pickupRewardId = 2384
+local equipmentPurchaseItemId = 2379
 local pickupRewardStorage = 64120
 local nestedRewardStorage = 50083
 local nestedRewardRootId = 1994
@@ -102,6 +103,36 @@ local function verifyEquipmentShadow(playerId, mode, money, leftItemId, rightIte
         armor and armor:getId() == armorItemId and current.x == position.x and current.y == position.y and current.z == position.z,
         "equipment shadow fixture mutated player state")
     print("PLAYERBOT_GAMEPLAY_TEST " .. string.upper(mode) .. "_PASS")
+end
+
+local function verifyEquipmentPurchase(playerId, rejected, resumed, attempts)
+    local player = Player(playerId)
+    assert(player and not player:isRemoved(), "Bot One disappeared during equipment purchase fixture")
+    local left = player:getSlotItem(CONST_SLOT_LEFT)
+    local right = player:getSlotItem(CONST_SLOT_RIGHT)
+    local equippedId = left and left:getId() == equipmentPurchaseItemId and equipmentPurchaseItemId or
+        right and right:getId() == equipmentPurchaseItemId and equipmentPurchaseItemId or 0
+    local totalMoney = player:getMoney() + player:getBankBalance()
+	local complete = rejected and equippedId == 0 and left and left:getId() == starterWeaponId and
+		player:getItemCount(equipmentPurchaseItemId) == 0 and totalMoney == 210 or
+		not rejected and equippedId == equipmentPurchaseItemId and player:getItemCount(starterWeaponId) == 1 and
+		totalMoney == 205
+	if not complete and attempts > 0 then
+		addEvent(verifyEquipmentPurchase, 500, playerId, rejected, resumed, attempts - 1)
+        return
+    end
+    assert(complete, "equipment purchase fixture did not reach the expected persisted state")
+	print("PLAYERBOT_GAMEPLAY_TEST EQUIPMENT_BUY" .. (rejected and "_REJECTED" or resumed and "_RESUME" or "") .. "_PASS")
+end
+
+local function verifyEquipmentPurchaseSpace(playerId)
+	local player = Player(playerId)
+	assert(player and not player:isRemoved(), "Bot One disappeared during equipment storage fixture")
+	local left = player:getSlotItem(CONST_SLOT_LEFT)
+	assert(left and left:getId() == starterWeaponId and player:getItemCount(equipmentPurchaseItemId) == 0 and
+		player:getMoney() + player:getBankBalance() == 210,
+		"equipment storage rejection mutated equipment or money")
+	print("PLAYERBOT_GAMEPLAY_TEST EQUIPMENT_BUY_SPACE_PASS")
 end
 
 local function verifyOracleDeparture(playerId, attempts)
@@ -579,12 +610,25 @@ function login.onLogin(player)
         mode == "stamina_normal" or mode == "hunt_planning" or mode == "readiness_ready" or
         mode == "readiness_upgrade" or mode == "readiness_missing_weapon" or mode == "readiness_supplies" or
 		mode == "readiness_retention" or mode == "equipment_shadow" or mode == "equipment_shadow_unaffordable" or
-		mode == "equipment_shadow_no_upgrade",
+		mode == "equipment_shadow_no_upgrade" or mode == "equipment_buy" or mode == "equipment_buy_resume" or
+		mode == "equipment_buy_space" or
+		mode == "equipment_buy_rejected",
 		"unknown PLAYERBOT_GAMEPLAY_MODE: " .. mode)
-	if mode == "equipment_shadow" or mode == "equipment_shadow_unaffordable" or mode == "equipment_shadow_no_upgrade" then
+	if mode == "equipment_shadow" or mode == "equipment_shadow_unaffordable" or mode == "equipment_shadow_no_upgrade" or
+		mode == "equipment_buy" or mode == "equipment_buy_resume" or mode == "equipment_buy_space" or
+		mode == "equipment_buy_rejected" then
 		local town = player:getTown()
 		assert(player:getLevel() == 8 and player:getVocation():getId() == 4 and town and town:getId() == thaisTownId,
 			"equipment shadow fixture did not load the level-8 Thais Knight")
+		local currentLeft = player:getSlotItem(CONST_SLOT_LEFT)
+		local currentRight = player:getSlotItem(CONST_SLOT_RIGHT)
+		if mode == "equipment_buy" and ((currentLeft and currentLeft:getId() == equipmentPurchaseItemId) or
+			(currentRight and currentRight:getId() == equipmentPurchaseItemId)) then
+			assert(player:getItemCount(starterWeaponId) == 1 and player:getMoney() + player:getBankBalance() == 205,
+				"equipment purchase restart did not preserve equipment and economy")
+			print("PLAYERBOT_GAMEPLAY_TEST EQUIPMENT_BUY_RESTART_PASS")
+			return true
+		end
 		if mode ~= "equipment_shadow_no_upgrade" then
 			local weapon = player:getSlotItem(CONST_SLOT_LEFT)
 			assert(weapon and weapon:remove(), "equipment shadow fixture could not clear the equipped sword")
@@ -603,14 +647,40 @@ function login.onLogin(player)
 			assert(backpack and backpack:addItem(2152, 20), "equipment shadow fixture could not add surplus money")
 		elseif mode == "equipment_shadow_unaffordable" then
 			removeAll(player, ITEM_GOLD_COIN)
+		elseif mode == "equipment_buy_resume" then
+			removeAll(player, equipmentPurchaseItemId)
+			removeAll(player, ITEM_GOLD_COIN)
+			local backpack = player:getSlotItem(CONST_SLOT_BACKPACK)
+			assert(player:getBankBalance() == 100 and backpack and backpack:addItem(ITEM_GOLD_COIN, 105) and
+				backpack:addItem(equipmentPurchaseItemId, 1),
+				"equipment resume fixture could not set persisted purchase state")
+		else
+			removeAll(player, equipmentPurchaseItemId)
+			removeAll(player, ITEM_GOLD_COIN)
+			local backpack = player:getSlotItem(CONST_SLOT_BACKPACK)
+			assert(player:getBankBalance() == 100 and backpack and backpack:addItem(ITEM_GOLD_COIN, 110),
+				"equipment purchase fixture could not set the bounded surplus")
+			if mode == "equipment_buy_space" then
+				player:setCapacity(100000)
+				while backpack:getSize() < backpack:getCapacity() - 1 do
+					assert(backpack:addItem(ITEM_BAG, 1), "equipment storage fixture could not fill the backpack")
+				end
+			end
 		end
 		suppressNearbyMonsters(player:getId())
 		local left = player:getSlotItem(CONST_SLOT_LEFT)
 		local right = player:getSlotItem(CONST_SLOT_RIGHT)
 		local armor = player:getSlotItem(CONST_SLOT_ARMOR)
 		assert(left and armor, "equipment shadow fixture lost required equipment")
-		addEvent(verifyEquipmentShadow, 250, player:getId(), mode, player:getMoney(), left:getId(),
-			right and right:getId() or 0, armor:getId(), player:getPosition())
+		if mode == "equipment_buy_space" then
+			addEvent(verifyEquipmentPurchaseSpace, 20000, player:getId())
+		elseif mode == "equipment_buy" or mode == "equipment_buy_resume" or mode == "equipment_buy_rejected" then
+			addEvent(verifyEquipmentPurchase, 500, player:getId(), mode == "equipment_buy_rejected",
+				mode == "equipment_buy_resume", 360)
+		else
+			addEvent(verifyEquipmentShadow, 250, player:getId(), mode, player:getMoney(), left:getId(),
+				right and right:getId() or 0, armor:getId(), player:getPosition())
+		end
 		print("PLAYERBOT_GAMEPLAY_TEST " .. string.upper(mode) .. "_START")
 		return true
 	end

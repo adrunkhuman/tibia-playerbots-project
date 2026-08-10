@@ -14,6 +14,7 @@ param(
 	[switch]$HuntRegionPlanning,
 	[switch]$CombatReadiness,
 	[switch]$EquipmentOffers,
+	[switch]$EquipmentPurchases,
 	[switch]$Depot,
 	[switch]$MainlandLoop,
 	[switch]$SpellTraining,
@@ -968,6 +969,64 @@ function Assert-EquipmentOfferEvents {
     }
 }
 
+function Assert-EquipmentPurchaseEvents {
+	param([string]$Logs, [switch]$Rejected, [switch]$Restart, [switch]$Resume)
+
+	$events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
+	$purchases = @($events | Where-Object {
+		$_.event -eq "action_result" -and $_.action -eq "buy_equipment" -and $_.result -eq "success"
+	})
+	$equips = @($events | Where-Object {
+		$_.event -eq "action_result" -and $_.action -eq "equip_equipment" -and $_.result -eq "success"
+	})
+	$results = @($events | Where-Object {
+		$_.event -eq "goal_result" -and $_.goal -eq "buy_equipment"
+	})
+	$terminal = @($events | Where-Object { $_.event -eq "terminal" })
+	if ($Restart) {
+		$online = @($events | Where-Object {
+			$_.event -eq "lifecycle" -and $_.status -eq "online" -and -not $_.recovered -and $_.objective -eq "service"
+		})
+		if ($online.Count -ne 1 -or $purchases.Count -ne 0 -or $equips.Count -ne 0 -or $terminal.Count -ne 0) {
+			throw "Equipment purchase restart reconstruction failed. online=$($online.Count), purchases=$($purchases.Count), equips=$($equips.Count), terminal=$($terminal.Count)."
+		}
+		return
+	}
+	if ($Rejected) {
+		$fallback = @($events | Where-Object {
+			$_.event -eq "goal_selection" -and $_.decision_reason -eq "equipment_purchase_failed" -and
+			$_.from_goal -eq "buy_equipment" -and $_.to_goal -ne "buy_equipment"
+		})
+		if ($results.Count -ne 1 -or $results[0].result -ne "failed" -or
+			$results[0].reason -ne "transaction_rejected" -or $fallback.Count -ne 1 -or
+			$purchases.Count -ne 0 -or $equips.Count -ne 0 -or $terminal.Count -ne 0) {
+			throw "Rejected equipment transaction did not preserve state and return to a valid goal."
+		}
+		return
+	}
+	if ($Resume) {
+		$selections = @($events | Where-Object {
+			$_.event -eq "strategy_selection" -and $_.goal -eq "buy_equipment" -and
+			$_.item_id -eq 2379 -and $_.acquisition -eq "carried"
+		})
+		if ($selections.Count -ne 1 -or $purchases.Count -ne 0 -or $equips.Count -ne 1 -or
+			$results.Count -ne 1 -or $results[0].result -ne "success" -or $terminal.Count -ne 0) {
+			throw "Persisted equipment purchase state was not reconstructed as an equip-only goal."
+		}
+		return
+	}
+	$selections = @($events | Where-Object {
+		$_.event -eq "goal_selection" -and $_.to_goal -eq "buy_equipment" -and $_.item_id -eq 2379 -and $_.price -eq 5
+	})
+	if ($selections.Count -ne 1 -or $purchases.Count -ne 1 -or $equips.Count -ne 1 -or
+		$results.Count -ne 1 -or $results[0].result -ne "success" -or
+		$purchases[0].carried_before -ne 110 -or $purchases[0].carried_after -ne 105 -or
+		$purchases[0].bank_before -ne 100 -or $purchases[0].bank_after -ne 100 -or
+		-not $equips[0].combat_ready -or -not $equips[0].displaced_items_preserved -or $terminal.Count -ne 0) {
+		throw "Justified equipment purchase was not selected, paid, equipped, and verified exactly once."
+	}
+}
+
 function Assert-GoalArbitrationInterruptEvents {
     param([string]$Logs)
 
@@ -1371,7 +1430,7 @@ if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
 
 $focusedScenarioRequested = $FullNavigation -or $TargetPursuit -or $CorpseLoot -or $DeathTelemetry -or $Healing -or $ValueLoot -or
 	$PickupProgression -or $GoalArbitration -or $OracleDeparture -or $StaminaProjection -or $HuntRegionPlanning -or
-	$CombatReadiness -or $EquipmentOffers -or $Depot -or $MainlandLoop -or $SpellTraining -or $SpellUse
+	$CombatReadiness -or $EquipmentOffers -or $EquipmentPurchases -or $Depot -or $MainlandLoop -or $SpellTraining -or $SpellUse
 if ($Focused -and -not $focusedScenarioRequested) {
 	throw "-Focused requires at least one focused scenario switch."
 }
@@ -1743,6 +1802,78 @@ try {
             Assert-EquipmentOfferEvents -Logs $noUpgradeLogs -Mode "no_upgrade"
         }
     }
+
+	if ($EquipmentPurchases) {
+		Invoke-Scenario -Name "equipment_purchase" -DefaultTimeoutSeconds 240 -Body {
+			Invoke-Compose down --volumes --remove-orphans
+			$env:PLAYERBOT_GAMEPLAY_MODE = "equipment_buy"
+			$env:PLAYERBOT_HUNT_DURATION_SECONDS = "900"
+			Invoke-Compose up --detach
+			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST EQUIPMENT_BUY_PASS' | Out-Null
+			$purchaseLogs = Wait-ForPlayerbotEvent {
+				$_.event -eq "goal_result" -and $_.goal -eq "buy_equipment" -and $_.result -eq "success"
+			}
+			Assert-EquipmentPurchaseEvents -Logs $purchaseLogs
+
+			$restartLineCount = @((Get-ServerLogs) -split "`r?`n").Count
+			Invoke-Compose stop server
+			Invoke-Compose up --detach server
+			$restartLogs = ""
+			while ([DateTime]::UtcNow -lt $currentScenarioDeadline) {
+				$restartLogs = ((Get-ServerLogs) -split "`r?`n" | Select-Object -Skip $restartLineCount) -join "`n"
+				$restartOnline = @(ConvertFrom-PlayerbotLogs -Logs $restartLogs | Where-Object {
+					$_.event -eq "lifecycle" -and $_.status -eq "online" -and -not $_.recovered -and $_.objective -eq "service"
+				}).Count -gt 0
+				if ($restartLogs -match 'PLAYERBOT_GAMEPLAY_TEST EQUIPMENT_BUY_RESTART_PASS' -and $restartOnline) { break }
+				Start-Sleep -Seconds 1
+			}
+			if ($restartLogs -notmatch 'PLAYERBOT_GAMEPLAY_TEST EQUIPMENT_BUY_RESTART_PASS' -or -not $restartOnline) {
+				Throw-WaitTimeout "Timed out waiting for equipment purchase restart reconstruction."
+			}
+			Assert-EquipmentPurchaseEvents -Logs $restartLogs -Restart
+		}
+		Invoke-Scenario -Name "equipment_purchase_resume" -DefaultTimeoutSeconds 240 -Body {
+			Invoke-Compose down --volumes --remove-orphans
+			$env:PLAYERBOT_GAMEPLAY_MODE = "equipment_buy_resume"
+			$env:PLAYERBOT_HUNT_DURATION_SECONDS = "900"
+			Invoke-Compose up --detach
+			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST EQUIPMENT_BUY_RESUME_PASS' | Out-Null
+			$resumeLogs = Wait-ForPlayerbotEvent {
+				$_.event -eq "goal_result" -and $_.goal -eq "buy_equipment" -and $_.result -eq "success"
+			}
+			Assert-EquipmentPurchaseEvents -Logs $resumeLogs -Resume
+		}
+		Invoke-Scenario -Name "equipment_purchase_space" -DefaultTimeoutSeconds 240 -Body {
+			Invoke-Compose down --volumes --remove-orphans
+			$env:PLAYERBOT_GAMEPLAY_MODE = "equipment_buy_space"
+			$env:PLAYERBOT_HUNT_DURATION_SECONDS = "900"
+			Invoke-Compose up --detach
+			$spaceLogs = Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST EQUIPMENT_BUY_SPACE_PASS'
+			$spaceEvents = @(ConvertFrom-PlayerbotLogs -Logs $spaceLogs)
+			$spaceRejections = @($spaceEvents | Where-Object {
+				$_.event -eq "equipment_offer_candidate" -and $_.item_id -eq 2379 -and
+				$_.reason -eq "insufficient_displaced_item_space"
+			})
+			$spaceActions = @($spaceEvents | Where-Object {
+				$_.event -eq "action_result" -and $_.action -in @("buy_equipment", "equip_equipment")
+			})
+			if ($spaceRejections.Count -lt 1 -or $spaceActions.Count -ne 0) {
+				throw "Equipment purchase did not reject insufficient displaced-item storage before payment."
+			}
+		}
+		Invoke-Scenario -Name "equipment_purchase_rejected" -DefaultTimeoutSeconds 240 -Body {
+			Invoke-Compose down --volumes --remove-orphans
+			$env:PLAYERBOT_GAMEPLAY_MODE = "equipment_buy_rejected"
+			$env:PLAYERBOT_HUNT_DURATION_SECONDS = "900"
+			Invoke-Compose up --detach
+			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST EQUIPMENT_BUY_REJECTED_PASS' | Out-Null
+			$rejectedLogs = Wait-ForPlayerbotEvent {
+				$_.event -eq "goal_selection" -and $_.decision_reason -eq "equipment_purchase_failed" -and
+				$_.from_goal -eq "buy_equipment" -and $_.to_goal -ne "buy_equipment"
+			}
+			Assert-EquipmentPurchaseEvents -Logs $rejectedLogs -Rejected
+		}
+	}
 
     if ($OracleDeparture) {
         Invoke-Scenario -Name "oracle_departure" -DefaultTimeoutSeconds 180 -Body {
