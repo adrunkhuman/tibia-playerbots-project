@@ -22,7 +22,6 @@ namespace {
 	constexpr size_t maximumEquipmentProviderApproaches = 4;
 	constexpr uint64_t maximumEquipmentProviderPathNodes = 5000;
 	constexpr size_t maximumEquipmentCatalogOffers = 64;
-	constexpr size_t maximumEquipmentUniqueItems = 16;
 
 	skills_t skillForWeapon(WeaponType_t weaponType)
 	{
@@ -251,6 +250,64 @@ PlayerBotController::EquipmentHuntSummary PlayerBotController::equipmentHuntSumm
 	return summary;
 }
 
+PlayerBotController::EquipmentOfferEvaluation PlayerBotController::evaluateEquipmentCandidate(
+	Player& player, uint16_t itemId, const EquipmentLoadout& currentLoadout,
+	const PlayerBotCombatProfile& currentProfile, const EquipmentHuntSummary& currentHunts,
+	bool currentReady, uint32_t additionalWeight, bool allowSimulation) const
+{
+	EquipmentOfferEvaluation evaluation;
+	evaluation.itemId = itemId;
+	evaluation.currentReady = currentReady;
+	EquipmentLoadout candidateLoadout = currentLoadout;
+	if (!applyEquipmentOffer(player, candidateLoadout, itemId, evaluation.slot, evaluation.replacedItemId,
+	                         evaluation.displacedLeftItemId, evaluation.displacedRightItemId,
+	                         evaluation.rejection)) {
+		evaluation.profile = currentProfile;
+		evaluation.hunts = currentHunts;
+		return evaluation;
+	}
+	if (!allowSimulation) {
+		evaluation.profile = currentProfile;
+		evaluation.hunts = currentHunts;
+		evaluation.rejection = "unique_item_evaluation_budget_exhausted";
+		return evaluation;
+	}
+
+	evaluation.simulated = true;
+	evaluation.profile = equipmentCombatProfile(player, candidateLoadout);
+	evaluation.hunts = equipmentHuntSummary(player, evaluation.profile);
+	evaluation.candidateReady = equipmentLoadoutReady(player, candidateLoadout, additionalWeight);
+	const int32_t currentMaximumDamage = Weapons::getMaxWeaponDamage(
+		currentProfile.level, currentProfile.attackSkill, currentProfile.attack, currentProfile.attackFactor);
+	const int32_t candidateMaximumDamage = Weapons::getMaxWeaponDamage(
+		evaluation.profile.level, evaluation.profile.attackSkill, evaluation.profile.attack,
+		evaluation.profile.attackFactor);
+	const bool noWorse = evaluation.profile.armor >= currentProfile.armor &&
+	                     evaluation.profile.defense >= currentProfile.defense &&
+	                     candidateMaximumDamage >= currentMaximumDamage &&
+	                     evaluation.hunts.suitableRegions >= currentHunts.suitableRegions &&
+	                     evaluation.hunts.lowestThreatRatio <= currentHunts.lowestThreatRatio &&
+	                     evaluation.hunts.bestProjectedExperience >= currentHunts.bestProjectedExperience;
+	const bool better = evaluation.profile.armor > currentProfile.armor ||
+	                    evaluation.profile.defense > currentProfile.defense ||
+	                    candidateMaximumDamage > currentMaximumDamage ||
+	                    evaluation.hunts.suitableRegions > currentHunts.suitableRegions ||
+	                    evaluation.hunts.lowestThreatRatio < currentHunts.lowestThreatRatio ||
+	                    evaluation.hunts.bestProjectedExperience > currentHunts.bestProjectedExperience;
+	if (currentReady && !evaluation.candidateReady) {
+		evaluation.rejection = "regresses_readiness";
+	} else if (!noWorse) {
+		evaluation.rejection = better ? "ambiguous_tradeoff" : "non_improving";
+	} else if (!better) {
+		evaluation.rejection = "non_improving";
+	} else {
+		evaluation.rule = !currentReady && evaluation.candidateReady ? EquipmentDecisionRule::ReadinessRepair :
+		                  evaluation.hunts.suitableRegions > currentHunts.suitableRegions ? EquipmentDecisionRule::UnlocksHunt :
+		                  EquipmentDecisionRule::ParetoImprovement;
+	}
+	return evaluation;
+}
+
 const char* PlayerBotController::equipmentDecisionRuleName(EquipmentDecisionRule rule) const
 {
 	switch (rule) {
@@ -399,95 +456,31 @@ std::optional<PlayerBotController::EquipmentOfferEvaluation> PlayerBotController
 			}
 			++catalogOffers;
 			EquipmentOfferEvaluation evaluation;
-			evaluation.npcId = npc->getID();
-			evaluation.npcPosition = npc->getPosition();
-			evaluation.itemId = offer.itemId;
-			evaluation.price = offer.buyPrice;
-			evaluation.currentReady = currentReady;
-			evaluation.carried = g_game.findItemOfType(&player, offer.itemId, true) != nullptr;
+			const bool carried = g_game.findItemOfType(&player, offer.itemId, true) != nullptr;
 			if (auto item = evaluatedItems.find(offer.itemId); item != evaluatedItems.end()) {
 				evaluation = item->second;
-				evaluation.npcId = npc->getID();
-				evaluation.npcPosition = npc->getPosition();
-				evaluation.price = offer.buyPrice;
 			} else {
-				EquipmentLoadout candidateLoadout = currentLoadout;
-				std::string rejection;
-				if (!applyEquipmentOffer(player, candidateLoadout, offer.itemId, evaluation.slot, evaluation.replacedItemId,
-				                         evaluation.displacedLeftItemId,
-				                         evaluation.displacedRightItemId, rejection)) {
-					evaluation.profile = currentProfile;
-					evaluation.hunts = currentHunts;
-					evaluation.rejection = rejection;
-					evaluatedItems.emplace(offer.itemId, evaluation);
-					emitEquipmentOffer(player, evaluation, currentProfile, currentHunts, reserve, position, "rejected", rejection.c_str());
-					continue;
+				evaluation = evaluateEquipmentCandidate(player, offer.itemId, currentLoadout, currentProfile,
+				                                        currentHunts, currentReady,
+				                                        carried ? 0 : Item::items[offer.itemId].weight,
+				                                        simulatedItems < maximumEquipmentCandidateSimulations);
+				if (evaluation.simulated) {
+					++simulatedItems;
 				}
-				if (!evaluation.carried && Item::items[offer.itemId].weight > player.getFreeCapacity()) {
-					evaluation.profile = currentProfile;
-					evaluation.hunts = currentHunts;
-					evaluation.rejection = "insufficient_capacity";
-					evaluatedItems.emplace(offer.itemId, evaluation);
-					emitEquipmentOffer(player, evaluation, currentProfile, currentHunts, reserve, position, "rejected", "insufficient_capacity");
-					continue;
-				}
-				if (simulatedItems >= maximumEquipmentUniqueItems) {
-					evaluation.profile = currentProfile;
-					evaluation.hunts = currentHunts;
-					emitEquipmentOffer(player, evaluation, currentProfile, currentHunts, reserve, position, "rejected",
-					                   "unique_item_evaluation_budget_exhausted");
-					continue;
-				}
-				++simulatedItems;
-				evaluation.profile = equipmentCombatProfile(player, candidateLoadout);
-				evaluation.hunts = equipmentHuntSummary(player, evaluation.profile);
-				evaluation.candidateReady = equipmentLoadoutReady(
-				    player, candidateLoadout, evaluation.carried ? 0 : Item::items[offer.itemId].weight);
-				const int32_t currentMaximumDamage = Weapons::getMaxWeaponDamage(currentProfile.level, currentProfile.attackSkill,
-				                                                                   currentProfile.attack, currentProfile.attackFactor);
-				const int32_t candidateMaximumDamage = Weapons::getMaxWeaponDamage(evaluation.profile.level,
-				                                                                     evaluation.profile.attackSkill,
-				                                                                     evaluation.profile.attack,
-				                                                                     evaluation.profile.attackFactor);
-				const bool noWorse = evaluation.profile.armor >= currentProfile.armor &&
-				                     evaluation.profile.defense >= currentProfile.defense &&
-				                     candidateMaximumDamage >= currentMaximumDamage &&
-				                     evaluation.hunts.suitableRegions >= currentHunts.suitableRegions &&
-				                     evaluation.hunts.lowestThreatRatio <= currentHunts.lowestThreatRatio &&
-				                     evaluation.hunts.bestProjectedExperience >= currentHunts.bestProjectedExperience;
-				const bool better = evaluation.profile.armor > currentProfile.armor ||
-				                    evaluation.profile.defense > currentProfile.defense ||
-				                    candidateMaximumDamage > currentMaximumDamage ||
-				                    evaluation.hunts.suitableRegions > currentHunts.suitableRegions ||
-				                    evaluation.hunts.lowestThreatRatio < currentHunts.lowestThreatRatio ||
-				                    evaluation.hunts.bestProjectedExperience > currentHunts.bestProjectedExperience;
-				if (currentReady && !evaluation.candidateReady) {
-					evaluation.rejection = "regresses_readiness";
-					evaluatedItems.emplace(offer.itemId, evaluation);
-					emitEquipmentOffer(player, evaluation, currentProfile, currentHunts, reserve, position, "rejected", "regresses_readiness");
-					continue;
-				}
-				if (!noWorse) {
-					evaluation.rejection = better ? "ambiguous_tradeoff" : "non_improving";
-					evaluatedItems.emplace(offer.itemId, evaluation);
-					emitEquipmentOffer(player, evaluation, currentProfile, currentHunts, reserve, position, "rejected",
-					                   better ? "ambiguous_tradeoff" : "non_improving");
-					continue;
-				}
-				if (!better) {
-					evaluation.rejection = "non_improving";
-					evaluatedItems.emplace(offer.itemId, evaluation);
-					emitEquipmentOffer(player, evaluation, currentProfile, currentHunts, reserve, position, "rejected", "non_improving");
-					continue;
-				}
-				evaluation.rule = !currentReady && evaluation.candidateReady ? EquipmentDecisionRule::ReadinessRepair :
-				                  evaluation.hunts.suitableRegions > currentHunts.suitableRegions ? EquipmentDecisionRule::UnlocksHunt :
-				                  EquipmentDecisionRule::ParetoImprovement;
 				evaluatedItems.emplace(offer.itemId, evaluation);
 			}
+			evaluation.npcId = npc->getID();
+			evaluation.npcPosition = npc->getPosition();
+			evaluation.price = offer.buyPrice;
+			evaluation.carried = carried;
 			if (!evaluation.rejection.empty()) {
 				emitEquipmentOffer(player, evaluation, currentProfile, currentHunts, reserve, position, "rejected",
 				                   evaluation.rejection.c_str());
+				continue;
+			}
+			if (!evaluation.carried && Item::items[offer.itemId].weight > player.getFreeCapacity()) {
+				emitEquipmentOffer(player, evaluation, currentProfile, currentHunts, reserve, position, "rejected",
+				                   "insufficient_capacity");
 				continue;
 			}
 			Item* backpackItem = player.getInventoryItem(CONST_SLOT_BACKPACK);

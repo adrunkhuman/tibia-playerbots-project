@@ -22,6 +22,8 @@ local starterArmorId = 2650
 local starterWeaponId = 2382
 local pickupRewardId = 2384
 local equipmentPurchaseItemId = 2379
+local mainlandRewardItemId = 2483
+local mainlandRewardStorage = 50076
 local pickupRewardStorage = 64120
 local nestedRewardStorage = 50083
 local nestedRewardRootId = 1994
@@ -525,6 +527,23 @@ local function verifyEconomicPickupProgression(playerId, attempts)
     print("PLAYERBOT_GAMEPLAY_TEST PICKUP_PROGRESSION_BUNDLE_PASS")
 end
 
+local function verifyMainlandReward(playerId, attempts)
+    local player = Player(playerId)
+    assert(player and not player:isRemoved(), "Bot One disappeared during mainland reward progression")
+    local armor = player:getSlotItem(CONST_SLOT_ARMOR)
+    local equipped = armor and armor:getId() == mainlandRewardItemId
+    local complete = player:getStorageValue(mainlandRewardStorage) == 1 and equipped
+    if not complete and attempts > 0 then
+        addEvent(verifyMainlandReward, 500, playerId, attempts - 1)
+        return
+    end
+    assert(player:getStorageValue(mainlandRewardStorage) == 1, "mainland reward storage was not persisted")
+    assert(equipped, "mainland scale armor reward was not equipped")
+    assert(player:getItemCount(starterArmorId) == 1, "displaced jacket was not preserved")
+    assert(player:getItemCount(1987) >= 1, "mainland reward bag was not preserved")
+    print("PLAYERBOT_GAMEPLAY_TEST MAINLAND_REWARD_PASS")
+end
+
 local function triggerArbitrationInterrupt(playerId)
     local player = Player(playerId)
     assert(player and not player:isRemoved(), "Bot One disappeared before the arbitration interrupt")
@@ -612,7 +631,7 @@ function login.onLogin(player)
 		mode == "readiness_retention" or mode == "equipment_shadow" or mode == "equipment_shadow_unaffordable" or
 		mode == "equipment_shadow_no_upgrade" or mode == "equipment_buy" or mode == "equipment_buy_resume" or
 		mode == "equipment_buy_space" or
-		mode == "equipment_buy_rejected",
+		mode == "equipment_buy_rejected" or mode == "mainland_reward",
 		"unknown PLAYERBOT_GAMEPLAY_MODE: " .. mode)
 	if mode == "equipment_shadow" or mode == "equipment_shadow_unaffordable" or mode == "equipment_shadow_no_upgrade" or
 		mode == "equipment_buy" or mode == "equipment_buy_resume" or mode == "equipment_buy_space" or
@@ -693,6 +712,32 @@ function login.onLogin(player)
 		local backpack = player:getSlotItem(CONST_SLOT_BACKPACK)
 		assert(backpack and backpack:addItem(2696, 1), "mainland fixture could not seed local-service loot")
 		print("PLAYERBOT_GAMEPLAY_TEST MAINLAND_START")
+		return true
+	end
+	if mode == "mainland_reward" then
+		local town = player:getTown()
+		assert(player:getLevel() == 8 and player:getVocation():getId() == 4 and town and town:getId() == thaisTownId,
+			"mainland reward fixture did not load the level-8 Thais Knight")
+		if player:getStorageValue(mainlandRewardStorage) == 1 then
+			local armor = player:getSlotItem(CONST_SLOT_ARMOR)
+			assert(armor and armor:getId() == mainlandRewardItemId and player:getItemCount(starterArmorId) == 1 and
+				player:getItemCount(1987) >= 1, "mainland reward restart did not preserve the complete equipped bundle")
+			print("PLAYERBOT_GAMEPLAY_TEST MAINLAND_REWARD_RESTART_PASS")
+			return true
+		end
+		assert(player:getStorageValue(mainlandRewardStorage) == -1,
+			"mainland reward fixture expected an unclaimed scale armor reward")
+		local armor = player:getSlotItem(CONST_SLOT_ARMOR)
+		if armor then assert(armor:remove(), "mainland reward fixture could not clear the armor slot") end
+		removeAll(player, starterArmorId)
+		assert(player:addItem(starterArmorId, 1, false, 1, CONST_SLOT_ARMOR),
+			"mainland reward fixture could not equip the jacket")
+		assert(player:setCapacity(100000), "mainland reward fixture could not increase capacity")
+		assert(player:teleportTo(Position(32356, 32130, 9)),
+			"mainland reward fixture could not approach the scale armor reward")
+		suppressNearbyMonsters(player:getId())
+		addEvent(verifyMainlandReward, 500, player:getId(), 360)
+		print("PLAYERBOT_GAMEPLAY_TEST MAINLAND_REWARD_START")
 		return true
 	end
 	if mode == "spell_use" then

@@ -17,6 +17,7 @@
 #include "item.h"
 #include "monsters.h"
 #include "player.h"
+#include "playerbotarea.h"
 #include "playerbotnavigation.h"
 #include "spawn.h"
 #include "tile.h"
@@ -34,7 +35,6 @@ namespace {
 	constexpr int32_t maximumRegionRadius = 24;
 	constexpr uint16_t spawnBucketSize = heatRadius * 2 + 1;
 	constexpr uint32_t maximumRegionDistancePadding = maximumRegionRadius * 2;
-	constexpr uint32_t maximumHuntDistanceFromTemple = 200;
 	constexpr uint32_t maximumHuntTravelDistance = 300;
 	constexpr double maximumThreatRatio = 0.35;
 
@@ -302,17 +302,15 @@ namespace {
 		                                   Position::getDistanceY(player.getPosition(), region.destination) +
 		                                   Position::getDistanceZ(player.getPosition(), region.destination) * 20;
 		const Position& templePosition = player.getTemplePosition();
-		const uint32_t templeDistance = Position::getDistanceX(templePosition, region.destination) +
-		                                Position::getDistanceY(templePosition, region.destination) +
-		                                Position::getDistanceZ(templePosition, region.destination) * 20;
+		const uint32_t templeDistance = playerbot::localPlanningDistance(templePosition, region.destination);
 		region.threatRatio = worstFightDamage / std::max<int32_t>(profile.maximumHealth, 1);
 		region.suitable = region.threatRatio <= maximumThreatRatio &&
-		                  templeDistance <= maximumHuntDistanceFromTemple &&
+		                  playerbot::isInsideLocalPlanningArea(templePosition, region.destination) &&
 		                  geometricDistance <= maximumHuntTravelDistance;
 		if (excludedRegions.find(region.center) != excludedRegions.end()) {
 			region.suitable = false;
 			region.rejectionReason = "observed_danger_cooldown";
-		} else if (templeDistance > maximumHuntDistanceFromTemple || geometricDistance > maximumHuntTravelDistance) {
+		} else if (!playerbot::isInsideLocalPlanningArea(templePosition, region.destination) || geometricDistance > maximumHuntTravelDistance) {
 			region.rejectionReason = "travel_distance";
 		} else if (!region.suitable) {
 			region.rejectionReason = "predicted_damage";
@@ -359,13 +357,11 @@ PlayerBotHuntRegionScan PlayerBotHuntRegionPlanner::beginScan(const Player& play
 	const Position& templePosition = player.getTemplePosition();
 	for (size_t index = 0; index < huntRegionCache.regions.size(); ++index) {
 		const Position& center = huntRegionCache.regions[index].center;
-		const uint32_t templeDistance = Position::getDistanceX(templePosition, center) +
-		                                Position::getDistanceY(templePosition, center) +
-		                                Position::getDistanceZ(templePosition, center) * 20;
+		const uint32_t templeDistance = playerbot::localPlanningDistance(templePosition, center);
 		const uint32_t travelDistance = Position::getDistanceX(player.getPosition(), center) +
 		                                Position::getDistanceY(player.getPosition(), center) +
 		                                Position::getDistanceZ(player.getPosition(), center) * 20;
-		if (templeDistance <= maximumHuntDistanceFromTemple + maximumRegionDistancePadding &&
+		if (templeDistance <= playerbot::maximumLocalPlanningDistance + maximumRegionDistancePadding &&
 		    travelDistance <= maximumHuntTravelDistance + maximumRegionDistancePadding) {
 			scan.candidateIndices.push_back(index);
 		}

@@ -94,6 +94,7 @@ namespace playerbot {
 	inline constexpr int32_t oracleDepartureUtility = 950;
 	inline constexpr int32_t capacityServiceUtility = 900;
 	inline constexpr int32_t criticalHealingServiceUtility = 1000;
+	inline constexpr size_t maximumEquipmentCandidateSimulations = 16;
 	inline constexpr int32_t missingPotionUtility = 15;
 	inline constexpr int32_t missingFoodUtility = 20;
 	inline constexpr int32_t sellableItemUtility = 10;
@@ -289,6 +290,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 			bool currentReady = false;
 			bool candidateReady = false;
 			bool carried = false;
+			bool simulated = false;
 			std::string rejection;
 			EquipmentDecisionRule rule = EquipmentDecisionRule::None;
 			uint32_t travelSteps = 0;
@@ -319,6 +321,8 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 			std::vector<std::string> nonStackableRootSignatures;
 			std::map<uint16_t, uint32_t> stackableRootCounts;
 			std::optional<EquipmentUpgrade> bestUpgrade;
+			std::optional<EquipmentOfferEvaluation> bestEquipment;
+			std::string equipmentRejection;
 			uint16_t bestItemId = 0;
 			uint16_t bestRootOrdinal = 0;
 			std::vector<uint16_t> bestItemPath;
@@ -355,6 +359,9 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 			uint32_t travelSteps = 0;
 			uint32_t estimatedDistance = 0;
 			uint32_t requiredBackpackSlots = 0;
+			uint16_t replacedItemId = 0;
+			uint16_t displacedLeftItemId = 0;
+			uint16_t displacedRightItemId = 0;
 			uint32_t knownUtility = 0;
 			uint32_t itemCount = 0;
 			uint32_t containerCount = 0;
@@ -601,6 +608,13 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		bool equipmentLoadoutReady(const Player& player, const EquipmentLoadout& loadout,
 		                           uint32_t additionalWeight = 0) const;
 		EquipmentHuntSummary equipmentHuntSummary(Player& player, const PlayerBotCombatProfile& profile) const;
+		EquipmentOfferEvaluation evaluateEquipmentCandidate(Player& player, uint16_t itemId,
+		                                                    const EquipmentLoadout& currentLoadout,
+		                                                    const PlayerBotCombatProfile& currentProfile,
+		                                                    const EquipmentHuntSummary& currentHunts,
+		                                                    bool currentReady,
+		                                                    uint32_t additionalWeight = 0,
+		                                                    bool allowSimulation = true) const;
 		const char* equipmentDecisionRuleName(EquipmentDecisionRule rule) const;
 		void emitEquipmentOffer(const Player& player, const EquipmentOfferEvaluation& evaluation,
 		                       const PlayerBotCombatProfile& currentProfile, const EquipmentHuntSummary& currentHunts,
@@ -612,12 +626,29 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 
 		std::string rewardItemSignature(const Item& item) const;
 
-		void inspectRewardItem(const Player& player, const Item& item, uint16_t rootOrdinal,
+		void inspectRewardItem(Player& player, const Item& item, uint16_t rootOrdinal,
 		                       std::vector<uint16_t>& path, const std::string& rootSignature,
-		                       RewardInspection& inspection) const;
+		                       const EquipmentLoadout& currentLoadout,
+		                       const PlayerBotCombatProfile& currentProfile,
+		                       const EquipmentHuntSummary& currentHunts, bool currentReady,
+		                       uint32_t additionalWeight,
+		                       std::map<std::pair<uint16_t, uint32_t>, EquipmentOfferEvaluation>& equipmentEvaluations,
+		                       size_t& simulatedItems, RewardInspection& inspection) const;
 
-		RewardInspection inspectRewardBundle(Player& player, const Container& contents) const;
-		RewardInspection inspectKnownReward(Player& player, const Item& item) const;
+		RewardInspection inspectRewardBundle(Player& player, const Container& contents,
+		                                        const EquipmentLoadout& currentLoadout,
+		                                        const PlayerBotCombatProfile& currentProfile,
+		                                        const EquipmentHuntSummary& currentHunts, bool currentReady,
+		                                        uint32_t additionalWeight,
+		                                        std::map<std::pair<uint16_t, uint32_t>, EquipmentOfferEvaluation>& equipmentEvaluations,
+		                                        size_t& simulatedItems) const;
+		RewardInspection inspectKnownReward(Player& player, const Item& item,
+		                                       const EquipmentLoadout& currentLoadout,
+		                                       const PlayerBotCombatProfile& currentProfile,
+		                                       const EquipmentHuntSummary& currentHunts, bool currentReady,
+		                                       uint32_t additionalWeight,
+		                                       std::map<std::pair<uint16_t, uint32_t>, EquipmentOfferEvaluation>& equipmentEvaluations,
+		                                       size_t& simulatedItems) const;
 		void finalizeRewardInspection(Player& player, RewardInspection& inspection) const;
 
 		std::string rewardInspectionItemsJson(const RewardInspection& inspection) const;
@@ -636,7 +667,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 
 		bool prepareRewardItemAccess(Player& player, const Position& position, Item*& selectedItem, std::string& failure);
 
-		bool isRookgaardRewardPosition(const Position& position) const;
+		bool isRewardPosition(const Player& player, const Position& position) const;
 
 		bool isRewardClaimed(const Player& player, uint16_t uniqueId) const;
 
@@ -886,8 +917,6 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		size_t pendingRewardContainerDepth = SIZE_MAX;
 		uint32_t pendingRewardContainerOpenAttempts = 0;
 		std::map<uint16_t, std::string> rewardInspectionFingerprints;
-		uint16_t pendingEquipmentItemId = 0;
-		uint32_t pendingEquipmentItemCount = 0;
 		std::map<uint16_t, uint32_t> pendingEquipmentDisplacedCounts;
 		uint16_t pendingReadinessItemId = 0;
 		slots_t pendingReadinessSlot = CONST_SLOT_WHEREEVER;

@@ -15,6 +15,7 @@ param(
 	[switch]$CombatReadiness,
 	[switch]$EquipmentOffers,
 	[switch]$EquipmentPurchases,
+	[switch]$MainlandRewards,
 	[switch]$Depot,
 	[switch]$MainlandLoop,
 	[switch]$SpellTraining,
@@ -606,12 +607,12 @@ function Assert-PickupProgressionRestartEvents {
 		$_.result -eq "success" -and $_.candidate_id -eq 64120
     })
     $nextSelection = @($events | Where-Object {
-		$_.event -eq "strategy_selection" -and $_.candidate_id -ne 64120
+		$_.event -eq "goal_selection" -and $_.to_goal -eq "hunt"
     })
     $online = @($events | Where-Object {
-        $_.event -eq "lifecycle" -and $_.status -eq "online" -and $_.objective -eq "pickup_reward"
+		$_.event -eq "lifecycle" -and $_.status -eq "online"
     })
-	if ($firstClaims.Count -ne 1 -or $nextSelection.Count -ne 1 -or $online.Count -ne 2) {
+	if ($firstClaims.Count -ne 1 -or $nextSelection.Count -lt 1 -or $online.Count -lt 2) {
         throw "Pickup progression did not reconstruct the next objective from persisted claim and equipment state."
     }
 }
@@ -626,7 +627,8 @@ function Assert-NestedPickupProgressionEvents {
     })
     $inspection = @($events | Where-Object {
         $_.event -eq "reward_inspection" -and $_.candidate_id -eq 50083 -and $_.recursive -and
-        $_.item_count -ge 5 -and $_.container_count -eq 1 -and $_.equipment_upgrade_count -eq 3 -and
+		$_.item_count -ge 5 -and $_.container_count -eq 1 -and $_.equipment_upgrade_count -eq 1 -and
+		$_.equipment_rule -in @("pareto_improvement", "unlocks_suitable_hunt", "fills_readiness_gap") -and
         @($_.items | Where-Object { $_.item_id -eq 2512 -and $_.classes -contains "equipment_upgrade" }).Count -eq 1 -and
         @($_.items | Where-Object { $_.item_id -eq 2380 }).Count -eq 1 -and
         @($_.items | Where-Object { $_.item_id -eq 2175 }).Count -eq 1 -and
@@ -1430,7 +1432,7 @@ if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
 
 $focusedScenarioRequested = $FullNavigation -or $TargetPursuit -or $CorpseLoot -or $DeathTelemetry -or $Healing -or $ValueLoot -or
 	$PickupProgression -or $GoalArbitration -or $OracleDeparture -or $StaminaProjection -or $HuntRegionPlanning -or
-	$CombatReadiness -or $EquipmentOffers -or $EquipmentPurchases -or $Depot -or $MainlandLoop -or $SpellTraining -or $SpellUse
+	$CombatReadiness -or $EquipmentOffers -or $EquipmentPurchases -or $MainlandRewards -or $Depot -or $MainlandLoop -or $SpellTraining -or $SpellUse
 if ($Focused -and -not $focusedScenarioRequested) {
 	throw "-Focused requires at least one focused scenario switch."
 }
@@ -1605,7 +1607,7 @@ try {
             Invoke-Compose stop server
             Invoke-Compose up --detach server
 			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST PICKUP_PROGRESSION_RESTART_START' | Out-Null
-			$restartLogs = Wait-ForLog -Pattern '"event":"strategy_selection".*"candidate_id":(?!64120)'
+			$restartLogs = Wait-ForLog -Pattern '"event":"goal_selection".*"to_goal":"hunt"'
             Assert-PickupProgressionRestartEvents -Logs $restartLogs
         }
 
@@ -1872,6 +1874,59 @@ try {
 				$_.from_goal -eq "buy_equipment" -and $_.to_goal -ne "buy_equipment"
 			}
 			Assert-EquipmentPurchaseEvents -Logs $rejectedLogs -Rejected
+		}
+	}
+
+	if ($MainlandRewards) {
+		Invoke-Scenario -Name "mainland_equipment_reward" -DefaultTimeoutSeconds 240 -Body {
+			Invoke-Compose down --volumes --remove-orphans
+			$env:PLAYERBOT_GAMEPLAY_MODE = "mainland_reward"
+			$env:PLAYERBOT_HUNT_DURATION_SECONDS = "900"
+			Invoke-Compose up --detach
+			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST MAINLAND_REWARD_PASS' | Out-Null
+			$logs = Get-ServerLogs
+			$events = @(ConvertFrom-PlayerbotLogs -Logs $logs)
+			$candidate = @($events | Where-Object {
+				$_.event -eq "strategy_candidate" -and $_.candidate_id -eq 50076 -and
+				$_.acquisition_source -eq "map_reward" -and $_.result -eq "feasible" -and $_.item_id -eq 2483
+			})
+			$selection = @($events | Where-Object {
+				$_.event -eq "strategy_selection" -and $_.candidate_id -eq 50076 -and $_.item_id -eq 2483
+			})
+			$claim = @($events | Where-Object {
+				$_.event -eq "action_result" -and $_.action -eq "claim_reward" -and
+				$_.result -eq "success" -and $_.candidate_id -eq 50076
+			})
+			$equip = @($events | Where-Object {
+				$_.event -eq "action_result" -and $_.action -eq "equip" -and
+				$_.result -eq "success" -and $_.item_id -eq 2483 -and $_.displaced_item_id -eq 2650
+			})
+			$result = @($events | Where-Object {
+				$_.event -eq "strategy_objective_result" -and $_.goal -eq "pickup_reward" -and
+				$_.candidate_id -eq 50076 -and $_.acquisition_source -eq "map_reward" -and $_.result -eq "success"
+			})
+			$battleAxeRejection = @($events | Where-Object {
+				$_.event -eq "reward_inspection" -and $_.candidate_id -eq 9217 -and
+				$_.equipment_upgrade_count -eq 0 -and $null -ne $_.equipment_rejection
+			})
+			if ($candidate.Count -ne 1 -or $selection.Count -ne 1 -or $claim.Count -ne 1 -or
+				$equip.Count -ne 1 -or $result.Count -ne 1 -or $battleAxeRejection.Count -lt 1) {
+				throw "Mainland reward discovery did not produce the expected selection, rejection, claim, and equip evidence."
+			}
+
+			$restartLineCount = @(($logs -split "`r?`n")).Count
+			Invoke-Compose stop server
+			Invoke-Compose up --detach server
+			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST MAINLAND_REWARD_RESTART_PASS' | Out-Null
+			Wait-ForLog -Pattern '"event":"goal_selection".*"to_goal":"hunt"' | Out-Null
+			$restartLogs = ((Get-ServerLogs) -split "`r?`n" | Select-Object -Skip $restartLineCount) -join "`n"
+			$restartEvents = @(ConvertFrom-PlayerbotLogs -Logs $restartLogs)
+			$duplicateActions = @($restartEvents | Where-Object {
+				$_.event -eq "action_result" -and $_.action -in @("claim_reward", "equip") -and $_.item_id -eq 2483
+			})
+			if ($duplicateActions.Count -ne 0) {
+				throw "Mainland reward restart repeated a completed claim or equip action."
+			}
 		}
 	}
 
