@@ -127,6 +127,20 @@ void PlayerBotManager::onHealthDrain(const Player& player, uint32_t damage)
 	}
 }
 
+void PlayerBotManager::onCombatDamage(Creature* attacker, const Creature& target, uint32_t damage)
+{
+	if (controller) {
+		controller->onCombatDamage(attacker, target, damage);
+	}
+}
+
+void PlayerBotManager::onHealthGain(Creature* healer, const Creature& target, uint32_t gain)
+{
+	if (controller) {
+		controller->onHealthGain(healer, target, gain);
+	}
+}
+
 void PlayerBotManager::onNpcReply(uint32_t playerId, uint32_t npcId, uint8_t type, const std::string& text)
 {
 	if (controller) {

@@ -15,6 +15,10 @@
 // Playerbot lifecycle, scheduling, navigation execution, and telemetry.
 using namespace playerbot;
 
+namespace {
+	constexpr uint32_t maximumSpellObservationValue = 10000;
+}
+
 const PlayerBotTestPolicy& playerbot::testPolicyFromEnvironment()
 {
 	static const PlayerBotTestPolicy policy = []() {
@@ -50,8 +54,10 @@ const PlayerBotTestPolicy& playerbot::testPolicyFromEnvironment()
 			 std::strcmp(gameplayMode, "adaptive_challenge") == 0 ||
 			 std::strcmp(gameplayMode, "readiness_ready") == 0 || std::strcmp(gameplayMode, "readiness_upgrade") == 0 ||
 			std::strcmp(gameplayMode, "readiness_missing_weapon") == 0 || std::strcmp(gameplayMode, "readiness_supplies") == 0 ||
-			std::strcmp(gameplayMode, "readiness_retention") == 0 || std::strcmp(gameplayMode, "spell_use") == 0);
+			std::strcmp(gameplayMode, "readiness_retention") == 0 || std::strcmp(gameplayMode, "spell_use") == 0 ||
+			std::strcmp(gameplayMode, "spell_calibration") == 0);
 		const bool adaptiveChallengeFixture = gameplayMode && std::strcmp(gameplayMode, "adaptive_challenge") == 0;
+		const bool spellCalibrationFixture = gameplayMode && std::strcmp(gameplayMode, "spell_calibration") == 0;
 		const bool fixedFixtureRoute = gameplayMode && std::strcmp(gameplayMode, "stamina_bonus") != 0 &&
 		                               std::strcmp(gameplayMode, "stamina_boundary") != 0 &&
 			                               std::strcmp(gameplayMode, "stamina_normal") != 0 &&
@@ -92,6 +98,7 @@ const PlayerBotTestPolicy& playerbot::testPolicyFromEnvironment()
 			gameplayMode && std::strcmp(gameplayMode, "equipment_buy_rejected") == 0,
 			adaptiveChallengeFixture,
 			adaptiveChallengeFixture,
+			spellCalibrationFixture,
 		};
 	}();
 	return policy;
@@ -126,8 +133,12 @@ void PlayerBotController::start(const Position& position, bool recovered, uint32
 	          << ",\"recovery_count\":" << recoveryCount
 	          << ",\"objective\":" << jsonString(useGoalSelector ? topLevelGoalName(activeGoal) :
 	                                                    (startInHunt ? "hunt" : "service"))
-	          << ",\"step_speed\":" << (g_game.getPlayerByID(playerId) ? g_game.getPlayerByID(playerId)->getSpeed() : 0);
+	          << ",\"step_speed\":" << (g_game.getPlayerByID(playerId) ? g_game.getPlayerByID(playerId)->getSpeed() : 0)
+	          << ",\"spell_calibration_profiles\":" << spellCalibration.size();
 	emit("lifecycle", position, lifecycle.str());
+	if (testPolicy.spellCalibrationFixture && controlledPlayer) {
+		runSpellCalibrationFixture(*controlledPlayer, position);
+	}
 	if (useGoalSelector) {
 		// The selected goal initialized its own executor state.
 	} else if (startInHunt) {
@@ -482,9 +493,55 @@ uint32_t PlayerBotController::navigationDecisionDelay(const Player& player) cons
 
 void PlayerBotController::onHealthDrain(const Player& player, uint32_t damage)
 {
+	if (player.getID() == playerId && !pendingSpellCast.name.empty()) {
+		pendingSpellCast.concurrentDamage = true;
+	}
 	if (player.getID() == playerId && isActiveHuntCombat(player)) {
 		huntRegionDamageTaken += damage;
 		huntCombatEvidence.damageTaken += damage;
+	}
+}
+
+void PlayerBotController::onCombatDamage(Creature* attacker, const Creature& target, uint32_t damage)
+{
+	if (pendingSpellCast.name.empty() || !spellCastExecuting) {
+		return;
+	}
+	if (!attacker || attacker->getID() != playerId) {
+		if (target.getID() == pendingSpellCast.targetId) {
+			pendingSpellCast.otherAttacker = true;
+		}
+		return;
+	}
+	for (uint8_t index = 0; index < pendingSpellCast.spellVictimCount; ++index) {
+		if (pendingSpellCast.spellVictimIds[index] == target.getID()) {
+			if (target.getID() == pendingSpellCast.targetId) {
+				pendingSpellCast.observedSpellDamage = std::min<uint32_t>(maximumSpellObservationValue,
+					pendingSpellCast.observedSpellDamage + damage);
+			}
+			return;
+		}
+	}
+	if (pendingSpellCast.spellVictimCount < pendingSpellCast.spellVictimIds.size()) {
+		pendingSpellCast.spellVictimIds[pendingSpellCast.spellVictimCount++] = target.getID();
+	} else {
+		pendingSpellCast.spellVictimOverflow = true;
+	}
+	if (target.getID() == pendingSpellCast.targetId) {
+		pendingSpellCast.observedSpellDamage = std::min<uint32_t>(maximumSpellObservationValue,
+			pendingSpellCast.observedSpellDamage + damage);
+	}
+}
+
+void PlayerBotController::onHealthGain(Creature* healer, const Creature& target, uint32_t gain)
+{
+	if (pendingSpellCast.name.empty() || target.getID() != playerId || pendingSpellCast.role != "healing") {
+		return;
+	}
+	if (healer && healer->getID() == playerId && spellCastExecuting) {
+		pendingSpellCast.observedSpellHealing = std::min<uint32_t>(maximumSpellObservationValue, pendingSpellCast.observedSpellHealing + gain);
+	} else {
+		pendingSpellCast.otherRecovery = true;
 	}
 }
 

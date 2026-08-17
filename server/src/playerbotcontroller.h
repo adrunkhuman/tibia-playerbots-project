@@ -16,6 +16,7 @@
 #include "playerbot.h"
 #include "playerbothuntregions.h"
 #include "playerbotnavigation.h"
+#include "playerbotspellcalibration.h"
 
 #include "container.h"
 #include "condition.h"
@@ -162,6 +163,7 @@ namespace playerbot {
 		bool forceEquipmentPurchaseRejected;
 		bool adaptiveChallengeFixture;
 		bool forceHuntScopeExhaustion;
+		bool spellCalibrationFixture;
 	};
 
 	std::string jsonString(const std::string& value);
@@ -422,6 +424,24 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 			int32_t healthBefore = 0;
 			uint32_t targetId = 0;
 			int32_t targetHealthBefore = 0;
+			int32_t missingHealth = 0;
+			int32_t hasteTicksBefore = 0;
+			int32_t hasteTicksAfterCast = 0;
+			int32_t hasteTicksObserved = 0;
+			int32_t hasteDurationMeasured = 0;
+			int64_t hasteEndTimeAfterCast = 0;
+			PlayerBotSpellEnvelope envelope;
+			std::string targetClass;
+			uint32_t observedSpellHealing = 0;
+			uint32_t observedSpellDamage = 0;
+			bool concurrentDamage = false;
+			bool otherRecovery = false;
+			bool otherAttacker = false;
+			bool meleeOrOtherBotDamage = false;
+			std::array<uint32_t, 4> spellVictimIds{};
+			uint8_t spellVictimCount = 0;
+			bool spellVictimOverflow = false;
+			std::chrono::steady_clock::time_point observedAt;
 		};
 
 		enum class ScenarioStage : uint8_t {
@@ -808,6 +828,8 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		uint32_t navigationDecisionDelay(const Player& player) const;
 
 		void onHealthDrain(const Player& player, uint32_t damage);
+		void onCombatDamage(Creature* attacker, const Creature& target, uint32_t damage);
+		void onHealthGain(Creature* healer, const Creature& target, uint32_t gain);
 
 		uint32_t navigationDistance(const Position& from, const Position& destination) const;
 
@@ -837,6 +859,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		void updateChallengeFrontier(const Player& player, const Position& position, uint64_t huntDurationSeconds,
 		                             const char* reason);
 		void runAdaptiveChallengeFixture(Player& player, const Position& position);
+		void runSpellCalibrationFixture(Player& player, const Position& position);
 		void cancelHuntRegionPlanning();
 		void emitHuntRegionPlanning(const HuntRegionPlanning& planning, const Position& position, const char* phase) const;
 
@@ -915,7 +938,9 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		uint32_t pendingHealPotionCount = 0;
 		std::chrono::steady_clock::time_point healRetryAfter;
 		PendingSpellCast pendingSpellCast;
+		bool spellCastExecuting = false;
 		std::chrono::steady_clock::time_point spellRetryAfter;
+		PlayerBotSpellCalibration spellCalibration;
 		bool pendingEat = false;
 		uint32_t pendingEatInventoryCount = 0;
 		int32_t pendingEatFoodTicks = 0;

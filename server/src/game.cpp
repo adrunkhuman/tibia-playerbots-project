@@ -35,6 +35,7 @@
 #include "monster.h"
 #include "movement.h"
 #include "playerbothuntregions.h"
+#include "playerbot.h"
 #include "scheduler.h"
 #include "server.h"
 #include "spells.h"
@@ -3859,6 +3860,9 @@ bool Game::combatChangeHealth(Creature* attacker, Creature* target, CombatDamage
 		int32_t realHealthChange = target->getHealth();
 		target->gainHealth(attacker, damage.primary.value);
 		realHealthChange = target->getHealth() - realHealthChange;
+		if (realHealthChange > 0) {
+			g_playerBots.onHealthGain(attacker, *target, static_cast<uint32_t>(realHealthChange));
+		}
 
 		if (realHealthChange > 0 && !target->isInGhostMode()) {
 			auto damageString = fmt::format("{:d} hitpoint{:s}", realHealthChange, realHealthChange != 1 ? "s" : "");
@@ -4124,6 +4128,7 @@ bool Game::combatChangeHealth(Creature* attacker, Creature* target, CombatDamage
 		}
 
 		target->drainHealth(attacker, realDamage);
+		g_playerBots.onCombatDamage(attacker, *target, static_cast<uint32_t>(realDamage));
 		addCreatureHealth(spectators, target);
 	}
 

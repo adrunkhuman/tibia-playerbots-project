@@ -34,8 +34,11 @@ local depotFixtureStorage = 50095
 local spellTrainingStorage = 50097
 local deathLoginCount = 0
 local spellTargetId = 0
+local spellSecondaryTargetId = 0
 local spellSupportObserved = false
+local spellCalibrationFixture = false
 local removeAll
+local verifyBerserkSingleTarget
 
 local function restoreRookgaardBaseline(player)
     local armor = player:getSlotItem(CONST_SLOT_ARMOR)
@@ -285,7 +288,29 @@ local function triggerSpellRecoveryPreemption(playerId)
     assert(player and not player:isRemoved(), "Bot One disappeared before spell recovery preemption")
     assert(player:addMana(200 - player:getMana()), "spell-use fixture could not restore recovery mana")
     assert(player:setHealth(110), "spell-use fixture could not trigger emergency recovery")
+    if spellCalibrationFixture then
+        addEvent(verifyBerserkSingleTarget, 500, playerId, 80)
+    end
     print("PLAYERBOT_GAMEPLAY_TEST SPELL_RECOVERY_PREEMPTION_TRIGGERED")
+end
+
+local function placeSpellTarget(player, target, positions)
+    if not target or target:isRemoved() then
+        return false
+    end
+    local origin = player:getPosition()
+    for _, offset in ipairs(positions) do
+        local position = Position(origin.x + offset[1], origin.y + offset[2], origin.z)
+        local tile = Tile(position)
+        if tile and tile:isWalkable() and target:teleportTo(position, true) then
+            return true
+        end
+    end
+    return false
+end
+
+local function keepSpellTargetAdjacent(player, target)
+    return placeSpellTarget(player, target, {{1, 0}, {0, 1}, {-1, 0}, {0, -1}})
 end
 
 local function waitForSpellAttackTarget(playerId, attempts)
@@ -297,6 +322,8 @@ local function waitForSpellAttackTarget(playerId, attempts)
         addEvent(triggerSpellRecoveryPreemption, 1800, playerId)
         return
     end
+    assert(target and not target:isRemoved(), "spell-use fixture target was removed before acquisition")
+    assert(keepSpellTargetAdjacent(player, target), "spell-use fixture could not keep its target adjacent")
     if attempts > 0 then
         addEvent(waitForSpellAttackTarget, 250, playerId, attempts - 1)
         return
@@ -339,6 +366,66 @@ local function triggerSpellFallback(playerId)
     print("PLAYERBOT_GAMEPLAY_TEST SPELL_FALLBACK_TRIGGERED")
 end
 
+local function cleanupSpellTargets()
+    for _, targetId in ipairs({spellTargetId, spellSecondaryTargetId}) do
+        local target = targetId ~= 0 and Monster(targetId) or nil
+        if target and not target:isRemoved() then
+            target:remove()
+        end
+    end
+    spellTargetId = 0
+    spellSecondaryTargetId = 0
+end
+
+local function verifyBerserkMultiTarget(playerId, attempts)
+    local player = Player(playerId)
+    local secondary = spellSecondaryTargetId ~= 0 and Monster(spellSecondaryTargetId) or nil
+    assert(player and not player:isRemoved(), "Bot One disappeared during Berserk multi-target verification")
+    local hitSecondary = secondary and not secondary:isRemoved() and secondary:getHealth() < 1000
+    if (not hitSecondary or player:getMana() > 85) and attempts > 0 then
+        addEvent(verifyBerserkMultiTarget, 250, playerId, attempts - 1)
+        return
+    end
+    assert(hitSecondary, "Berserk did not damage the controlled secondary target")
+    assert(player:getMana() <= 85, "Berserk did not consume its normal mana cost for the multi-target cast")
+    cleanupSpellTargets()
+    print("PLAYERBOT_GAMEPLAY_TEST SPELL_USE_PASS")
+end
+
+local function prepareBerserkMultiTarget(playerId, attempts)
+    local player = Player(playerId)
+    local primary = spellTargetId ~= 0 and Monster(spellTargetId) or nil
+    assert(player and not player:isRemoved(), "Bot One disappeared before Berserk multi-target setup")
+    if (not primary or primary:isRemoved() or player:getMana() > 85) and attempts > 0 then
+        addEvent(prepareBerserkMultiTarget, 250, playerId, attempts - 1)
+        return
+    end
+    assert(primary and not primary:isRemoved(), "Berserk single-target fixture lost its primary target")
+    assert(player:getMana() <= 85, "Berserk single-target cast was not observed before multi-target setup")
+    assert(keepSpellTargetAdjacent(player, primary), "Berserk fixture could not keep its primary target adjacent")
+    local secondary = Game.createMonster(spellTargetMonsterName, player:getPosition(), true, true)
+    assert(secondary, "Berserk fixture could not create a secondary target")
+    spellSecondaryTargetId = secondary:getId()
+    assert(placeSpellTarget(player, secondary, {{1, 1}, {1, -1}, {-1, 1}, {-1, -1}}),
+        "Berserk fixture could not place the secondary target in its area")
+    assert(player:addMana(player:getMaxMana() - player:getMana()), "Berserk fixture could not restore multi-target mana")
+    addEvent(verifyBerserkMultiTarget, 4750, playerId, 80)
+end
+
+verifyBerserkSingleTarget = function(playerId, attempts)
+    local player = Player(playerId)
+    local primary = spellTargetId ~= 0 and Monster(spellTargetId) or nil
+    assert(player and not player:isRemoved(), "Bot One disappeared during Berserk single-target verification")
+    local hitPrimary = primary and not primary:isRemoved() and primary:getHealth() < 1000
+    if (not hitPrimary or player:getMana() > 85) and attempts > 0 then
+        addEvent(verifyBerserkSingleTarget, 250, playerId, attempts - 1)
+        return
+    end
+    assert(hitPrimary, "Berserk did not damage its visible primary target")
+    assert(player:getMana() <= 85, "Berserk did not consume its normal mana cost")
+    addEvent(prepareBerserkMultiTarget, 0, playerId, 40)
+end
+
 local function verifySpellUse(playerId, attempts)
     local player = Player(playerId)
     assert(player and not player:isRemoved(), "Bot One disappeared during spell-use fixture")
@@ -355,9 +442,7 @@ local function verifySpellUse(playerId, attempts)
     assert(hasted, "Haste did not apply its normal condition")
     assert(damaged, "Whirlwind Throw did not damage its visible target")
     assert(offenseCast, "Whirlwind Throw did not consume its normal mana cost")
-    if target then
-        target:remove()
-    end
+    cleanupSpellTargets()
     print("PLAYERBOT_GAMEPLAY_TEST SPELL_USE_PASS")
 end
 
@@ -626,7 +711,7 @@ function login.onLogin(player)
         mode == "arbitration" or
         mode == "arbitration_interrupt" or mode == "departure" or mode == "departure_interrupt" or
         mode == "departure_recovery" or mode == "spell_training" or mode == "stamina_bonus" or mode == "stamina_boundary" or
-		mode == "stamina_normal" or mode == "hunt_planning" or mode == "readiness_ready" or
+		mode == "stamina_normal" or mode == "hunt_planning" or mode == "spell_calibration" or mode == "readiness_ready" or
 		mode == "adaptive_challenge" or
         mode == "readiness_upgrade" or mode == "readiness_missing_weapon" or mode == "readiness_supplies" or
 		mode == "readiness_retention" or mode == "equipment_shadow" or mode == "equipment_shadow_unaffordable" or
@@ -741,13 +826,17 @@ function login.onLogin(player)
 		print("PLAYERBOT_GAMEPLAY_TEST MAINLAND_REWARD_START")
 		return true
 	end
-	if mode == "spell_use" then
+	if mode == "spell_use" or mode == "spell_calibration" then
 		assert(player:setVocation(4), "spell-use fixture could not select Knight")
-		local requiredExperience = Game.getExperienceForLevel(20) - player:getExperience()
+		spellCalibrationFixture = mode == "spell_calibration"
+		local requiredLevel = spellCalibrationFixture and 35 or 20
+		local requiredExperience = Game.getExperienceForLevel(requiredLevel) - player:getExperience()
 		if requiredExperience > 0 then player:addExperience(requiredExperience) end
-		assert(player:getLevel() == 20, "spell-use fixture could not select level 20")
+		assert(player:getLevel() == requiredLevel, "spell-use fixture could not select the required level")
 		assert(player:teleportTo(depotPosition), "spell-use fixture could not reach the depot")
-		for _, spellName in ipairs({"Light Healing", "Haste", "Whirlwind Throw"}) do
+		local spells = spellCalibrationFixture and {"Light Healing", "Haste", "Whirlwind Throw", "Berserk"} or
+			{"Light Healing", "Haste", "Whirlwind Throw"}
+		for _, spellName in ipairs(spells) do
 			assert(player:learnSpell(spellName), "spell-use fixture could not prelearn " .. spellName)
 		end
 		assert(player:setMaxHealth(200), "spell-use fixture could not normalize health")
@@ -759,7 +848,7 @@ function login.onLogin(player)
 		addEvent(restoreLightHealing, 6000, player:getId())
 		addEvent(waitForSpellSupport, 6000, player:getId(), 120)
 		addEvent(verifySpellUse, 500, player:getId(), 120)
-		print("PLAYERBOT_GAMEPLAY_TEST SPELL_USE_START")
+		print("PLAYERBOT_GAMEPLAY_TEST " .. string.upper(mode) .. "_START")
 		return true
 	end
 	restoreRookgaardBaseline(player)

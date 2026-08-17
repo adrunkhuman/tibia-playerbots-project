@@ -55,6 +55,7 @@ the changed behavior:
 | `-MainlandLoop` | Two real Thais hunt/depot cycles, local services, restart recovery, and teleport exclusion. |
 | `-SpellTraining` | Tagged trainer discovery, reserve-backed affordability rejection, normal spell dialogue/payment, and restart persistence. |
 | `-SpellUse` | Light Healing preemption, Haste, Whirlwind Throw, unlearned-spell potion fallback, and mana-reserve melee fallback. |
+| `-SpellCalibration` | Engine-path Light Healing, measured Haste duration, and single-target Whirlwind attribution; deterministic classifier evidence for race-heavy censored/concurrent/ambiguous cases; profile confidence, LRU eviction, bounded values, telemetry, and controller-recreation reset. |
 
 Navigation or looting changes require at least:
 
@@ -104,6 +105,26 @@ default five-minute development hunt is smoke evidence. Use a separate normal
 stack run with 20 to 60 minute hunts to assess sustained escalation, recovery
 backoff, scan retries, and telemetry volume; short hunts can end before the bot
 reaches deep patrol points or accumulates enough active-combat evidence.
+
+`-SpellCalibration` marks deterministic classifier-helper evidence as
+`source="classifier_helper"` and confidence/eviction math as
+`source="profile_math"`. It also requires normal engine Light Healing, Haste,
+Whirlwind Throw, and level-35 Berserk single- and multi-victim casts, then
+restarts the server to confirm a fresh controller starts with no profiles. The
+first normal offensive action must remain Berserk below full confidence. Helper
+coverage supplies concurrent damage, other attacker, melee ambiguity, target
+loss, censored/equality healing boundaries, and bounded profile math. The
+synchronous single-thread spell path cannot interleave an external attacker with
+`g_game.playerSay`, so those ambiguity cases do not use timing races. The suite
+validates classifier behavior and selected mirrored envelopes, not complete
+Lua-to-C++ formula fidelity; issue #1 remains authoritative. Loaded metadata and
+audited formula envelopes remain the source for safety; observations only rank
+already-legal actions. Inspect
+`spell_calibration` and `action_result` records for rejection reasons such as
+`censored_overheal`, `concurrent_damage`, `other_recovery`, `other_attacker`,
+`melee_or_other_bot_damage`, `target_lost`, and `multi_target`. Profiles are
+memory-bounded and reset with the controller, so this fixture does not test
+database persistence.
 
 ## Connectionless regression
 

@@ -21,6 +21,7 @@ param(
 	[switch]$MainlandLoop,
 	[switch]$SpellTraining,
 	[switch]$SpellUse,
+	[switch]$SpellCalibration,
 	[switch]$Focused,
 	[switch]$SkipBuild,
 	[switch]$KeepStack
@@ -1464,6 +1465,61 @@ function Assert-SpellUseEvents {
 	throw "Spell use failed. healing=$($healing.Count), support=$($support.Count), offense=$($offense.Count), unlearned=$($unlearned.Count), fallbackPotion=$($fallbackPotion.Count), manaFallback=$($manaFallback.Count), preempted=$preempted, invalidLegalCandidates=$($invalidLegalCandidates.Count), failed=$($failed.Count), terminal=$($terminal.Count)."
 }
 
+function Assert-SpellCalibrationEvents {
+	param([string]$Logs)
+
+	$events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
+	$fixture = @($events | Where-Object { $_.event -eq "spell_calibration" })
+	$phases = @($fixture | ForEach-Object { $_.phase })
+	$required = @("isolated_healing", "healing_equality_exact", "overheal_censored", "concurrent_damage", "single_target_damage", "melee_ambiguous",
+		"rejected_cast", "other_attacker_ambiguous", "target_loss_ambiguous", "multi_target_ambiguous", "support_duration", "support_preexisting_or_replaced", "low_confidence", "gradual_ranking", "bounded_range", "fixture_profile_clear")
+	$missing = @($required | Where-Object { $_ -notin $phases })
+	$acceptedHealing = @($fixture | Where-Object { $_.source -eq "classifier_helper" -and $_.phase -eq "isolated_healing" -and $_.evidence -eq "accepted" -and
+		$_.engine_bounds.maximum -lt 10000 -and $_.calibration.accepted -eq 1 })
+	$equalityHealing = @($fixture | Where-Object { $_.source -eq "classifier_helper" -and $_.phase -eq "healing_equality_exact" -and $_.evidence -eq "accepted" })
+	$censored = @($fixture | Where-Object { $_.source -eq "classifier_helper" -and $_.phase -eq "overheal_censored" -and $_.evidence -eq "censored_overheal" })
+	$concurrent = @($fixture | Where-Object { $_.source -eq "classifier_helper" -and $_.phase -eq "concurrent_damage" -and $_.evidence -eq "concurrent_damage" })
+	$damage = @($fixture | Where-Object { $_.source -eq "classifier_helper" -and $_.phase -eq "single_target_damage" -and $_.evidence -eq "accepted" -and $_.target_class -eq "monster:fixture" })
+	$ambiguous = @($fixture | Where-Object { $_.source -eq "classifier_helper" -and $_.phase -in @("melee_ambiguous", "other_attacker_ambiguous", "target_loss_ambiguous") -and $_.calibration.ambiguous -gt 0 })
+	$multiTarget = @($fixture | Where-Object { $_.source -eq "classifier_helper" -and $_.phase -eq "multi_target_ambiguous" -and $_.evidence -eq "multi_target" -and $_.calibration.accepted -eq 0 })
+	$support = @($fixture | Where-Object { $_.phase -eq "support_duration" -and $_.calibration.conservative -eq 33000 -and $_.engine_bounds.duration_ms -eq 33000 })
+	$supportRejected = @($fixture | Where-Object { $_.phase -eq "support_preexisting_or_replaced" -and $_.evidence -eq "preexisting_or_replaced_condition" -and $_.calibration.ambiguous -eq 1 })
+	$lowConfidence = @($fixture | Where-Object { $_.source -eq "profile_math" -and $_.phase -eq "low_confidence" -and $_.calibration.confidence -lt 1 -and $_.policy_unchanged })
+	$adjusted = @($fixture | Where-Object { $_.source -eq "profile_math" -and $_.phase -eq "gradual_ranking" -and $_.calibration.confidence -eq 1 -and
+		$_.calibration.ranking -gt $_.engine_bounds.minimum -and $_.calibration.maximum -le 60000 })
+	$bounded = @($fixture | Where-Object { $_.source -eq "profile_math" -and $_.phase -eq "bounded_range" -and $_.calibration.maximum -eq 60000 })
+	$fixtureClear = @($fixture | Where-Object { $_.source -eq "profile_math" -and $_.phase -eq "fixture_profile_clear" -and $_.profiles_before -eq 12 -and $_.profiles_after -eq 0 })
+	$evicted = @($events | Where-Object { $_.event -eq "spell_calibration_eviction" -and $_.source -eq "profile_math" -and $_.profile_count -eq 12 })
+	$engineHealing = @($events | Where-Object { $_.event -eq "action_result" -and $_.action -eq "cast_spell" -and $_.result -eq "success" -and
+		$_.policy_candidate.spell -eq "Light Healing" -and $_.reason -eq "accepted" -and $_.calibration.accepted -eq 1 })
+	$engineHaste = @($events | Where-Object { $_.event -eq "action_result" -and $_.action -eq "cast_spell" -and $_.result -eq "success" -and
+		$_.policy_candidate.spell -eq "Haste" -and $_.reason -eq "accepted" -and $_.haste_ticks_after_cast -gt 0 -and
+		$_.haste_ticks_observed -gt 0 -and $_.haste_duration_measured -ge 32000 -and $_.haste_duration_measured -le 34000 })
+	$engineBerserkSingle = @($events | Where-Object { $_.event -eq "action_result" -and $_.action -eq "cast_spell" -and $_.result -eq "success" -and
+		$_.policy_candidate.spell -eq "Berserk" -and $_.reason -eq "accepted" -and $_.spell_victim_count -eq 1 -and
+		-not $_.spell_victim_overflow -and $_.target_class -eq "monster:Playerbot Spell Target" -and $_.calibration.accepted -eq 1 -and $_.calibration.confidence -lt 1 })
+	$engineBerserkMulti = @($events | Where-Object { $_.event -eq "action_result" -and $_.action -eq "cast_spell" -and $_.result -eq "success" -and
+		$_.policy_candidate.spell -eq "Berserk" -and $_.reason -eq "multi_target" -and $_.spell_victim_count -gt 1 -and
+		-not $_.spell_victim_overflow -and $_.target_class -eq "monster:Playerbot Spell Target" -and $_.calibration.ambiguous -ge 1 })
+	$firstOffensiveRequest = $null
+	foreach ($event in $events) {
+		if ($event.event -eq "action_result" -and $event.action -eq "cast_spell" -and $event.result -eq "requested" -and $event.need -eq "offense") {
+			$firstOffensiveRequest = $event
+			break
+		}
+	}
+	$defaultBerserk = $null -ne $firstOffensiveRequest -and $firstOffensiveRequest.policy_candidate.spell -eq "Berserk" -and
+		$firstOffensiveRequest.calibration.confidence -eq 0
+	$actualLowConfidence = @($events | Where-Object { $_.event -eq "action_result" -and $_.action -eq "cast_spell" -and $_.result -eq "requested" -and
+		$_.policy_candidate.spell -eq "Light Healing" -and $_.calibration.confidence -eq 0 })
+	if ($missing.Count -eq 0 -and $acceptedHealing.Count -eq 1 -and $equalityHealing.Count -eq 1 -and $censored.Count -eq 1 -and $concurrent.Count -eq 1 -and
+		$damage.Count -eq 1 -and $ambiguous.Count -eq 3 -and $multiTarget.Count -eq 1 -and $support.Count -eq 1 -and $supportRejected.Count -eq 1 -and $lowConfidence.Count -eq 1 -and
+		$adjusted.Count -ge 1 -and $bounded.Count -eq 1 -and $fixtureClear.Count -eq 1 -and $evicted.Count -ge 1 -and
+		$engineHealing.Count -ge 1 -and $engineHaste.Count -ge 1 -and $engineBerserkSingle.Count -eq 1 -and $engineBerserkMulti.Count -eq 1 -and
+		$defaultBerserk -and $actualLowConfidence.Count -ge 1) { return }
+	throw "Spell calibration telemetry was incomplete. missing=$($missing -join ','), acceptedHealing=$($acceptedHealing.Count), equalityHealing=$($equalityHealing.Count), censored=$($censored.Count), concurrent=$($concurrent.Count), damage=$($damage.Count), ambiguous=$($ambiguous.Count), multiTarget=$($multiTarget.Count), support=$($support.Count), supportRejected=$($supportRejected.Count), lowConfidence=$($lowConfidence.Count), adjusted=$($adjusted.Count), bounded=$($bounded.Count), fixtureClear=$($fixtureClear.Count), evicted=$($evicted.Count), engineHealing=$($engineHealing.Count), engineHaste=$($engineHaste.Count), engineBerserkSingle=$($engineBerserkSingle.Count), engineBerserkMulti=$($engineBerserkMulti.Count), defaultBerserk=$defaultBerserk, actualLowConfidence=$($actualLowConfidence.Count)."
+}
+
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
 	throw "Docker is required to run the playerbot gameplay suite."
 }
@@ -1471,7 +1527,7 @@ if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
 $focusedScenarioRequested = $FullNavigation -or $TargetPursuit -or $CorpseLoot -or $DeathTelemetry -or $Healing -or $ValueLoot -or
 	$PickupProgression -or $GoalArbitration -or $OracleDeparture -or $StaminaProjection -or $HuntRegionPlanning -or
 	$AdaptiveChallenge -or
-	$CombatReadiness -or $EquipmentOffers -or $EquipmentPurchases -or $MainlandRewards -or $Depot -or $MainlandLoop -or $SpellTraining -or $SpellUse
+	$CombatReadiness -or $EquipmentOffers -or $EquipmentPurchases -or $MainlandRewards -or $Depot -or $MainlandLoop -or $SpellTraining -or $SpellUse -or $SpellCalibration
 if ($Focused -and -not $focusedScenarioRequested) {
 	throw "-Focused requires at least one focused scenario switch."
 }
@@ -2090,6 +2146,36 @@ try {
 			Invoke-Compose up --detach
 			$spellLogs = Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST SPELL_USE_PASS'
 			Assert-SpellUseEvents -Logs $spellLogs
+		}
+	}
+
+	if ($SpellCalibration) {
+		Invoke-Scenario -Name "spell_calibration" -DefaultTimeoutSeconds 90 -Body {
+			Invoke-Compose down --volumes --remove-orphans
+			$env:PLAYERBOT_GAMEPLAY_MODE = "spell_calibration"
+			$env:PLAYERBOT_HUNT_DURATION_SECONDS = "900"
+			Invoke-Compose up --detach
+			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST SPELL_CALIBRATION_START' | Out-Null
+			$calibrationLogs = Wait-ForLog -Pattern '"event":"spell_calibration".*"phase":"fixture_profile_clear"'
+			$engineLogs = Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST SPELL_USE_PASS'
+			Assert-SpellCalibrationEvents -Logs $engineLogs
+			$restartLineCount = @((Get-ServerLogs) -split "`r?`n").Count
+			Invoke-Compose stop server
+			Invoke-Compose up --detach server
+			$restartLogs = ""
+			while ([DateTime]::UtcNow -lt $currentScenarioDeadline) {
+				$restartLogs = ((Get-ServerLogs) -split "`r?`n" | Select-Object -Skip $restartLineCount) -join "`n"
+				$fresh = @(ConvertFrom-PlayerbotLogs -Logs $restartLogs | Where-Object {
+					$_.event -eq "lifecycle" -and $_.status -eq "online" -and $_.spell_calibration_profiles -eq 0
+				})
+				if ($fresh.Count -eq 1) { break }
+				Start-Sleep -Seconds 1
+			}
+			if (@(ConvertFrom-PlayerbotLogs -Logs $restartLogs | Where-Object {
+				$_.event -eq "lifecycle" -and $_.status -eq "online" -and $_.spell_calibration_profiles -eq 0
+			}).Count -ne 1) {
+				Throw-WaitTimeout "Controller recreation did not start with an empty spell calibration profile store."
+			}
 		}
 	}
 
