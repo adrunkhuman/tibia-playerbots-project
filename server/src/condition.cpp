@@ -954,6 +954,21 @@ bool ConditionRegeneration::executeCondition(Creature* creature, int32_t interva
 	return ConditionGeneric::executeCondition(creature, interval);
 }
 
+std::optional<ManaRegenerationForecast> ConditionRegeneration::getManaForecast(const Creature& creature, uint32_t executionInterval) const
+{
+	if (getTicks() == 0 || manaGain == 0 || manaTicks == 0 || executionInterval == 0 || creature.getZone() == ZONE_PROTECTION) {
+		return std::nullopt;
+	}
+	const uint64_t remaining = internalManaTicks < manaTicks ? manaTicks - internalManaTicks : 0;
+	const uint64_t executions = std::max<uint64_t>(1, (remaining + executionInterval - 1) / executionInterval);
+	const uint64_t due = executions * executionInterval;
+	if (getTicks() != -1) {
+		const uint64_t availableExecutions = (static_cast<uint64_t>(getTicks()) + executionInterval - 1) / executionInterval;
+		if (executions > availableExecutions) return std::nullopt;
+	}
+	return ManaRegenerationForecast{manaGain, manaTicks, static_cast<uint32_t>(due)};
+}
+
 bool ConditionRegeneration::setParam(ConditionParam_t param, int32_t value)
 {
 	bool ret = ConditionGeneric::setParam(param, value);

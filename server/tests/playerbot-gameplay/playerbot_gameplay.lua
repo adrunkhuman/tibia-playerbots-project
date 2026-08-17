@@ -717,7 +717,12 @@ function login.onLogin(player)
 		mode == "readiness_retention" or mode == "equipment_shadow" or mode == "equipment_shadow_unaffordable" or
 		mode == "equipment_shadow_no_upgrade" or mode == "equipment_buy" or mode == "equipment_buy_resume" or
 		mode == "equipment_buy_space" or
-		mode == "equipment_buy_rejected" or mode == "mainland_reward",
+		mode == "equipment_buy_rejected" or mode == "mainland_reward" or mode == "magic_training_haste" or
+		mode == "magic_training_great_light" or mode == "magic_training_light" or mode == "magic_training_refresh" or
+		mode == "magic_training_reserve" or mode == "magic_training_failed" or mode == "magic_training_service" or
+		mode == "magic_training_progression" or mode == "magic_training_hunt" or mode == "magic_training_pz" or
+		mode == "magic_training_exact_full" or mode == "magic_training_restart" or mode == "magic_training_absent" or
+		mode == "magic_training_expired" or mode == "magic_training_post_hunt" or mode == "magic_training_post_hunt_no_overflow",
 		"unknown PLAYERBOT_GAMEPLAY_MODE: " .. mode)
 	if mode == "equipment_shadow" or mode == "equipment_shadow_unaffordable" or mode == "equipment_shadow_no_upgrade" or
 		mode == "equipment_buy" or mode == "equipment_buy_resume" or mode == "equipment_buy_space" or
@@ -848,6 +853,89 @@ function login.onLogin(player)
 		addEvent(restoreLightHealing, 6000, player:getId())
 		addEvent(waitForSpellSupport, 6000, player:getId(), 120)
 		addEvent(verifySpellUse, 500, player:getId(), 120)
+		print("PLAYERBOT_GAMEPLAY_TEST " .. string.upper(mode) .. "_START")
+		return true
+	end
+	if mode:sub(1, 14) == "magic_training" then
+		local restarting = mode == "magic_training_restart" and player:getStorageValue(50098) == 1
+		if restarting then
+			suppressNearbyMonsters(player:getId())
+			print("PLAYERBOT_GAMEPLAY_TEST MAGIC_TRAINING_RESTART_START")
+			return true
+		end
+		local thais = Town(thaisTownId)
+		assert(thais and player:setTown(thais) and player:setVocation(4), "magic training fixture could not select Thais Knight")
+		local requiredExperience = Game.getExperienceForLevel(20) - player:getExperience()
+		if requiredExperience > 0 then player:addExperience(requiredExperience) end
+		assert(player:getLevel() == 20, "magic training fixture could not select the required level")
+		for _, spellName in ipairs({"Haste", "Great Light", "Light"}) do
+			player:forgetSpell(spellName)
+		end
+		local spells = (mode == "magic_training_haste" or mode == "magic_training_refresh" or mode == "magic_training_hunt" or
+			mode == "magic_training_post_hunt") and
+			{"Haste", "Great Light", "Light"} or mode == "magic_training_great_light" and {"Great Light"} or {"Light"}
+		for _, spellName in ipairs(spells) do
+			assert(player:learnSpell(spellName), "magic training fixture could not learn " .. spellName)
+		end
+		local inProtectionZone = mode == "magic_training_pz"
+		assert(player:teleportTo(inProtectionZone and thais:getTemplePosition() or Position(32084, 32144, 5)),
+			"magic training fixture could not choose its safety context")
+		assert(player:setMaxMana(1000) and player:addMana(player:getMaxMana() - player:getMana()), "magic training fixture could not restore mana")
+		local backpack = player:getSlotItem(CONST_SLOT_BACKPACK)
+		removeAll(player, ITEM_GOLD_COIN)
+		assert(backpack and backpack:addItem(ITEM_GOLD_COIN, 100), "magic training fixture could not normalize cash reserve")
+		player:removeCondition(CONDITION_REGENERATION)
+		if mode ~= "magic_training_absent" then
+			local regeneration = Condition(CONDITION_REGENERATION, CONDITIONID_DEFAULT)
+			regeneration:setParameter(CONDITION_PARAM_MANAGAIN, mode == "magic_training_reserve" and 1000 or 10)
+			regeneration:setParameter(CONDITION_PARAM_MANATICKS,
+				(mode == "magic_training_post_hunt" or mode == "magic_training_post_hunt_no_overflow") and 10000 or 1000)
+			regeneration:setParameter(CONDITION_PARAM_TICKS, mode == "magic_training_expired" and 0 or 60000)
+			assert(player:addCondition(regeneration), "magic training fixture could not add regeneration")
+		end
+		if mode == "magic_training_reserve" then
+			assert(player:addMana(39 - player:getMana()), "magic training fixture could not lower mana")
+		end
+		if mode == "magic_training_exact_full" then
+			assert(player:addMana(990 - player:getMana()), "magic training fixture could not set exact-full forecast")
+		end
+		if mode == "magic_training_post_hunt_no_overflow" then
+			assert(player:addMana(990 - player:getMana()), "magic training post-hunt fixture could not set non-overflow mana")
+		end
+		if mode == "magic_training_refresh" then
+			local haste = Condition(CONDITION_HASTE)
+			haste:setParameter(CONDITION_PARAM_TICKS, 60000)
+			assert(player:addCondition(haste), "magic training fixture could not apply Haste")
+			local light = Condition(CONDITION_LIGHT)
+			light:setParameter(CONDITION_PARAM_LIGHT_LEVEL, 6)
+			light:setParameter(CONDITION_PARAM_LIGHT_COLOR, 215)
+			light:setParameter(CONDITION_PARAM_TICKS, 60000)
+			assert(player:addCondition(light), "magic training fixture could not apply Light condition")
+		end
+		if mode == "magic_training_service" then
+			assert(player:setCapacity(1), "magic training service fixture could not require a depot return")
+		elseif mode == "magic_training_progression" then
+			player:forgetSpell("Find Person")
+			removeAll(player, potionItemId)
+			removeAll(player, meatItemId)
+			assert(player:addItem(potionItemId, 5) and player:addItem(meatItemId, 1),
+				"magic training progression fixture could not prepare service reserves")
+			assert(player:removeMoney(player:getMoney()) and player:addMoney(100) and player:setBankBalance(200),
+				"magic training progression fixture could not normalize spell training funds")
+			assert(player:getMoney() == 100 and player:getBankBalance() == 200,
+				"magic training progression fixture has the wrong service and spell-training reserves")
+			assert(player:teleportTo(Position(32356, 32130, 9)),
+				"magic training progression fixture could not choose a reachable non-PZ trainer route")
+		end
+		if mode == "magic_training_post_hunt" or mode == "magic_training_post_hunt_no_overflow" then
+			if not player:hasLearnedSpell("Find Person") then
+				assert(player:learnSpell("Find Person"), "magic training post-hunt fixture could not remove spell-learning work")
+			end
+		end
+		if mode == "magic_training_restart" then
+			assert(player:setStorageValue(50098, 1), "magic training restart fixture could not persist its marker")
+		end
+		suppressNearbyMonsters(player:getId())
 		print("PLAYERBOT_GAMEPLAY_TEST " .. string.upper(mode) .. "_START")
 		return true
 	end

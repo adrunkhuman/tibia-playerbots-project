@@ -12,6 +12,7 @@
 
 #include "playerbotcontroller.h"
 #include "playerbotspellcalibration.h"
+#include "condition.h"
 #include "spells.h"
 
 // Runtime spell-trainer discovery and normal NPC learning dialogue.
@@ -25,6 +26,68 @@ namespace {
 	constexpr uint32_t minimumHasteRouteSteps = 20;
 	constexpr int32_t smallHealthPotionMaximumHealing = 90;
 	constexpr int32_t maximumHasteObservationDelay = 2000;
+	constexpr uint32_t magicTrainingEmergencyReserve = 20;
+	constexpr auto magicTrainingRetryDelay = std::chrono::seconds(2);
+
+	struct MagicTrainingSpell {
+		const PlayerBotSpellDescriptor* descriptor = nullptr;
+		InstantSpell* spell = nullptr;
+		uint64_t cost = 0;
+		bool refresh = false;
+	};
+
+	std::optional<ManaRegenerationForecast> manaRegenerationForecast(const Player& player)
+	{
+		return player.getManaRegenerationForecast();
+	}
+
+	bool magicTrainingEffectUseful(const Player& player, PlayerBotTrainingEffect effect)
+	{
+		return effect == PlayerBotTrainingEffect::Haste ? !player.hasCondition(CONDITION_HASTE) :
+		       effect == PlayerBotTrainingEffect::Light ? !player.hasCondition(CONDITION_LIGHT) : false;
+	}
+
+	bool magicTrainingSpellLegal(const Player& player, const PlayerBotSpellDescriptor& descriptor, InstantSpell*& spell,
+	                            uint64_t& cost)
+	{
+		if (!descriptor.magicTrainingSafe || descriptor.magicTrainingPriority == 0 ||
+		    descriptor.magicTrainingEffect == PlayerBotTrainingEffect::None || !player.hasLearnedInstantSpell(descriptor.name)) {
+			return false;
+		}
+		spell = g_spells ? g_spells->getInstantSpellByName(descriptor.name) : nullptr;
+		if (!spell || spell->getWords() != descriptor.words || !spell->isLearnable() || !spell->isEnabled() ||
+		    player.getLevel() < spell->getLevel() || player.getMagicLevel() < spell->getMagicLevel() ||
+		    player.getSoul() < spell->getSoulCost() || (spell->isPremium() && !player.isPremium()) ||
+		    (spell->getNeedWeapon() && !player.getWeapon(true)) || player.hasCondition(CONDITION_EXHAUST_HEAL) ||
+		    spell->getAggressive() || !spell->getSelfTarget() || spell->getNeedTarget() || spell->getHasParam() ||
+		    spell->getHasPlayerNameParam() || spell->getNeedDirection() || spell->getNeedCasterTargetOrDirection()) {
+			return false;
+		}
+		cost = spell->getManaCost(&player);
+		return cost != 0 && cost <= static_cast<uint64_t>(player.getMana()) -
+		       std::min<uint64_t>(player.getMana(), magicTrainingEmergencyReserve);
+	}
+
+	std::optional<MagicTrainingSpell> selectMagicTrainingSpell(const Player& player)
+	{
+		std::optional<MagicTrainingSpell> useful;
+		std::optional<MagicTrainingSpell> refresh;
+		for (const PlayerBotSpellDescriptor& descriptor : playerBotSpellDescriptors()) {
+			InstantSpell* spell = nullptr;
+			uint64_t cost = 0;
+			if (!magicTrainingSpellLegal(player, descriptor, spell, cost)) continue;
+			if (magicTrainingEffectUseful(player, descriptor.magicTrainingEffect)) {
+				if (!useful || descriptor.magicTrainingPriority > useful->descriptor->magicTrainingPriority) {
+					useful = MagicTrainingSpell{&descriptor, spell, cost, false};
+				}
+			} else if (descriptor.magicTrainingRefreshSafe &&
+			           (!refresh || cost < refresh->cost ||
+			            (cost == refresh->cost && descriptor.magicTrainingPriority > refresh->descriptor->magicTrainingPriority))) {
+				refresh = MagicTrainingSpell{&descriptor, spell, cost, true};
+			}
+		}
+		return useful ? useful : refresh;
+	}
 
 	const char* fallbackForRole(PlayerBotSpellRole role)
 	{
@@ -268,6 +331,99 @@ void PlayerBotController::verifySpellCast(Player& player, const Position& positi
 	pendingSpellCast = PendingSpellCast{};
 }
 
+const char* PlayerBotController::magicTrainingSafetyReason(const Player& player) const
+{
+	if (cyclePhase == CyclePhase::Hunt) return "hunting";
+	if (progressionObjective != ProgressionObjective::None) return "progression_objective";
+	if (scenarioStage != ScenarioStage::Traverse || ratId != 0 || defensiveTargetId != 0 ||
+	    const_cast<Player&>(player).getAttackedCreature() != nullptr) return "combat_or_pursuit";
+	if (navigationPending || worldChangePending || !navigationSteps.empty()) return "pending_navigation";
+	if (!pendingSpellCast.name.empty() || pendingHeal || pendingEat || needsHealing(player)) return "defensive_work";
+	if (!player.canDoAction() || player.hasCondition(CONDITION_EXHAUST_HEAL)) return "spell_cooldown";
+	return nullptr;
+}
+
+const char* PlayerBotController::magicTrainingCandidateReason(const Player& player) const
+{
+	if (const char* reason = magicTrainingSafetyReason(player)) return reason;
+	if (player.getZone() == ZONE_PROTECTION) return "regeneration_paused";
+	const std::optional<ManaRegenerationForecast> forecast = manaRegenerationForecast(player);
+	if (!forecast) return "no_active_regeneration_forecast";
+	const uint64_t predictedMana = static_cast<uint64_t>(player.getMana()) + forecast->gain;
+	if (predictedMana <= player.getMaxMana()) return "next_tick_not_overflow";
+	return selectMagicTrainingSpell(player) ? nullptr : "no_audited_safe_spell";
+}
+
+bool PlayerBotController::magicTrainingSafe(const Player& player) const
+{
+	return magicTrainingSafetyReason(player) == nullptr;
+}
+
+void PlayerBotController::finishMagicTraining(Player& player, const Position& position, const char* result, const char* reason)
+{
+	magicTrainingCooldownUntil = std::chrono::steady_clock::now() + magicTrainingRetryDelay;
+	if (activeGoal == TopLevelGoal::MagicTraining) {
+		emit("goal_result", position, "\"decision_id\":" + std::to_string(goalDecisionId) +
+		     ",\"goal\":\"magic_training\",\"result\":" + jsonString(result) + ",\"reason\":" + jsonString(reason));
+		if (selectTopLevelGoal(player, position, "magic_training_complete")) {
+			schedule(SCHEDULER_MINTICKS);
+		}
+	}
+}
+
+bool PlayerBotController::processMagicTraining(Player& player, const Position& position)
+{
+	const char* reason = magicTrainingCandidateReason(player);
+	const std::optional<ManaRegenerationForecast> forecast = manaRegenerationForecast(player);
+	const std::optional<MagicTrainingSpell> selected = !reason ? selectMagicTrainingSpell(player) : std::nullopt;
+	if (!selected || !forecast) {
+		finishMagicTraining(player, position, "skipped", reason ? reason : "opportunity_lost");
+		return false;
+	}
+	const uint64_t manaBefore = player.getMana();
+	const uint64_t manaSpentBefore = player.getSpentMana();
+	const uint32_t magicLevelBefore = player.getBaseMagicLevel();
+	const uint64_t predictedMana = manaBefore + forecast->gain;
+	const uint64_t wastedMana = predictedMana - player.getMaxMana();
+	++counters.actionsAttempted;
+	std::ostringstream request;
+	request << "\"action\":\"magic_training\",\"result\":\"requested\",\"source\":\"engine_path\""
+	        << ",\"spell\":" << jsonString(selected->descriptor->name) << ",\"audited_priority\":"
+	        << static_cast<uint32_t>(selected->descriptor->magicTrainingPriority) << ",\"refresh\":"
+	        << (selected->refresh ? "true" : "false") << ",\"mana_before\":" << manaBefore
+	        << ",\"mana_max\":" << player.getMaxMana() << ",\"mana_gain\":" << forecast->gain
+	        << ",\"mana_tick_interval\":" << forecast->interval << ",\"mana_tick_remaining\":" << forecast->remaining
+	        << ",\"predicted_mana\":" << predictedMana << ",\"wasted_mana\":" << wastedMana
+	        << ",\"mana_cost\":" << selected->cost << ",\"emergency_reserve\":" << magicTrainingEmergencyReserve;
+	emit("action_result", position, request.str());
+	g_game.playerSay(playerId, 0, TALKTYPE_SAY, "", selected->spell->getWords());
+	uint64_t manaAfter = player.getMana();
+	const uint64_t manaSpentAfter = player.getSpentMana();
+	const uint32_t magicLevelAfter = player.getBaseMagicLevel();
+	if (testPolicy.forceMagicTrainingVerificationFailure) {
+		// The engine cast remains real; this fixture corrupts only the post-cast observation snapshot.
+		++manaAfter;
+	}
+	const uint64_t manaDelta = manaBefore >= manaAfter ? manaBefore - manaAfter : UINT64_MAX;
+	const bool progressed = magicLevelAfter > magicLevelBefore ||
+	                        (magicLevelAfter == magicLevelBefore && manaSpentAfter > manaSpentBefore);
+	const bool verified = manaDelta == selected->cost && progressed;
+	std::ostringstream result;
+	result << "\"action\":\"magic_training\",\"result\":" << jsonString(verified ? "success" : "failed")
+	       << ",\"source\":\"engine_verification\",\"engine_result\":" << jsonString(verified ? "accepted" : "rejected")
+	       << ",\"spell\":" << jsonString(selected->descriptor->name) << ",\"mana_before\":" << manaBefore
+	       << ",\"mana_after\":" << manaAfter << ",\"mana_cost\":" << selected->cost << ",\"mana_delta\":" << manaDelta
+	       << ",\"mana_spent_before\":" << manaSpentBefore << ",\"mana_spent_after\":" << manaSpentAfter
+	       << ",\"magic_level_before\":" << magicLevelBefore << ",\"magic_level_after\":" << magicLevelAfter
+	       << ",\"emergency_reserve\":" << magicTrainingEmergencyReserve << ",\"mana_gain\":" << forecast->gain
+	       << ",\"mana_tick_interval\":" << forecast->interval << ",\"mana_tick_remaining\":" << forecast->remaining
+	       << ",\"predicted_mana\":" << predictedMana << ",\"wasted_mana\":" << wastedMana;
+	emit("action_result", position, result.str());
+	if (!verified) ++counters.actionsFailed;
+	finishMagicTraining(player, position, verified ? "success" : "failed", verified ? "cast_verified" : "cast_verification_failed");
+	return false;
+}
+
 void PlayerBotController::runSpellCalibrationFixture(Player& player, const Position& position)
 {
 	auto emitFixture = [this, &position](const char* spell, const char* targetClass, const PlayerBotSpellEnvelope& envelope,
@@ -341,6 +497,85 @@ void PlayerBotController::runSpellCalibrationFixture(Player& player, const Posit
 	emit("spell_calibration", position, "\"source\":\"profile_math\",\"phase\":\"fixture_profile_clear\",\"profiles_before\":" +
 	     std::to_string(profilesBeforeReset) + ",\"profiles_after\":" + std::to_string(spellCalibration.size()) +
 	     ",\"persistent\":false");
+}
+
+void PlayerBotController::runMagicTrainingFixture(Player& player, const Position& position)
+{
+	const std::optional<ManaRegenerationForecast> defaultForecast = player.getManaRegenerationForecast();
+	std::ostringstream defaultFields;
+	defaultFields << "\"source\":\"authoritative_forecast\",\"case\":\"active_default\",\"active\":"
+	              << (defaultForecast ? "true" : "false");
+	if (defaultForecast) {
+		defaultFields << ",\"gain\":" << defaultForecast->gain << ",\"interval\":" << defaultForecast->interval
+		              << ",\"remaining\":" << defaultForecast->remaining;
+	}
+	emit("magic_training_fixture", position, defaultFields.str());
+
+	ConditionRegeneration active(CONDITIONID_DEFAULT, CONDITION_REGENERATION, 10000);
+	active.setParam(CONDITION_PARAM_MANAGAIN, 10);
+	active.setParam(CONDITION_PARAM_MANATICKS, 1000);
+	active.executeCondition(&player, 250);
+	const std::optional<ManaRegenerationForecast> forecast = active.getManaForecast(player, EVENT_CREATURE_THINK_INTERVAL);
+	if (forecast) {
+		const uint64_t exactFull = 990 + forecast->gain;
+		const uint64_t overflow = 995 + forecast->gain;
+		std::ostringstream fields;
+		fields << "\"source\":\"authoritative_forecast\",\"case\":\"active\",\"gain\":" << forecast->gain
+		       << ",\"interval\":" << forecast->interval << ",\"remaining\":" << forecast->remaining
+		       << ",\"exact_full_predicted\":" << exactFull << ",\"exact_full_overflow\":false"
+		       << ",\"overflow_predicted\":" << overflow << ",\"overflow_wasted\":" << overflow - 1000;
+		emit("magic_training_fixture", position, fields.str());
+	}
+	ConditionRegeneration finite(CONDITIONID_DEFAULT, CONDITION_REGENERATION, 500);
+	finite.setParam(CONDITION_PARAM_MANAGAIN, 10);
+	finite.setParam(CONDITION_PARAM_MANATICKS, 1000);
+	finite.executeCondition(&player, 250);
+	emit("magic_training_fixture", position,
+	     std::string("\"source\":\"authoritative_forecast\",\"case\":\"finite_final_tick\",\"active\":") +
+	         (finite.getManaForecast(player, EVENT_CREATURE_THINK_INTERVAL) ? "true" : "false"));
+	finite.setParam(CONDITION_PARAM_MANATICKS, 3000);
+	emit("magic_training_fixture", position,
+	     std::string("\"source\":\"authoritative_forecast\",\"case\":\"finite_expires_before_tick\",\"active\":") +
+	         (finite.getManaForecast(player, EVENT_CREATURE_THINK_INTERVAL) ? "true" : "false"));
+	ConditionRegeneration nonDefault(CONDITIONID_COMBAT, CONDITION_REGENERATION, 10000);
+	nonDefault.setParam(CONDITION_PARAM_MANAGAIN, 4);
+	nonDefault.setParam(CONDITION_PARAM_MANATICKS, 1000);
+	nonDefault.executeCondition(&player, 500);
+	const std::optional<ManaRegenerationForecast> nonDefaultForecast =
+		nonDefault.getManaForecast(player, EVENT_CREATURE_THINK_INTERVAL);
+	emit("magic_training_fixture", position,
+	     "\"source\":\"authoritative_forecast\",\"case\":\"non_default\",\"active\":" +
+	         std::string(nonDefaultForecast ? "true" : "false") + ",\"gain\":" +
+	         std::to_string(nonDefaultForecast ? nonDefaultForecast->gain : 0) + ",\"remaining\":" +
+	         std::to_string(nonDefaultForecast ? nonDefaultForecast->remaining : 0));
+	if (player.getZone() != ZONE_PROTECTION) {
+		auto addForecastCondition = [&player](ConditionId_t id, uint32_t gain, uint32_t interval) {
+			auto* condition = new ConditionRegeneration(id, CONDITION_REGENERATION, 10000);
+			condition->setParam(CONDITION_PARAM_MANAGAIN, gain);
+			condition->setParam(CONDITION_PARAM_MANATICKS, interval);
+			condition->executeCondition(&player, 500);
+			player.addCondition(condition);
+		};
+		addForecastCondition(CONDITIONID_COMBAT, 3, 1000);
+		addForecastCondition(CONDITIONID_HEAD, 7, 2000);
+		const std::optional<ManaRegenerationForecast> aggregated = player.getManaRegenerationForecast();
+		emit("magic_training_fixture", position,
+		     "\"source\":\"authoritative_forecast\",\"case\":\"earliest_same_engine_cycle\",\"active\":" +
+		         std::string(aggregated ? "true" : "false") + ",\"gain\":" +
+		         std::to_string(aggregated ? aggregated->gain : 0) + ",\"remaining\":" +
+		         std::to_string(aggregated ? aggregated->remaining : 0));
+		player.removeCondition(CONDITION_REGENERATION, CONDITIONID_COMBAT);
+		player.removeCondition(CONDITION_REGENERATION, CONDITIONID_HEAD);
+	}
+	ConditionRegeneration expired(CONDITIONID_DEFAULT, CONDITION_REGENERATION, 0);
+	expired.setParam(CONDITION_PARAM_MANAGAIN, 10);
+	expired.setParam(CONDITION_PARAM_MANATICKS, 1000);
+	emit("magic_training_fixture", position, std::string("\"source\":\"authoritative_forecast\",\"case\":\"expired\",\"active\":") +
+	     (expired.getManaForecast(player, EVENT_CREATURE_THINK_INTERVAL) ? "true" : "false"));
+	if (player.getZone() == ZONE_PROTECTION) {
+		emit("magic_training_fixture", position, std::string("\"source\":\"authoritative_forecast\",\"case\":\"protection_zone\",\"active\":") +
+		     (active.getManaForecast(player, EVENT_CREATURE_THINK_INTERVAL) ? "true" : "false"));
+	}
 }
 
 bool PlayerBotController::handleSpellHealing(Player* player, const Position& currentPosition)

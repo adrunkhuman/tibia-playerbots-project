@@ -42,7 +42,8 @@ const PlayerBotTestPolicy& playerbot::testPolicyFromEnvironment()
 				 std::strcmp(gameplayMode, "equipment_buy_resume") == 0 ||
 				 std::strcmp(gameplayMode, "equipment_buy_space") == 0 ||
 				 std::strcmp(gameplayMode, "equipment_buy_rejected") == 0 ||
-				 std::strcmp(gameplayMode, "mainland_reward") == 0);
+			 (std::strncmp(gameplayMode, "magic_training", 14) == 0 &&
+			  std::strcmp(gameplayMode, "magic_training_hunt") != 0));
 		const bool startInHunt = gameplayMode &&
 			(std::strcmp(gameplayMode, "navigation") == 0 || std::strcmp(gameplayMode, "navigation_recovery") == 0 ||
 			 std::strcmp(gameplayMode, "corpse") == 0 ||
@@ -55,9 +56,13 @@ const PlayerBotTestPolicy& playerbot::testPolicyFromEnvironment()
 			 std::strcmp(gameplayMode, "readiness_ready") == 0 || std::strcmp(gameplayMode, "readiness_upgrade") == 0 ||
 			std::strcmp(gameplayMode, "readiness_missing_weapon") == 0 || std::strcmp(gameplayMode, "readiness_supplies") == 0 ||
 			std::strcmp(gameplayMode, "readiness_retention") == 0 || std::strcmp(gameplayMode, "spell_use") == 0 ||
+			std::strcmp(gameplayMode, "magic_training_hunt") == 0 ||
+			std::strcmp(gameplayMode, "magic_training_post_hunt") == 0 ||
+			std::strcmp(gameplayMode, "magic_training_post_hunt_no_overflow") == 0 ||
 			std::strcmp(gameplayMode, "spell_calibration") == 0);
 		const bool adaptiveChallengeFixture = gameplayMode && std::strcmp(gameplayMode, "adaptive_challenge") == 0;
 		const bool spellCalibrationFixture = gameplayMode && std::strcmp(gameplayMode, "spell_calibration") == 0;
+		const bool magicTrainingFixture = gameplayMode && std::strncmp(gameplayMode, "magic_training", 14) == 0;
 		const bool fixedFixtureRoute = gameplayMode && std::strcmp(gameplayMode, "stamina_bonus") != 0 &&
 		                               std::strcmp(gameplayMode, "stamina_boundary") != 0 &&
 			                               std::strcmp(gameplayMode, "stamina_normal") != 0 &&
@@ -99,6 +104,8 @@ const PlayerBotTestPolicy& playerbot::testPolicyFromEnvironment()
 			adaptiveChallengeFixture,
 			adaptiveChallengeFixture,
 			spellCalibrationFixture,
+			magicTrainingFixture,
+			gameplayMode && std::strcmp(gameplayMode, "magic_training_failed") == 0,
 		};
 	}();
 	return policy;
@@ -123,23 +130,26 @@ void PlayerBotController::start(const Position& position, bool recovered, uint32
 	Player* controlledPlayer = g_game.getPlayerByID(playerId);
 	const bool departureComplete = controlledPlayer && hasCompletedRookgaardDeparture(*controlledPlayer);
 	const bool departureRequired = controlledPlayer && requiresRookgaardDeparture(*controlledPlayer);
-	const bool useGoalSelector = controlledPlayer && (departureRequired || (!recovered && testPolicy.progressionEnabled));
-	if (useGoalSelector && !selectTopLevelGoal(*controlledPlayer, position, "startup")) {
+	const bool useGoalSelector = controlledPlayer && !startInHunt &&
+	                             (departureRequired || (!recovered && testPolicy.progressionEnabled));
+	if (!testPolicy.magicTrainingFixture && useGoalSelector && !selectTopLevelGoal(*controlledPlayer, position, "startup")) {
 		return;
 	}
 	std::ostringstream lifecycle;
 	lifecycle << "\"status\":\"online\",\"message\":\"Playerbot online\""
 	          << ",\"recovered\":" << (recovered ? "true" : "false")
 	          << ",\"recovery_count\":" << recoveryCount
-	          << ",\"objective\":" << jsonString(useGoalSelector ? topLevelGoalName(activeGoal) :
+	          << ",\"objective\":" << jsonString(testPolicy.magicTrainingFixture ? "fixture_pending" : useGoalSelector ? topLevelGoalName(activeGoal) :
 	                                                    (startInHunt ? "hunt" : "service"))
 	          << ",\"step_speed\":" << (g_game.getPlayerByID(playerId) ? g_game.getPlayerByID(playerId)->getSpeed() : 0)
-	          << ",\"spell_calibration_profiles\":" << spellCalibration.size();
+		          << ",\"spell_calibration_profiles\":" << spellCalibration.size();
 	emit("lifecycle", position, lifecycle.str());
 	if (testPolicy.spellCalibrationFixture && controlledPlayer) {
 		runSpellCalibrationFixture(*controlledPlayer, position);
 	}
-	if (useGoalSelector) {
+	if (testPolicy.magicTrainingFixture) {
+		magicTrainingFixtureInitializationPending = true;
+	} else if (useGoalSelector) {
 		// The selected goal initialized its own executor state.
 	} else if (startInHunt) {
 		activeGoal = TopLevelGoal::Hunt;
@@ -152,7 +162,7 @@ void PlayerBotController::start(const Position& position, bool recovered, uint32
 		cyclePhase = CyclePhase::Service;
 	}
 	setStage(ScenarioStage::Traverse, position);
-	schedule(navigationInterval);
+	schedule(testPolicy.magicTrainingFixture ? 1000 : navigationInterval);
 }
 
 void PlayerBotController::schedule(uint32_t interval)
@@ -768,6 +778,25 @@ void PlayerBotController::navigate()
 
 	const Position currentPosition = player->getPosition();
 	lastPosition = currentPosition;
+	if (magicTrainingFixtureInitializationPending) {
+		magicTrainingFixtureInitializationPending = false;
+		runMagicTrainingFixture(*player, currentPosition);
+		const bool useGoalSelector = !testPolicy.startInHunt &&
+		                             (requiresRookgaardDeparture(*player) || testPolicy.progressionEnabled);
+		if (useGoalSelector) {
+			if (!selectTopLevelGoal(*player, currentPosition, "startup")) {
+				return;
+			}
+		} else if (testPolicy.startInHunt) {
+			activeGoal = TopLevelGoal::Hunt;
+			startHunt(player, currentPosition, "focused_fixture");
+		} else {
+			activeGoal = TopLevelGoal::Service;
+			cyclePhase = CyclePhase::Service;
+		}
+		schedule(navigationInterval);
+		return;
+	}
 	maybeLogSummary(currentPosition);
 	recordActiveHuntCombat(*player);
 	verifySpellCast(*player, currentPosition);

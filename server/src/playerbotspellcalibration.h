@@ -7,6 +7,7 @@
 
 #include <cstdint>
 #include <cstddef>
+#include <array>
 #include <map>
 #include <optional>
 #include <string>
@@ -20,10 +21,21 @@ enum class PlayerBotSpellRole : uint8_t {
 	RangedOffense,
 };
 
+enum class PlayerBotTrainingEffect : uint8_t {
+	None,
+	Haste,
+	Light,
+};
+
 struct PlayerBotSpellDescriptor {
 	const char* name;
 	const char* words;
 	PlayerBotSpellRole role;
+	// Only explicitly audited, self-contained instant spells may opt in.
+	bool magicTrainingSafe = false;
+	uint8_t magicTrainingPriority = 0;
+	PlayerBotTrainingEffect magicTrainingEffect = PlayerBotTrainingEffect::None;
+	bool magicTrainingRefreshSafe = false;
 };
 
 struct PlayerBotSpellEnvelope {
@@ -59,6 +71,7 @@ enum class PlayerBotSpellEvidence : uint8_t {
 };
 
 const PlayerBotSpellDescriptor* playerBotSpellDescriptor(const char* name);
+const std::array<PlayerBotSpellDescriptor, 6>& playerBotSpellDescriptors();
 const char* playerBotSpellRoleName(PlayerBotSpellRole role);
 PlayerBotSpellEnvelope playerBotSpellEnvelope(const Player& player, const PlayerBotSpellDescriptor& descriptor);
 PlayerBotSpellEvidence playerBotClassifySpellObservation(PlayerBotSpellRole role, const PlayerBotSpellObservation& observation,

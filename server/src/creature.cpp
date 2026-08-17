@@ -1347,6 +1347,27 @@ Condition* Creature::getCondition(ConditionType_t type, ConditionId_t conditionI
 	return nullptr;
 }
 
+std::optional<ManaRegenerationForecast> Creature::getManaRegenerationForecast() const
+{
+	if (getZone() == ZONE_PROTECTION) return std::nullopt;
+	std::optional<ManaRegenerationForecast> earliest;
+	uint64_t gain = 0;
+	for (const Condition* condition : conditions) {
+		if (condition->getType() != CONDITION_REGENERATION) continue;
+		const auto forecast = static_cast<const ConditionRegeneration*>(condition)->getManaForecast(*this, EVENT_CREATURE_THINK_INTERVAL);
+		if (!forecast) continue;
+		if (!earliest || forecast->remaining < earliest->remaining) {
+			earliest = forecast;
+			gain = forecast->gain;
+		} else if (forecast->remaining == earliest->remaining) {
+			gain += forecast->gain;
+		}
+	}
+	if (!earliest) return std::nullopt;
+	earliest->gain = static_cast<uint32_t>(std::min<uint64_t>(gain, std::numeric_limits<uint32_t>::max()));
+	return earliest;
+}
+
 void Creature::executeConditions(uint32_t interval)
 {
 	ConditionList tempConditions{ conditions };

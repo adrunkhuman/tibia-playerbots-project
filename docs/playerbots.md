@@ -34,7 +34,9 @@ docker compose -f server/compose.yaml logs playerbot-setup server
 
 The controller evaluates top-level goals only at safe boundaries: startup,
 completed or failed pickup, completed service/depot work, and hunt deadline or
-capacity return. It does not switch goals during movement, combat, looting,
+capacity return. Hunt completion enters the neutral `Idle` phase before goal
+selection so a non-hunt opportunity can compete with the next hunt. The
+controller does not switch goals during movement, combat, looting,
 dialogue, transactions, or pending item verification. Safety can force service;
 critical healing can interrupt reward or Oracle travel before an irreversible
 action.
@@ -49,12 +51,13 @@ Utilities are deterministic arbitration scores, not probabilities:
 | Equipment reward | 650 |
 | Spell training | 550 |
 | Ordinary service | 400 |
+| Magic training | 350 |
 | Hunt | 300 |
 | Economic reward | 250 |
 
 Service needs and reward value adjust these baselines, so candidates can cross
 nominal tiers. Equal scores keep declaration order: departure, service, pickup,
-spell training, then hunt. Successful pickup and spell-training families cool
+spell training, equipment, magic training, then hunt. Successful pickup and spell-training families cool
 down for five minutes; failed or interrupted families cool down for 60 seconds.
 
 ## Navigation and hunting
@@ -209,6 +212,66 @@ wait for or confirmation of the full duration. Pre-existing or replaced
 conditions are rejected. Only accepted healing adds verified hunt recovery
 pressure.
 
+### Magic training
+
+Magic training is a one-cast overflow opportunity, not a level target or a
+training window. Outside a hunt, the controller forecasts the next active
+engine mana-regeneration tick. If `current mana + gain > maximum mana`, it may
+make one audited safe cast so the tick does not lose mana, then immediately
+returns to normal goal arbitration. Exact full mana is not overflow. Hunting
+always keeps mana: it never selects this opportunity.
+
+`ConditionRegeneration::getManaForecast` supplies each active condition's
+read-only gain, interval, and time to its next engine tick.
+`Creature::getManaRegenerationForecast` aligns condition phases to the server's
+condition-execution interval, selects the earliest actual engine cycle, and sums
+only default, equipment, or combat conditions due on that cycle. A finite
+condition contributes its valid final tick because regeneration executes before
+condition expiration; a condition that expires before reaching its next tick is
+excluded. `remaining` is time to that aligned execution cycle. The API returns
+no forecast for absent or expired conditions, zero gain or interval, or a
+protection zone, where the engine pauses regeneration.
+Overflow uses strict `current mana + gain > maximum mana`; exact full mana does
+not cast. Overflow arithmetic, predicted mana, and lost mana use `uint64_t`.
+Telemetry records current and maximum mana, tick gain, interval and remaining
+time, prediction, and loss.
+
+The candidate has utility 350: below service, reward, spell learning, and
+equipment work, but above hunting. It is infeasible during hunting, combat,
+navigation, recovery, pending actions, or a paused/no-overflow forecast. A
+result always applies a short cooldown and reselects. Failed verification stops
+after that one attempt; there is no retry loop or persisted training state.
+Restart recomputes the opportunity from the player and condition.
+
+Descriptors explicitly opt in with safe, priority, effect, and refresh-safe
+metadata. This compile-time registry is the extension point for new vocations
+and audited spells; additions require matching loaded spell and learned-state
+support. Policy preflights enabled state, level, magic level, premium, soul,
+mana reserve, exhaustion, weapon, and safe instant-spell shape. It rejects
+aggressive, targeted, parameterized, directional, rune, and unsupported spells;
+the normal `g_game.playerSay` path remains authoritative for final legality and
+cost. Higher useful
+priority wins: Haste first when absent, then Great Light when there is no light,
+then Light. If all audited effects are active, the lowest-cost refresh-safe
+descriptor wins; Light is currently that fallback. A cast must leave 20 mana,
+but does not reserve a second spell cost. Verification requires the observed
+mana delta to equal loaded cost and either base magic level or configured
+`manaSpent` progression to increase; this handles `RATE_MAGIC` and level-boundary
+counter resets. The reported `engine_result` describes that observation, not a
+return value from `g_game.playerSay`. Calibration observations never select it.
+
+The gameplay fixtures test forecast arithmetic and selector behavior separately.
+The forecast fixture covers default and non-default conditions, expiration,
+earliest-cycle selection, and gains summed in one engine cycle. The arbitration
+fixtures cover a real hunt finish, `Idle`, one normal engine cast, continuation,
+and higher-priority service or spell learning. They do not model arbitrary
+condition serialization: regeneration phase intentionally resets on load, so
+the restart fixture checks a fresh forecast from current persisted mana and
+conditions rather than a retained training window.
+All scenarios use controlled Lua setup. They prove forecast arithmetic,
+arbitration, and normal engine casts under those conditions, not frequency or
+utility on an ordinary long-running server.
+
 The service cycle sells known surplus, restores five small health potions and
 one meat, deposits carried money, and withdraws 100 gp. Hunting ends after the
 configured duration or below 30 oz free capacity. Remaining top-level backpack
@@ -298,6 +361,7 @@ States, actions, results, statuses, and reasons use stable lowercase values.
 | Equipment | `equipment_offer_candidate` and `equipment_offer_shadow` expose loaded tagged-shop offers, loadout and hunt deltas, reserve and route checks, and non-mutating `would_buy` or `would_equip` decisions. Live `buy_equipment` goals use `strategy_selection`, `action_result`, `strategy_objective_result`, and `goal_result` to record purchase, carried-item recovery, displacement, equip verification, and fallback. |
 | Spell training | `spell_trainer_discovered`, `spell_candidate`, `strategy_selection`, `action_result`, and `goal_result` expose loaded offers, eligibility rejections, provider/route choice, and exact payment verification. |
 | Spell casting | `action_result` with `action="cast_spell"` records the need, semantic `policy_candidate`, selected method, mana reserve, normal-path request, engine result, observed outcome, fallback, captured engine bounds, monotonic observation age, target class, distinct synchronous spell-victim count, measured Haste condition ticks, and controller-local calibration counts, range, conservative value, ranking estimate, confidence, and evidence reason. `spell_calibration` separates `classifier_helper` and `profile_math` fixture evidence; `spell_calibration_eviction` records bounded-profile replacement. `legal_candidates` contains only normal-path casts confirmed by resource evidence. |
+| Magic training | `goal_candidate`, `goal_selection`, and `goal_result` expose overflow arbitration. `action_result` with `action="magic_training"` emits a requested `engine_path` record and a success or failure `engine_verification` record with spell, reserve, current/maximum/predicted/lost mana, aggregated gain, aligned interval/remaining time, loaded cost, mana delta, and magic progression. `magic_training_fixture` with `source="authoritative_forecast"` is controlled fixture evidence, not a live cast. |
 | Actions | `action_result`, `target_changed`, `service_discovered`, `npc_reply`, `stuck` record externally relevant attempts and outcomes. |
 | Hunting | `hunt_region_candidate`, `hunt_region_scan`, `hunt_region_selection`, `hunt_region_outcome`, `hunt_challenge_frontier`, `hunt_scope_exhausted`, and `hunt_region_patrol` expose planner inputs, recovery assumptions, active-combat evidence, frontier updates, and bounded local exhaustion. |
 | Navigation | `navigation_progress` records bounded recovery such as oscillation suppression. |
