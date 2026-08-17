@@ -78,12 +78,40 @@ the navigator and selects the highest route-adjusted score. Navigation remains
 behind the destination/reachability interface so a later navigator can replace
 tile planning without changing hunt selection.
 
-Predicted threat rejects a region above `0.35` expected fight damage per maximum
-health. It models up to three overlapping hostile spawns. Taking one maximum
-health pool of damage within the first two minutes abandons the region for ten
-minutes. Completed hunts update a per-controller XP correction after at least
-30 seconds and one kill; the sample is clamped to `0.25` through `2.0` and uses
-a 65/35 rolling blend. This state resets on relog or restart.
+One scan uses an immutable combat, recovery, resource, and frontier snapshot for
+every scoring batch. Position, level, stamina, cooldown exclusions, map revision,
+or a health decrease cancels the scan. Other equipment, mana, potion, or learned
+spell changes apply to the next scan. Candidate telemetry describes the captured
+snapshot rather than necessarily the player's state when selection completes.
+
+Predicted pressure models up to three overlapping hostile spawns, current
+equipment, one conservative small-health-potion recovery, and learned Light
+Healing when its loaded metadata, current mana, cooldown, and legality allow
+it. The prediction uses the spell's minimum server formula and preserves
+recovery mana. A candidate is lethal at or above the bot's current health; it
+does not credit potion or spell recovery before that lethal point.
+`raw_threat_ratio` reports unrecovered predicted damage against maximum health.
+`threat_ratio` subtracts conservative recovery for challenge ranking, while
+`predicted_lethal` compares unrecovered damage with snapshotted current health.
+`recovery.available_before_lethal` is therefore currently zero.
+
+Each controller starts with a `0.20` pressure frontier and rewards the highest
+projected-XP reachable region in its `+/-0.05` band. Safer regions remain a
+fallback. Thirty seconds of active combat with at least 50% hunt uptime,
+near-full health, and no verified recovery escalates the frontier by `0.025`.
+Verified potion or healing-spell pressure, observed danger, or death backs it
+off by `0.05`; the next two qualifying hunts hold before escalation resumes.
+The target stays within `0.10` through `0.40`. It is an adaptation bound, not a
+lethal threshold. Travel and idle full health do not count as easy evidence.
+Frontier and performance state are per-controller and reset on relog or restart.
+
+Taking one maximum health pool of active-combat damage within the first two
+minutes abandons the region for ten minutes. Completed hunts update a
+per-controller XP correction after at least 30 seconds and one kill; the sample
+is clamped to `0.25` through `2.0` and uses a 65/35 rolling blend. When all
+locally scanned candidates are unavailable, the controller emits
+`hunt_scope_exhausted` and retries the same bounded scope after 30 seconds. It
+does not expand geography or stop the controller.
 
 When an attacked monster leaves normal positional or creature visibility, or
 the attack association is lost, the bot clears chase and pursues a reachable
@@ -94,6 +122,11 @@ tiles. Pursuit lasts at most five seconds and six tiles of Chebyshev displacemen
 Reaching the approach point or exhausting either budget returns to patrol and
 suppresses that target for ten seconds. A 60-second traversal combat timeout
 retains its separate 120-second suppression.
+
+Defensive combat runs only outside the hunt cycle. During a hunt, only the
+active traversal combat episode contributes combat evidence; target pursuit is
+part of that episode for hunt death attribution, but does not itself add active
+combat time or damage.
 
 The map-derived region planner and bounded pursuit are prototypes, not
 whole-map hierarchical navigation or general creature memory. Regression
@@ -228,7 +261,7 @@ States, actions, results, statuses, and reasons use stable lowercase values.
 | Spell training | `spell_trainer_discovered`, `spell_candidate`, `strategy_selection`, `action_result`, and `goal_result` expose loaded offers, eligibility rejections, provider/route choice, and exact payment verification. |
 | Spell casting | `action_result` with `action="cast_spell"` records the need, semantic `policy_candidate`, selected method, mana reserve, normal-path request, engine result, observed outcome, and fallback. `legal_candidates` contains only normal-path casts confirmed by resource evidence. |
 | Actions | `action_result`, `target_changed`, `service_discovered`, `npc_reply`, `stuck` record externally relevant attempts and outcomes. |
-| Hunting | `hunt_region_candidate`, `hunt_region_scan`, `hunt_region_selection`, `hunt_region_outcome`, `hunt_region_patrol` expose planner inputs and results. |
+| Hunting | `hunt_region_candidate`, `hunt_region_scan`, `hunt_region_selection`, `hunt_region_outcome`, `hunt_challenge_frontier`, `hunt_scope_exhausted`, and `hunt_region_patrol` expose planner inputs, recovery assumptions, active-combat evidence, frontier updates, and bounded local exhaustion. |
 | Navigation | `navigation_progress` records bounded recovery such as oscillation suppression. |
 | Health | `summary` reports cumulative timing, action, failure, stuck, and suppression counters every 60 seconds. |
 
@@ -236,6 +269,12 @@ Successful movement is not logged per tile. Repeated identical transitions,
 target changes, and action failures are emitted at most once per 60 seconds;
 `summary.suppressed_events` counts omissions. Counters cover one in-memory
 controller lifetime. Docker retains three 10 MiB server log files.
+
+`hunt_challenge_frontier.result` is `escalated`, `backoff`, `hold`, `clamped`,
+or `insufficient_active_combat`. Its `retreat` field is true only for the
+`hunt_region_observed_danger` exit reason. `hunt_scope_exhausted` reports total,
+scored, suitable, and reachable candidate counts plus the retry delay and either
+`local_scope_exhausted` or `route_validation_budget_exhausted`.
 
 Target pursuit uses `action_result` with `action="target_pursuit"`.
 `result="started"` includes `target_id` and `last_seen_position`;

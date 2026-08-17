@@ -20,6 +20,7 @@
 #include "playerbotarea.h"
 #include "playerbotnavigation.h"
 #include "spawn.h"
+#include "spells.h"
 #include "tile.h"
 #include "weapons.h"
 
@@ -29,6 +30,7 @@
 
 extern Game g_game;
 extern ConfigManager g_config;
+extern Spells* g_spells;
 
 namespace {
 	constexpr int32_t heatRadius = 8;
@@ -36,7 +38,10 @@ namespace {
 	constexpr uint16_t spawnBucketSize = heatRadius * 2 + 1;
 	constexpr uint32_t maximumRegionDistancePadding = maximumRegionRadius * 2;
 	constexpr uint32_t maximumHuntTravelDistance = 300;
-	constexpr double maximumThreatRatio = 0.35;
+	constexpr double challengeBandWidth = 0.05;
+	constexpr uint16_t smallHealthPotionItemId = 8704;
+	constexpr double smallHealthPotionMinimumHealing = 60;
+	constexpr uint32_t recoveryManaReserve = 20;
 
 	bool isRookgaardSpawn(const Position& position)
 	{
@@ -221,11 +226,12 @@ namespace {
 		++huntRegionCacheRevision;
 	}
 
-	PlayerBotHuntRegion scoreRegion(Player& player, const PlayerBotCombatProfile& profile, size_t candidateIndex,
+	PlayerBotHuntRegion scoreRegion(Player& player, const PlayerBotHuntPlanningProfile& planningProfile, size_t candidateIndex,
 	                                const std::set<Position>& excludedRegions,
 	                                const std::map<Position, PlayerBotHuntRegionPerformance>& performance,
 	                                uint32_t huntDurationSeconds)
 	{
+		const PlayerBotCombatProfile& profile = planningProfile.combat;
 	const uint16_t staminaMinutes = player.getStaminaMinutes();
 	const CachedRegion& cached = huntRegionCache.regions[candidateIndex];
 		PlayerBotHuntRegion region;
@@ -254,6 +260,7 @@ namespace {
 			return region;
 		}
 		double worstFightDamage = 0;
+		double worstFightSeconds = 0;
 		for (size_t anchor : cached.members) {
 			struct LocalAttacker {
 				double damagePerSecond;
@@ -277,11 +284,16 @@ namespace {
 				remainingDamagePerSecond += localAttackers[index].damagePerSecond;
 			}
 			double fightDamage = 0;
+			double fightSeconds = 0;
 			for (size_t index = 0; index < attackers; ++index) {
 				fightDamage += remainingDamagePerSecond * localAttackers[index].fightSeconds;
+				fightSeconds += localAttackers[index].fightSeconds;
 				remainingDamagePerSecond -= localAttackers[index].damagePerSecond;
 			}
-			worstFightDamage = std::max(worstFightDamage, fightDamage);
+			if (fightDamage > worstFightDamage) {
+				worstFightDamage = fightDamage;
+				worstFightSeconds = fightSeconds;
+			}
 		}
 		std::sort(region.patrolPoints.begin(), region.patrolPoints.end());
 		region.patrolPoints.erase(std::unique(region.patrolPoints.begin(), region.patrolPoints.end()),
@@ -303,8 +315,19 @@ namespace {
 		                                   Position::getDistanceZ(player.getPosition(), region.destination) * 20;
 		const Position& templePosition = player.getTemplePosition();
 		const uint32_t templeDistance = playerbot::localPlanningDistance(templePosition, region.destination);
-		region.threatRatio = worstFightDamage / std::max<int32_t>(profile.maximumHealth, 1);
-		region.suitable = region.threatRatio <= maximumThreatRatio &&
+		region.predictedFightSeconds = worstFightSeconds;
+		region.currentHealth = planningProfile.currentHealth;
+		region.recovery = playerBotPredictRecovery(planningProfile, worstFightSeconds);
+		region.rawThreatRatio = worstFightDamage / std::max<int32_t>(profile.maximumHealth, 1);
+		region.threatRatio = std::max(0.0, worstFightDamage - region.recovery.totalMinimumHealing) /
+		                     std::max<int32_t>(profile.maximumHealth, 1);
+		region.challengeFrontier = planningProfile.challengeFrontier;
+		region.challengeBandMinimum = std::max(0.0, planningProfile.challengeFrontier - challengeBandWidth);
+		region.challengeBandMaximum = planningProfile.challengeFrontier + challengeBandWidth;
+		region.inChallengeBand = region.threatRatio >= region.challengeBandMinimum &&
+		                         region.threatRatio <= region.challengeBandMaximum;
+		region.predictedLethal = playerBotPredictedLethal(planningProfile.currentHealth, worstFightDamage);
+		region.suitable = !region.predictedLethal && region.threatRatio <= region.challengeBandMaximum &&
 		                  playerbot::isInsideLocalPlanningArea(templePosition, region.destination) &&
 		                  geometricDistance <= maximumHuntTravelDistance;
 		if (excludedRegions.find(region.center) != excludedRegions.end()) {
@@ -312,8 +335,10 @@ namespace {
 			region.rejectionReason = "observed_danger_cooldown";
 		} else if (!playerbot::isInsideLocalPlanningArea(templePosition, region.destination) || geometricDistance > maximumHuntTravelDistance) {
 			region.rejectionReason = "travel_distance";
+		} else if (region.predictedLethal) {
+			region.rejectionReason = "predicted_lethal";
 		} else if (!region.suitable) {
-			region.rejectionReason = "predicted_damage";
+			region.rejectionReason = "challenge_frontier";
 		}
 		region.experiencePerMinute *= g_config.getExperienceStage(player.getLevel());
 		region.staminaMinutes = staminaMinutes;
@@ -330,6 +355,71 @@ namespace {
 		region.score = region.projectedExperience;
 		return region;
 	}
+}
+
+PlayerBotHuntPlanningProfile playerBotHuntPlanningProfile(const Player& player, const PlayerBotCombatProfile& combat,
+                                                           double challengeFrontier)
+{
+	PlayerBotHuntPlanningProfile profile;
+	profile.combat = combat;
+	profile.currentHealth = player.getHealth();
+	profile.mana = player.getMana();
+	profile.magicLevel = player.getMagicLevel();
+	profile.potionCount = static_cast<const Cylinder&>(player).getItemTypeCount(smallHealthPotionItemId);
+	profile.challengeFrontier = challengeFrontier;
+	InstantSpell* spell = g_spells ? g_spells->getInstantSpellByName("Light Healing") : nullptr;
+	if (!spell || spell->getWords() != "exura" || !spell->isLearnable() || !spell->isEnabled() ||
+	    !spell->canCast(&player) || player.getLevel() < spell->getLevel() ||
+	    player.getMagicLevel() < spell->getMagicLevel() || (spell->isPremium() && !player.isPremium())) {
+		return profile;
+	}
+	profile.lightHealingLegal = true;
+	profile.lightHealingManaCost = spell->getManaCost(&player);
+	profile.lightHealingCooldown = std::max(spell->getCooldown(), spell->getGroupCooldown());
+	return profile;
+}
+
+PlayerBotRecoveryPrediction playerBotPredictRecovery(const PlayerBotHuntPlanningProfile& profile, double predictedFightSeconds)
+{
+	PlayerBotRecoveryPrediction prediction;
+	prediction.potionUses = std::min<uint32_t>(1, profile.potionCount);
+	prediction.potionMinimumHealing = prediction.potionUses * smallHealthPotionMinimumHealing;
+	prediction.lightHealingLegal = profile.lightHealingLegal;
+	prediction.spellManaCost = profile.lightHealingManaCost;
+	prediction.spellCooldown = profile.lightHealingCooldown;
+	prediction.manaReserve = prediction.spellManaCost + recoveryManaReserve;
+	if (prediction.lightHealingLegal && prediction.spellManaCost != 0 && profile.mana > prediction.manaReserve) {
+		const uint32_t manaCasts = (profile.mana - prediction.manaReserve) / prediction.spellManaCost;
+		const uint32_t durationCasts = std::max<uint32_t>(1, static_cast<uint32_t>(std::floor(
+			predictedFightSeconds * 1000.0 / std::max<uint32_t>(prediction.spellCooldown, 1))));
+		prediction.spellCasts = std::min(manaCasts, durationCasts);
+	}
+	prediction.spellMinimumHealing = prediction.spellCasts *
+		(profile.combat.level / 5.0 + profile.magicLevel * 1.4 + 8);
+	prediction.totalMinimumHealing = prediction.potionMinimumHealing + prediction.spellMinimumHealing;
+	return prediction;
+}
+
+bool playerBotPredictedLethal(int32_t currentHealth, double predictedDamage)
+{
+	return currentHealth <= 0 || predictedDamage >= currentHealth;
+}
+
+bool playerBotPreferHuntRegion(const PlayerBotHuntRegion& left, const PlayerBotHuntRegion& right)
+{
+	const bool leftAvailable = left.suitable && left.reachable;
+	const bool rightAvailable = right.suitable && right.reachable;
+	if (leftAvailable != rightAvailable) {
+		return leftAvailable;
+	}
+	return left.inChallengeBand != right.inChallengeBand ? left.inChallengeBand : left.score > right.score;
+}
+
+bool playerBotHuntScopeExhausted(const std::vector<PlayerBotHuntRegion>& regions)
+{
+	return std::none_of(regions.begin(), regions.end(), [](const PlayerBotHuntRegion& region) {
+		return region.suitable && region.reachable;
+	});
 }
 
 void PlayerBotHuntRegionPlanner::invalidateCache()
@@ -370,20 +460,7 @@ PlayerBotHuntRegionScan PlayerBotHuntRegionPlanner::beginScan(const Player& play
 	return scan;
 }
 
-bool PlayerBotHuntRegionPlanner::score(Player& player, uint64_t revision, size_t candidateIndex,
-	                                      const std::set<Position>& excludedRegions,
-	                                      const std::map<Position, PlayerBotHuntRegionPerformance>& performance,
-	                                      uint32_t huntDurationSeconds, PlayerBotHuntRegion& region) const
-{
-	const Item* weapon = player.getWeapon(true);
-	const PlayerBotCombatProfile profile{
-		player.getLevel(), player.getMaxHealth(), player.getArmor(), player.getDefense(), weapon ? weapon->getAttack() : 7,
-		weapon ? player.getWeaponSkill(weapon) : player.getSkillLevel(SKILL_FIST), player.getAttackFactor(),
-	};
-	return score(player, profile, revision, candidateIndex, excludedRegions, performance, huntDurationSeconds, region);
-}
-
-bool PlayerBotHuntRegionPlanner::score(Player& player, const PlayerBotCombatProfile& profile, uint64_t revision,
+bool PlayerBotHuntRegionPlanner::score(Player& player, const PlayerBotHuntPlanningProfile& profile, uint64_t revision,
 	                                      size_t candidateIndex, const std::set<Position>& excludedRegions,
 	                                      const std::map<Position, PlayerBotHuntRegionPerformance>& performance,
 	                                      uint32_t huntDurationSeconds, PlayerBotHuntRegion& region) const

@@ -47,6 +47,7 @@ the changed behavior:
 | `-OracleDeparture` | Tagged Oracle route, dialogue, vocation/town/position verification, and restart persistence. |
 | `-StaminaProjection` | Premium bonus, low-stamina penalty, and ordinary stamina projections. |
 | `-HuntRegionPlanning` | Cached scanner batching, threat rejection, reachability, cooldowns, and observed correction. |
+| `-AdaptiveChallenge` | Synthetic frontier and planner-helper fixture covering idle exclusion, escalation, hysteresis, recovery backoff, equipment/recovery prediction, lethal rejection, and local exhaustion. It does not validate real combat sampling or long-running hunt behavior. |
 | `-CombatReadiness` | Equipment, supplies, capacity, service recovery, upgrades, and restart reconstruction. |
 | `-EquipmentPurchases` | Justified purchase and equip verification, clean restart persistence, carried-upgrade recovery, displaced-item-space rejection, and rejected transactions. |
 | `-MainlandRewards` | Real Thais reward object from a teleported, high-capacity fixture; scale-armor claim and equip, displaced-item and bundle preservation, restart reconstruction, and non-null battle-axe rejection evidence. It does not prove normal traversal, realistic capacity limits, or a specific rejection reason. |
@@ -94,8 +95,15 @@ docker compose -f server/compose.yaml logs --follow --no-log-prefix server
 ```
 
 Inspect `hunt_region_candidate`, `hunt_region_scan`, `hunt_region_selection`,
-`hunt_region_outcome`, `hunt_region_patrol`, and `navigation_progress` events.
+`hunt_region_outcome`, `hunt_challenge_frontier`, `hunt_scope_exhausted`,
+`hunt_region_patrol`, and `navigation_progress` events.
 Remove the environment override and recreate the server afterward.
+
+Focused tests prove deterministic frontier transitions, not soak stability. The
+default five-minute development hunt is smoke evidence. Use a separate normal
+stack run with 20 to 60 minute hunts to assess sustained escalation, recovery
+backoff, scan retries, and telemetry volume; short hunts can end before the bot
+reaches deep patrol points or accumulates enough active-combat evidence.
 
 ## Connectionless regression
 

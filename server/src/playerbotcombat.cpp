@@ -103,6 +103,7 @@ bool PlayerBotController::handleHealing(Player* player, const Position& currentP
 		const int32_t health = player->getHealth();
 		if (potionCount < pendingHealPotionCount && health > pendingHealHealth) {
 			logHealResult("success", nullptr, health, potionCount, currentPosition);
+			recordHuntRecovery(true);
 		} else {
 			++counters.actionsFailed;
 			logHealResult("failed", potionCount < pendingHealPotionCount ? "ineffective_recovery" : "use_not_verified",
@@ -487,6 +488,195 @@ void PlayerBotController::processTraversalCombat(Player* player, const Position&
 	schedule(navigationInterval);
 }
 
+bool PlayerBotController::isActiveHuntCombat(const Player& player) const
+{
+	return activeHuntRegion && cyclePhase == CyclePhase::Hunt && scenarioStage == ScenarioStage::TraversalCombat &&
+	       const_cast<Player&>(player).getAttackedCreature() != nullptr;
+}
+
+void PlayerBotController::recordHuntCombatObservation(bool active, double elapsedSeconds, int32_t health,
+	                                                     int32_t maximumHealth, uint32_t attackers)
+{
+	if (!active) {
+		return;
+	}
+	huntCombatEvidence.activeSeconds += std::max(0.0, elapsedSeconds);
+	huntCombatEvidence.minimumHealth = std::min(huntCombatEvidence.minimumHealth, health);
+	const uint8_t healthPercent = maximumHealth <= 0 ? 0 : static_cast<uint8_t>(std::clamp(
+		health * 100 / maximumHealth, 0, 100));
+	++huntCombatEvidence.healthPercentSamples[healthPercent];
+	huntCombatEvidence.maximumAttackerOverlap = std::max(huntCombatEvidence.maximumAttackerOverlap, attackers);
+}
+
+void PlayerBotController::recordActiveHuntCombat(const Player& player)
+{
+	const auto now = std::chrono::steady_clock::now();
+	const bool active = isActiveHuntCombat(player);
+	if (!active) {
+		huntCombatEvidence.lastSample = now;
+		return;
+	}
+	double elapsedSeconds = 0;
+	if (huntCombatEvidence.lastSample.time_since_epoch().count() != 0) {
+		elapsedSeconds = std::chrono::duration<double>(now - huntCombatEvidence.lastSample).count();
+	}
+	huntCombatEvidence.lastSample = now;
+	SpectatorVec spectators;
+	g_game.map.getSpectators(spectators, player.getPosition());
+	uint32_t attackers = 0;
+	for (Creature* creature : spectators) {
+		if (creature->getMonster() && creature->getAttackedCreature() == &player) {
+			++attackers;
+		}
+	}
+	recordHuntCombatObservation(active, elapsedSeconds, player.getHealth(), player.getMaxHealth(), attackers);
+}
+
+uint8_t PlayerBotController::p10HuntCombatHealthPercent() const
+{
+	const uint32_t samples = std::accumulate(huntCombatEvidence.healthPercentSamples.begin(),
+	                                         huntCombatEvidence.healthPercentSamples.end(), 0U);
+	if (samples == 0) {
+		return 0;
+	}
+	const uint32_t threshold = (samples + 9) / 10;
+	uint32_t cumulative = 0;
+	for (uint8_t percent = 0; percent <= 100; ++percent) {
+		cumulative += huntCombatEvidence.healthPercentSamples[percent];
+		if (cumulative >= threshold) {
+			return percent;
+		}
+	}
+	return 100;
+}
+
+void PlayerBotController::recordHuntRecovery(bool potion)
+{
+	Player* player = g_game.getPlayerByID(playerId);
+	if (!player || !activeHuntRegion || !isActiveHuntCombat(*player)) {
+		return;
+	}
+	if (potion) {
+		++huntCombatEvidence.potionRecoveries;
+	} else {
+		++huntCombatEvidence.spellRecoveries;
+	}
+}
+
+void PlayerBotController::updateChallengeFrontier(const Player& player, const Position& position,
+	                                                  uint64_t huntDurationSeconds, const char* reason)
+{
+	const double uptime = huntDurationSeconds == 0 ? 0 : huntCombatEvidence.activeSeconds / huntDurationSeconds;
+	const uint32_t recoveries = huntCombatEvidence.potionRecoveries + huntCombatEvidence.spellRecoveries;
+	const bool enoughActiveCombat = huntCombatEvidence.activeSeconds >= 30 && uptime >= 0.5;
+	const bool nearFullHealth = huntCombatEvidence.minimumHealth != std::numeric_limits<int32_t>::max() &&
+	                            static_cast<int64_t>(huntCombatEvidence.minimumHealth) * 100 >=
+	                                static_cast<int64_t>(player.getMaxHealth()) * challengeHealthSafetyPercent;
+	const double before = challengeFrontier.target;
+	const bool backoff = huntCombatEvidence.dangerObserved || huntCombatEvidence.deathObserved || recoveries != 0;
+	const bool qualifyingEasy = enoughActiveCombat && nearFullHealth && !backoff;
+	const bool retreatObserved = std::strcmp(reason, "hunt_region_observed_danger") == 0;
+	const char* result = "insufficient_active_combat";
+	if (backoff && (huntCombatEvidence.activeSeconds > 0 || huntCombatEvidence.deathObserved)) {
+		challengeFrontier.target = std::max(minimumChallengeFrontier, challengeFrontier.target - challengeBackoff);
+		challengeFrontier.qualifyingHuntsToHold = 2;
+		result = "backoff";
+	} else if (qualifyingEasy && challengeFrontier.qualifyingHuntsToHold != 0) {
+		--challengeFrontier.qualifyingHuntsToHold;
+		result = "hold";
+	} else if (qualifyingEasy) {
+		challengeFrontier.target = std::min(maximumChallengeFrontier, challengeFrontier.target + challengeEscalation);
+		result = challengeFrontier.target == before ? "clamped" : "escalated";
+	}
+	std::ostringstream fields;
+	fields << std::fixed << std::setprecision(3)
+	       << "\"result\":" << jsonString(result)
+	       << ",\"reason\":" << jsonString(reason)
+	       << ",\"frontier_before\":" << before
+	       << ",\"frontier_after\":" << challengeFrontier.target
+	       << ",\"hold_qualifying_hunts\":" << static_cast<uint16_t>(challengeFrontier.qualifyingHuntsToHold)
+	       << ",\"active_combat_seconds\":" << huntCombatEvidence.activeSeconds
+	       << ",\"active_combat_uptime\":" << uptime
+	       << ",\"minimum_health\":" << (huntCombatEvidence.minimumHealth == std::numeric_limits<int32_t>::max() ? 0 : huntCombatEvidence.minimumHealth)
+	       << ",\"verified_recoveries\":" << recoveries
+	       << ",\"retreat\":" << (retreatObserved ? "true" : "false")
+	       << ",\"danger\":" << (huntCombatEvidence.dangerObserved ? "true" : "false")
+	       << ",\"death\":" << (huntCombatEvidence.deathObserved ? "true" : "false");
+	emit("hunt_challenge_frontier", position, fields.str());
+}
+
+void PlayerBotController::runAdaptiveChallengeFixture(Player& player, const Position& position)
+{
+	adaptiveChallengeFixtureRun = true;
+	auto applyEvidence = [this, &player, &position](double activeSeconds, uint32_t potionRecoveries, bool death = false) {
+		huntCombatEvidence = HuntCombatEvidence{};
+		recordHuntCombatObservation(activeSeconds != 0, activeSeconds, player.getMaxHealth(), player.getMaxHealth(), 1);
+		huntCombatEvidence.potionRecoveries = potionRecoveries;
+		huntCombatEvidence.deathObserved = death;
+		updateChallengeFrontier(player, position, 60, "adaptive_challenge_fixture");
+	};
+	huntCombatEvidence = HuntCombatEvidence{};
+	recordHuntCombatObservation(false, 30, player.getMaxHealth(), player.getMaxHealth(), 1);
+	const double idleObservedSeconds = huntCombatEvidence.activeSeconds;
+	recordHuntCombatObservation(true, 30, player.getMaxHealth(), player.getMaxHealth(), 1);
+	const double activeObservedSeconds = huntCombatEvidence.activeSeconds;
+	applyEvidence(0, 0); // Travel and idle health must not advance the frontier.
+	applyEvidence(30, 0);
+	applyEvidence(30, 0);
+	applyEvidence(30, 1);
+	applyEvidence(30, 0);
+	applyEvidence(30, 0);
+	applyEvidence(30, 0);
+	applyEvidence(0, 0, true);
+
+	const PlayerBotHuntRegionScan scan = huntRegionPlanner.beginScan(player);
+	PlayerBotHuntRegion current;
+	PlayerBotHuntRegion equipped;
+	PlayerBotHuntPlanningProfile planningProfile;
+	if (!scan.candidateIndices.empty()) {
+		const Item* weapon = player.getWeapon(true);
+		const PlayerBotCombatProfile profile{
+			player.getLevel(), player.getMaxHealth(), player.getArmor(), player.getDefense(), weapon ? weapon->getAttack() : 7,
+			weapon ? player.getWeaponSkill(weapon) : player.getSkillLevel(SKILL_FIST), player.getAttackFactor(),
+		};
+		planningProfile = playerBotHuntPlanningProfile(player, profile, challengeFrontier.target);
+		PlayerBotCombatProfile improved = profile;
+		improved.armor += 20;
+		huntRegionPlanner.score(player, planningProfile, scan.revision, scan.candidateIndices.front(), {}, huntRegionPerformance,
+		                       60, current);
+		const PlayerBotHuntPlanningProfile improvedProfile = playerBotHuntPlanningProfile(player, improved, challengeFrontier.target);
+		huntRegionPlanner.score(player, improvedProfile, scan.revision, scan.candidateIndices.front(), {}, huntRegionPerformance,
+		                       60, equipped);
+	}
+	const PlayerBotRecoveryPrediction recovery = playerBotPredictRecovery(planningProfile, 30);
+	PlayerBotHuntRegion inBand;
+	inBand.score = 10;
+	inBand.suitable = true;
+	inBand.reachable = true;
+	inBand.inChallengeBand = true;
+	PlayerBotHuntRegion easier;
+	easier.score = 1000;
+	easier.suitable = true;
+	easier.reachable = true;
+	std::vector<PlayerBotHuntRegion> exhausted(1);
+	exhausted.front().suitable = true;
+	std::ostringstream fields;
+	fields << std::fixed << std::setprecision(2)
+	       << "\"recovery_total\":" << recovery.totalMinimumHealing
+	       << ",\"recovery_spell_legal\":" << (recovery.lightHealingLegal ? "true" : "false")
+	       << ",\"recovery_spell_casts\":" << recovery.spellCasts
+	       << ",\"equipment_pressure_before\":" << current.threatRatio
+	       << ",\"equipment_pressure_after\":" << equipped.threatRatio
+	       << ",\"idle_observed_seconds\":" << idleObservedSeconds
+	       << ",\"active_observed_seconds\":" << activeObservedSeconds
+	       << ",\"in_band_outranks_easier\":" << (playerBotPreferHuntRegion(inBand, easier) ? "true" : "false")
+	       << ",\"wounded_lethal\":" << (playerBotPredictedLethal(40, 40) ? "true" : "false")
+	       << ",\"zero_health_lethal\":" << (playerBotPredictedLethal(0, 0) ? "true" : "false")
+	       << ",\"helper_scope_exhausted\":" << (playerBotHuntScopeExhausted(exhausted) ? "true" : "false");
+	emit("adaptive_challenge_fixture", position, fields.str());
+	huntCombatEvidence = HuntCombatEvidence{};
+}
+
 void PlayerBotController::emitHuntRegionCandidate(const PlayerBotHuntRegion& region, const Position& position) const
 {
 	std::ostringstream fields;
@@ -507,6 +697,24 @@ void PlayerBotController::emitHuntRegionCandidate(const PlayerBotHuntRegion& reg
 	       << ",\"stamina_experience_multiplier\":" << region.staminaExperienceMultiplier
 	       << ",\"projected_experience\":" << region.projectedExperience
 	       << ",\"threat_ratio\":" << region.threatRatio
+	       << ",\"raw_threat_ratio\":" << region.rawThreatRatio
+	       << ",\"current_health\":" << region.currentHealth
+	       << ",\"predicted_fight_seconds\":" << region.predictedFightSeconds
+	       << ",\"challenge_frontier\":" << region.challengeFrontier
+	       << ",\"challenge_band_minimum\":" << region.challengeBandMinimum
+	       << ",\"challenge_band_maximum\":" << region.challengeBandMaximum
+	       << ",\"in_challenge_band\":" << (region.inChallengeBand ? "true" : "false")
+	       << ",\"predicted_lethal\":" << (region.predictedLethal ? "true" : "false")
+	       << ",\"recovery\":{\"light_healing_legal\":" << (region.recovery.lightHealingLegal ? "true" : "false")
+	       << ",\"spell_minimum_healing\":" << region.recovery.spellMinimumHealing
+	       << ",\"potion_minimum_healing\":" << region.recovery.potionMinimumHealing
+	       << ",\"total_minimum_healing\":" << region.recovery.totalMinimumHealing
+	       << ",\"available_before_lethal\":" << region.recovery.availableBeforeLethal
+	       << ",\"spell_mana_cost\":" << region.recovery.spellManaCost
+	       << ",\"spell_cooldown\":" << region.recovery.spellCooldown
+	       << ",\"spell_casts\":" << region.recovery.spellCasts
+	       << ",\"potion_uses\":" << region.recovery.potionUses
+	       << ",\"mana_reserve\":" << region.recovery.manaReserve << '}'
 	       << ",\"score\":" << region.score
 	       << ",\"travel_steps\":" << region.travelSteps
 	       << ",\"expanded_nodes\":" << region.expandedNodes
@@ -561,6 +769,13 @@ void PlayerBotController::finishHuntRegion(const Player& player, const Position&
 			updatedCorrection = performance.correction;
 		}
 	}
+	const uint8_t p10HealthPercent = p10HuntCombatHealthPercent();
+	const int32_t p10Health = player.getMaxHealth() * p10HealthPercent / 100;
+	const double activeDamagePerMinute = huntCombatEvidence.activeSeconds == 0 ? 0 :
+	                                    huntCombatEvidence.damageTaken * 60.0 / huntCombatEvidence.activeSeconds;
+	const double frontierBefore = challengeFrontier.target;
+	const bool retreatObserved = std::strcmp(reason, "hunt_region_observed_danger") == 0;
+	updateChallengeFrontier(player, position, std::max<int64_t>(0, duration), reason);
 	std::ostringstream fields;
 	fields << std::fixed << std::setprecision(2);
 	fields << "\"region_id\":" << activeHuntRegion->id
@@ -573,7 +788,21 @@ void PlayerBotController::finishHuntRegion(const Player& player, const Position&
 	       << ",\"predicted_experience\":" << activeHuntRegion->projectedExperience
 	       << ",\"updated_observed_correction\":" << updatedCorrection
 	       << ",\"kills\":" << huntRegionKills
-	       << ",\"damage_taken\":" << huntRegionDamageTaken;
+	       << ",\"damage_taken\":" << huntRegionDamageTaken
+	       << ",\"active_combat_seconds\":" << huntCombatEvidence.activeSeconds
+	       << ",\"active_combat_uptime\":" << (duration <= 0 ? 0 : huntCombatEvidence.activeSeconds / duration)
+	       << ",\"active_combat_damage_per_minute\":" << activeDamagePerMinute
+	       << ",\"minimum_health\":" << (huntCombatEvidence.minimumHealth == std::numeric_limits<int32_t>::max() ? 0 : huntCombatEvidence.minimumHealth)
+	       << ",\"p10_health\":" << p10Health
+	       << ",\"p10_health_percent\":" << static_cast<uint16_t>(p10HealthPercent)
+	       << ",\"verified_potion_recoveries\":" << huntCombatEvidence.potionRecoveries
+	       << ",\"verified_spell_recoveries\":" << huntCombatEvidence.spellRecoveries
+	       << ",\"maximum_attacker_overlap\":" << huntCombatEvidence.maximumAttackerOverlap
+	       << ",\"retreat_observed\":" << (retreatObserved ? "true" : "false")
+	       << ",\"danger_observed\":" << (huntCombatEvidence.dangerObserved ? "true" : "false")
+	       << ",\"death_observed\":" << (huntCombatEvidence.deathObserved ? "true" : "false")
+	       << ",\"frontier_before\":" << frontierBefore
+	       << ",\"frontier_after\":" << challengeFrontier.target;
 	emit("hunt_region_outcome", position, fields.str());
 	if (Player* speakingPlayer = g_game.getPlayerByID(playerId)) {
 		say(*speakingPlayer, "Leaving hunt: " + std::string(reason) + ". " +
@@ -582,6 +811,7 @@ void PlayerBotController::finishHuntRegion(const Player& player, const Position&
 		         player.getExperience() - huntRegionStartExperience : 0) + " experience.");
 	}
 	activeHuntRegion.reset();
+	huntCombatEvidence = HuntCombatEvidence{};
 }
 
 void PlayerBotController::cancelHuntRegionPlanning()
@@ -606,6 +836,7 @@ void PlayerBotController::emitHuntRegionPlanning(const HuntRegionPlanning& plann
 		       << ",\"batch_pathfinding_calls\":" << planning.batchPathfindingCalls
 	       << ",\"expanded_nodes\":" << planning.expandedNodes
 	       << ",\"yields\":" << planning.yields
+	       << ",\"challenge_frontier\":" << planning.profile.challengeFrontier
 	       << ",\"decision_latency_us\":" << latencyUs;
 	emit("hunt_region_scan", position, fields.str());
 }
@@ -613,6 +844,11 @@ void PlayerBotController::emitHuntRegionPlanning(const HuntRegionPlanning& plann
 bool PlayerBotController::selectHuntRegion(Player& player, const Position& position, const char* reason)
 {
 	const auto now = std::chrono::steady_clock::now();
+	if (!huntRegionPlanning && now < huntScopeReevaluationAfter) {
+		schedule(static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+			huntScopeReevaluationAfter - now).count()));
+		return false;
+	}
 	std::set<Position> excludedRegions;
 	for (auto cooldown = huntRegionCooldowns.begin(); cooldown != huntRegionCooldowns.end();) {
 		if (now >= cooldown->second) {
@@ -628,8 +864,8 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 	                           huntRegionPlanning->cacheRevision != PlayerBotHuntRegionPlanner::getCacheRevision();
 	if (huntRegionPlanning &&
 	    (huntRegionPlanning->playerPosition != player.getPosition() || huntRegionPlanning->playerLevel != player.getLevel() ||
-	     huntRegionPlanning->playerHealth != player.getHealth() || huntRegionPlanning->playerArmor != player.getArmor() ||
-	     huntRegionPlanning->playerDefense != player.getDefense() || huntRegionPlanning->staminaMinutes != player.getStaminaMinutes() ||
+	     player.getHealth() < huntRegionPlanning->profile.currentHealth ||
+	     huntRegionPlanning->staminaMinutes != player.getStaminaMinutes() ||
 	     huntRegionPlanning->excludedRegions != excludedRegions ||
 	     staleRevision)) {
 		if (staleRevision) {
@@ -638,6 +874,9 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 		cancelHuntRegionPlanning();
 	}
 	if (!huntRegionPlanning) {
+		if (testPolicy.adaptiveChallengeFixture && !adaptiveChallengeFixtureRun) {
+			runAdaptiveChallengeFixture(player, position);
+		}
 		PlayerBotHuntRegionScan scan = huntRegionPlanner.beginScan(player);
 		HuntRegionPlanning planning;
 		planning.regions.reserve(scan.candidateCount);
@@ -651,11 +890,14 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 		planning.totalCandidates = static_cast<uint32_t>(scan.candidateCount);
 		planning.playerPosition = player.getPosition();
 		planning.playerLevel = player.getLevel();
-		planning.playerHealth = player.getHealth();
-		planning.playerArmor = player.getArmor();
-		planning.playerDefense = player.getDefense();
 		planning.staminaMinutes = player.getStaminaMinutes();
 		planning.excludedRegions = excludedRegions;
+		const Item* weapon = player.getWeapon(true);
+		const PlayerBotCombatProfile combat{
+			player.getLevel(), player.getMaxHealth(), player.getArmor(), player.getDefense(), weapon ? weapon->getAttack() : 7,
+			weapon ? player.getWeaponSkill(weapon) : player.getSkillLevel(SKILL_FIST), player.getAttackFactor(),
+		};
+		planning.profile = playerBotHuntPlanningProfile(player, combat, challengeFrontier.target);
 		huntRegionPlanning = std::move(planning);
 		emitHuntRegionPlanning(*huntRegionPlanning, position, "scoring_started");
 		return false;
@@ -669,7 +911,7 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 		     scoredThisTurn < huntRegionScoringCandidatesPerTurn && planning.nextScoringCandidate < planning.totalCandidates;
 		     ++scoredThisTurn, ++planning.nextScoringCandidate) {
 			PlayerBotHuntRegion region;
-			if (!huntRegionPlanner.score(player, planning.cacheRevision,
+			if (!huntRegionPlanner.score(player, planning.profile, planning.cacheRevision,
 			                             planning.candidateIndices[planning.nextScoringCandidate], excludedRegions,
 			                             huntRegionPerformance, huntDurationSeconds, region)) {
 				emitHuntRegionPlanning(planning, position, "stale_revision");
@@ -698,8 +940,16 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 			return false;
 		}
 		std::sort(planning.regions.begin(), planning.regions.end(), [](const PlayerBotHuntRegion& left, const PlayerBotHuntRegion& right) {
-			return left.score > right.score;
+			return playerBotPreferHuntRegion(left, right);
 		});
+		if (testPolicy.forceHuntScopeExhaustion) {
+			for (PlayerBotHuntRegion& region : planning.regions) {
+				region.suitable = false;
+				region.inChallengeBand = false;
+				region.rejectionReason = "fixture_scope_exhausted";
+			}
+			planning.suitableCandidates = 0;
+		}
 		uint32_t regionId = 1;
 		for (PlayerBotHuntRegion& region : planning.regions) {
 			region.id = regionId++;
@@ -774,24 +1024,34 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 		break;
 	}
 
-	auto selected = std::max_element(planning.regions.begin(), planning.regions.end(), [](const PlayerBotHuntRegion& left,
-	                                                                                         const PlayerBotHuntRegion& right) {
-		const bool leftAvailable = left.suitable && left.reachable;
-		const bool rightAvailable = right.suitable && right.reachable;
-		return leftAvailable == rightAvailable ? left.score < right.score : !leftAvailable;
-	});
+	auto selected = std::max_element(planning.regions.begin(), planning.regions.end(),
+	                                 [](const PlayerBotHuntRegion& left, const PlayerBotHuntRegion& right) {
+		                                 return playerBotPreferHuntRegion(right, left);
+	                                 });
 	for (const PlayerBotHuntRegion& region : planning.regions) {
 		emitHuntRegionCandidate(region, position);
 	}
-	if (selected == planning.regions.end() || !selected->suitable || !selected->reachable) {
+	if (playerBotHuntScopeExhausted(planning.regions)) {
 		const bool validationBudgetExhausted = std::any_of(planning.regions.begin(), planning.regions.end(),
 			[](const PlayerBotHuntRegion& region) { return region.rejectionReason == "navigation_node_budget"; });
 		emitHuntRegionPlanning(planning, position, "exhausted");
 		emit("hunt_region_selection", position,
 		     "\"result\":\"failed\",\"reason\":" +
 		         jsonString(validationBudgetExhausted ? "route_validation_budget_exhausted" : "no_suitable_reachable_region"));
+		uint32_t reachableCandidates = 0;
+		for (const PlayerBotHuntRegion& region : planning.regions) {
+			reachableCandidates += region.reachable ? 1 : 0;
+		}
+		emit("hunt_scope_exhausted", position,
+		     "\"candidate_count\":" + std::to_string(planning.totalCandidates) +
+		         ",\"scored_candidate_count\":" + std::to_string(planning.scoredCandidates) +
+		         ",\"suitable_candidate_count\":" + std::to_string(planning.suitableCandidates) +
+		         ",\"reachable_candidate_count\":" + std::to_string(reachableCandidates) +
+		         ",\"frontier\":" + std::to_string(challengeFrontier.target) +
+		         ",\"retry_delay_ms\":" + std::to_string(huntScopeReevaluationDelay.count() * 1000) +
+		         ",\"reason\":" + jsonString(validationBudgetExhausted ? "route_validation_budget_exhausted" : "local_scope_exhausted"));
+		huntScopeReevaluationAfter = now + huntScopeReevaluationDelay;
 		cancelHuntRegionPlanning();
-		stop(validationBudgetExhausted ? "hunt_region_route_validation_budget_exhausted" : "hunt_region_unavailable", position);
 		return false;
 	}
 
@@ -807,6 +1067,7 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 	huntRegionStartExperience = player.getExperience();
 	huntRegionKills = 0;
 	huntRegionDamageTaken = 0;
+	huntCombatEvidence = HuntCombatEvidence{};
 	emit("hunt_region_selection", position,
 	     "\"result\":\"selected\",\"region_id\":" + std::to_string(selected->id) +
 	         ",\"reason\":" + jsonString(reason) + ",\"center\":{\"x\":" +
@@ -854,7 +1115,10 @@ void PlayerBotController::startHunt(Player* player, const Position& position, co
 	huntRouteIndex = 0;
 	if (!testPolicy.fixedFixtureRoute && !activeHuntRegion) {
 		if (!selectHuntRegion(*player, position, "hunt_started")) {
-			schedule(SCHEDULER_MINTICKS);
+			if (huntScopeReevaluationAfter.time_since_epoch().count() == 0 ||
+			    std::chrono::steady_clock::now() >= huntScopeReevaluationAfter) {
+				schedule(SCHEDULER_MINTICKS);
+			}
 			return;
 		}
 	}

@@ -12,6 +12,7 @@ param(
 	[switch]$OracleDeparture,
 	[switch]$StaminaProjection,
 	[switch]$HuntRegionPlanning,
+	[switch]$AdaptiveChallenge,
 	[switch]$CombatReadiness,
 	[switch]$EquipmentOffers,
 	[switch]$EquipmentPurchases,
@@ -896,6 +897,43 @@ function Assert-HuntRegionPlanningEvents {
     }
 }
 
+function Assert-AdaptiveChallengeEvents {
+    param([string]$Logs)
+
+    $events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
+    $frontier = @($events | Where-Object { $_.event -eq "hunt_challenge_frontier" })
+    $idle = @($frontier | Where-Object { $_.result -eq "insufficient_active_combat" -and $_.active_combat_seconds -eq 0 })
+    $escalated = @($frontier | Where-Object { $_.result -eq "escalated" })
+    $backoff = @($frontier | Where-Object { $_.result -eq "backoff" })
+	$deathBackoff = @($backoff | Where-Object { $_.death })
+    $hold = @($frontier | Where-Object { $_.result -eq "hold" })
+    $fixture = @($events | Where-Object { $_.event -eq "adaptive_challenge_fixture" })
+    $candidates = @($events | Where-Object {
+        $_.event -eq "hunt_region_candidate" -and $_.recovery -and $_.challenge_frontier -ge 0.1 -and
+        $_.challenge_band_minimum -lt $_.challenge_band_maximum -and $_.predicted_lethal -ne $null
+    })
+	$unsafeLethalRecovery = @($candidates | Where-Object { $_.recovery.available_before_lethal -ne 0 })
+    $exhausted = @($events | Where-Object {
+        $_.event -eq "hunt_scope_exhausted" -and $_.reason -eq "local_scope_exhausted" -and $_.retry_delay_ms -eq 30000
+    })
+    $terminal = @($events | Where-Object { $_.event -eq "terminal" })
+    if ($idle.Count -ne 1 -or $escalated.Count -ne 3 -or $backoff.Count -ne 2 -or $deathBackoff.Count -ne 1 -or $hold.Count -ne 2 -or
+        [Math]::Abs($escalated[0].frontier_before - 0.20) -gt 0.001 -or
+        [Math]::Abs($escalated[1].frontier_after - 0.25) -gt 0.001 -or
+		[Math]::Abs($escalated[2].frontier_after - 0.225) -gt 0.001 -or
+        [Math]::Abs($backoff[0].frontier_after - 0.20) -gt 0.001 -or
+		[Math]::Abs($deathBackoff[0].frontier_after - 0.175) -gt 0.001 -or
+        $hold[0].hold_qualifying_hunts -ne 1 -or $hold[1].hold_qualifying_hunts -ne 0 -or
+        $fixture.Count -ne 1 -or -not $fixture[0].recovery_spell_legal -or $fixture[0].recovery_spell_casts -lt 1 -or
+        $fixture[0].equipment_pressure_after -gt $fixture[0].equipment_pressure_before -or
+		$fixture[0].idle_observed_seconds -ne 0 -or $fixture[0].active_observed_seconds -ne 30 -or
+		-not $fixture[0].in_band_outranks_easier -or -not $fixture[0].wounded_lethal -or
+		-not $fixture[0].zero_health_lethal -or -not $fixture[0].helper_scope_exhausted -or
+		$candidates.Count -lt 1 -or $unsafeLethalRecovery.Count -ne 0 -or $exhausted.Count -ne 1 -or $terminal.Count -ne 0) {
+        throw "Adaptive challenge evidence was incomplete. idle=$($idle.Count), escalated=$($escalated.Count), backoff=$($backoff.Count), hold=$($hold.Count), fixture=$($fixture.Count), candidates=$($candidates.Count), exhausted=$($exhausted.Count), terminal=$($terminal.Count)."
+    }
+}
+
 function Assert-CombatReadinessEvents {
     param([string]$Logs, [string]$Mode)
 
@@ -1432,6 +1470,7 @@ if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
 
 $focusedScenarioRequested = $FullNavigation -or $TargetPursuit -or $CorpseLoot -or $DeathTelemetry -or $Healing -or $ValueLoot -or
 	$PickupProgression -or $GoalArbitration -or $OracleDeparture -or $StaminaProjection -or $HuntRegionPlanning -or
+	$AdaptiveChallenge -or
 	$CombatReadiness -or $EquipmentOffers -or $EquipmentPurchases -or $MainlandRewards -or $Depot -or $MainlandLoop -or $SpellTraining -or $SpellUse
 if ($Focused -and -not $focusedScenarioRequested) {
 	throw "-Focused requires at least one focused scenario switch."
@@ -1711,7 +1750,7 @@ try {
         }
     }
 
-    if ($HuntRegionPlanning) {
+	if ($HuntRegionPlanning) {
         Invoke-Scenario -Name "hunt_region_planning" -DefaultTimeoutSeconds 180 -Body {
             Invoke-Compose down --volumes --remove-orphans
             $env:PLAYERBOT_GAMEPLAY_MODE = "hunt_planning"
@@ -1874,6 +1913,18 @@ try {
 				$_.from_goal -eq "buy_equipment" -and $_.to_goal -ne "buy_equipment"
 			}
 			Assert-EquipmentPurchaseEvents -Logs $rejectedLogs -Rejected
+		}
+	}
+
+	if ($AdaptiveChallenge) {
+		Invoke-Scenario -Name "adaptive_challenge" -DefaultTimeoutSeconds 120 -Body {
+			Invoke-Compose down --volumes --remove-orphans
+			$env:PLAYERBOT_GAMEPLAY_MODE = "adaptive_challenge"
+			$env:PLAYERBOT_HUNT_DURATION_SECONDS = "60"
+			Invoke-Compose up --detach
+			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST ADAPTIVE_CHALLENGE_START' | Out-Null
+			$challengeLogs = Wait-ForLog -Pattern '"event":"hunt_scope_exhausted"'
+			Assert-AdaptiveChallengeEvents -Logs $challengeLogs
 		}
 	}
 
