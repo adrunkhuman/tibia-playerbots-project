@@ -11,6 +11,7 @@
 #include "otpch.h"
 
 #include "playerbotcontroller.h"
+#include "playerbotarea.h"
 
 // Goal arbitration and reward discovery, claiming, and equipment.
 using namespace playerbot;
@@ -372,9 +373,14 @@ std::string PlayerBotController::rewardItemSignature(const Item& item) const
 	return signature.str();
 }
 
-void PlayerBotController::inspectRewardItem(const Player& player, const Item& item, uint16_t rootOrdinal,
+void PlayerBotController::inspectRewardItem(Player& player, const Item& item, uint16_t rootOrdinal,
                        std::vector<uint16_t>& path, const std::string& rootSignature,
-                       RewardInspection& inspection) const
+                       const EquipmentLoadout& currentLoadout,
+                       const PlayerBotCombatProfile& currentProfile,
+                       const EquipmentHuntSummary& currentHunts, bool currentReady,
+                       uint32_t additionalWeight,
+					   std::map<std::pair<uint16_t, uint32_t>, EquipmentOfferEvaluation>& equipmentEvaluations,
+                       size_t& simulatedItems, RewardInspection& inspection) const
 {
 	RewardItemInspection inspected{item.getID(), item.getItemCount(), static_cast<uint32_t>(path.size()),
 	                              rootOrdinal, path};
@@ -383,16 +389,51 @@ void PlayerBotController::inspectRewardItem(const Player& player, const Item& it
 		inspected.classes.emplace_back("container");
 		++inspection.containerCount;
 	}
-	if (std::optional<EquipmentUpgrade> upgrade = evaluateEquipmentUpgrade(player, item)) {
+	EquipmentOfferEvaluation equipment;
+	bool evaluatedEquipment = false;
+	if (isCombatEquipment(item)) {
+		evaluatedEquipment = true;
+		const auto cacheKey = std::make_pair(item.getID(), additionalWeight);
+		if (auto cached = equipmentEvaluations.find(cacheKey); cached != equipmentEvaluations.end()) {
+			equipment = cached->second;
+		} else {
+			equipment = evaluateEquipmentCandidate(
+				player, item.getID(), currentLoadout, currentProfile, currentHunts, currentReady,
+				additionalWeight, simulatedItems < maximumEquipmentCandidateSimulations);
+			if (equipment.simulated) {
+				++simulatedItems;
+			}
+			equipmentEvaluations.emplace(cacheKey, equipment);
+		}
+	}
+	if (evaluatedEquipment && equipment.rejection.empty()) {
+		const ItemType& candidateType = Item::items[item.getID()];
+		const uint16_t currentItemId = currentLoadout.itemIds[equipment.slot];
+		const ItemType* currentType = currentItemId == 0 ? nullptr : &Item::items[currentItemId];
+		const bool armorSlot = equipment.slot == CONST_SLOT_HEAD || equipment.slot == CONST_SLOT_ARMOR ||
+		                       equipment.slot == CONST_SLOT_LEGS || equipment.slot == CONST_SLOT_FEET;
+		const bool shield = candidateType.weaponType == WEAPON_SHIELD;
+		const char* metric = armorSlot ? "armor" : shield ? "defense" : "attack";
+		const int32_t candidateValue = armorSlot ? candidateType.armor :
+		                               shield ? candidateType.defense : candidateType.attack;
+		const int32_t currentValue = !currentType ? 0 : armorSlot ? currentType->armor :
+		                             shield ? currentType->defense : currentType->attack;
+		EquipmentUpgrade upgrade{equipment.slot, std::max(1, candidateValue - currentValue), metric,
+		                         currentValue, candidateValue};
 		inspected.classes.emplace_back("equipment_upgrade");
 		++inspection.equipmentUpgradeCount;
-		if (!inspection.bestUpgrade || upgrade->benefit > inspection.bestUpgrade->benefit) {
+		if (!inspection.bestEquipment || equipment.rule > inspection.bestEquipment->rule ||
+		    (equipment.rule == inspection.bestEquipment->rule &&
+		     upgrade.benefit > inspection.bestUpgrade->benefit)) {
 			inspection.bestUpgrade = upgrade;
+			inspection.bestEquipment = equipment;
 			inspection.bestItemId = item.getID();
 			inspection.bestRootOrdinal = rootOrdinal;
 			inspection.bestItemPath = path;
 			inspection.bestRootSignature = rootSignature;
 		}
+	} else if (evaluatedEquipment && inspection.equipmentRejection.empty()) {
+		inspection.equipmentRejection = equipment.rejection;
 	}
 	inspected.worth = item.getWorth();
 	if (inspected.worth != 0) {
@@ -443,13 +484,19 @@ void PlayerBotController::inspectRewardItem(const Player& player, const Item& it
 		uint16_t childOrdinal = 0;
 		for (const Item* child : container->getItemList()) {
 			path.push_back(childOrdinal++);
-			inspectRewardItem(player, *child, rootOrdinal, path, rootSignature, inspection);
+			inspectRewardItem(player, *child, rootOrdinal, path, rootSignature, currentLoadout,
+			                  currentProfile, currentHunts, currentReady, additionalWeight,
+			                  equipmentEvaluations, simulatedItems, inspection);
 			path.pop_back();
 		}
 	}
 }
 
-PlayerBotController::RewardInspection PlayerBotController::inspectRewardBundle(Player& player, const Container& contents) const
+PlayerBotController::RewardInspection PlayerBotController::inspectRewardBundle(
+	Player& player, const Container& contents, const EquipmentLoadout& currentLoadout,
+	const PlayerBotCombatProfile& currentProfile, const EquipmentHuntSummary& currentHunts, bool currentReady,
+	uint32_t additionalWeight, std::map<std::pair<uint16_t, uint32_t>, EquipmentOfferEvaluation>& equipmentEvaluations,
+	size_t& simulatedItems) const
 {
 	RewardInspection inspection;
 	uint16_t rootOrdinal = 0;
@@ -462,13 +509,19 @@ PlayerBotController::RewardInspection PlayerBotController::inspectRewardBundle(P
 			inspection.nonStackableRootSignatures.push_back(signature);
 		}
 		std::vector<uint16_t> path;
-		inspectRewardItem(player, *root, rootOrdinal++, path, signature, inspection);
+		inspectRewardItem(player, *root, rootOrdinal++, path, signature, currentLoadout, currentProfile,
+		                  currentHunts, currentReady, additionalWeight, equipmentEvaluations, simulatedItems,
+		                  inspection);
 	}
 	finalizeRewardInspection(player, inspection);
 	return inspection;
 }
 
-PlayerBotController::RewardInspection PlayerBotController::inspectKnownReward(Player& player, const Item& item) const
+PlayerBotController::RewardInspection PlayerBotController::inspectKnownReward(
+	Player& player, const Item& item, const EquipmentLoadout& currentLoadout,
+	const PlayerBotCombatProfile& currentProfile, const EquipmentHuntSummary& currentHunts, bool currentReady,
+	uint32_t additionalWeight, std::map<std::pair<uint16_t, uint32_t>, EquipmentOfferEvaluation>& equipmentEvaluations,
+	size_t& simulatedItems) const
 {
 	RewardInspection inspection;
 	const std::string signature = rewardItemSignature(item);
@@ -479,7 +532,8 @@ PlayerBotController::RewardInspection PlayerBotController::inspectKnownReward(Pl
 		inspection.nonStackableRootSignatures.push_back(signature);
 	}
 	std::vector<uint16_t> path;
-	inspectRewardItem(player, item, 0, path, signature, inspection);
+	inspectRewardItem(player, item, 0, path, signature, currentLoadout, currentProfile, currentHunts,
+	                  currentReady, additionalWeight, equipmentEvaluations, simulatedItems, inspection);
 	finalizeRewardInspection(player, inspection);
 	return inspection;
 }
@@ -645,6 +699,11 @@ bool PlayerBotController::prepareRewardItemAccess(Player& player, const Position
 
 	Item* root = findMatchingRewardRoot(player, pickupReward.rootSignature);
 	if (!root) {
+		Item* extracted = g_game.findItemOfType(&player, pickupReward.itemId, true);
+		if (extracted && isRewardClaimed(player, pickupReward.uniqueId)) {
+			selectedItem = extracted;
+			return true;
+		}
 		failure = "reward_bundle_unavailable";
 		return false;
 	}
@@ -675,7 +734,7 @@ bool PlayerBotController::prepareRewardItemAccess(Player& player, const Position
 		Position sourcePosition;
 		uint8_t sourceIndex = 0;
 		g_game.internalGetPosition(ancestor, sourcePosition, sourceIndex);
-		if (sourcePosition.x != 0xFFFF || (sourcePosition.y & 0x40) == 0) {
+		if (sourcePosition.x != 0xFFFF) {
 			failure = "reward_container_position_unavailable";
 			return false;
 		}
@@ -703,11 +762,17 @@ bool PlayerBotController::prepareRewardItemAccess(Player& player, const Position
 	return true;
 }
 
-bool PlayerBotController::isRookgaardRewardPosition(const Position& position) const
+bool PlayerBotController::isRewardPosition(const Player& player, const Position& position) const
 {
-	return position.z < MAP_MAX_LAYERS &&
-	       Position::getDistanceX(position, rookgaardTemplePosition) <= rookgaardRewardRadius &&
-	       Position::getDistanceY(position, rookgaardTemplePosition) <= rookgaardRewardRadius;
+	if (position.z >= MAP_MAX_LAYERS || !player.getTown()) {
+		return false;
+	}
+	if (player.getTown()->getID() == rookgaardTownId) {
+		return Position::getDistanceX(position, rookgaardTemplePosition) <= rookgaardRewardRadius &&
+		       Position::getDistanceY(position, rookgaardTemplePosition) <= rookgaardRewardRadius;
+	}
+	return player.getTown()->getID() == oracleTownId &&
+	       playerbot::isInsideLocalPlanningArea(player.getTemplePosition(), position);
 }
 
 bool PlayerBotController::isRewardClaimed(const Player& player, uint16_t uniqueId) const
@@ -773,6 +838,7 @@ void PlayerBotController::emitRewardCandidate(const PickupReward& candidate, con
 {
 	std::ostringstream fields;
 	fields << "\"goal\":\"pickup_reward\",\"candidate_id\":" << candidate.uniqueId
+	       << ",\"acquisition_source\":\"map_reward\""
 	       << ",\"result\":" << jsonString(result)
 	       << ",\"item_id\":" << candidate.itemId
 	       << ",\"root_item_id\":" << candidate.rootItemId
@@ -803,6 +869,7 @@ void PlayerBotController::emitRewardInspection(uint16_t uniqueId, const Position
 {
 	std::ostringstream fields;
 	fields << "\"goal\":\"pickup_reward\",\"candidate_id\":" << uniqueId
+	       << ",\"acquisition_source\":\"map_reward\""
 	       << ",\"result\":\"inspected\",\"recursive\":true"
 	       << ",\"known_utility\":" << inspection.knownUtility
 	       << ",\"item_count\":" << inspection.itemCount
@@ -811,6 +878,10 @@ void PlayerBotController::emitRewardInspection(uint16_t uniqueId, const Position
 	       << ",\"currency_value\":" << inspection.currencyValue
 	       << ",\"sell_value\":" << inspection.sellValue
 	       << ",\"equipment_upgrade_count\":" << inspection.equipmentUpgradeCount
+	       << ",\"equipment_rule\":" << (inspection.bestEquipment ?
+	              jsonString(equipmentDecisionRuleName(inspection.bestEquipment->rule)) : "null")
+	       << ",\"equipment_rejection\":" << (inspection.equipmentRejection.empty() ?
+	              "null" : jsonString(inspection.equipmentRejection))
 	       << ",\"destination\":{\"x\":" << rewardPosition.x << ",\"y\":" << rewardPosition.y
 	       << ",\"z\":" << static_cast<uint16_t>(rewardPosition.z) << '}'
 	       << ",\"items\":" << rewardInspectionItemsJson(inspection);
@@ -829,6 +900,12 @@ bool PlayerBotController::findPickupReward(Player& player, const Position& posit
 	std::optional<PickupReward> claimedUpgrade;
 	std::vector<PickupReward> unclaimedCandidates;
 	std::deque<PlayerBotNavigationStep> selectedSteps;
+	const EquipmentLoadout currentLoadout = equipmentLoadout(player);
+	const PlayerBotCombatProfile currentProfile = equipmentCombatProfile(player, currentLoadout);
+	const EquipmentHuntSummary currentHunts = equipmentHuntSummary(player, currentProfile);
+	const bool currentReady = equipmentLoadoutReady(player, currentLoadout);
+	std::map<std::pair<uint16_t, uint32_t>, EquipmentOfferEvaluation> equipmentEvaluations;
+	size_t simulatedItems = 0;
 	for (const auto& entry : g_game.getUniqueItems()) {
 		Item* rewardObject = entry.second;
 		if (!rewardObject) {
@@ -845,8 +922,19 @@ bool PlayerBotController::findPickupReward(Player& player, const Position& posit
 		}
 		Tile* tile = rewardObject->getTile();
 		Container* contents = rewardObject->getContainer();
-		if (!tile || !isRookgaardRewardPosition(tile->getPosition()) ||
-		    (containerReward && (!contents || contents->empty()))) {
+		if (!tile || !isRewardPosition(player, tile->getPosition())) {
+			continue;
+		}
+		PickupReward rejected;
+		rejected.uniqueId = rewardObject->getUniqueId();
+		rejected.rootItemId = rewardObject->getID();
+		rejected.itemPosition = tile->getPosition();
+		if (containerReward && !contents) {
+			emitRewardCandidate(rejected, position, "rejected", "malformed_reward_container");
+			continue;
+		}
+		if (containerReward && contents->empty()) {
+			emitRewardCandidate(rejected, position, "rejected", "empty_reward_bundle");
 			continue;
 		}
 
@@ -857,14 +945,6 @@ bool PlayerBotController::findPickupReward(Player& player, const Position& posit
 				continue;
 			}
 		}
-		RewardInspection inspection = containerReward ? inspectRewardBundle(player, *contents) :
-		                                                inspectKnownReward(player, *knownReward);
-		if (inspection.itemCount != 0) {
-			emitRewardInspection(rewardObject->getUniqueId(), tile->getPosition(), inspection, position);
-		}
-		if (inspection.knownUtility <= 0 || inspection.rootSignatures.empty()) {
-			continue;
-		}
 		uint32_t totalWeight = 0;
 		if (containerReward) {
 			for (Item* reward : contents->getItemList()) {
@@ -873,7 +953,26 @@ bool PlayerBotController::findPickupReward(Player& player, const Position& posit
 		} else {
 			totalWeight = knownReward->getWeight();
 		}
-
+		const bool claimed = isRewardClaimed(player, rewardObject->getUniqueId());
+		const uint32_t acquisitionWeight = claimed ? 0 : totalWeight;
+		RewardInspection inspection = containerReward ?
+			inspectRewardBundle(player, *contents, currentLoadout, currentProfile, currentHunts, currentReady,
+			                    acquisitionWeight, equipmentEvaluations, simulatedItems) :
+			inspectKnownReward(player, *knownReward, currentLoadout, currentProfile, currentHunts, currentReady,
+			                   acquisitionWeight, equipmentEvaluations, simulatedItems);
+		if (inspection.itemCount != 0) {
+			emitRewardInspection(rewardObject->getUniqueId(), tile->getPosition(), inspection, position);
+		}
+		if (inspection.knownUtility <= 0 || inspection.rootSignatures.empty()) {
+			rejected.itemCount = inspection.itemCount;
+			rejected.containerCount = inspection.containerCount;
+			rejected.unknownCount = inspection.unknownCount;
+			rejected.equipmentUpgradeCount = inspection.equipmentUpgradeCount;
+			emitRewardCandidate(rejected, position, "rejected",
+			                    inspection.equipmentRejection.empty() ? "unsupported_reward_bundle" :
+			                                                            inspection.equipmentRejection.c_str());
+			continue;
+		}
 		PickupReward candidate;
 		candidate.uniqueId = rewardObject->getUniqueId();
 		candidate.rootOrdinal = inspection.bestUpgrade ? inspection.bestRootOrdinal : inspection.primaryKnownRootOrdinal;
@@ -887,6 +986,9 @@ bool PlayerBotController::findPickupReward(Player& player, const Position& posit
 			candidate.metric = inspection.bestUpgrade->metric;
 			candidate.currentValue = inspection.bestUpgrade->currentValue;
 			candidate.candidateValue = inspection.bestUpgrade->candidateValue;
+			candidate.replacedItemId = inspection.bestEquipment->replacedItemId;
+			candidate.displacedLeftItemId = inspection.bestEquipment->displacedLeftItemId;
+			candidate.displacedRightItemId = inspection.bestEquipment->displacedRightItemId;
 		}
 		candidate.knownUtility = inspection.knownUtility;
 		candidate.itemCount = inspection.itemCount;
@@ -901,9 +1003,19 @@ bool PlayerBotController::findPickupReward(Player& player, const Position& posit
 		candidate.nonStackableRootSignatures = inspection.nonStackableRootSignatures;
 		candidate.stackableRootCounts = inspection.stackableRootCounts;
 		candidate.estimatedDistance = navigationDistance(position, candidate.itemPosition);
+		std::set<slots_t> displacedSlots;
+		if (inspection.bestEquipment) {
+			for (const auto& displaced : {std::pair<slots_t, uint16_t>{candidate.slot, candidate.replacedItemId},
+			                              {CONST_SLOT_LEFT, candidate.displacedLeftItemId},
+			                              {CONST_SLOT_RIGHT, candidate.displacedRightItemId}}) {
+				if (displaced.second != 0) {
+					displacedSlots.insert(displaced.first);
+				}
+			}
+		}
 		candidate.requiredBackpackSlots = (containerReward ? static_cast<uint32_t>(contents->size()) : 1) +
-		                                  (inspection.bestUpgrade && player.getInventoryItem(candidate.slot) ? 1 : 0);
-		if (isRewardClaimed(player, candidate.uniqueId)) {
+		                                  static_cast<uint32_t>(displacedSlots.size());
+		if (claimed) {
 			const bool ownedUpgrade = inspection.bestUpgrade &&
 			                          (candidate.selectedItemPath.empty() ?
 			                               g_game.findItemOfType(&player, candidate.itemId, true) != nullptr :
@@ -1081,12 +1193,19 @@ void PlayerBotController::beginPickupReward(Player& player, const Position& posi
 	progressionAttempts = 0;
 	pendingRewardContainerDepth = SIZE_MAX;
 	pendingRewardContainerOpenAttempts = 0;
+	pendingEquipmentDisplacedCounts.clear();
+	for (uint16_t itemId : {pickupReward.replacedItemId, pickupReward.displacedLeftItemId,
+	                        pickupReward.displacedRightItemId}) {
+		if (itemId != 0) {
+			pendingEquipmentDisplacedCounts[itemId] = getInventoryItemCount(player, itemId);
+		}
+	}
 	if (!pickupReward.resumeEquipment) {
 		navigationTarget = pickupReward.approachPosition;
 		navigationSteps = std::move(rewardSteps);
 	}
 	std::ostringstream fields;
-	fields << "\"goal\":\"pickup_reward\",\"candidate_id\":" << pickupReward.uniqueId
+	fields << "\"goal\":\"pickup_reward\",\"acquisition_source\":\"map_reward\",\"candidate_id\":" << pickupReward.uniqueId
 	       << ",\"reason\":" << jsonString(pickupReward.resumeEquipment ? "resume_claimed_upgrade" :
 	                                                                    "highest_known_utility_reachable_reward")
 	       << ",\"item_id\":" << pickupReward.itemId << ",\"root_item_id\":" << pickupReward.rootItemId
@@ -1225,12 +1344,13 @@ void PlayerBotController::finishProgressionObjective(Player* player, const Posit
                                 bool scheduleNext)
 {
 	std::ostringstream fields;
-	fields << "\"goal\":\"pickup_reward\",\"candidate_id\":" << pickupReward.uniqueId
+	fields << "\"goal\":\"pickup_reward\",\"acquisition_source\":\"map_reward\",\"candidate_id\":" << pickupReward.uniqueId
 	       << ",\"item_id\":" << pickupReward.itemId << ",\"result\":" << jsonString(result)
 	       << ",\"reason\":" << jsonString(reason);
 	emit("strategy_objective_result", position, fields.str());
 	emit("goal_result", position,
-	     "\"decision_id\":" + std::to_string(goalDecisionId) + ",\"goal\":\"pickup_reward\",\"result\":" +
+	     "\"decision_id\":" + std::to_string(goalDecisionId) +
+	         ",\"goal\":\"pickup_reward\",\"acquisition_source\":\"map_reward\",\"result\":" +
 	         jsonString(result) + ",\"reason\":" + jsonString(reason));
 	if (player) {
 		say(*player, std::string("Equipment reward objective ") + result + ": " + reason + '.');
@@ -1238,6 +1358,7 @@ void PlayerBotController::finishProgressionObjective(Player* player, const Posit
 	progressionObjective = ProgressionObjective::None;
 	progressionStage = ProgressionStage::Travel;
 	pickupReward = PickupReward{};
+	pendingEquipmentDisplacedCounts.clear();
 	progressionAttempts = 0;
 	clearNavigation();
 	serviceStage = ServiceStage::Discover;
@@ -1351,6 +1472,37 @@ void PlayerBotController::processPickupReward(Player* player, const Position& cu
 			finishProgressionObjective(player, currentPosition, "success", "reward_equipped");
 			return;
 		}
+		if (equipped && equipped->getID() == pickupReward.rootItemId &&
+		    !pickupReward.selectedItemPath.empty() &&
+		    resolveRewardPath(equipped, pickupReward.selectedItemPath, pickupReward.selectedItemPath.size())) {
+			if (progressionAttempts >= maximumProgressionAttempts) {
+				finishProgressionObjective(player, currentPosition, "failed", "reward_root_move_not_verified");
+				return;
+			}
+			Container* backpack = playerBackpack(*player);
+			if (!backpack || backpack->size() >= backpack->capacity()) {
+				finishProgressionObjective(player, currentPosition, "failed", "insufficient_reward_root_space");
+				return;
+			}
+			if (!player->canDoAction()) {
+				schedule(navigationDecisionDelay(*player));
+				return;
+			}
+			Position rootPosition;
+			uint8_t rootIndex = 0;
+			g_game.internalGetPosition(equipped, rootPosition, rootIndex);
+			++progressionAttempts;
+			++counters.actionsAttempted;
+			emit("action_result", currentPosition,
+			     "\"action\":\"relocate_reward_root\",\"result\":\"requested\",\"item_id\":" +
+			         std::to_string(equipped->getID()) + ",\"slot\":" + std::to_string(pickupReward.slot));
+			g_game.playerMoveItem(player, rootPosition, equipped->getClientID(), rootIndex,
+			                      Position(0xFFFF, 0x40 | backpackContainerId,
+			                               static_cast<uint8_t>(backpack->size())),
+			                      equipped->getItemCount(), equipped, backpack);
+			schedule(navigationDecisionDelay(*player));
+			return;
+		}
 		Item* reward = nullptr;
 		std::string accessFailure;
 		if (!prepareRewardItemAccess(*player, currentPosition, reward, accessFailure)) {
@@ -1363,6 +1515,42 @@ void PlayerBotController::processPickupReward(Player* player, const Position& cu
 			schedule(navigationDecisionDelay(*player));
 			return;
 		}
+		Item* displaced = nullptr;
+		slots_t displacedSlot = CONST_SLOT_WHEREEVER;
+		for (const auto& entry : {std::pair<slots_t, uint16_t>{pickupReward.slot, pickupReward.replacedItemId},
+		                         {CONST_SLOT_LEFT, pickupReward.displacedLeftItemId},
+		                         {CONST_SLOT_RIGHT, pickupReward.displacedRightItemId}}) {
+			Item* equippedItem = entry.second == 0 ? nullptr : player->getInventoryItem(entry.first);
+			if (equippedItem && equippedItem->getID() == entry.second && equippedItem != reward) {
+				displaced = equippedItem;
+				displacedSlot = entry.first;
+				break;
+			}
+		}
+		if (displaced) {
+			if (progressionAttempts >= maximumProgressionAttempts) {
+				finishProgressionObjective(player, currentPosition, "failed", "displaced_item_move_not_verified");
+				return;
+			}
+			Position displacedPosition;
+			uint8_t displacedIndex = 0;
+			g_game.internalGetPosition(displaced, displacedPosition, displacedIndex);
+			++progressionAttempts;
+			++counters.actionsAttempted;
+			emit("action_result", currentPosition,
+			     "\"action\":\"preserve_displaced_equipment\",\"result\":\"requested\",\"item_id\":" +
+			         std::to_string(displaced->getID()) + ",\"slot\":" + std::to_string(displacedSlot));
+			Container* backpack = playerBackpack(*player);
+			if (!backpack || backpack->size() >= backpack->capacity()) {
+				finishProgressionObjective(player, currentPosition, "failed", "insufficient_displaced_item_space");
+				return;
+			}
+			g_game.playerMoveItem(player, displacedPosition, displaced->getClientID(), displacedIndex,
+			                      Position(0xFFFF, 0x40 | backpackContainerId, static_cast<uint8_t>(backpack->size())),
+			                      displaced->getItemCount(), displaced, nullptr);
+			schedule(navigationDecisionDelay(*player));
+			return;
+		}
 
 		Position sourcePosition;
 		uint8_t sourceIndex = 0;
@@ -1371,11 +1559,13 @@ void PlayerBotController::processPickupReward(Player* player, const Position& cu
 			finishProgressionObjective(player, currentPosition, "failed", "reward_inventory_position_unavailable");
 			return;
 		}
-		Item* previous = player->getInventoryItem(pickupReward.slot);
-		pendingEquipmentItemId = previous ? previous->getID() : 0;
-		pendingEquipmentItemCount = pendingEquipmentItemId == 0 ? 0 :
-		                            getInventoryItemCount(*player, pendingEquipmentItemId);
 		++counters.actionsAttempted;
+		emit("action_result", currentPosition,
+		     "\"action\":\"equip_reward\",\"result\":\"requested\",\"item_id\":" +
+		         std::to_string(reward->getID()) + ",\"slot\":" + std::to_string(pickupReward.slot) +
+		         ",\"source_y\":" + std::to_string(sourcePosition.y) +
+		         ",\"source_z\":" + std::to_string(sourcePosition.z) +
+		         ",\"source_index\":" + std::to_string(sourceIndex));
 		g_game.playerMoveItem(player, sourcePosition, reward->getClientID(), sourceIndex,
 		                      Position(0xFFFF, pickupReward.slot, 0), reward->getItemCount(), reward, nullptr);
 		progressionStage = ProgressionStage::VerifyEquipment;
@@ -1384,8 +1574,11 @@ void PlayerBotController::processPickupReward(Player* player, const Position& cu
 	}
 
 	Item* equipped = player->getInventoryItem(pickupReward.slot);
-	const bool displacedPreserved = pendingEquipmentItemId == 0 ||
-	                                 getInventoryItemCount(*player, pendingEquipmentItemId) >= pendingEquipmentItemCount;
+	const bool displacedPreserved = std::all_of(pendingEquipmentDisplacedCounts.begin(),
+	                                           pendingEquipmentDisplacedCounts.end(),
+	                                           [this, player](const auto& entry) {
+		                                           return getInventoryItemCount(*player, entry.first) >= entry.second;
+	                                           });
 	if (!equipped || equipped->getID() != pickupReward.itemId || !displacedPreserved) {
 		if (++progressionAttempts >= maximumProgressionAttempts) {
 			finishProgressionObjective(player, currentPosition, "failed",
@@ -1399,7 +1592,7 @@ void PlayerBotController::processPickupReward(Player* player, const Position& cu
 	std::ostringstream fields;
 	fields << "\"action\":\"equip\",\"result\":\"success\",\"item_id\":" << pickupReward.itemId
 	       << ",\"slot\":" << static_cast<int32_t>(pickupReward.slot)
-	       << ",\"displaced_item_id\":" << pendingEquipmentItemId
+	       << ",\"displaced_item_id\":" << pickupReward.replacedItemId
 	       << ",\"metric\":" << jsonString(pickupReward.metric)
 	       << ",\"value_before\":" << pickupReward.currentValue
 	       << ",\"value_after\":" << pickupReward.candidateValue;

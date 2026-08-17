@@ -136,6 +136,7 @@ spell use.
 ```powershell
 pwsh -File scripts/test-playerbot-gameplay.ps1 -FullNavigation -CorpseLoot
 pwsh -File scripts/test-playerbot-gameplay.ps1 -Focused -EquipmentPurchases
+pwsh -File scripts/test-playerbot-gameplay.ps1 -Focused -MainlandRewards
 pwsh -File scripts/test-playerbot-gameplay.ps1 -Focused -SpellTraining
 pwsh -File scripts/test-playerbot-gameplay.ps1 -Focused -SpellUse
 ```

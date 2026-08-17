@@ -160,16 +160,24 @@ secondary corpse actions are outside this behavior.
 ## Rewards and departure
 
 Reward discovery is limited to loaded shared quest containers handled by action
-ID `2000` inside the bounded Rookgaard area. The bot evaluates complete nested
-bundles, protects unknown items, verifies storage and inventory changes after
-normal use, and equips useful upgrades through normal item movement. Routes
-longer than 120 steps or requiring a door, rope, or shovel action are not simple
-pickup objectives. At most 14 nested reward ancestors can be opened.
+ID `2000`. Rookgaard keeps its bounded reward area. Thais uses the same weighted
+200-tile temple boundary as hunt discovery. The bot traverses complete nested
+bundles, protects unknown items, and applies the same readiness, hunt-unlock,
+and Pareto rules used for NPC equipment offers. Equipment evaluation is limited
+to 16 unique item-and-weight simulations per scan; later equipment candidates
+are preserved and rejected with `unique_item_evaluation_budget_exhausted`. The
+bot verifies storage and inventory changes after normal use, preserves displaced
+items, and equips useful upgrades through normal item movement. Routes longer
+than 120 steps or requiring a door, rope, or shovel action are not simple pickup
+objectives. At most 14 nested reward ancestors can be opened.
 
-Action ID `2001`, dedicated quest scripts, levers, and non-container reward
-sources require separate behavior and are not claimed by this path. Transient
-claim state is not persisted; storage, inventory, and equipment reconstruct the
-next decision after restart.
+Action ID `2001` is excluded except for the hard-coded doublet reward with unique
+ID `56002` and item ID `2485`. Dedicated quest scripts, levers, and other
+non-container rewards require separate behavior.
+Candidate telemetry reports `map_reward` as the acquisition source and gives
+explicit malformed, unsupported, non-improving, capacity, inventory, utility,
+and route rejection reasons. Transient claim state is not persisted; storage,
+inventory, and equipment reconstruct the next decision after restart.
 
 An unpromoted level 8 through 10 player can select the live tagged Oracle. The
 bot derives a route, says `hi`, `yes`, `thais`, `knight`, `yes`, then verifies

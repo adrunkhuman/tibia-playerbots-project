@@ -37,7 +37,8 @@ const PlayerBotTestPolicy& playerbot::testPolicyFromEnvironment()
 				 std::strcmp(gameplayMode, "equipment_buy") == 0 ||
 				 std::strcmp(gameplayMode, "equipment_buy_resume") == 0 ||
 				 std::strcmp(gameplayMode, "equipment_buy_space") == 0 ||
-				 std::strcmp(gameplayMode, "equipment_buy_rejected") == 0);
+				 std::strcmp(gameplayMode, "equipment_buy_rejected") == 0 ||
+				 std::strcmp(gameplayMode, "mainland_reward") == 0);
 		const bool startInHunt = gameplayMode &&
 			(std::strcmp(gameplayMode, "navigation") == 0 || std::strcmp(gameplayMode, "navigation_recovery") == 0 ||
 			 std::strcmp(gameplayMode, "corpse") == 0 ||
@@ -57,6 +58,7 @@ const PlayerBotTestPolicy& playerbot::testPolicyFromEnvironment()
 			                               std::strcmp(gameplayMode, "equipment_shadow_unaffordable") != 0 &&
 			                               std::strcmp(gameplayMode, "equipment_shadow_no_upgrade") != 0 &&
 			                               std::strcmp(gameplayMode, "mainland") != 0 &&
+			                               std::strcmp(gameplayMode, "mainland_reward") != 0 &&
 		                               std::strcmp(gameplayMode, "depot") != 0;
 		const char* depotRestartPhase = std::getenv("PLAYERBOT_DEPOT_RESTART_PHASE");
 		const DepotRestartCheckpoint depotRestartCheckpoint = !depotRestartPhase ? DepotRestartCheckpoint::None :
