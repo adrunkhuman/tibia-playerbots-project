@@ -18,6 +18,7 @@
 #include "monsters.h"
 #include "player.h"
 #include "playerbotarea.h"
+#include "playerbotspellcalibration.h"
 #include "playerbotnavigation.h"
 #include "spawn.h"
 #include "spells.h"
@@ -376,6 +377,9 @@ PlayerBotHuntPlanningProfile playerBotHuntPlanningProfile(const Player& player, 
 	profile.lightHealingLegal = true;
 	profile.lightHealingManaCost = spell->getManaCost(&player);
 	profile.lightHealingCooldown = std::max(spell->getCooldown(), spell->getGroupCooldown());
+	if (const PlayerBotSpellDescriptor* descriptor = playerBotSpellDescriptor("Light Healing")) {
+		profile.lightHealingMinimum = playerBotSpellEnvelope(player, *descriptor).minimum;
+	}
 	return profile;
 }
 
@@ -394,8 +398,8 @@ PlayerBotRecoveryPrediction playerBotPredictRecovery(const PlayerBotHuntPlanning
 			predictedFightSeconds * 1000.0 / std::max<uint32_t>(prediction.spellCooldown, 1))));
 		prediction.spellCasts = std::min(manaCasts, durationCasts);
 	}
-	prediction.spellMinimumHealing = prediction.spellCasts *
-		(profile.combat.level / 5.0 + profile.magicLevel * 1.4 + 8);
+	// Safety remains the callback's audited lower envelope, never observed calibration.
+	prediction.spellMinimumHealing = prediction.spellCasts * profile.lightHealingMinimum;
 	prediction.totalMinimumHealing = prediction.potionMinimumHealing + prediction.spellMinimumHealing;
 	return prediction;
 }

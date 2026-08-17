@@ -53,6 +53,7 @@ struct PlayerBotHuntPlanningProfile {
 	uint32_t potionCount = 0;
 	uint32_t lightHealingManaCost = 0;
 	uint32_t lightHealingCooldown = 0;
+	int32_t lightHealingMinimum = 0;
 	double challengeFrontier = 0;
 	bool lightHealingLegal = false;
 };

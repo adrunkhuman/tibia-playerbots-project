@@ -171,6 +171,44 @@ wasteful small health potion. If potions are unavailable, it also attempts
 Light Healing for larger deficits. Each cast verifies mana plus health, haste
 condition, or target damage before falling back to a potion or normal melee.
 
+### Spell calibration
+
+Loaded spell metadata remains authoritative for spell words, legality, mana, and
+cooldowns. Formula bounds come from `light_healing.lua`, `whirlwind_throw.lua`,
+`berserk.lua`, and `haste.lua`. The engine does not expose those Lua callback
+bounds, so `playerbotspellcalibration` maintains a manually synchronized lower
+and upper envelope. Review the envelope whenever those callbacks change;
+calibration never replaces it. Formula fidelity remains under issue #1. The hunt
+planner continues to use only Light Healing's lower envelope for recovery and
+predicted-lethal checks.
+
+Observed casts are controller-local ranking evidence only. They cannot alter
+formula-minimum healing safety, predicted-lethal rejection, engine legality,
+cooldowns, or mana reserves. Profiles are keyed by spell and target class where
+relevant, bounded to 12 keys and 64 samples per counter. A thirteenth key
+deterministically evicts the least recently observed key; telemetry records the
+eviction. Profiles reset when the controller is recreated. Accepted, rejected,
+and ambiguous counters each cap at 64. Confidence is accepted samples divided
+by eight, capped at one; rejected and ambiguous evidence do not reduce it.
+`conservative` is the accepted observed minimum. `ranking` blends the formula
+midpoint toward the accepted mean by confidence. Normal combat-hook observations
+cap at 10,000 before profiling; profiles clamp values at 60,000. Before full
+confidence the #91 policy remains unchanged. At full confidence the controller
+can rank existing legal offensive alternatives, but never invents a cross-role
+action or bypasses normal `g_game.playerSay` casting.
+
+Healing accepts an exact roll only when missing health is at least the captured
+formula maximum and there is no concurrent damage or other recovery. Potential
+overheal is `censored_overheal`, not a low roll. Damage accepts attributed
+single-target Whirlwind Throw and Berserk samples with stable target ID and
+class; melee, other attackers, target loss, unstable targets, and multi-target
+Berserk effects are ambiguous. Haste captures newly applied condition identity
+and remaining ticks immediately after the engine cast, then estimates duration
+as remaining ticks plus at most 2,000 ms elapsed at verification. This is not a
+wait for or confirmation of the full duration. Pre-existing or replaced
+conditions are rejected. Only accepted healing adds verified hunt recovery
+pressure.
+
 The service cycle sells known surplus, restores five small health potions and
 one meat, deposits carried money, and withdraws 100 gp. Hunting ends after the
 configured duration or below 30 oz free capacity. Remaining top-level backpack
@@ -259,7 +297,7 @@ States, actions, results, statuses, and reasons use stable lowercase values.
 | Rewards | `strategy_candidate`, `reward_inspection`, `strategy_selection`, `strategy_objective_result` expose bundle selection and verification. |
 | Equipment | `equipment_offer_candidate` and `equipment_offer_shadow` expose loaded tagged-shop offers, loadout and hunt deltas, reserve and route checks, and non-mutating `would_buy` or `would_equip` decisions. Live `buy_equipment` goals use `strategy_selection`, `action_result`, `strategy_objective_result`, and `goal_result` to record purchase, carried-item recovery, displacement, equip verification, and fallback. |
 | Spell training | `spell_trainer_discovered`, `spell_candidate`, `strategy_selection`, `action_result`, and `goal_result` expose loaded offers, eligibility rejections, provider/route choice, and exact payment verification. |
-| Spell casting | `action_result` with `action="cast_spell"` records the need, semantic `policy_candidate`, selected method, mana reserve, normal-path request, engine result, observed outcome, and fallback. `legal_candidates` contains only normal-path casts confirmed by resource evidence. |
+| Spell casting | `action_result` with `action="cast_spell"` records the need, semantic `policy_candidate`, selected method, mana reserve, normal-path request, engine result, observed outcome, fallback, captured engine bounds, monotonic observation age, target class, distinct synchronous spell-victim count, measured Haste condition ticks, and controller-local calibration counts, range, conservative value, ranking estimate, confidence, and evidence reason. `spell_calibration` separates `classifier_helper` and `profile_math` fixture evidence; `spell_calibration_eviction` records bounded-profile replacement. `legal_candidates` contains only normal-path casts confirmed by resource evidence. |
 | Actions | `action_result`, `target_changed`, `service_discovered`, `npc_reply`, `stuck` record externally relevant attempts and outcomes. |
 | Hunting | `hunt_region_candidate`, `hunt_region_scan`, `hunt_region_selection`, `hunt_region_outcome`, `hunt_challenge_frontier`, `hunt_scope_exhausted`, and `hunt_region_patrol` expose planner inputs, recovery assumptions, active-combat evidence, frontier updates, and bounded local exhaustion. |
 | Navigation | `navigation_progress` records bounded recovery such as oscillation suppression. |
@@ -269,6 +307,12 @@ Successful movement is not logged per tile. Repeated identical transitions,
 target changes, and action failures are emitted at most once per 60 seconds;
 `summary.suppressed_events` counts omissions. Counters cover one in-memory
 controller lifetime. Docker retains three 10 MiB server log files.
+
+`Game::combatChangeHealth` forwards global damage and healing notifications to
+the playerbot manager. The controller attributes only synchronous effects that
+match its pending normal speech cast. `classifier_helper` records cover
+classification boundaries that cannot interleave on that single-threaded path;
+they are not live engine-attribution evidence.
 
 `hunt_challenge_frontier.result` is `escalated`, `backoff`, `hold`, `clamped`,
 or `insufficient_active_combat`. Its `retreat` field is true only for the

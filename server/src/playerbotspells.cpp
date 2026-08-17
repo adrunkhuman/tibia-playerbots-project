@@ -11,6 +11,7 @@
 #include "otpch.h"
 
 #include "playerbotcontroller.h"
+#include "playerbotspellcalibration.h"
 #include "spells.h"
 
 // Runtime spell-trainer discovery and normal NPC learning dialogue.
@@ -23,56 +24,27 @@ namespace {
 	constexpr uint32_t higherPriorityRecoveryManaReserve = 20;
 	constexpr uint32_t minimumHasteRouteSteps = 20;
 	constexpr int32_t smallHealthPotionMaximumHealing = 90;
+	constexpr int32_t maximumHasteObservationDelay = 2000;
 
-	enum class KnightSpellRole : uint8_t {
-		Healing,
-		Support,
-		MeleeOffense,
-		RangedOffense,
-	};
-
-	struct AuditedKnightSpellDescriptor {
-		const char* name;
-		const char* words;
-		KnightSpellRole role;
-	};
-
-	constexpr std::array<AuditedKnightSpellDescriptor, 4> auditedKnightSpells = {{
-		{"Light Healing", "exura", KnightSpellRole::Healing},
-		{"Haste", "utani hur", KnightSpellRole::Support},
-		{"Berserk", "exori", KnightSpellRole::MeleeOffense},
-		{"Whirlwind Throw", "exori hur", KnightSpellRole::RangedOffense},
-	}};
-
-	const AuditedKnightSpellDescriptor* findAuditedKnightSpell(const char* name)
+	const char* fallbackForRole(PlayerBotSpellRole role)
 	{
-		auto it = std::find_if(auditedKnightSpells.begin(), auditedKnightSpells.end(), [name](const auto& descriptor) {
-			return std::strcmp(descriptor.name, name) == 0;
-		});
-		return it == auditedKnightSpells.end() ? nullptr : &*it;
-	}
-
-	const char* roleName(KnightSpellRole role)
-	{
-		switch (role) {
-			case KnightSpellRole::Healing: return "healing";
-			case KnightSpellRole::Support: return "support";
-			case KnightSpellRole::MeleeOffense: return "melee_offense";
-			case KnightSpellRole::RangedOffense: return "ranged_offense";
-		}
-		return "unsupported";
-	}
-
-	const char* fallbackForRole(KnightSpellRole role)
-	{
-		return role == KnightSpellRole::Healing ? "small_health_potion" :
-		       role == KnightSpellRole::Support ? "continue_route" : "normal_melee";
+		return role == PlayerBotSpellRole::Healing ? "small_health_potion" :
+		       role == PlayerBotSpellRole::Support ? "continue_route" : "normal_melee";
 	}
 
 	const char* fallbackForNeed(const char* need)
 	{
 		return std::strcmp(need, "recovery") == 0 ? "small_health_potion" :
 		       std::strcmp(need, "safe_route") == 0 ? "continue_route" : "normal_melee";
+	}
+
+	std::string targetClass(const Creature* target)
+	{
+		if (!target) return "self";
+		if (!target->getMonster()) return "creature";
+		std::string name = target->getName();
+		name.resize(std::min<size_t>(name.size(), 48));
+		return "monster:" + name;
 	}
 
 }
@@ -105,8 +77,33 @@ void PlayerBotController::emitSpellCastEvent(const Position& position, const cha
 		       << ",\"health_before\":" << pending->healthBefore
 		       << ",\"health_after\":" << (player ? player->getHealth() : pending->healthBefore);
 		if (pending->targetId != 0) {
+			Creature* target = g_game.getCreatureByID(pending->targetId);
 			fields << ",\"target_id\":" << pending->targetId
-			       << ",\"target_health_before\":" << pending->targetHealthBefore;
+			       << ",\"target_health_before\":" << pending->targetHealthBefore
+			       << ",\"target_health_after\":" << (target && !target->isRemoved() ? target->getHealth() : 0)
+			       << ",\"target_class\":" << jsonString(pending->targetClass);
+		}
+		fields << ",\"engine_bounds\":{\"minimum\":" << pending->envelope.minimum
+		       << ",\"maximum\":" << pending->envelope.maximum << ",\"duration_ms\":" << pending->envelope.durationMs << '}'
+		       << ",\"observation_age_ms\":" << std::chrono::duration_cast<std::chrono::milliseconds>(
+		           std::chrono::steady_clock::now() - pending->observedAt).count();
+		if (pending->targetId != 0) {
+			fields << ",\"spell_victim_count\":" << static_cast<uint16_t>(pending->spellVictimCount)
+			       << ",\"spell_victim_overflow\":" << (pending->spellVictimOverflow ? "true" : "false");
+		}
+		if (pending->role == "support") {
+			fields << ",\"haste_ticks_after_cast\":" << pending->hasteTicksAfterCast
+			       << ",\"haste_ticks_observed\":" << pending->hasteTicksObserved
+			       << ",\"haste_duration_measured\":" << pending->hasteDurationMeasured;
+		}
+		if (const PlayerBotSpellProfile* profile = spellCalibration.find(pending->name, pending->targetClass)) {
+			fields << ",\"calibration\":{\"accepted\":" << profile->accepted << ",\"rejected\":" << profile->rejected
+			       << ",\"ambiguous\":" << profile->ambiguous << ",\"minimum\":" << profile->minimum
+			       << ",\"maximum\":" << profile->maximum << ",\"conservative\":" << profile->conservative
+			       << ",\"ranking\":" << profile->ranking << ",\"confidence\":" << profile->confidence << '}';
+		} else {
+			fields << ",\"calibration\":{\"accepted\":0,\"rejected\":0,\"ambiguous\":0,\"confidence\":0}"
+			       << ",\"ranking_estimate\":" << spellCalibration.ranking(pending->name, pending->targetClass, pending->envelope);
 		}
 	}
 	if (reason) {
@@ -119,7 +116,7 @@ void PlayerBotController::emitSpellCastEvent(const Position& position, const cha
 bool PlayerBotController::startSpellCast(Player& player, const Position& position, const char* spellName, const char* need,
                                          Creature* target)
 {
-	const AuditedKnightSpellDescriptor* descriptor = findAuditedKnightSpell(spellName);
+	const PlayerBotSpellDescriptor* descriptor = playerBotSpellDescriptor(spellName);
 	if (!descriptor) {
 		emitSpellCastEvent(position, nullptr, nullptr, nullptr, need, "skipped", "not_attempted", "unsupported_descriptor", nullptr,
 		                   &player, fallbackForNeed(need));
@@ -127,13 +124,13 @@ bool PlayerBotController::startSpellCast(Player& player, const Position& positio
 	}
 	InstantSpell* spell = g_spells ? g_spells->getInstantSpellByName(descriptor->name) : nullptr;
 	if (!spell || spell->getWords() != descriptor->words || !spell->isLearnable()) {
-		emitSpellCastEvent(position, descriptor->name, descriptor->words, roleName(descriptor->role), need, "skipped",
-		                   "not_attempted", "unsupported_metadata", nullptr, &player, fallbackForRole(descriptor->role));
+		emitSpellCastEvent(position, descriptor->name, descriptor->words, playerBotSpellRoleName(descriptor->role), need, "skipped",
+			                   "not_attempted", "unsupported_metadata", nullptr, &player, fallbackForRole(descriptor->role));
 		return false;
 	}
 	if (!player.hasLearnedInstantSpell(descriptor->name)) {
 		if (shouldEmitRepeated("cast_spell:unlearned:" + std::string(descriptor->name))) {
-			emitSpellCastEvent(position, descriptor->name, descriptor->words, roleName(descriptor->role), need, "skipped",
+			emitSpellCastEvent(position, descriptor->name, descriptor->words, playerBotSpellRoleName(descriptor->role), need, "skipped",
 			                   "not_attempted", "unlearned", nullptr, &player, fallbackForRole(descriptor->role));
 		}
 		return false;
@@ -141,48 +138,70 @@ bool PlayerBotController::startSpellCast(Player& player, const Position& positio
 	if (!player.canDoAction() || !pendingSpellCast.name.empty()) {
 		return false;
 	}
-	const bool healingGroup = descriptor->role == KnightSpellRole::Healing || descriptor->role == KnightSpellRole::Support;
+	const bool healingGroup = descriptor->role == PlayerBotSpellRole::Healing || descriptor->role == PlayerBotSpellRole::Support;
 	if (player.hasCondition(healingGroup ? CONDITION_EXHAUST_HEAL : CONDITION_EXHAUST_COMBAT)) {
 		if (shouldEmitRepeated("cast_spell:cooldown:" + std::string(descriptor->name))) {
-			emitSpellCastEvent(position, descriptor->name, descriptor->words, roleName(descriptor->role), need, "skipped",
+			emitSpellCastEvent(position, descriptor->name, descriptor->words, playerBotSpellRoleName(descriptor->role), need, "skipped",
 			                   "not_attempted", "cooldown", nullptr, &player, fallbackForRole(descriptor->role));
 		}
 		return false;
 	}
-	if ((descriptor->role == KnightSpellRole::MeleeOffense || descriptor->role == KnightSpellRole::RangedOffense) &&
+	if ((descriptor->role == PlayerBotSpellRole::MeleeOffense || descriptor->role == PlayerBotSpellRole::RangedOffense) &&
 		(!target || target->isRemoved() || target->isDead() || player.getAttackedCreature() != target ||
 		 !player.canSeeCreature(target) || !player.canSee(target->getPosition()) ||
 		 !Position::areInRange<1, 1, 0>(position, target->getPosition()))) {
 		if (shouldEmitRepeated("cast_spell:lost_target:" + std::string(descriptor->name))) {
-			emitSpellCastEvent(position, descriptor->name, descriptor->words, roleName(descriptor->role), need, "skipped",
+			emitSpellCastEvent(position, descriptor->name, descriptor->words, playerBotSpellRoleName(descriptor->role), need, "skipped",
 			                   "not_attempted", "lost_target", nullptr, &player, "normal_melee");
 		}
 		return false;
 	}
 	if (spell->getNeedTarget() && !spell->canThrowSpell(&player, target)) {
 		if (shouldEmitRepeated("cast_spell:target_unreachable:" + std::string(descriptor->name))) {
-			emitSpellCastEvent(position, descriptor->name, descriptor->words, roleName(descriptor->role), need, "skipped",
+			emitSpellCastEvent(position, descriptor->name, descriptor->words, playerBotSpellRoleName(descriptor->role), need, "skipped",
 			                   "not_attempted", "target_unreachable", nullptr, &player, "normal_melee");
 		}
 		return false;
 	}
 	const uint32_t manaCost = spell->getManaCost(&player);
-	const uint32_t reserve = descriptor->role == KnightSpellRole::Healing ? 0 : higherPriorityRecoveryManaReserve;
+	const uint32_t reserve = descriptor->role == PlayerBotSpellRole::Healing ? 0 : higherPriorityRecoveryManaReserve;
 	if (player.getMana() < manaCost + reserve) {
 		if (shouldEmitRepeated("cast_spell:insufficient_mana_reserve:" + std::string(descriptor->name))) {
-			emitSpellCastEvent(position, descriptor->name, descriptor->words, roleName(descriptor->role), need, "skipped",
+			emitSpellCastEvent(position, descriptor->name, descriptor->words, playerBotSpellRoleName(descriptor->role), need, "skipped",
 			                   "not_attempted", "insufficient_mana_reserve", nullptr, &player, fallbackForRole(descriptor->role));
 		}
 		return false;
 	}
 
-	pendingSpellCast = {descriptor->name, roleName(descriptor->role), need, player.getMana(), reserve, player.getHealth(),
-	                    target ? target->getID() : 0, target ? target->getHealth() : 0};
+	const PlayerBotSpellEnvelope envelope = playerBotSpellEnvelope(player, *descriptor);
+	pendingSpellCast = PendingSpellCast{};
+	pendingSpellCast.name = descriptor->name;
+	pendingSpellCast.role = playerBotSpellRoleName(descriptor->role);
+	pendingSpellCast.need = need;
+	pendingSpellCast.manaBefore = player.getMana();
+	pendingSpellCast.manaReserve = reserve;
+	pendingSpellCast.healthBefore = player.getHealth();
+	pendingSpellCast.targetId = target ? target->getID() : 0;
+	pendingSpellCast.targetHealthBefore = target ? target->getHealth() : 0;
+	pendingSpellCast.missingHealth = player.getMaxHealth() - player.getHealth();
+	pendingSpellCast.hasteTicksBefore = player.hasCondition(CONDITION_HASTE) ? player.getCondition(CONDITION_HASTE)->getTicks() : 0;
+	pendingSpellCast.envelope = envelope;
+	pendingSpellCast.targetClass = targetClass(target);
+	pendingSpellCast.otherRecovery = descriptor->role == PlayerBotSpellRole::Healing && player.hasCondition(CONDITION_REGENERATION);
+	pendingSpellCast.observedAt = std::chrono::steady_clock::now();
 	++counters.actionsAttempted;
-	emitSpellCastEvent(position, descriptor->name, descriptor->words, roleName(descriptor->role), need, "requested", "unchecked",
+	emitSpellCastEvent(position, descriptor->name, descriptor->words, playerBotSpellRoleName(descriptor->role), need, "requested", "unchecked",
 	                   nullptr, &pendingSpellCast, &player, nullptr);
 	// Route through the normal player speech handler so the live spell engine owns legality and costs.
+	spellCastExecuting = true;
 	g_game.playerSay(playerId, 0, TALKTYPE_SAY, "", spell->getWords());
+	spellCastExecuting = false;
+	if (descriptor->role == PlayerBotSpellRole::Support) {
+		if (Condition* haste = player.getCondition(CONDITION_HASTE)) {
+			pendingSpellCast.hasteTicksAfterCast = haste->getTicks();
+			pendingSpellCast.hasteEndTimeAfterCast = haste->getEndTime();
+		}
+	}
 	return true;
 }
 
@@ -191,32 +210,137 @@ void PlayerBotController::verifySpellCast(Player& player, const Position& positi
 	if (pendingSpellCast.name.empty()) {
 		return;
 	}
-	const AuditedKnightSpellDescriptor* descriptor = findAuditedKnightSpell(pendingSpellCast.name.c_str());
+	const PlayerBotSpellDescriptor* descriptor = playerBotSpellDescriptor(pendingSpellCast.name.c_str());
 	const bool manaSpent = player.getMana() < pendingSpellCast.manaBefore;
+	PlayerBotSpellObservation observation;
+	observation.manaSpent = manaSpent;
+	observation.concurrentDamage = pendingSpellCast.concurrentDamage;
+	observation.otherRecovery = pendingSpellCast.otherRecovery;
+	observation.otherAttacker = pendingSpellCast.otherAttacker;
+	observation.meleeOrOtherBotDamage = pendingSpellCast.meleeOrOtherBotDamage;
 	bool observed = false;
 	if (pendingSpellCast.role == "healing") {
+		observation.value = pendingSpellCast.observedSpellHealing;
 		observed = player.getHealth() > pendingSpellCast.healthBefore;
+		if (!pendingSpellCast.concurrentDamage && player.getHealth() - pendingSpellCast.healthBefore !=
+		    static_cast<int32_t>(pendingSpellCast.observedSpellHealing)) {
+			observation.otherRecovery = true;
+		}
 	} else if (pendingSpellCast.role == "support") {
-		observed = player.hasCondition(CONDITION_HASTE);
+		Condition* haste = player.getCondition(CONDITION_HASTE);
+		const int32_t elapsed = static_cast<int32_t>(std::clamp<int64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+			std::chrono::steady_clock::now() - pendingSpellCast.observedAt).count(), 0, maximumHasteObservationDelay));
+		pendingSpellCast.hasteTicksObserved = haste ? haste->getTicks() : 0;
+		pendingSpellCast.hasteDurationMeasured = pendingSpellCast.hasteTicksObserved + elapsed;
+		const bool newlyApplied = haste && pendingSpellCast.hasteTicksBefore == 0 && pendingSpellCast.hasteTicksAfterCast > 0 &&
+		                          pendingSpellCast.hasteEndTimeAfterCast != 0 &&
+		                          haste->getEndTime() == pendingSpellCast.hasteEndTimeAfterCast;
+		observation.value = newlyApplied ? pendingSpellCast.hasteDurationMeasured : 0;
+		observed = observation.value > 0;
 	} else {
 		Creature* target = g_game.getCreatureByID(pendingSpellCast.targetId);
-		observed = !target || target->isRemoved() || target->isDead() || target->getHealth() < pendingSpellCast.targetHealthBefore;
+		observation.targetStable = target && !target->isRemoved() && targetClass(target) == pendingSpellCast.targetClass;
+		observation.value = pendingSpellCast.observedSpellDamage;
+		observation.multiTarget = pendingSpellCast.spellVictimOverflow || pendingSpellCast.spellVictimCount > 1;
+		observed = observation.value > 0;
+	}
+	const PlayerBotSpellEvidence evidence = descriptor ? playerBotClassifySpellObservation(descriptor->role, observation,
+		pendingSpellCast.missingHealth, pendingSpellCast.envelope) : PlayerBotSpellEvidence::CastNotVerified;
+	spellCalibration.observe(pendingSpellCast.name, pendingSpellCast.targetClass, pendingSpellCast.envelope, evidence, observation.value);
+	if (std::optional<std::string> evicted = spellCalibration.takeEvictedProfile()) {
+		emit("spell_calibration_eviction", position, "\"evicted_profile\":" + jsonString(*evicted) +
+		     ",\"replacement_profile\":" + jsonString(pendingSpellCast.name + "\n" + pendingSpellCast.targetClass));
 	}
 	const bool success = manaSpent && observed;
-	const char* reason = success ? nullptr : !manaSpent ? "cast_not_verified" : "ineffective_result";
+	const char* reason = playerBotSpellEvidenceName(evidence);
 	const char* fallback = success ? nullptr : pendingSpellCast.role == "healing" ? "small_health_potion" :
 	                       pendingSpellCast.role == "support" ? "continue_route" : "normal_melee";
 	emitSpellCastEvent(position, descriptor ? descriptor->name : nullptr, descriptor ? descriptor->words : nullptr,
-	                   descriptor ? roleName(descriptor->role) : nullptr, pendingSpellCast.need.c_str(),
+	                   descriptor ? playerBotSpellRoleName(descriptor->role) : nullptr, pendingSpellCast.need.c_str(),
 	                   success ? "success" : "failed", manaSpent ? "accepted" : "rejected", reason,
 	                   &pendingSpellCast, &player, fallback);
 	if (!success) {
 		++counters.actionsFailed;
 		spellRetryAfter = std::chrono::steady_clock::now() + healingRetryInterval;
-	} else if (pendingSpellCast.role == "healing") {
+	} else if (pendingSpellCast.role == "healing" && evidence == PlayerBotSpellEvidence::Accepted) {
 		recordHuntRecovery(false);
 	}
 	pendingSpellCast = PendingSpellCast{};
+}
+
+void PlayerBotController::runSpellCalibrationFixture(Player& player, const Position& position)
+{
+	auto emitFixture = [this, &position](const char* spell, const char* targetClass, const PlayerBotSpellEnvelope& envelope,
+	                                     PlayerBotSpellEvidence evidence, int32_t value, const char* phase) {
+		const PlayerBotSpellProfile& profile = spellCalibration.observe(spell, targetClass, envelope, evidence, value);
+		std::ostringstream fields;
+		const bool profileMath = std::strcmp(phase, "low_confidence") == 0 || std::strcmp(phase, "gradual_ranking") == 0 ||
+		                         std::strcmp(phase, "bounded_range") == 0;
+		fields << "\"source\":" << jsonString(profileMath ? "profile_math" : "classifier_helper")
+		       << ",\"phase\":" << jsonString(phase) << ",\"spell\":" << jsonString(spell)
+		       << ",\"target_class\":" << jsonString(targetClass) << ",\"evidence\":" << jsonString(playerBotSpellEvidenceName(evidence))
+		       << ",\"engine_bounds\":{\"minimum\":" << envelope.minimum << ",\"maximum\":" << envelope.maximum
+		       << ",\"duration_ms\":" << envelope.durationMs << "},\"calibration\":{\"accepted\":" << profile.accepted
+		       << ",\"rejected\":" << profile.rejected << ",\"ambiguous\":" << profile.ambiguous
+		       << ",\"minimum\":" << profile.minimum << ",\"maximum\":" << profile.maximum
+		       << ",\"conservative\":" << profile.conservative << ",\"ranking\":" << profile.ranking
+		       << ",\"confidence\":" << profile.confidence << '}';
+		if (std::strcmp(phase, "low_confidence") == 0) {
+			fields << ",\"policy_unchanged\":true";
+		}
+		emit("spell_calibration", position, fields.str());
+	};
+	const PlayerBotSpellDescriptor* healing = playerBotSpellDescriptor("Light Healing");
+	const PlayerBotSpellDescriptor* ranged = playerBotSpellDescriptor("Whirlwind Throw");
+	const PlayerBotSpellDescriptor* melee = playerBotSpellDescriptor("Berserk");
+	const PlayerBotSpellDescriptor* support = playerBotSpellDescriptor("Haste");
+	if (!healing || !ranged || !melee || !support) return;
+	const PlayerBotSpellEnvelope healingEnvelope = playerBotSpellEnvelope(player, *healing);
+	const PlayerBotSpellEnvelope rangedEnvelope = playerBotSpellEnvelope(player, *ranged);
+	const PlayerBotSpellEnvelope meleeEnvelope = playerBotSpellEnvelope(player, *melee);
+	const PlayerBotSpellEnvelope supportEnvelope = playerBotSpellEnvelope(player, *support);
+	PlayerBotSpellObservation acceptedHeal{true, false, false, true, false, false, false,
+	                                      std::max(1, healingEnvelope.minimum)};
+	emitFixture(healing->name, "self", healingEnvelope,
+	            playerBotClassifySpellObservation(healing->role, acceptedHeal, healingEnvelope.maximum + 1, healingEnvelope),
+	            acceptedHeal.value, "isolated_healing");
+	emitFixture(healing->name, "self", healingEnvelope,
+	            playerBotClassifySpellObservation(healing->role, acceptedHeal, healingEnvelope.maximum, healingEnvelope),
+	            acceptedHeal.value, "healing_equality_exact");
+	emitFixture(healing->name, "self", healingEnvelope, PlayerBotSpellEvidence::CensoredOverheal, 0, "overheal_censored");
+	emitFixture(healing->name, "self", healingEnvelope, PlayerBotSpellEvidence::ConcurrentDamage, 0, "concurrent_damage");
+	emitFixture(healing->name, "self", healingEnvelope, PlayerBotSpellEvidence::CastNotVerified, 0, "rejected_cast");
+	PlayerBotSpellObservation acceptedDamage{true, false, false, true, false, false, false,
+	                                        std::max(1, rangedEnvelope.minimum)};
+	emitFixture(ranged->name, "monster:fixture", rangedEnvelope,
+	            playerBotClassifySpellObservation(ranged->role, acceptedDamage, 0, rangedEnvelope), acceptedDamage.value,
+	            "single_target_damage");
+	emitFixture(ranged->name, "monster:fixture", rangedEnvelope, PlayerBotSpellEvidence::MeleeOrOtherBotDamage, 0, "melee_ambiguous");
+	emitFixture(ranged->name, "monster:fixture", rangedEnvelope, PlayerBotSpellEvidence::OtherAttacker, 0, "other_attacker_ambiguous");
+	emitFixture(ranged->name, "monster:fixture", rangedEnvelope, PlayerBotSpellEvidence::TargetLost, 0, "target_loss_ambiguous");
+	emitFixture(melee->name, "monster:fixture", meleeEnvelope, PlayerBotSpellEvidence::MultiTarget, 0, "multi_target_ambiguous");
+	emitFixture(support->name, "self", supportEnvelope, PlayerBotSpellEvidence::Accepted, supportEnvelope.durationMs,
+	            "support_duration");
+	emitFixture(support->name, "self", supportEnvelope, PlayerBotSpellEvidence::PreexistingOrReplacedCondition, 0,
+	            "support_preexisting_or_replaced");
+	for (uint16_t sample = 0; sample < 9; ++sample) {
+		emitFixture(ranged->name, "monster:fixture", rangedEnvelope, PlayerBotSpellEvidence::Accepted,
+			sample == 8 ? 70000 : rangedEnvelope.maximum + sample,
+			sample == 0 ? "low_confidence" : sample == 8 ? "bounded_range" : "gradual_ranking");
+	}
+	for (uint8_t profile = 0; profile <= 12; ++profile) {
+		spellCalibration.observe(ranged->name, "monster:eviction-" + std::to_string(profile), rangedEnvelope,
+		                         PlayerBotSpellEvidence::Accepted, rangedEnvelope.minimum);
+		if (std::optional<std::string> evicted = spellCalibration.takeEvictedProfile()) {
+			emit("spell_calibration_eviction", position, "\"source\":\"profile_math\",\"evicted_profile\":" +
+			     jsonString(*evicted) + ",\"profile_count\":" + std::to_string(spellCalibration.size()));
+		}
+	}
+	const size_t profilesBeforeReset = spellCalibration.size();
+	spellCalibration.clear();
+	emit("spell_calibration", position, "\"source\":\"profile_math\",\"phase\":\"fixture_profile_clear\",\"profiles_before\":" +
+	     std::to_string(profilesBeforeReset) + ",\"profiles_after\":" + std::to_string(spellCalibration.size()) +
+	     ",\"persistent\":false");
 }
 
 bool PlayerBotController::handleSpellHealing(Player* player, const Position& currentPosition)
@@ -248,6 +372,17 @@ bool PlayerBotController::tryOffensiveSpell(Player* player, const Position& curr
 	}
 	Creature* target = g_game.getCreatureByID(ratId);
 	if (player->hasLearnedInstantSpell("Berserk") && player->getLevel() >= 35) {
+		const PlayerBotSpellDescriptor* ranged = playerBotSpellDescriptor("Whirlwind Throw");
+		const PlayerBotSpellDescriptor* melee = playerBotSpellDescriptor("Berserk");
+		const std::string targetKind = targetClass(target);
+		if (ranged && melee) {
+			const PlayerBotSpellProfile* profile = spellCalibration.find(ranged->name, targetKind);
+			if (profile && profile->confidence >= 1.0 &&
+			    spellCalibration.ranking(ranged->name, targetKind, playerBotSpellEnvelope(*player, *ranged)) >
+			        spellCalibration.ranking(melee->name, targetKind, playerBotSpellEnvelope(*player, *melee))) {
+				return startSpellCast(*player, currentPosition, ranged->name, "offense", target);
+			}
+		}
 		return startSpellCast(*player, currentPosition, "Berserk", "offense", target);
 	}
 	return startSpellCast(*player, currentPosition, "Whirlwind Throw", "offense", target);
