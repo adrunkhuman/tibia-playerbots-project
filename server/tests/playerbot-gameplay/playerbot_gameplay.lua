@@ -626,7 +626,8 @@ function login.onLogin(player)
         mode == "arbitration" or
         mode == "arbitration_interrupt" or mode == "departure" or mode == "departure_interrupt" or
         mode == "departure_recovery" or mode == "spell_training" or mode == "stamina_bonus" or mode == "stamina_boundary" or
-        mode == "stamina_normal" or mode == "hunt_planning" or mode == "readiness_ready" or
+		mode == "stamina_normal" or mode == "hunt_planning" or mode == "readiness_ready" or
+		mode == "adaptive_challenge" or
         mode == "readiness_upgrade" or mode == "readiness_missing_weapon" or mode == "readiness_supplies" or
 		mode == "readiness_retention" or mode == "equipment_shadow" or mode == "equipment_shadow_unaffordable" or
 		mode == "equipment_shadow_no_upgrade" or mode == "equipment_buy" or mode == "equipment_buy_resume" or
@@ -793,6 +794,18 @@ function login.onLogin(player)
 	end
 	if mode == "hunt_planning" then
 		print("PLAYERBOT_GAMEPLAY_TEST HUNT_PLANNING_START")
+		return true
+	end
+	if mode == "adaptive_challenge" then
+		assert(player:setVocation(4), "adaptive challenge fixture could not select Knight")
+		local requiredExperience = Game.getExperienceForLevel(9) - player:getExperience()
+		if requiredExperience > 0 then player:addExperience(requiredExperience) end
+		assert(player:getLevel() == 9 and player:learnSpell("Light Healing"),
+			"adaptive challenge fixture could not prepare learned Light Healing")
+		assert(player:setMaxMana(200) and player:addMana(player:getMaxMana() - player:getMana()),
+			"adaptive challenge fixture could not prepare recovery mana")
+		suppressNearbyMonsters(player:getId())
+		print("PLAYERBOT_GAMEPLAY_TEST ADAPTIVE_CHALLENGE_START")
 		return true
 	end
 	if mode == "depot" then

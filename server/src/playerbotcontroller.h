@@ -75,6 +75,13 @@ namespace playerbot {
 	inline constexpr std::chrono::seconds healingRetryInterval(2);
 	inline constexpr std::chrono::minutes stableLifetimeReset(5);
 	inline constexpr std::chrono::minutes huntRegionCooldown(10);
+	inline constexpr std::chrono::seconds huntScopeReevaluationDelay(30);
+	inline constexpr double initialChallengeFrontier = 0.20;
+	inline constexpr double minimumChallengeFrontier = 0.10;
+	inline constexpr double maximumChallengeFrontier = 0.40;
+	inline constexpr double challengeEscalation = 0.025;
+	inline constexpr double challengeBackoff = 0.05;
+	inline constexpr double challengeHealthSafetyPercent = 85;
 	inline constexpr std::chrono::minutes pickupRewardSuccessCooldown(5);
 	inline constexpr std::chrono::seconds pickupRewardFailureCooldown(60);
 	inline constexpr std::chrono::minutes spellTrainingSuccessCooldown(5);
@@ -153,6 +160,8 @@ namespace playerbot {
 		bool forceRepeatedNavigationStepFailures;
 		bool equipmentPurchasesEnabled;
 		bool forceEquipmentPurchaseRejected;
+		bool adaptiveChallengeFixture;
+		bool forceHuntScopeExhaustion;
 	};
 
 	std::string jsonString(const std::string& value);
@@ -479,14 +488,30 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 			uint64_t scoringTimeUs = 0;
 			Position playerPosition;
 			uint32_t playerLevel = 0;
-			int32_t playerHealth = 0;
-			int32_t playerArmor = 0;
-			int32_t playerDefense = 0;
 			uint16_t staminaMinutes = 0;
 			bool fixtureForcedUnreachable = false;
 			bool fixtureForcedNodeLimit = false;
 			uint64_t cacheRevision = 0;
 			std::set<Position> excludedRegions;
+			PlayerBotHuntPlanningProfile profile;
+		};
+
+		struct ChallengeFrontier {
+			double target = playerbot::initialChallengeFrontier;
+			uint8_t qualifyingHuntsToHold = 0;
+		};
+
+		struct HuntCombatEvidence {
+			double activeSeconds = 0;
+			uint32_t damageTaken = 0;
+			uint32_t potionRecoveries = 0;
+			uint32_t spellRecoveries = 0;
+			uint32_t maximumAttackerOverlap = 0;
+			int32_t minimumHealth = std::numeric_limits<int32_t>::max();
+			bool dangerObserved = false;
+			bool deathObserved = false;
+			std::array<uint32_t, 101> healthPercentSamples{};
+			std::chrono::steady_clock::time_point lastSample;
 		};
 
 		class DecisionTimer
@@ -803,6 +828,15 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		void processFixtureDeposit(Player* player, const Position& currentPosition);
 
 		void emitHuntRegionCandidate(const PlayerBotHuntRegion& region, const Position& position) const;
+		bool isActiveHuntCombat(const Player& player) const;
+		void recordHuntCombatObservation(bool active, double elapsedSeconds, int32_t health, int32_t maximumHealth,
+		                                 uint32_t attackers);
+		void recordActiveHuntCombat(const Player& player);
+		uint8_t p10HuntCombatHealthPercent() const;
+		void recordHuntRecovery(bool potion);
+		void updateChallengeFrontier(const Player& player, const Position& position, uint64_t huntDurationSeconds,
+		                             const char* reason);
+		void runAdaptiveChallengeFixture(Player& player, const Position& position);
 		void cancelHuntRegionPlanning();
 		void emitHuntRegionPlanning(const HuntRegionPlanning& planning, const Position& position, const char* phase) const;
 
@@ -944,11 +978,15 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		std::optional<PlayerBotHuntRegion> activeHuntRegion;
 		std::map<Position, std::chrono::steady_clock::time_point>& huntRegionCooldowns;
 		std::map<Position, PlayerBotHuntRegionPerformance> huntRegionPerformance;
+		ChallengeFrontier challengeFrontier;
+		HuntCombatEvidence huntCombatEvidence;
+		std::chrono::steady_clock::time_point huntScopeReevaluationAfter;
 		std::chrono::steady_clock::time_point huntRegionStarted;
 		uint64_t huntRegionStartExperience = 0;
 		uint32_t huntRegionStartLevel = 0;
 		uint32_t huntRegionKills = 0;
 		uint32_t huntRegionDamageTaken = 0;
+		bool adaptiveChallengeFixtureRun = false;
 		std::deque<PlayerBotNavigationStep> navigationSteps;
 		Position navigationTarget;
 		Position navigationExpectedPosition;

@@ -32,6 +32,31 @@ struct PlayerBotCombatProfile {
 	float attackFactor = 1.0f;
 };
 
+struct PlayerBotRecoveryPrediction {
+	double spellMinimumHealing = 0;
+	double potionMinimumHealing = 0;
+	double totalMinimumHealing = 0;
+	uint32_t spellManaCost = 0;
+	uint32_t spellCooldown = 0;
+	uint32_t spellCasts = 0;
+	uint32_t potionUses = 0;
+	uint32_t manaReserve = 0;
+	double availableBeforeLethal = 0;
+	bool lightHealingLegal = false;
+};
+
+struct PlayerBotHuntPlanningProfile {
+	PlayerBotCombatProfile combat;
+	int32_t currentHealth = 0;
+	uint32_t mana = 0;
+	uint32_t magicLevel = 0;
+	uint32_t potionCount = 0;
+	uint32_t lightHealingManaCost = 0;
+	uint32_t lightHealingCooldown = 0;
+	double challengeFrontier = 0;
+	bool lightHealingLegal = false;
+};
+
 struct PlayerBotHuntMonsterProfile {
 	std::string name;
 	double expectedSpawns = 0;
@@ -57,11 +82,20 @@ struct PlayerBotHuntRegion {
 	double staminaExperienceMultiplier = 1;
 	double projectedExperience = 0;
 	double threatRatio = 0;
+	double rawThreatRatio = 0;
+	int32_t currentHealth = 0;
+	double predictedFightSeconds = 0;
+	double challengeFrontier = 0;
+	double challengeBandMinimum = 0;
+	double challengeBandMaximum = 0;
+	PlayerBotRecoveryPrediction recovery;
 	double score = 0;
 	uint32_t travelSteps = 0;
 	uint64_t expandedNodes = 0;
 	bool suitable = false;
 	bool reachable = false;
+	bool inChallengeBand = false;
+	bool predictedLethal = false;
 	std::string rejectionReason;
 };
 
@@ -80,16 +114,21 @@ struct PlayerBotHuntRegionScan {
 	std::vector<size_t> candidateIndices;
 };
 
+PlayerBotHuntPlanningProfile playerBotHuntPlanningProfile(const Player& player, const PlayerBotCombatProfile& combat,
+                                                           double challengeFrontier);
+PlayerBotRecoveryPrediction playerBotPredictRecovery(const PlayerBotHuntPlanningProfile& profile,
+                                                      double predictedFightSeconds);
+bool playerBotPredictedLethal(int32_t currentHealth, double predictedDamage);
+bool playerBotPreferHuntRegion(const PlayerBotHuntRegion& left, const PlayerBotHuntRegion& right);
+bool playerBotHuntScopeExhausted(const std::vector<PlayerBotHuntRegion>& regions);
+
 class PlayerBotHuntRegionPlanner
 {
 	public:
 		static void invalidateCache();
 		static uint64_t getCacheRevision();
 		PlayerBotHuntRegionScan beginScan(const Player& player) const;
-		bool score(Player& player, uint64_t revision, size_t candidateIndex, const std::set<Position>& excludedRegions,
-		           const std::map<Position, PlayerBotHuntRegionPerformance>& performance,
-		           uint32_t huntDurationSeconds, PlayerBotHuntRegion& region) const;
-		bool score(Player& player, const PlayerBotCombatProfile& profile, uint64_t revision, size_t candidateIndex,
+		bool score(Player& player, const PlayerBotHuntPlanningProfile& profile, uint64_t revision, size_t candidateIndex,
 		           const std::set<Position>& excludedRegions,
 		           const std::map<Position, PlayerBotHuntRegionPerformance>& performance,
 		           uint32_t huntDurationSeconds, PlayerBotHuntRegion& region) const;

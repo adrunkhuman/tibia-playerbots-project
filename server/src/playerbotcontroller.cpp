@@ -47,13 +47,16 @@ const PlayerBotTestPolicy& playerbot::testPolicyFromEnvironment()
 			 std::strcmp(gameplayMode, "value") == 0 || std::strcmp(gameplayMode, "departure_interrupt") == 0 ||
 			 std::strcmp(gameplayMode, "stamina_bonus") == 0 || std::strcmp(gameplayMode, "stamina_boundary") == 0 ||
 			 std::strcmp(gameplayMode, "stamina_normal") == 0 || std::strcmp(gameplayMode, "hunt_planning") == 0 ||
+			 std::strcmp(gameplayMode, "adaptive_challenge") == 0 ||
 			 std::strcmp(gameplayMode, "readiness_ready") == 0 || std::strcmp(gameplayMode, "readiness_upgrade") == 0 ||
 			std::strcmp(gameplayMode, "readiness_missing_weapon") == 0 || std::strcmp(gameplayMode, "readiness_supplies") == 0 ||
 			std::strcmp(gameplayMode, "readiness_retention") == 0 || std::strcmp(gameplayMode, "spell_use") == 0);
+		const bool adaptiveChallengeFixture = gameplayMode && std::strcmp(gameplayMode, "adaptive_challenge") == 0;
 		const bool fixedFixtureRoute = gameplayMode && std::strcmp(gameplayMode, "stamina_bonus") != 0 &&
 		                               std::strcmp(gameplayMode, "stamina_boundary") != 0 &&
 			                               std::strcmp(gameplayMode, "stamina_normal") != 0 &&
 			                               std::strcmp(gameplayMode, "hunt_planning") != 0 &&
+			                               std::strcmp(gameplayMode, "adaptive_challenge") != 0 &&
 			                               std::strcmp(gameplayMode, "equipment_shadow") != 0 &&
 			                               std::strcmp(gameplayMode, "equipment_shadow_unaffordable") != 0 &&
 			                               std::strcmp(gameplayMode, "equipment_shadow_no_upgrade") != 0 &&
@@ -87,6 +90,8 @@ const PlayerBotTestPolicy& playerbot::testPolicyFromEnvironment()
 			                  std::strcmp(gameplayMode, "equipment_shadow_unaffordable") != 0 &&
 			                  std::strcmp(gameplayMode, "equipment_shadow_no_upgrade") != 0),
 			gameplayMode && std::strcmp(gameplayMode, "equipment_buy_rejected") == 0,
+			adaptiveChallengeFixture,
+			adaptiveChallengeFixture,
 		};
 	}();
 	return policy;
@@ -392,6 +397,10 @@ void PlayerBotController::onDeath(const Player& player, const Creature* killer, 
 	}
 	deathObserved = true;
 	lastPosition = player.getPosition();
+	if (activeHuntRegion && cyclePhase == CyclePhase::Hunt &&
+	    (scenarioStage == ScenarioStage::TraversalCombat || scenarioStage == ScenarioStage::TargetPursuit)) {
+		huntCombatEvidence.deathObserved = true;
+	}
 	if (activeHuntRegion) {
 		huntRegionCooldowns[activeHuntRegion->center] = std::chrono::steady_clock::now() + huntRegionCooldown;
 	}
@@ -473,8 +482,9 @@ uint32_t PlayerBotController::navigationDecisionDelay(const Player& player) cons
 
 void PlayerBotController::onHealthDrain(const Player& player, uint32_t damage)
 {
-	if (player.getID() == playerId && activeHuntRegion) {
+	if (player.getID() == playerId && isActiveHuntCombat(player)) {
 		huntRegionDamageTaken += damage;
+		huntCombatEvidence.damageTaken += damage;
 	}
 }
 
@@ -702,10 +712,12 @@ void PlayerBotController::navigate()
 	const Position currentPosition = player->getPosition();
 	lastPosition = currentPosition;
 	maybeLogSummary(currentPosition);
+	recordActiveHuntCombat(*player);
 	verifySpellCast(*player, currentPosition);
 	if (activeHuntRegion && cyclePhase == CyclePhase::Hunt) {
 		if (huntRegionDamageTaken >= static_cast<uint32_t>(player->getMaxHealth()) &&
 		    std::chrono::steady_clock::now() - huntRegionStarted < std::chrono::minutes(2)) {
+			huntCombatEvidence.dangerObserved = true;
 			huntRegionCooldowns[activeHuntRegion->center] = std::chrono::steady_clock::now() + huntRegionCooldown;
 			beginService(player, currentPosition, "hunt_region_observed_danger");
 			schedule(navigationInterval);

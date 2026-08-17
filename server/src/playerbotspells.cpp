@@ -213,6 +213,8 @@ void PlayerBotController::verifySpellCast(Player& player, const Position& positi
 	if (!success) {
 		++counters.actionsFailed;
 		spellRetryAfter = std::chrono::steady_clock::now() + healingRetryInterval;
+	} else if (pendingSpellCast.role == "healing") {
+		recordHuntRecovery(false);
 	}
 	pendingSpellCast = PendingSpellCast{};
 }
