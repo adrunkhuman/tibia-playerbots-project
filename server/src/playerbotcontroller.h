@@ -97,6 +97,7 @@ namespace playerbot {
 	inline constexpr int32_t pickupRewardBaseUtility = 650;
 	inline constexpr int32_t spellTrainingGoalUtility = 550;
 	inline constexpr int32_t equipmentPurchaseGoalUtility = 500;
+	inline constexpr int32_t magicTrainingGoalUtility = 350;
 	inline constexpr int32_t economicPickupBaseUtility = 250;
 	inline constexpr int32_t huntGoalUtility = 300;
 	inline constexpr int32_t oracleDepartureUtility = 950;
@@ -164,6 +165,8 @@ namespace playerbot {
 		bool adaptiveChallengeFixture;
 		bool forceHuntScopeExhaustion;
 		bool spellCalibrationFixture;
+		bool magicTrainingFixture;
+		bool forceMagicTrainingVerificationFailure;
 	};
 
 	std::string jsonString(const std::string& value);
@@ -186,6 +189,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 
 	private:
 		enum class CyclePhase : uint8_t {
+			Idle,
 			Service,
 			ReturnToDepot,
 			DepositLoot,
@@ -223,6 +227,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 			PickupReward,
 			LearnSpell,
 			BuyEquipment,
+			MagicTraining,
 			Hunt,
 		};
 
@@ -752,6 +757,12 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		void finishSpellTraining(Player* player, const Position& position, const char* result, const char* reason);
 		void processSpellTraining(Player* player, const Position& currentPosition);
 
+		bool processMagicTraining(Player& player, const Position& position);
+		const char* magicTrainingCandidateReason(const Player& player) const;
+		bool magicTrainingSafe(const Player& player) const;
+		const char* magicTrainingSafetyReason(const Player& player) const;
+		void finishMagicTraining(Player& player, const Position& position, const char* result, const char* reason);
+
 		const char* topLevelGoalName(TopLevelGoal goal) const;
 
 		uint32_t saleableItemCount(const Player& player) const;
@@ -860,6 +871,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		                             const char* reason);
 		void runAdaptiveChallengeFixture(Player& player, const Position& position);
 		void runSpellCalibrationFixture(Player& player, const Position& position);
+		void runMagicTrainingFixture(Player& player, const Position& position);
 		void cancelHuntRegionPlanning();
 		void emitHuntRegionPlanning(const HuntRegionPlanning& planning, const Position& position, const char* phase) const;
 
@@ -968,6 +980,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		std::chrono::steady_clock::time_point pickupRewardCooldownUntil;
 		std::chrono::steady_clock::time_point spellTrainingCooldownUntil;
 		std::chrono::steady_clock::time_point equipmentPurchaseCooldownUntil;
+		std::chrono::steady_clock::time_point magicTrainingCooldownUntil;
 		uint32_t progressionAttempts = 0;
 		uint32_t pendingRewardItemCount = 0;
 		uint32_t pendingRewardRootCount = 0;
@@ -1031,6 +1044,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		std::map<Position, std::chrono::steady_clock::time_point> temporarilyBlockedPositions;
 		bool navigationPending = false;
 		bool worldChangePending = false;
+		bool magicTrainingFixtureInitializationPending = false;
 		Counters counters;
 		std::unordered_map<std::string, std::chrono::steady_clock::time_point> repeatedEventTimes;
 		const std::chrono::steady_clock::time_point started = std::chrono::steady_clock::now();

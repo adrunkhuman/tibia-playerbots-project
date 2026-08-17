@@ -56,6 +56,7 @@ the changed behavior:
 | `-SpellTraining` | Tagged trainer discovery, reserve-backed affordability rejection, normal spell dialogue/payment, and restart persistence. |
 | `-SpellUse` | Light Healing preemption, Haste, Whirlwind Throw, unlearned-spell potion fallback, and mana-reserve melee fallback. |
 | `-SpellCalibration` | Engine-path Light Healing, measured Haste duration, and single-target Whirlwind attribution; deterministic classifier evidence for race-heavy censored/concurrent/ambiguous cases; profile confidence, LRU eviction, bounded values, telemetry, and controller-recreation reset. |
+| `-MagicTraining` | Creature aggregated regeneration-forecast boundaries, including finite final ticks, strict overflow/exact-full behavior, PZ pause, one normal Haste/Great Light/Light or Light-refresh cast, service and spell-learning precedence, post-hunt `Idle` arbitration, failed verification, and restart forecast recomputation. Controlled setup proves arithmetic and engine paths, not ordinary long-running frequency; regeneration phase is not preserved across serialization. |
 
 Navigation or looting changes require at least:
 
@@ -63,6 +64,7 @@ Navigation or looting changes require at least:
 pwsh -File scripts/test-playerbot-gameplay.ps1 -FullNavigation -CorpseLoot
 pwsh -File scripts/test-playerbot-gameplay.ps1 -TargetPursuit -Focused
 pwsh -File scripts/test-playerbot-gameplay.ps1 -SpellUse -Focused
+pwsh -File scripts/test-playerbot-gameplay.ps1 -MagicTraining -Focused
 ```
 
 `-TargetPursuit` runs successful `target_pursuit` reacquisition and bounded

@@ -25,6 +25,7 @@ namespace {
 const char* PlayerBotController::cyclePhaseName() const
 {
 	switch (cyclePhase) {
+		case CyclePhase::Idle: return "idle";
 		case CyclePhase::Service: return "service";
 		case CyclePhase::ReturnToDepot: return "return_to_depot";
 		case CyclePhase::DepositLoot: return "deposit_loot";
@@ -126,6 +127,7 @@ void PlayerBotController::finishHuntAndSelectGoal(Player* player, const Position
 	pendingLootItemId = 0;
 	pendingDiscardItemId = 0;
 	player->closeContainer(corpseContainerId);
+	setCyclePhase(CyclePhase::Idle, position, reason);
 	emit("goal_result", position,
 	     "\"decision_id\":" + std::to_string(goalDecisionId) +
 	         ",\"goal\":\"hunt\",\"result\":\"success\",\"reason\":" + jsonString(reason));

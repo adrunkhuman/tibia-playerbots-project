@@ -1145,6 +1145,10 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 		processProgression(player, currentPosition);
 		return;
 	}
+	if (activeGoal == TopLevelGoal::MagicTraining) {
+		processMagicTraining(*player, currentPosition);
+		return;
+	}
 	if (cyclePhase == CyclePhase::Hunt && !ensureCombatReady(player, currentPosition, "readiness_continuous_check")) {
 		return;
 	}

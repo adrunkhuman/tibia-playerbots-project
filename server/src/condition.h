@@ -23,9 +23,17 @@
 #include "fileloader.h"
 #include "enums.h"
 
+#include <optional>
+
 class Creature;
 class Player;
 class PropStream;
+
+struct ManaRegenerationForecast {
+	uint32_t gain = 0;
+	uint32_t interval = 0;
+	uint32_t remaining = 0;
+};
 
 enum ConditionAttr_t {
 	CONDITIONATTR_TYPE = 1,
@@ -201,6 +209,7 @@ class ConditionRegeneration final : public ConditionGeneric
 
 		bool setParam(ConditionParam_t param, int32_t value) override;
 		int32_t getParam(ConditionParam_t param) override;
+		std::optional<ManaRegenerationForecast> getManaForecast(const Creature& creature, uint32_t executionInterval) const;
 
 		ConditionRegeneration* clone() const override {
 			return new ConditionRegeneration(*this);

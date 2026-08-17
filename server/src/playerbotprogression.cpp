@@ -1107,6 +1107,7 @@ const char* PlayerBotController::topLevelGoalName(TopLevelGoal goal) const
 		case TopLevelGoal::PickupReward: return "pickup_reward";
 		case TopLevelGoal::LearnSpell: return "learn_spell";
 		case TopLevelGoal::BuyEquipment: return "buy_equipment";
+		case TopLevelGoal::MagicTraining: return "magic_training";
 		case TopLevelGoal::Hunt: return "hunt";
 	}
 	return "unknown";
@@ -1180,6 +1181,14 @@ void PlayerBotController::emitGoalCandidate(const Player& player, const GoalCand
 		       << ",\"price\":" << equipment->price << ",\"rule\":"
 		       << jsonString(equipmentDecisionRuleName(equipment->rule))
 		       << ",\"travel_steps\":" << equipment->travelSteps;
+	}
+	if (candidate.goal == TopLevelGoal::MagicTraining) {
+		const std::optional<ManaRegenerationForecast> forecast = player.getManaRegenerationForecast();
+		fields << ",\"mana\":" << player.getMana() << ",\"mana_max\":" << player.getMaxMana();
+		if (forecast) {
+			fields << ",\"mana_gain\":" << forecast->gain << ",\"mana_tick_interval\":" << forecast->interval
+			       << ",\"mana_tick_remaining\":" << forecast->remaining;
+		}
 	}
 	emit("goal_candidate", position, fields.str());
 }
@@ -1261,11 +1270,17 @@ bool PlayerBotController::selectTopLevelGoal(Player& player, const Position& pos
 	                                 equipmentPurchaseCoolingDown ? "cooldown" :
 	                                 !testPolicy.equipmentPurchasesEnabled ? "shadow_only" :
 	                                 equipmentFound ? equipmentDecisionRuleName(equipment->rule) : "no_justified_offer"};
+	const bool magicTrainingCoolingDown = magicTrainingCooldownUntil > now;
+	const char* magicTrainingReason = magicTrainingCoolingDown ? "cooldown" : magicTrainingCandidateReason(player);
+	const GoalCandidate magicTraining{TopLevelGoal::MagicTraining, !magicTrainingCoolingDown && magicTrainingReason == nullptr,
+	                                  !magicTrainingCoolingDown && magicTrainingReason == nullptr ? magicTrainingGoalUtility : 0,
+	                                  magicTrainingReason ? magicTrainingReason : "next_tick_overflow"};
 	const bool higherUtilityGoal = (departureCandidate.feasible && departureCandidate.utility > huntGoalUtility) ||
 	                               (service.feasible && service.utility > huntGoalUtility) ||
 	                               (pickup.feasible && pickup.utility > huntGoalUtility) ||
 	                               (learnSpell.feasible && learnSpell.utility > huntGoalUtility) ||
-	                               (buyEquipment.feasible && buyEquipment.utility > huntGoalUtility);
+	                               (buyEquipment.feasible && buyEquipment.utility > huntGoalUtility) ||
+	                               (magicTraining.feasible && magicTraining.utility > huntGoalUtility);
 	const bool huntFeasible = !higherUtilityGoal;
 	const GoalCandidate hunt{TopLevelGoal::Hunt, huntFeasible, huntGoalUtility,
 	                         higherUtilityGoal ? "deferred_lower_utility" :
@@ -1277,11 +1292,12 @@ bool PlayerBotController::selectTopLevelGoal(Player& player, const Position& pos
 	emitGoalCandidate(player, learnSpell, position, decisionReason);
 	emitGoalCandidate(player, buyEquipment, position, decisionReason, nullptr, nullptr,
 	                  equipmentFound ? &*equipment : nullptr);
+	emitGoalCandidate(player, magicTraining, position, decisionReason);
 	emitGoalCandidate(player, hunt, position, decisionReason);
 
 	const GoalCandidate* selected = nullptr;
-	const std::array<const GoalCandidate*, 6> candidates = {
-		&departureCandidate, &service, &pickup, &learnSpell, &buyEquipment, &hunt,
+	const std::array<const GoalCandidate*, 7> candidates = {
+		&departureCandidate, &service, &pickup, &learnSpell, &buyEquipment, &magicTraining, &hunt,
 	};
 	for (const GoalCandidate* candidate : candidates) {
 		if (candidate->feasible && (!selected || candidate->utility > selected->utility)) {
@@ -1326,6 +1342,8 @@ bool PlayerBotController::selectTopLevelGoal(Player& player, const Position& pos
 		beginEquipmentPurchase(player, position, *equipment);
 	} else if (selected->goal == TopLevelGoal::Service) {
 		beginService(&player, position, "goal_selected");
+	} else if (selected->goal == TopLevelGoal::MagicTraining) {
+		schedule(SCHEDULER_MINTICKS);
 	} else {
 		startHunt(&player, position, "goal_selected");
 	}

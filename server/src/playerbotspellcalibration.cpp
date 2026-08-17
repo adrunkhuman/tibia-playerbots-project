@@ -18,9 +18,11 @@ namespace {
 	constexpr int32_t maximumObservedValue = 60000;
 	constexpr uint16_t confidenceSamples = 8;
 
-	constexpr std::array<PlayerBotSpellDescriptor, 4> descriptors = {{
+	constexpr std::array<PlayerBotSpellDescriptor, 6> descriptors = {{
 		{"Light Healing", "exura", PlayerBotSpellRole::Healing},
-		{"Haste", "utani hur", PlayerBotSpellRole::Support},
+		{"Haste", "utani hur", PlayerBotSpellRole::Support, true, 30, PlayerBotTrainingEffect::Haste, false},
+		{"Great Light", "utevo gran lux", PlayerBotSpellRole::Support, true, 20, PlayerBotTrainingEffect::Light, true},
+		{"Light", "utevo lux", PlayerBotSpellRole::Support, true, 10, PlayerBotTrainingEffect::Light, true},
 		{"Berserk", "exori", PlayerBotSpellRole::MeleeOffense},
 		{"Whirlwind Throw", "exori hur", PlayerBotSpellRole::RangedOffense},
 	}};
@@ -43,6 +45,11 @@ const PlayerBotSpellDescriptor* playerBotSpellDescriptor(const char* name)
 		return std::strcmp(descriptor.name, name) == 0;
 	});
 	return it == descriptors.end() ? nullptr : &*it;
+}
+
+const std::array<PlayerBotSpellDescriptor, 6>& playerBotSpellDescriptors()
+{
+	return descriptors;
 }
 
 const char* playerBotSpellRoleName(PlayerBotSpellRole role)

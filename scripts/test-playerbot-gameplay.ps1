@@ -22,6 +22,7 @@ param(
 	[switch]$SpellTraining,
 	[switch]$SpellUse,
 	[switch]$SpellCalibration,
+	[switch]$MagicTraining,
 	[switch]$Focused,
 	[switch]$SkipBuild,
 	[switch]$KeepStack
@@ -1520,6 +1521,78 @@ function Assert-SpellCalibrationEvents {
 	throw "Spell calibration telemetry was incomplete. missing=$($missing -join ','), acceptedHealing=$($acceptedHealing.Count), equalityHealing=$($equalityHealing.Count), censored=$($censored.Count), concurrent=$($concurrent.Count), damage=$($damage.Count), ambiguous=$($ambiguous.Count), multiTarget=$($multiTarget.Count), support=$($support.Count), supportRejected=$($supportRejected.Count), lowConfidence=$($lowConfidence.Count), adjusted=$($adjusted.Count), bounded=$($bounded.Count), fixtureClear=$($fixtureClear.Count), evicted=$($evicted.Count), engineHealing=$($engineHealing.Count), engineHaste=$($engineHaste.Count), engineBerserkSingle=$($engineBerserkSingle.Count), engineBerserkMulti=$($engineBerserkMulti.Count), defaultBerserk=$defaultBerserk, actualLowConfidence=$($actualLowConfidence.Count)."
 }
 
+function Assert-MagicTrainingEvents {
+	param([string]$Logs, [string]$Mode, [string]$Spell)
+	$events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
+	$actions = @($events | Where-Object { $_.event -eq "action_result" -and $_.action -eq "magic_training" })
+	$requests = @($actions | Where-Object { $_.result -eq "requested" })
+	$verified = @($actions | Where-Object { $_.source -eq "engine_verification" })
+	$candidates = @($events | Where-Object { $_.event -eq "goal_candidate" -and $_.goal -eq "magic_training" })
+	if ($Mode -eq "cast") {
+		$success = @($verified | Where-Object { $_.result -eq "success" -and $_.spell -eq $Spell -and $_.mana_delta -eq $_.mana_cost -and $_.mana_spent_after -gt $_.mana_spent_before -and $_.mana_after -ge 20 -and $_.wasted_mana -gt 0 })
+		$goal = @($events | Where-Object { $_.event -eq "goal_result" -and $_.goal -eq "magic_training" -and $_.result -eq "success" -and $_.reason -eq "cast_verified" })
+		if ($requests.Count -eq 1 -and $success.Count -eq 1 -and $goal.Count -eq 1) { return }
+		throw "Magic training $Spell did not make exactly one verified overflow cast. requests=$($requests.Count), success=$($success.Count), goal=$($goal.Count)."
+	}
+	if ($Mode -eq "failed") {
+		$failed = @($verified | Where-Object { $_.result -eq "failed" -and $_.spell -eq "Light" })
+		$goal = @($events | Where-Object { $_.event -eq "goal_result" -and $_.goal -eq "magic_training" -and $_.result -eq "failed" -and $_.reason -eq "cast_verification_failed" })
+		$continued = @($events | Where-Object { $_.event -eq "goal_selection" -and $_.decision_reason -eq "magic_training_complete" -and $_.from_goal -eq "magic_training" })
+		if ($requests.Count -eq 1 -and $failed.Count -eq 1 -and $goal.Count -eq 1 -and $continued.Count -eq 1) { return }
+		throw "Failed magic-training verification retried or did not reselect."
+	}
+	if ($Mode -eq "post_hunt") {
+		$idle = @($events | Where-Object { $_.event -eq "objective_transition" -and $_.from -eq "hunt" -and $_.to -eq "idle" })
+		$selection = @($events | Where-Object { $_.event -eq "goal_selection" -and $_.decision_reason -eq "hunt_deadline" -and $_.to_goal -eq "magic_training" })
+		$continued = @($events | Where-Object { $_.event -eq "goal_selection" -and $_.decision_reason -eq "magic_training_complete" -and $_.from_goal -eq "magic_training" -and $_.to_goal -eq "hunt" })
+		$success = @($verified | Where-Object { $_.result -eq "success" -and $_.spell -eq "Haste" })
+		if ($idle.Count -ge 1 -and $selection.Count -eq 1 -and $requests.Count -eq 1 -and $success.Count -eq 1 -and $continued.Count -eq 1) { return }
+		throw "Post-hunt overflow did not transition Idle to one magic-training cast and back to Hunt."
+	}
+	if ($Mode -eq "post_hunt_no_overflow") {
+		$idle = @($events | Where-Object { $_.event -eq "objective_transition" -and $_.from -eq "hunt" -and $_.to -eq "idle" })
+		$selection = @($events | Where-Object { $_.event -eq "goal_selection" -and $_.decision_reason -eq "hunt_deadline" -and $_.to_goal -eq "hunt" })
+		$guard = @($candidates | Where-Object { $_.decision_reason -eq "hunt_deadline" -and -not $_.feasible -and $_.reason -eq "next_tick_not_overflow" })
+		if ($idle.Count -ge 1 -and $selection.Count -ge 1 -and $guard.Count -ge 1 -and $actions.Count -eq 0) { return }
+		throw "Post-hunt non-overflow did not return from Idle directly to Hunt."
+	}
+	if ($Mode -eq "restart") {
+		$online = @($events | Where-Object { $_.event -eq "lifecycle" -and $_.status -eq "online" })
+		$forecast = @($events | Where-Object {
+			$_.event -eq "magic_training_fixture" -and $_.case -eq "active_default" -and $_.active -and $_.remaining -eq $_.interval
+		})
+		$guard = @($candidates | Where-Object {
+			-not $_.feasible -and $_.reason -eq "next_tick_not_overflow" -and $_.mana_tick_remaining -eq $_.mana_tick_interval -and
+			$_.mana + $_.mana_gain -le $_.mana_max
+		})
+		if ($online.Count -eq 1 -and $forecast.Count -eq 1 -and $guard.Count -ge 1 -and $actions.Count -eq 0) { return }
+		throw "Restart did not recompute the fresh regeneration forecast from persisted player state."
+	}
+	$reason = $Mode -eq "reserve" ? "no_audited_safe_spell" : $Mode -eq "pz" ? "regeneration_paused" :
+		$Mode -in @("absent", "expired") ? "no_active_regeneration_forecast" : "next_tick_not_overflow"
+	if ($requests.Count -eq 0 -and $verified.Count -eq 0 -and @($candidates | Where-Object { -not $_.feasible -and $_.reason -eq $reason }).Count -ge 1) { return }
+	throw "Magic training $Mode guard failed."
+}
+
+function Assert-MagicTrainingForecastFixture {
+	param([string]$Logs, [string]$Mode)
+	$fixture = @(ConvertFrom-PlayerbotLogs -Logs $Logs | Where-Object { $_.event -eq "magic_training_fixture" -and $_.source -eq "authoritative_forecast" })
+	if ($Mode -eq "active") {
+		$activeDefault = @($fixture | Where-Object { $_.case -eq "active_default" -and $_.active -and $_.gain -eq 10 -and $_.interval -eq 1000 -and $_.remaining -eq 1000 })
+		$active = @($fixture | Where-Object { $_.case -eq "active" -and $_.gain -eq 10 -and $_.interval -eq 1000 -and $_.remaining -eq 1000 -and -not $_.exact_full_overflow -and $_.overflow_wasted -eq 5 })
+		$finalTick = @($fixture | Where-Object { $_.case -eq "finite_final_tick" -and $_.active })
+		$finite = @($fixture | Where-Object { $_.case -eq "finite_expires_before_tick" -and -not $_.active })
+		$nonDefault = @($fixture | Where-Object { $_.case -eq "non_default" -and $_.active -and $_.gain -eq 4 -and $_.remaining -eq 1000 })
+		$aggregated = @($fixture | Where-Object { $_.case -eq "earliest_same_engine_cycle" -and $_.active -and $_.gain -eq 13 -and $_.remaining -eq 1000 })
+		$expired = @($fixture | Where-Object { $_.case -eq "expired" -and -not $_.active })
+		if ($activeDefault.Count -eq 1 -and $active.Count -eq 1 -and $finalTick.Count -eq 1 -and $finite.Count -eq 1 -and $nonDefault.Count -eq 1 -and $aggregated.Count -eq 1 -and $expired.Count -eq 1) { return }
+		throw "The Creature regeneration forecast fixture did not cover active default, expiration, non-default, earliest, and summed-tick boundaries."
+	}
+	$expected = $Mode -eq "pz" ? "active_default" : "active_default"
+	if (@($fixture | Where-Object { $_.case -eq $expected -and -not $_.active }).Count -eq 1) { return }
+	throw "Magic training $Mode did not expose an absent authoritative regeneration forecast."
+}
+
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
 	throw "Docker is required to run the playerbot gameplay suite."
 }
@@ -1527,7 +1600,7 @@ if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
 $focusedScenarioRequested = $FullNavigation -or $TargetPursuit -or $CorpseLoot -or $DeathTelemetry -or $Healing -or $ValueLoot -or
 	$PickupProgression -or $GoalArbitration -or $OracleDeparture -or $StaminaProjection -or $HuntRegionPlanning -or
 	$AdaptiveChallenge -or
-	$CombatReadiness -or $EquipmentOffers -or $EquipmentPurchases -or $MainlandRewards -or $Depot -or $MainlandLoop -or $SpellTraining -or $SpellUse -or $SpellCalibration
+	$CombatReadiness -or $EquipmentOffers -or $EquipmentPurchases -or $MainlandRewards -or $Depot -or $MainlandLoop -or $SpellTraining -or $SpellUse -or $SpellCalibration -or $MagicTraining
 if ($Focused -and -not $focusedScenarioRequested) {
 	throw "-Focused requires at least one focused scenario switch."
 }
@@ -2176,6 +2249,93 @@ try {
 			}).Count -ne 1) {
 				Throw-WaitTimeout "Controller recreation did not start with an empty spell calibration profile store."
 			}
+		}
+	}
+
+	if ($MagicTraining) {
+		foreach ($case in @(
+			@{ Name = "magic_training_haste"; Mode = "cast"; Spell = "Haste" },
+			@{ Name = "magic_training_great_light"; Mode = "cast"; Spell = "Great Light" },
+			@{ Name = "magic_training_light"; Mode = "cast"; Spell = "Light" },
+			@{ Name = "magic_training_refresh"; Mode = "cast"; Spell = "Light" },
+			@{ Name = "magic_training_reserve"; Mode = "reserve"; Spell = "" },
+			@{ Name = "magic_training_exact_full"; Mode = "exact_full"; Spell = "" },
+			@{ Name = "magic_training_pz"; Mode = "pz"; Spell = "" },
+			@{ Name = "magic_training_absent"; Mode = "absent"; Spell = "" },
+			@{ Name = "magic_training_expired"; Mode = "expired"; Spell = "" },
+			@{ Name = "magic_training_failed"; Mode = "failed"; Spell = "" }
+		)) {
+			Invoke-Scenario -Name $case.Name -DefaultTimeoutSeconds 120 -Body {
+				Invoke-Compose down --volumes --remove-orphans
+				$env:PLAYERBOT_GAMEPLAY_MODE = $case.Name
+				Invoke-Compose up --detach
+				$pattern = if ($case.Mode -eq "cast") { '"action":"magic_training","result":"success"' } elseif ($case.Mode -eq "failed") { '"action":"magic_training","result":"failed"' } else { '"event":"goal_candidate".*"goal":"magic_training"' }
+				$logs = Wait-ForLog -Pattern $pattern
+				Assert-MagicTrainingEvents -Logs $logs -Mode $case.Mode -Spell $case.Spell
+				if ($case.Name -eq "magic_training_haste") {
+					Assert-MagicTrainingForecastFixture -Logs $logs -Mode "active"
+				} elseif ($case.Mode -in @("pz", "absent", "expired")) {
+					Assert-MagicTrainingForecastFixture -Logs $logs -Mode $case.Mode
+				}
+			}
+		}
+		foreach ($case in @(
+			@{ Name = "magic_training_service"; Winner = "service" },
+			@{ Name = "magic_training_progression"; Winner = "learn_spell" }
+		)) {
+			Invoke-Scenario -Name $case.Name -DefaultTimeoutSeconds 120 -Body {
+				Invoke-Compose down --volumes --remove-orphans
+				$env:PLAYERBOT_GAMEPLAY_MODE = $case.Name
+				Invoke-Compose up --detach
+				$logs = Wait-ForLog -Pattern ('"event":"goal_selection".*"to_goal":"' + $case.Winner + '"')
+				$events = @(ConvertFrom-PlayerbotLogs -Logs $logs)
+				$magic = @($events | Where-Object { $_.event -eq "goal_candidate" -and $_.goal -eq "magic_training" -and $_.feasible -and $_.utility -eq 350 })
+				$actions = @($events | Where-Object { $_.event -eq "action_result" -and $_.action -eq "magic_training" })
+				if ($magic.Count -lt 1 -or $actions.Count -ne 0) { throw "Magic training did not yield to $($case.Winner)." }
+			}
+		}
+		foreach ($case in @(
+			@{ Name = "magic_training_post_hunt"; Mode = "post_hunt" },
+			@{ Name = "magic_training_post_hunt_no_overflow"; Mode = "post_hunt_no_overflow" }
+		)) {
+			Invoke-Scenario -Name $case.Name -DefaultTimeoutSeconds 120 -Body {
+				Invoke-Compose down --volumes --remove-orphans
+				$env:PLAYERBOT_GAMEPLAY_MODE = $case.Name
+				$env:PLAYERBOT_HUNT_DURATION_SECONDS = "1"
+				Invoke-Compose up --detach
+				$pattern = $case.Mode -eq "post_hunt" ? '"event":"goal_selection".*"decision_reason":"magic_training_complete".*"to_goal":"hunt"' :
+					'"event":"goal_selection".*"decision_reason":"hunt_deadline".*"to_goal":"hunt"'
+				$logs = Wait-ForLog -Pattern $pattern
+				Assert-MagicTrainingEvents -Logs $logs -Mode $case.Mode
+			}
+		}
+		Invoke-Scenario -Name "magic_training_restart" -DefaultTimeoutSeconds 120 -Body {
+			Invoke-Compose down --volumes --remove-orphans
+			$env:PLAYERBOT_GAMEPLAY_MODE = "magic_training_restart"
+			Invoke-Compose up --detach
+			$initialLogs = Wait-ForLog -Pattern '"action":"magic_training","result":"success"'
+			Assert-MagicTrainingEvents -Logs $initialLogs -Mode "cast" -Spell "Light"
+			$cast = @(ConvertFrom-PlayerbotLogs -Logs $initialLogs | Where-Object {
+				$_.event -eq "action_result" -and $_.action -eq "magic_training" -and $_.source -eq "engine_verification" -and $_.result -eq "success"
+			})[0]
+			$restartLineCount = @((Get-ServerLogs) -split "`r?`n").Count
+			Invoke-Compose stop server
+			$persistedMagicLevel = Invoke-DatabaseScalar -Query "SELECT maglevel FROM players WHERE name = 'Bot One'"
+			$persistedManaSpent = Invoke-DatabaseScalar -Query "SELECT manaspent FROM players WHERE name = 'Bot One'"
+			if ($persistedMagicLevel -ne $cast.magic_level_after -or $persistedManaSpent -ne $cast.mana_spent_after) {
+				throw "Magic training cast progress was not persisted by clean shutdown. magicLevel=$persistedMagicLevel/$($cast.magic_level_after), manaSpent=$persistedManaSpent/$($cast.mana_spent_after)."
+			}
+			Invoke-Compose up --detach server
+			Wait-ForLog -Pattern '"event":"goal_candidate".*"goal":"magic_training".*"reason":"next_tick_not_overflow"' | Out-Null
+			$restartLogs = ((Get-ServerLogs) -split "`r?`n" | Select-Object -Skip $restartLineCount) -join "`n"
+			Assert-MagicTrainingEvents -Logs $restartLogs -Mode "restart"
+		}
+		Invoke-Scenario -Name "magic_training_hunt" -DefaultTimeoutSeconds 90 -Body {
+			Invoke-Compose down --volumes --remove-orphans
+			$env:PLAYERBOT_GAMEPLAY_MODE = "magic_training_hunt"
+			Invoke-Compose up --detach
+			$logs = Wait-ForLog -Pattern '"action":"hunt_cycle","result":"started"'
+			if (@(ConvertFrom-PlayerbotLogs -Logs $logs | Where-Object { $_.event -eq "action_result" -and $_.action -eq "magic_training" }).Count -ne 0) { throw "Magic training ran while hunting." }
 		}
 	}
 
