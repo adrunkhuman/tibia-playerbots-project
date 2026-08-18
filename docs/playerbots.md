@@ -275,10 +275,24 @@ utility on an ordinary long-running server.
 The service cycle sells known surplus, restores five small health potions and
 one meat, deposits carried money, and withdraws 100 gp. Hunting ends after the
 configured duration or below 30 oz free capacity. Remaining top-level backpack
-loot is moved through a reachable town depot locker into that player's real
-depot chest. Nested containers are opened and deposits are verified through
-normal item movement. Equipped items, the root backpack, currency, rope,
-shovel, and supply reserves are retained.
+loot is moved through a reachable local depot locker into that player's real
+depot chest. Depot locality and locker identity are independent: discovery
+enumerates map-indexed lockers, keeps only lockers in the 200-tile weighted
+planning area anchored at the bot's current position, then validates the locker
+still has its indexed depot ID. It ranks all standable adjacent squares by
+weighted current-position distance, locker ID, locker position, and approach
+position. It validates at most two routes per scheduler decision and resumes
+the sorted queue on the next decision. A moved player rebuilds the queue from a
+new anchor. Failed approaches are suppressed for two seconds, then become
+eligible again; a scan containing only suppressed approaches waits for the
+earliest suppression expiry without consuming an attempt. Complete unavailable
+scans retry after one, two, and four seconds, then stop on the fourth failed
+scan. A selected route is transferred into
+normal navigation, so it is not planned again. The selected actual locker ID,
+rather than the town ID, identifies the opened locker and player depot storage.
+Nested containers are opened and deposits are verified through normal item
+movement. Equipped items, the root backpack, currency, rope, shovel, and
+supply reserves are retained.
 
 Item value comes from tagged shop offers. Currency uses intrinsic value; other
 loot must have a known buyer. Corpse contents are ranked by value per weight,
@@ -383,6 +397,16 @@ or `insufficient_active_combat`. Its `retreat` field is true only for the
 `hunt_region_observed_danger` exit reason. `hunt_scope_exhausted` reports total,
 scored, suitable, and reachable candidate counts plus the retry delay and either
 `local_scope_exhausted` or `route_validation_budget_exhausted`.
+
+`action_result` with `action="depot_discover"` reports indexed, in-scope, and
+standable candidate counts. Success records the actual `depot_id`, locker and
+approach positions, weighted distance, route steps, and expanded nodes.
+`unavailable` records `no_local_locker`, `no_standable_approach`, or
+`no_reachable_locker`; `continuing` records
+`route_validation_budget_exhausted` while the bounded candidate queue remains.
+Unavailable records include the retry attempt and currently suppressed approach
+count; the fourth unavailable round emits the normal `depot_unavailable`
+terminal event.
 
 Target pursuit uses `action_result` with `action="target_pursuit"`.
 `result="started"` includes `target_id` and `last_seen_position`;

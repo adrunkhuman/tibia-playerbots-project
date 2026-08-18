@@ -51,7 +51,7 @@ the changed behavior:
 | `-CombatReadiness` | Equipment, supplies, capacity, service recovery, upgrades, and restart reconstruction. |
 | `-EquipmentPurchases` | Justified purchase and equip verification, clean restart persistence, carried-upgrade recovery, displaced-item-space rejection, and rejected transactions. |
 | `-MainlandRewards` | Real Thais reward object from a teleported, high-capacity fixture; scale-armor claim and equip, displaced-item and bundle preservation, restart reconstruction, and non-null battle-axe rejection evidence. It does not prove normal traversal, realistic capacity limits, or a specific rejection reason. |
-| `-Depot` | Real locker/chest discovery, nested deposits, move verification, retries, and restart checkpoints. |
+| `-Depot` | Real Thais locker/chest discovery from Naji, including the exact nearest locker and approach selection, nested deposits, move verification, retries, and restart checkpoints. |
 | `-MainlandLoop` | Two real Thais hunt/depot cycles, local services, restart recovery, and teleport exclusion. |
 | `-SpellTraining` | Tagged trainer discovery, reserve-backed affordability rejection, normal spell dialogue/payment, and restart persistence. |
 | `-SpellUse` | Light Healing preemption, Haste, Whirlwind Throw, unlearned-spell potion fallback, and mana-reserve melee fallback. |
