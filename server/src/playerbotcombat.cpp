@@ -1200,6 +1200,11 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 			return;
 		}
 		if (!processNavigation(player, currentPosition, depotApproachPosition)) {
+			if (fixedTargetRouteFailureCount != 0) {
+				rejectedDepotApproaches[depotApproachPosition] = std::chrono::steady_clock::now() + depotApproachSuppression;
+				clearDepotDiscovery();
+				clearNavigation();
+			}
 			return;
 		}
 		setCyclePhase(CyclePhase::DepositLoot, currentPosition, "depot_reached");
@@ -1224,6 +1229,11 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 			setCyclePhase(CyclePhase::ReturnToDepot, currentPosition, "displaced_during_deposit");
 			clearNavigation();
 			if (!processNavigation(player, currentPosition, depotApproachPosition)) {
+				if (fixedTargetRouteFailureCount != 0) {
+					rejectedDepotApproaches[depotApproachPosition] = std::chrono::steady_clock::now() + depotApproachSuppression;
+					clearDepotDiscovery();
+					clearNavigation();
+				}
 				return;
 			}
 			setCyclePhase(CyclePhase::DepositLoot, currentPosition, "depot_reached");

@@ -1274,26 +1274,30 @@ function Assert-DepotEvents {
 	$events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
 	$discovery = @($events | Where-Object {
 		$_.event -eq "action_result" -and $_.action -eq "depot_discover" -and
-		$_.result -eq "success" -and $_.depot_id -eq 2 -and $_.expanded_nodes -ge 0
+		$_.result -eq "success" -and $_.locker.x -eq 32352 -and $_.locker.y -eq 32225 -and
+		$_.locker.z -eq 7 -and $_.approach.x -eq 32352 -and $_.approach.y -eq 32226 -and $_.approach.z -eq 7 -and
+		$_.distance -ge 0 -and $_.route_steps -ge 0 -and $_.expanded_nodes -ge 0 -and $_.indexed -gt $_.in_scope -and
+		$_.in_scope -ge 1 -and $_.standable -gt 1
 	})
+	$depotId = if ($discovery.Count -gt 0) { $discovery[0].depot_id } else { -1 }
 	$locker = @($events | Where-Object {
 		$_.event -eq "action_result" -and $_.action -eq "depot_open_locker" -and
-		$_.result -eq "requested" -and $_.depot_id -eq 2 -and $_.container_id -eq 14
+		$_.result -eq "requested" -and $_.depot_id -eq $depotId -and $_.container_id -eq 14
 	})
 	$chest = @($events | Where-Object {
 		$_.event -eq "action_result" -and $_.action -eq "depot_open_chest" -and
-		$_.result -eq "requested" -and $_.depot_id -eq 2 -and $_.container_id -eq 13
+		$_.result -eq "requested" -and $_.depot_id -eq $depotId -and $_.container_id -eq 13
 	})
 	$verified = @($events | Where-Object {
 		$_.event -eq "action_result" -and $_.action -eq "deposit" -and
-		$_.result -eq "success" -and $_.policy -eq "known_loot" -and $_.depot_id -eq 2 -and
+		$_.result -eq "success" -and $_.policy -eq "known_loot" -and $_.depot_id -eq $depotId -and
 		$_.container_id -eq 13 -and $_.item_id -eq 2684 -and $_.verified -gt 0 -and
 		$_.inventory_after -eq ($_.inventory_before - $_.verified) -and
 		$_.depot_after -eq ($_.depot_before + $_.verified)
 	})
 	$complete = @($events | Where-Object {
 		$_.event -eq "action_result" -and $_.action -eq "deposit" -and
-		$_.result -eq "complete" -and $_.depot_id -eq 2 -and $_.container_id -eq 13
+		$_.result -eq "complete" -and $_.depot_id -eq $depotId -and $_.container_id -eq 13
 	})
 	$deposited = ($verified | Measure-Object -Property verified -Sum).Sum
 	$unsafeMoves = @($events | Where-Object {
@@ -1304,7 +1308,7 @@ function Assert-DepotEvents {
 	if ($discovery.Count -lt 1 -or $locker.Count -lt 1 -or $chest.Count -lt 1 -or
 		$deposited -ne $ExpectedDepositedCount -or $complete.Count -lt 1 -or
 		$unsafeMoves.Count -ne 0 -or $terminal.Count -ne 0) {
-		throw "Real depot evidence was incomplete. discovery=$($discovery.Count), locker=$($locker.Count), chest=$($chest.Count), deposited=$deposited, complete=$($complete.Count), unsafe=$($unsafeMoves.Count), terminal=$($terminal.Count)."
+		throw "Real Thais depot evidence was incomplete. discovery=$($discovery.Count), depotId=$depotId, locker=$($locker.Count), chest=$($chest.Count), deposited=$deposited, complete=$($complete.Count), unsafe=$($unsafeMoves.Count), terminal=$($terminal.Count)."
 	}
 }
 
@@ -1341,11 +1345,12 @@ function Assert-MainlandLoopEvents {
 		$_.event -eq "action_result" -and $_.action -eq "hunt_cycle" -and $_.result -eq "started"
 	})
 	$deposits = @($events | Where-Object {
-		$_.event -eq "action_result" -and $_.action -eq "deposit" -and $_.result -eq "complete" -and $_.depot_id -eq 2
+		$_.event -eq "action_result" -and $_.action -eq "deposit" -and $_.result -eq "complete"
 	})
 	$realDepot = @($events | Where-Object {
 		$_.event -eq "action_result" -and $_.action -eq "depot_discover" -and $_.result -eq "success" -and
-		$_.locker.x -eq 32344 -and $_.locker.y -eq 32218 -and $_.locker.z -eq 5
+		$_.locker.x -eq 32352 -and $_.locker.y -eq 32225 -and $_.locker.z -eq 7 -and
+		$_.approach.x -eq 32352 -and $_.approach.y -eq 32226 -and $_.approach.z -eq 7
 	})
 	$trainingRoomDepot = @($events | Where-Object {
 		$_.event -eq "action_result" -and $_.action -eq "depot_discover" -and $_.result -eq "success" -and
@@ -1665,7 +1670,7 @@ try {
 			Invoke-Compose up --detach
 			Invoke-DatabaseCommand -Query "INSERT INTO player_depotitems (player_id, sid, pid, itemtype, count, attributes) SELECT id, 9001, 2, 2684, 7, X'' FROM players WHERE name = 'Rook Tester'"
 			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST DEPOT_PASS' | Out-Null
-			$firstCycleLogs = Wait-ForLog -Pattern '"action":"deposit","result":"complete","depot_id":2'
+			$firstCycleLogs = Wait-ForLog -Pattern '"action":"deposit","result":"complete"'
 			Assert-DepotEvents -Logs $firstCycleLogs -ExpectedDepositedCount 2
 
 			$restartLineCount = @((Get-ServerLogs) -split "`r?`n").Count
@@ -1676,7 +1681,7 @@ try {
 				Start-Sleep -Seconds 1
 				$secondCycleLogs = ((Get-ServerLogs) -split "`r?`n" | Select-Object -Skip $restartLineCount) -join "`n"
 				if ($secondCycleLogs -match 'PLAYERBOT_GAMEPLAY_TEST DEPOT_PASS' -and
-					$secondCycleLogs -match '"action":"deposit","result":"complete","depot_id":2') { break }
+						$secondCycleLogs -match '"action":"deposit","result":"complete"') { break }
 			}
 			Assert-DepotEvents -Logs $secondCycleLogs -ExpectedDepositedCount 1
 			$sentinelCount = Invoke-DatabaseScalar -Query "SELECT COALESCE(SUM(count), 0) FROM player_depotitems JOIN players ON players.id = player_depotitems.player_id WHERE players.name = 'Rook Tester' AND pid = 2 AND itemtype = 2684"
@@ -1709,7 +1714,7 @@ try {
 					Start-Sleep -Seconds 1
 					$recoveryLogs = ((Get-ServerLogs) -split "`r?`n" | Select-Object -Skip $restartLineCount) -join "`n"
 					if ($recoveryLogs -match 'PLAYERBOT_GAMEPLAY_TEST DEPOT_PASS' -and
-						$recoveryLogs -match '"action":"deposit","result":"complete","depot_id":2') { break }
+						$recoveryLogs -match '"action":"deposit","result":"complete"') { break }
 				}
 				Assert-DepotRecoveryEvents -Logs $recoveryLogs -Phase $phase
 			}

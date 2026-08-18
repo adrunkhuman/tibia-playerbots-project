@@ -22,8 +22,10 @@ namespace {
 const PlayerBotTestPolicy& playerbot::testPolicyFromEnvironment()
 {
 	static const PlayerBotTestPolicy policy = []() {
-		const char* gameplayMode = std::getenv("PLAYERBOT_GAMEPLAY_MODE");
-		const char* regressionMode = std::getenv("PLAYERBOT_REGRESSION_MODE");
+		const char* gameplayModeValue = std::getenv("PLAYERBOT_GAMEPLAY_MODE");
+		const char* regressionModeValue = std::getenv("PLAYERBOT_REGRESSION_MODE");
+		const char* gameplayMode = gameplayModeValue && *gameplayModeValue != '\0' ? gameplayModeValue : nullptr;
+		const char* regressionMode = regressionModeValue && *regressionModeValue != '\0' ? regressionModeValue : nullptr;
 		const bool progressionMode = gameplayMode &&
 			(std::strcmp(gameplayMode, "progression") == 0 ||
 			 std::strcmp(gameplayMode, "progression_bundle") == 0 ||
@@ -73,7 +75,8 @@ const PlayerBotTestPolicy& playerbot::testPolicyFromEnvironment()
 			                               std::strcmp(gameplayMode, "equipment_shadow_no_upgrade") != 0 &&
 			                               std::strcmp(gameplayMode, "mainland") != 0 &&
 			                               std::strcmp(gameplayMode, "mainland_reward") != 0 &&
-		                               std::strcmp(gameplayMode, "depot") != 0;
+			                               std::strcmp(gameplayMode, "spell_training") != 0 &&
+			                               std::strcmp(gameplayMode, "depot") != 0;
 		const char* depotRestartPhase = std::getenv("PLAYERBOT_DEPOT_RESTART_PHASE");
 		const DepotRestartCheckpoint depotRestartCheckpoint = !depotRestartPhase ? DepotRestartCheckpoint::None :
 			std::strcmp(depotRestartPhase, "approach") == 0 ? DepotRestartCheckpoint::Approach :
@@ -162,7 +165,9 @@ void PlayerBotController::start(const Position& position, bool recovered, uint32
 		cyclePhase = CyclePhase::Service;
 	}
 	setStage(ScenarioStage::Traverse, position);
-	schedule(testPolicy.magicTrainingFixture ? 1000 : navigationInterval);
+	// Login fixtures run through Lua after controller creation. Let the real-map
+	// depot fixture establish its Naji position before its first discovery pass.
+	schedule(testPolicy.depotFixture ? 2000 : testPolicy.magicTrainingFixture ? 1000 : navigationInterval);
 }
 
 void PlayerBotController::schedule(uint32_t interval)
@@ -409,6 +414,13 @@ void PlayerBotController::clearNavigation()
 	worldChangePending = false;
 	navigationTarget = Position();
 	blockedStepCount = 0;
+}
+
+void PlayerBotController::adoptNavigationPlan(const Position& destination, std::deque<PlayerBotNavigationStep> steps)
+{
+	clearNavigation();
+	navigationTarget = destination;
+	navigationSteps = std::move(steps);
 }
 
 void PlayerBotController::onDeath(const Player& player, const Creature* killer, const Creature* mostDamageKiller)
@@ -702,6 +714,13 @@ bool PlayerBotController::processNavigation(Player* player, const Position& curr
 			std::chrono::steady_clock::now() - startedAt).count();
 		if (!planned || navigationSteps.empty()) {
 			++counters.pathfindingFailures;
+			emit("navigation_progress", currentPosition,
+			     "\"result\":\"failed\",\"reason\":\"route_unavailable\",\"cycle_phase\":" +
+			         jsonString(cyclePhaseName()) + ",\"destination\":{\"x\":" + std::to_string(destination.x) +
+			         ",\"y\":" + std::to_string(destination.y) + ",\"z\":" +
+			         std::to_string(static_cast<uint16_t>(destination.z)) + "},\"plan_result\":" +
+			         std::to_string(static_cast<uint16_t>(planResult)) + ",\"expanded_nodes\":" +
+			         std::to_string(expandedNodes));
 			logActionFailure("navigate", "route_unavailable", currentPosition);
 			if (blockedPositions.empty() && ++fixedTargetRouteFailureCount >= 20) {
 				stop("navigation_route_unavailable", currentPosition);

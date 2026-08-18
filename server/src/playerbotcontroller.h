@@ -126,6 +126,13 @@ namespace playerbot {
 	inline constexpr Position fakeDepotPosition(32105, 32195, 8);
 	inline constexpr Position fakeDepotTilePosition(32105, 32196, 8);
 	inline constexpr uint32_t maximumDepotAttempts = 3;
+	inline constexpr uint32_t maximumDepotDiscoveryAttempts = 4;
+	// A depot scan can see several lockers with eight adjacent approach tiles each.
+	// Keep expensive navigation planning bounded and resume the sorted queue next turn.
+	inline constexpr uint32_t depotRouteValidationsPerDecision = 2;
+	inline constexpr std::chrono::seconds depotApproachSuppression(2);
+	inline constexpr uint32_t depotRetryInitialInterval = 1000;
+	inline constexpr uint32_t depotRetryMaximumInterval = 4000;
 	inline constexpr uint32_t depotRestartCheckpointStorage = 50096;
 	inline constexpr std::array<Position, 4> huntingLoop = {{
 		Position(32084, 32144, 5),
@@ -521,6 +528,14 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 			PlayerBotHuntPlanningProfile profile;
 		};
 
+		struct DepotCandidate {
+			uint16_t depotId = 0;
+			uint16_t lockerItemId = 0;
+			Position lockerPosition;
+			Position approachPosition;
+			uint32_t distance = 0;
+		};
+
 		struct ChallengeFrontier {
 			double target = playerbot::initialChallengeFrontier;
 			uint8_t qualifyingHuntsToHold = 0;
@@ -847,10 +862,13 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		bool detectNavigationOscillation(const Position& currentPosition, const Position& destination);
 
 		bool processNavigation(Player* player, const Position& currentPosition, const Position& destination);
+		void adoptNavigationPlan(const Position& destination, std::deque<PlayerBotNavigationStep> steps);
 
 		bool isProtectedDepositItem(const Item& item) const;
 		bool findDepositableItem(const Player& player, Container* container, Container*& source,
 		                         Item*& depositItem, uint8_t& count) const;
+		bool findDepotLocker(const Position& position, uint16_t expectedDepotId, uint16_t& lockerItemId) const;
+		void clearDepotDiscovery();
 		bool discoverDepot(Player& player, const Position& currentPosition);
 		bool openDepotLocker(Player& player, const Position& currentPosition);
 		bool openDepotChest(Player& player, const Position& currentPosition);
@@ -939,8 +957,18 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		uint8_t pendingDepositRequestedCount = 0;
 		uint32_t depotAttempts = 0;
 		uint16_t depotId = 0;
+		uint16_t depotLockerItemId = 0;
 		Position depotLockerPosition;
 		Position depotApproachPosition;
+		std::vector<DepotCandidate> depotCandidates;
+		std::map<Position, std::chrono::steady_clock::time_point> rejectedDepotApproaches;
+		size_t nextDepotCandidate = 0;
+		uint32_t depotIndexedCandidateCount = 0;
+		uint32_t depotInScopeCandidateCount = 0;
+		uint32_t depotStandableCandidateCount = 0;
+		uint32_t depotSuppressedApproachCount = 0;
+		Position depotDiscoveryAnchor;
+		bool depotCandidatesPrepared = false;
 		DepotStage depotStage = DepotStage::Discover;
 		std::set<uint16_t> unavailableLootItemIds;
 		std::map<uint16_t, uint32_t> itemSellValues;

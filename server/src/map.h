@@ -203,6 +203,9 @@ class Map
 			return getTile(pos.x, pos.y, pos.z);
 		}
 		const std::vector<Position>& getDepotLockerPositions(uint16_t depotId) const;
+		const std::map<uint16_t, std::vector<Position>>& getDepotLockerPositions() const {
+			return depotLockerPositions;
+		}
 
 		/**
 		  * Set a single tile.

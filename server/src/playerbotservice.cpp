@@ -11,6 +11,7 @@
 #include "otpch.h"
 
 #include "playerbotcontroller.h"
+#include "playerbotarea.h"
 
 #include "depotchest.h"
 #include "depotlocker.h"
@@ -60,9 +61,9 @@ void PlayerBotController::beginReturn(Player* player, const Position& position, 
 	pendingDiscardItemId = 0;
 	pendingDepositItemId = 0;
 	depotAttempts = 0;
-	depotId = 0;
-	depotLockerPosition = Position();
-	depotApproachPosition = Position();
+	fixedTargetRouteFailureCount = 0;
+	clearDepotDiscovery();
+	rejectedDepotApproaches.clear();
 	depotStage = DepotStage::Discover;
 	player->closeContainer(corpseContainerId);
 	setStage(ScenarioStage::Traverse, position);
@@ -661,90 +662,209 @@ bool PlayerBotController::findDepositableItem(const Player& player, Container* c
 	return false;
 }
 
-bool PlayerBotController::discoverDepot(Player& player, const Position& currentPosition)
+bool PlayerBotController::findDepotLocker(const Position& position, uint16_t expectedDepotId, uint16_t& lockerItemId) const
 {
-	Town* town = player.getTown();
-	if (!town || town->getID() > UINT16_MAX) {
-		stop("depot_town_unavailable", currentPosition);
+	Tile* tile = g_game.map.getTile(position);
+	TileItemVector* items = tile ? tile->getItemList() : nullptr;
+	if (!items) {
 		return false;
 	}
-	const uint16_t requestedDepotId = static_cast<uint16_t>(town->getID());
-	if (depotId == requestedDepotId && depotApproachPosition != Position()) {
-		Tile* tile = g_game.map.getTile(depotLockerPosition);
-		TileItemVector* items = tile ? tile->getItemList() : nullptr;
-		if (items) {
-			for (Item* item : *items) {
-				Container* container = item->getContainer();
-				if (container && container->getDepotLocker() && container->getDepotLocker()->getDepotId() == depotId) {
-					return true;
-				}
-			}
+	for (Item* item : *items) {
+		Container* container = item->getContainer();
+		if (container && container->getDepotLocker() && container->getDepotLocker()->getDepotId() == expectedDepotId) {
+			lockerItemId = item->getID();
+			return true;
 		}
 	}
+	return false;
+}
 
-	depotId = requestedDepotId;
+void PlayerBotController::clearDepotDiscovery()
+{
+	depotId = 0;
+	depotLockerItemId = 0;
 	depotLockerPosition = Position();
 	depotApproachPosition = Position();
-	for (const Position& lockerPosition : g_game.map.getDepotLockerPositions(depotId)) {
-		Tile* lockerTile = g_game.map.getTile(lockerPosition);
-		TileItemVector* lockerItems = lockerTile ? lockerTile->getItemList() : nullptr;
-		if (!lockerItems) {
-			continue;
-		}
-		uint16_t lockerItemId = 0;
-		for (Item* item : *lockerItems) {
-			Container* container = item->getContainer();
-			if (container && container->getDepotLocker() && container->getDepotLocker()->getDepotId() == depotId) {
-				lockerItemId = item->getID();
-				break;
-			}
-		}
-		if (lockerItemId == 0) {
-			continue;
-		}
-		for (int32_t x = -1; x <= 1; ++x) {
-			for (int32_t y = -1; y <= 1; ++y) {
-				if (x == 0 && y == 0) {
-					continue;
-				}
-				const Position approach(lockerPosition.x + x, lockerPosition.y + y, lockerPosition.z);
-				Tile* approachTile = g_game.map.getTile(approach);
-				if (!approachTile || approachTile->queryAdd(0, player, 1, FLAG_IGNOREBLOCKCREATURE) != RETURNVALUE_NOERROR) {
-					continue;
-				}
-				std::deque<PlayerBotNavigationStep> steps;
-				uint64_t expandedNodes = 0;
-				++counters.pathfindingCalls;
-				const auto startedAt = std::chrono::steady_clock::now();
-				const PlayerBotNavigationResult result = navigator.plan(player, approach, {}, steps, expandedNodes);
-				counters.pathfindingTimeUs += std::chrono::duration_cast<std::chrono::microseconds>(
-					std::chrono::steady_clock::now() - startedAt).count();
-				if (result != PlayerBotNavigationResult::Reached) {
-					++counters.pathfindingFailures;
-					continue;
-				}
-				depotLockerPosition = lockerPosition;
-				depotApproachPosition = approach;
-				depotStage = DepotStage::Approach;
-				std::ostringstream fields;
-				fields << "\"action\":\"depot_discover\",\"result\":\"success\",\"depot_id\":" << depotId
-				       << ",\"locker_item_id\":" << lockerItemId << ",\"locker\":{\"x\":" << lockerPosition.x
-				       << ",\"y\":" << lockerPosition.y << ",\"z\":" << static_cast<uint16_t>(lockerPosition.z)
-				       << "},\"approach\":{\"x\":" << approach.x << ",\"y\":" << approach.y
-				       << ",\"z\":" << static_cast<uint16_t>(approach.z) << "},\"expanded_nodes\":" << expandedNodes;
-				emit("action_result", currentPosition, fields.str());
-				return true;
-			}
+	depotCandidates.clear();
+	nextDepotCandidate = 0;
+	depotIndexedCandidateCount = 0;
+	depotInScopeCandidateCount = 0;
+	depotStandableCandidateCount = 0;
+	depotSuppressedApproachCount = 0;
+	depotDiscoveryAnchor = Position();
+	depotCandidatesPrepared = false;
+}
+
+bool PlayerBotController::discoverDepot(Player& player, const Position& currentPosition)
+{
+	const auto now = std::chrono::steady_clock::now();
+	for (auto it = rejectedDepotApproaches.begin(); it != rejectedDepotApproaches.end();) {
+		if (it->second <= now) {
+			it = rejectedDepotApproaches.erase(it);
+		} else {
+			++it;
 		}
 	}
-	if (++depotAttempts >= maximumDepotAttempts) {
-		logActionFailure("depot_discover", "locker_not_reachable", currentPosition);
-		stop("depot_unavailable", currentPosition);
-	} else {
-		emit("action_result", currentPosition, "\"action\":\"depot_discover\",\"result\":\"retry\",\"depot_id\":" +
-		     std::to_string(depotId) + ",\"retry\":" + std::to_string(depotAttempts));
+	if (depotId == 0 && depotCandidatesPrepared && depotDiscoveryAnchor != currentPosition) {
+		clearDepotDiscovery();
+		depotAttempts = 0;
+	}
+	uint16_t lockerItemId = 0;
+	if (depotId != 0 && depotApproachPosition != Position() &&
+	    playerbot::isInsideLocalPlanningArea(currentPosition, depotLockerPosition) &&
+	    findDepotLocker(depotLockerPosition, depotId, lockerItemId) && lockerItemId == depotLockerItemId) {
+		return true;
+	}
+	if (depotId != 0) {
+		clearDepotDiscovery();
+		depotAttempts = 0;
+	}
+	auto finishUnavailable = [&](const char* reason) {
+		++depotAttempts;
+		const uint32_t retryDelay = std::min<uint32_t>(depotRetryMaximumInterval,
+		                                               depotRetryInitialInterval << std::min<uint32_t>(depotAttempts - 1, 2));
+		if (shouldEmitRepeated(std::string("depot_discover:") + reason)) {
+			emit("action_result", currentPosition,
+			     std::string("\"action\":\"depot_discover\",\"result\":\"unavailable\",\"reason\":") + jsonString(reason) +
+			         ",\"indexed\":" + std::to_string(depotIndexedCandidateCount) +
+			         ",\"in_scope\":" + std::to_string(depotInScopeCandidateCount) +
+			         ",\"standable\":" + std::to_string(depotStandableCandidateCount) +
+			         ",\"suppressed\":" + std::to_string(depotSuppressedApproachCount) +
+			         ",\"attempt\":" + std::to_string(depotAttempts));
+		}
+		clearDepotDiscovery();
+		if (depotAttempts >= maximumDepotDiscoveryAttempts) {
+			logActionFailure("depot_discover", reason, currentPosition);
+			stop("depot_unavailable", currentPosition);
+			return;
+		}
+		schedule(retryDelay);
+	};
+
+	if (!depotCandidatesPrepared) {
+		depotCandidatesPrepared = true;
+		depotDiscoveryAnchor = currentPosition;
+		for (const auto& entry : g_game.map.getDepotLockerPositions()) {
+			for (const Position& lockerPosition : entry.second) {
+				++depotIndexedCandidateCount;
+				if (!playerbot::isInsideLocalPlanningArea(currentPosition, lockerPosition)) {
+					continue;
+				}
+				uint16_t indexedLockerItemId = 0;
+				if (!findDepotLocker(lockerPosition, entry.first, indexedLockerItemId)) {
+					continue;
+				}
+				++depotInScopeCandidateCount;
+				for (int32_t xOffset = -1; xOffset <= 1; ++xOffset) {
+					for (int32_t yOffset = -1; yOffset <= 1; ++yOffset) {
+						if (xOffset == 0 && yOffset == 0) {
+							continue;
+						}
+						const Position approach(lockerPosition.x + xOffset, lockerPosition.y + yOffset, lockerPosition.z);
+						Tile* approachTile = g_game.map.getTile(approach);
+						if (!approachTile || approachTile->queryAdd(0, player, 1, FLAG_IGNOREBLOCKCREATURE) != RETURNVALUE_NOERROR) {
+							continue;
+						}
+						++depotStandableCandidateCount;
+						if (rejectedDepotApproaches.find(approach) != rejectedDepotApproaches.end()) {
+							++depotSuppressedApproachCount;
+							continue;
+						}
+						depotCandidates.push_back({entry.first, indexedLockerItemId, lockerPosition, approach,
+						                           playerbot::localPlanningDistance(currentPosition, approach)});
+					}
+				}
+			}
+		}
+		std::sort(depotCandidates.begin(), depotCandidates.end(), [](const DepotCandidate& left, const DepotCandidate& right) {
+			return left.distance != right.distance ? left.distance < right.distance :
+			       left.depotId != right.depotId ? left.depotId < right.depotId :
+			       left.lockerPosition != right.lockerPosition ? left.lockerPosition < right.lockerPosition :
+			       left.approachPosition < right.approachPosition;
+		});
+	}
+
+	if (depotCandidates.empty()) {
+		if (depotSuppressedApproachCount != 0) {
+			auto earliestExpiry = rejectedDepotApproaches.begin()->second;
+			for (const auto& rejected : rejectedDepotApproaches) {
+				earliestExpiry = std::min(earliestExpiry, rejected.second);
+			}
+			const uint32_t retryDelay = static_cast<uint32_t>(std::max<int64_t>(
+			    1, std::chrono::duration_cast<std::chrono::milliseconds>(earliestExpiry - now).count()));
+			clearDepotDiscovery();
+			schedule(retryDelay);
+			return false;
+		}
+		finishUnavailable(depotInScopeCandidateCount == 0 ? "no_local_locker" :
+		                  depotStandableCandidateCount == 0 ? "no_standable_approach" : "no_reachable_locker");
+		return false;
+	}
+
+	uint32_t routeValidations = 0;
+	while (nextDepotCandidate < depotCandidates.size() && routeValidations < depotRouteValidationsPerDecision) {
+		const DepotCandidate candidate = depotCandidates[nextDepotCandidate++];
+		uint16_t candidateLockerItemId = 0;
+		Tile* approachTile = g_game.map.getTile(candidate.approachPosition);
+		if (!playerbot::isInsideLocalPlanningArea(currentPosition, candidate.lockerPosition) ||
+		    !findDepotLocker(candidate.lockerPosition, candidate.depotId, candidateLockerItemId) ||
+		    candidateLockerItemId != candidate.lockerItemId || !approachTile ||
+		    approachTile->queryAdd(0, player, 1, FLAG_IGNOREBLOCKCREATURE) != RETURNVALUE_NOERROR) {
+			continue;
+		}
+		std::deque<PlayerBotNavigationStep> steps;
+		uint64_t expandedNodes = 0;
+		++routeValidations;
+		++counters.pathfindingCalls;
+		const auto startedAt = std::chrono::steady_clock::now();
+		const PlayerBotNavigationResult result = candidate.approachPosition == currentPosition ? PlayerBotNavigationResult::Reached :
+		                                         navigator.plan(player, candidate.approachPosition, {}, steps, expandedNodes);
+		counters.pathfindingTimeUs += std::chrono::duration_cast<std::chrono::microseconds>(
+			std::chrono::steady_clock::now() - startedAt).count();
+		if (result != PlayerBotNavigationResult::Reached ||
+		    (candidate.approachPosition != currentPosition && steps.empty())) {
+			++counters.pathfindingFailures;
+			rejectedDepotApproaches[candidate.approachPosition] = now + depotApproachSuppression;
+			continue;
+		}
+		depotId = candidate.depotId;
+		depotLockerItemId = candidate.lockerItemId;
+		depotLockerPosition = candidate.lockerPosition;
+		depotApproachPosition = candidate.approachPosition;
+		depotStage = DepotStage::Approach;
+		depotAttempts = 0;
+		fixedTargetRouteFailureCount = 0;
+		const size_t routeSteps = steps.size();
+		adoptNavigationPlan(depotApproachPosition, std::move(steps));
+		depotCandidates.clear();
+		nextDepotCandidate = 0;
+		depotCandidatesPrepared = false;
+		depotDiscoveryAnchor = Position();
+		std::ostringstream fields;
+		fields << "\"action\":\"depot_discover\",\"result\":\"success\",\"depot_id\":" << depotId
+		       << ",\"locker_item_id\":" << depotLockerItemId << ",\"locker\":{\"x\":" << depotLockerPosition.x
+		       << ",\"y\":" << depotLockerPosition.y << ",\"z\":" << static_cast<uint16_t>(depotLockerPosition.z)
+		       << "},\"approach\":{\"x\":" << depotApproachPosition.x << ",\"y\":" << depotApproachPosition.y
+		       << ",\"z\":" << static_cast<uint16_t>(depotApproachPosition.z) << "},\"distance\":" << candidate.distance
+		       << ",\"route_steps\":" << routeSteps << ",\"expanded_nodes\":" << expandedNodes
+		       << ",\"indexed\":" << depotIndexedCandidateCount << ",\"in_scope\":" << depotInScopeCandidateCount
+		       << ",\"standable\":" << depotStandableCandidateCount;
+		emit("action_result", currentPosition, fields.str());
+		return true;
+	}
+
+	if (nextDepotCandidate < depotCandidates.size()) {
+		emit("action_result", currentPosition,
+		     std::string("\"action\":\"depot_discover\",\"result\":\"continuing\",\"reason\":\"route_validation_budget_exhausted\"") +
+		         ",\"indexed\":" + std::to_string(depotIndexedCandidateCount) +
+		         ",\"in_scope\":" + std::to_string(depotInScopeCandidateCount) +
+		         ",\"standable\":" + std::to_string(depotStandableCandidateCount) +
+		         ",\"route_validations\":" + std::to_string(routeValidations));
 		schedule(blockedRouteRetryInterval);
+	return false;
 	}
+
+	finishUnavailable("no_reachable_locker");
 	return false;
 }
 
@@ -832,7 +952,10 @@ bool PlayerBotController::openDepotLocker(Player& player, const Position& curren
 		return false;
 	}
 	logActionFailure("depot_open_locker", "locker_identity_changed", currentPosition);
-	stop("depot_locker_identity_changed", currentPosition);
+	clearDepotDiscovery();
+	clearNavigation();
+	setCyclePhase(CyclePhase::ReturnToDepot, currentPosition, "depot_locker_identity_changed");
+	schedule(blockedRouteRetryInterval);
 	return false;
 }
 

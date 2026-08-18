@@ -40,6 +40,19 @@ local spellCalibrationFixture = false
 local removeAll
 local verifyBerserkSingleTarget
 
+function PlayerbotThaisLockerDepotId()
+    local tile = Tile(Position(32352, 32225, 7))
+    assert(tile, "real Thais locker tile is unavailable")
+    for _, item in ipairs(tile:getItems() or {}) do
+        if isDepot(item:getUniqueId()) then
+            local depotId = getDepotId(item:getUniqueId())
+            assert(depotId, "real Thais locker depot ID is unavailable")
+            return depotId
+        end
+    end
+    error("real Thais locker is unavailable")
+end
+
 local function restoreRookgaardBaseline(player)
     local armor = player:getSlotItem(CONST_SLOT_ARMOR)
     if player:getLevel() ~= 8 or player:getVocation():getId() ~= 4 or not armor or armor:getId() ~= 2463 then
@@ -676,7 +689,7 @@ local function verifyDepot(playerId, attempts)
 		end
 		return
 	end
-	local chest = player:getDepotChest(thaisTownId, false)
+	local chest = player:getDepotChest(PlayerbotThaisLockerDepotId(), false)
 	local restartPhase = os.getenv("PLAYERBOT_DEPOT_RESTART_PHASE") or ""
 	local expectedLoot = restartPhase ~= "" and 2 or player:getStorageValue(depotFixtureStorage) == 2 and 3 or 2
 	local priorGoldPersists = restartPhase == "" or restartPhase == "deposit" or restartPhase == "depart"
@@ -990,8 +1003,8 @@ function login.onLogin(player)
 		if fixtureState == -1 then
 			local thais = Town(thaisTownId)
 			assert(thais and player:setTown(thais), "depot fixture could not select Thais")
-			assert(player:teleportTo(thais:getTemplePosition()), "depot fixture could not reach the Thais temple")
-			local chest = player:getDepotChest(thaisTownId, true)
+			assert(player:teleportTo(Position(32345, 32225, 7)), "depot fixture could not reach Naji")
+			local chest = player:getDepotChest(PlayerbotThaisLockerDepotId(), true)
 			assert(chest and chest:addItem(ITEM_GOLD_COIN, 1), "depot fixture could not seed prior depot contents")
 			local backpack = player:getSlotItem(CONST_SLOT_BACKPACK)
 			local outer = backpack and backpack:addItem(ITEM_BAG, 1)
