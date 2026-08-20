@@ -121,6 +121,8 @@ namespace playerbot {
 	inline constexpr uint32_t returnCapacityThreshold = 30 * 100;
 	inline constexpr uint32_t carriedGoldReserve = 100;
 	inline constexpr uint32_t maximumServiceAttempts = 3;
+	// Prevent a rejected slotted-item move from blocking the service/depot loop.
+	inline constexpr std::chrono::seconds unavailableDispositionCooldown(60);
 	inline constexpr uint32_t maximumRelogAttempts = 3;
 	inline constexpr uint32_t maximumProgressionAttempts = 3;
 	inline constexpr uint16_t genericQuestChestActionId = 2000;
@@ -180,6 +182,7 @@ namespace playerbot {
 		bool forceRepeatedNavigationStepFailures;
 		bool forceCorpseNavigationFailures;
 		bool forcePatrolRouteFailures;
+		bool suppressSlottedLootSeller;
 		bool equipmentPurchasesEnabled;
 		bool forceEquipmentPurchaseRejected;
 		bool adaptiveChallengeFixture;
@@ -623,6 +626,9 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		uint32_t protectedItemReserve(uint16_t itemId) const;
 
 		uint32_t getSaleItemCount(const Player& player, uint16_t itemId) const;
+		uint32_t getBackpackSaleItemCount(const Player& player, uint16_t itemId) const;
+		bool isItemValidForSlot(const Item& item, slots_t slot) const;
+		Item* findActionableSlottedItem(const Player& player, uint16_t itemId, slots_t& slot) const;
 
 		int32_t getFoodTicks(const Player& player) const;
 
@@ -860,6 +866,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		ServiceNpc* findShopFor(uint16_t itemId, bool buying, const Position& position);
 
 		ServiceNpc* findLootSeller(Player* player, const Position& position, uint16_t& itemId);
+		bool prepareSlottedSaleItem(Player* player, uint16_t itemId, const Position& position);
 
 		void completeServiceAction(Player* player, const char* action, uint16_t itemId, uint32_t amount, const Position& position);
 
@@ -997,6 +1004,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		uint32_t pendingDepositDestinationCount = 0;
 		uint32_t pendingDepositInventoryCount = 0;
 		uint8_t pendingDepositRequestedCount = 0;
+		slots_t pendingDepositSourceSlot = CONST_SLOT_WHEREEVER;
 		uint32_t depotAttempts = 0;
 		uint16_t depotId = 0;
 		uint16_t depotLockerItemId = 0;
@@ -1077,6 +1085,11 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		uint16_t serviceItemId = 0;
 		uint32_t serviceAmount = 0;
 		uint32_t serviceBeforeItemCount = 0;
+		uint16_t pendingSlottedSaleItemId = 0;
+		slots_t pendingSlottedSaleSourceSlot = CONST_SLOT_WHEREEVER;
+		uint32_t pendingSlottedSaleBackpackCount = 0;
+		uint32_t slottedSaleMoveAttempts = 0;
+		std::map<std::pair<uint16_t, slots_t>, std::chrono::steady_clock::time_point> unavailableSlottedSales;
 		uint64_t serviceBeforeMoney = 0;
 		uint64_t serviceBeforeBalance = 0;
 		bool bankDepositComplete = false;

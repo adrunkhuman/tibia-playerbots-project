@@ -427,6 +427,15 @@ States, actions, results, statuses, and reasons use stable lowercase values.
 | Navigation | `navigation_progress` records bounded recovery such as oscillation suppression. |
 | Health | `summary` reports cumulative timing, action, failure, stuck, and suppression counters every 60 seconds. |
 
+`action_result` records with `action="item_disposition"` report moves of
+policy-approved loot from invalid equipment slots before sale. The numeric
+`source_slot` uses `slots_t` values (`10` is the ammunition slot),
+`provider_available` records whether a live seller was selected, and
+`disposition` is `sell` or `deposit`. `attempt` counts move requests.
+`result="deferred"` with `cooldown_ms` means an unverified move is suppressed
+for 60 seconds before another disposition attempt. Real-depot `deposit` records
+use the same `source_slot`, `provider_available`, and `disposition` fields.
+
 Successful movement is not logged per tile. Repeated identical transitions,
 target changes, and action failures are emitted at most once per 60 seconds;
 `summary.suppressed_events` counts omissions. Counters cover one in-memory

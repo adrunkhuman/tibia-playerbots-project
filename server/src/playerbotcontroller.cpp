@@ -46,6 +46,8 @@ const PlayerBotTestPolicy& playerbot::testPolicyFromEnvironment()
 				 std::strcmp(gameplayMode, "equipment_buy_resume") == 0 ||
 				 std::strcmp(gameplayMode, "equipment_buy_space") == 0 ||
 				 std::strcmp(gameplayMode, "equipment_buy_rejected") == 0 ||
+				 std::strcmp(gameplayMode, "slotted_loot_seller") == 0 ||
+				 std::strcmp(gameplayMode, "slotted_loot_no_seller") == 0 ||
 			 (std::strncmp(gameplayMode, "magic_training", 14) == 0 &&
 			  std::strcmp(gameplayMode, "magic_training_hunt") != 0));
 		const bool startInHunt = gameplayMode &&
@@ -80,7 +82,9 @@ const PlayerBotTestPolicy& playerbot::testPolicyFromEnvironment()
 			                               std::strcmp(gameplayMode, "mainland") != 0 &&
 			                               std::strcmp(gameplayMode, "mainland_reward") != 0 &&
 			                               std::strcmp(gameplayMode, "spell_training") != 0 &&
-			                               std::strcmp(gameplayMode, "depot") != 0;
+			                               std::strcmp(gameplayMode, "depot") != 0 &&
+			                               std::strcmp(gameplayMode, "slotted_loot_seller") != 0 &&
+			                               std::strcmp(gameplayMode, "slotted_loot_no_seller") != 0;
 		const char* depotRestartPhase = std::getenv("PLAYERBOT_DEPOT_RESTART_PHASE");
 		const DepotRestartCheckpoint depotRestartCheckpoint = !depotRestartPhase ? DepotRestartCheckpoint::None :
 			std::strcmp(depotRestartPhase, "approach") == 0 ? DepotRestartCheckpoint::Approach :
@@ -106,6 +110,7 @@ const PlayerBotTestPolicy& playerbot::testPolicyFromEnvironment()
 			gameplayMode && std::strcmp(gameplayMode, "navigation_recovery") == 0,
 			gameplayMode && std::strcmp(gameplayMode, "corpse_inaccessible") == 0,
 			gameplayMode && std::strcmp(gameplayMode, "patrol_recovery") == 0,
+			gameplayMode && std::strcmp(gameplayMode, "slotted_loot_no_seller") == 0,
 			!gameplayMode || (std::strcmp(gameplayMode, "equipment_shadow") != 0 &&
 			                  std::strcmp(gameplayMode, "equipment_shadow_unaffordable") != 0 &&
 			                  std::strcmp(gameplayMode, "equipment_shadow_no_upgrade") != 0),
@@ -353,7 +358,7 @@ uint32_t PlayerBotController::protectedItemReserve(uint16_t itemId) const
 	return 0;
 }
 
-uint32_t PlayerBotController::getSaleItemCount(const Player& player, uint16_t itemId) const
+uint32_t PlayerBotController::getBackpackSaleItemCount(const Player& player, uint16_t itemId) const
 {
 	if (isFoodItem(itemId)) {
 		return 0;
@@ -405,6 +410,56 @@ uint32_t PlayerBotController::getSaleItemCount(const Player& player, uint16_t it
 	}
 	const uint32_t reserve = protectedItemReserve(itemId);
 	return count > reserve ? count - reserve : 0;
+}
+
+bool PlayerBotController::isItemValidForSlot(const Item& item, slots_t slot) const
+{
+	uint32_t slotPosition = 0;
+	switch (slot) {
+		case CONST_SLOT_HEAD: slotPosition = SLOTP_HEAD; break;
+		case CONST_SLOT_NECKLACE: slotPosition = SLOTP_NECKLACE; break;
+		case CONST_SLOT_BACKPACK: slotPosition = SLOTP_BACKPACK; break;
+		case CONST_SLOT_ARMOR: slotPosition = SLOTP_ARMOR; break;
+		case CONST_SLOT_RIGHT: slotPosition = SLOTP_RIGHT; break;
+		case CONST_SLOT_LEFT: slotPosition = SLOTP_LEFT; break;
+		case CONST_SLOT_LEGS: slotPosition = SLOTP_LEGS; break;
+		case CONST_SLOT_FEET: slotPosition = SLOTP_FEET; break;
+		case CONST_SLOT_RING: slotPosition = SLOTP_RING; break;
+		case CONST_SLOT_AMMO: slotPosition = SLOTP_AMMO; break;
+		default: return false;
+	}
+	return (item.getSlotPosition() & slotPosition) != 0;
+}
+
+Item* PlayerBotController::findActionableSlottedItem(const Player& player, uint16_t itemId, slots_t& slot) const
+{
+	const auto now = std::chrono::steady_clock::now();
+	for (int32_t slotIndex = CONST_SLOT_FIRST; slotIndex <= CONST_SLOT_LAST; ++slotIndex) {
+		const slots_t candidateSlot = static_cast<slots_t>(slotIndex);
+		Item* item = player.getInventoryItem(candidateSlot);
+		if (!item || candidateSlot == CONST_SLOT_BACKPACK || (itemId != 0 && item->getID() != itemId) ||
+		    isItemValidForSlot(*item, candidateSlot) || isProtectedInventoryItem(*item) ||
+		    isProtectedDepositItem(player, *item)) {
+			continue;
+		}
+		auto suppressed = unavailableSlottedSales.find({item->getID(), candidateSlot});
+		if (suppressed != unavailableSlottedSales.end() && suppressed->second > now) {
+			continue;
+		}
+		slot = candidateSlot;
+		return item;
+	}
+	return nullptr;
+}
+
+uint32_t PlayerBotController::getSaleItemCount(const Player& player, uint16_t itemId) const
+{
+	uint32_t count = getBackpackSaleItemCount(player, itemId);
+	slots_t slot = CONST_SLOT_WHEREEVER;
+	if (Item* slotted = findActionableSlottedItem(player, itemId, slot)) {
+		count += slotted->getItemCount();
+	}
+	return count;
 }
 
 void PlayerBotController::logSummary(const Position& position, bool final)

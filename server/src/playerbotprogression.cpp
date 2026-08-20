@@ -1147,16 +1147,9 @@ const char* PlayerBotController::topLevelGoalName(TopLevelGoal goal) const
 uint32_t PlayerBotController::saleableItemCount(const Player& player) const
 {
 	uint32_t count = 0;
-	std::unordered_set<uint16_t> countedItems;
-	for (const ServiceNpc& service : serviceShops) {
-		Npc* npc = g_game.getNpcByID(service.id);
-		if (!npc || npc->isRemoved()) {
-			continue;
-		}
-		for (const ShopInfo& offer : npc->getShopOffers()) {
-			if (offer.sellPrice != 0 && countedItems.emplace(offer.itemId).second) {
-				count += getSaleItemCount(player, offer.itemId);
-			}
+	for (const auto& [itemId, value] : itemSellValues) {
+		if (value != 0) {
+			count += getSaleItemCount(player, itemId);
 		}
 	}
 	return count;
