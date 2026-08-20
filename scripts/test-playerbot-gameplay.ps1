@@ -1,3 +1,15 @@
+<#
+.SYNOPSIS
+Runs disposable playerbot gameplay scenarios against the local Compose stack.
+
+.DESCRIPTION
+Builds or reuses the server image, runs the selected telemetry-backed gameplay
+fixtures, and removes the scenario stack unless -KeepStack is set.
+
+.PARAMETER SlottedLoot
+Runs seller, no-eligible-seller depot fallback, and interrupted-deposit restart
+fixtures for policy-approved loot carried in an invalid equipment slot.
+#>
 param(
 	[ValidateRange(30, 3600)]
 	[int]$TimeoutSeconds = 300,
@@ -18,6 +30,7 @@ param(
 	[switch]$EquipmentPurchases,
 	[switch]$MainlandRewards,
 	[switch]$Depot,
+	[switch]$SlottedLoot,
 	[switch]$MainlandLoop,
 	[switch]$SpellTraining,
 	[switch]$SpellUse,
@@ -1448,6 +1461,48 @@ function Assert-DepotRecoveryEvents {
 	}
 }
 
+function Assert-SlottedLootEvents {
+	param([string]$Logs, [switch]$SellerAvailable, [switch]$Restarted)
+
+	$events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
+	$sellMoves = @($events | Where-Object {
+		$_.action -eq "item_disposition" -and $_.item_id -eq 2398 -and $_.source_slot -eq 10 -and
+		$_.disposition -eq "sell" -and $_.provider_available
+	})
+	$sales = @($events | Where-Object {
+		$_.action -eq "sell" -and $_.result -eq "success" -and $_.item_id -eq 2398 -and
+		$_.count -eq 1 -and ($_.carried_after + $_.bank_after) -gt ($_.carried_before + $_.bank_before)
+	})
+	$deposits = @($events | Where-Object {
+		$_.action -eq "deposit" -and $_.result -in @("success", "partial") -and $_.item_id -eq 2398 -and
+		$_.verified -eq 1 -and $_.source_slot -eq 10 -and $_.disposition -eq "deposit" -and
+		$_.provider_available -eq $false
+	})
+	$depositRequests = @($events | Where-Object {
+		$_.action -eq "deposit" -and $_.result -eq "requested" -and $_.item_id -eq 2398 -and
+		$_.source_slot -eq 10 -and $_.disposition -eq "deposit" -and $_.provider_available -eq $false
+	})
+	$protectedMoves = @($events | Where-Object {
+		$_.action -in @("sell", "deposit", "item_disposition") -and $_.item_id -eq 2463
+	})
+	$reselectedService = @($events | Where-Object {
+		$_.event -eq "goal_selection" -and $_.decision_reason -eq "service_complete" -and
+		$_.to_goal -eq "service" -and $_.reason -eq "sellable_inventory"
+	})
+	$terminal = @($events | Where-Object { $_.event -eq "terminal" })
+	if ($SellerAvailable) {
+		if ($sellMoves.Count -lt 2 -or $sales.Count -ne 1 -or $deposits.Count -ne 0) {
+			throw "Slotted seller disposition failed. moves=$($sellMoves.Count), sales=$($sales.Count), deposits=$($deposits.Count)."
+		}
+	} elseif (($Restarted -and ($depositRequests.Count -ne 1 -or $deposits.Count -ne 0)) -or
+		(-not $Restarted -and $deposits.Count -ne 1) -or $sales.Count -ne 0) {
+		throw "Slotted no-seller disposition failed. requests=$($depositRequests.Count), deposits=$($deposits.Count), sales=$($sales.Count), restarted=$Restarted."
+	}
+	if ($protectedMoves.Count -ne 0 -or $reselectedService.Count -ne 0 -or $terminal.Count -ne 0) {
+		throw "Slotted disposition did not preserve protected state or bounded service. protected=$($protectedMoves.Count), repeated=$($reselectedService.Count), terminal=$($terminal.Count), restarted=$Restarted."
+	}
+}
+
 function Assert-MainlandLoopEvents {
 	param([string]$Logs, [int]$MinimumCycles = 3, [int]$MinimumDeposits = 2)
 
@@ -1724,7 +1779,7 @@ if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
 $focusedScenarioRequested = $FullNavigation -or $TargetPursuit -or $CorpseLoot -or $DeathTelemetry -or $Healing -or $ValueLoot -or
 	$PickupProgression -or $GoalArbitration -or $OracleDeparture -or $StaminaProjection -or $HuntRegionPlanning -or
 	$AdaptiveChallenge -or
-	$CombatReadiness -or $EquipmentOffers -or $EquipmentPurchases -or $MainlandRewards -or $Depot -or $MainlandLoop -or $SpellTraining -or $SpellUse -or $SpellCalibration -or $MagicTraining
+	$CombatReadiness -or $EquipmentOffers -or $EquipmentPurchases -or $MainlandRewards -or $Depot -or $SlottedLoot -or $MainlandLoop -or $SpellTraining -or $SpellUse -or $SpellCalibration -or $MagicTraining
 if ($Focused -and -not $focusedScenarioRequested) {
 	throw "-Focused requires at least one focused scenario switch."
 }
@@ -1777,6 +1832,50 @@ try {
 					$restartLogs -match '"action":"hunt_cycle","result":"started","cycle":1') { break }
 			}
 			Assert-MainlandLoopEvents -Logs $restartLogs -MinimumCycles 1 -MinimumDeposits 1
+		}
+	}
+
+	if ($SlottedLoot) {
+		Invoke-Scenario -Name "slotted_loot_seller" -DefaultTimeoutSeconds 240 -Body {
+			Invoke-Compose down --volumes --remove-orphans
+			$env:PLAYERBOT_GAMEPLAY_MODE = "slotted_loot_seller"
+			$env:PLAYERBOT_DEPOT_RESTART_PHASE = ""
+			Invoke-Compose up --detach playerbot-setup
+			Start-Sleep -Seconds 3
+			Invoke-DatabaseCommand -Query "DELETE FROM player_items WHERE player_id = (SELECT id FROM players WHERE name = 'Bot One') AND (pid = 10 OR itemtype = 8704); INSERT INTO player_items (player_id, sid, pid, itemtype, count, attributes) SELECT id, 9900, 10, 2398, 1, X'' FROM players WHERE name = 'Bot One';"
+			Invoke-Compose up --no-deps --detach server
+			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST SLOTTED_LOOT_SELLER_PASS' | Out-Null
+			$sellerLogs = Wait-ForLog -Pattern '"decision_reason":"service_complete"'
+			Assert-SlottedLootEvents -Logs $sellerLogs -SellerAvailable
+		}
+
+		Invoke-Scenario -Name "slotted_loot_no_seller" -DefaultTimeoutSeconds 240 -Body {
+			Invoke-Compose down --volumes --remove-orphans
+			$env:PLAYERBOT_GAMEPLAY_MODE = "slotted_loot_no_seller"
+			$env:PLAYERBOT_DEPOT_RESTART_PHASE = ""
+			Invoke-Compose up --detach playerbot-setup
+			Start-Sleep -Seconds 3
+			Invoke-DatabaseCommand -Query "DELETE FROM player_items WHERE player_id = (SELECT id FROM players WHERE name = 'Bot One') AND (pid = 10 OR itemtype = 8704); INSERT INTO player_items (player_id, sid, pid, itemtype, count, attributes) SELECT id, 9900, 10, 2398, 1, X'' FROM players WHERE name = 'Bot One';"
+			Invoke-Compose up --no-deps --detach server
+			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST SLOTTED_LOOT_NO_SELLER_PASS' | Out-Null
+			$noSellerLogs = Wait-ForLog -Pattern '"decision_reason":"service_complete"'
+			Assert-SlottedLootEvents -Logs $noSellerLogs
+		}
+
+		Invoke-Scenario -Name "slotted_loot_deposit_restart" -DefaultTimeoutSeconds 300 -Body {
+			Invoke-Compose down --volumes --remove-orphans
+			$env:PLAYERBOT_GAMEPLAY_MODE = "slotted_loot_no_seller"
+			$env:PLAYERBOT_DEPOT_RESTART_PHASE = "deposit"
+			Invoke-Compose up --detach playerbot-setup
+			Start-Sleep -Seconds 3
+			Invoke-DatabaseCommand -Query "DELETE FROM player_items WHERE player_id = (SELECT id FROM players WHERE name = 'Bot One') AND (pid = 10 OR itemtype = 8704); INSERT INTO player_items (player_id, sid, pid, itemtype, count, attributes) SELECT id, 9900, 10, 2398, 1, X'' FROM players WHERE name = 'Bot One';"
+			Invoke-Compose up --no-deps --detach server
+			Wait-ForLog -Pattern '"action":"depot_restart_checkpoint","result":"paused","phase":"deposit"' | Out-Null
+			Invoke-Compose stop server
+			Invoke-Compose up --detach server
+			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST SLOTTED_LOOT_NO_SELLER_PASS' | Out-Null
+			$restartLogs = Wait-ForLog -Pattern '"decision_reason":"service_complete"'
+			Assert-SlottedLootEvents -Logs $restartLogs -Restarted
 		}
 	}
 

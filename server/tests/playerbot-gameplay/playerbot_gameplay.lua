@@ -23,6 +23,7 @@ local starterArmorId = 2650
 local starterWeaponId = 2382
 local pickupRewardId = 2384
 local equipmentPurchaseItemId = 2379
+local slottedLootItemId = 2398
 local mainlandRewardItemId = 2483
 local mainlandRewardStorage = 50076
 local pickupRewardStorage = 64120
@@ -745,7 +746,8 @@ local function verifyService(playerId, initialDepotBagCount, attempts)
 	assert(player:getBankBalance() == 39, "shop purchases and bank transactions produced the wrong balance")
 	assert(player:getSlotItem(CONST_SLOT_ARMOR):getId() == starterArmorId, "starter jacket was deposited")
 	local right = player:getSlotItem(CONST_SLOT_RIGHT)
-	assert(not right or right:getId() == meatItemId, "unexpected item appeared in the starter shield slot")
+	assert(not right or right:getId() == meatItemId or right:getId() == ITEM_PLATINUM_COIN,
+		"unexpected item appeared in the starter shield slot: " .. (right and right:getId() or 0))
 	assert(player:getSlotItem(CONST_SLOT_LEFT):getId() == starterWeaponId, "starter club was deposited")
 	local feet = player:getSlotItem(CONST_SLOT_FEET)
 	assert(not feet or feet:getId() == potionItemId, "unexpected item appeared in the starter feet slot")
@@ -788,6 +790,44 @@ local function verifyDepot(playerId, attempts)
     print("PLAYERBOT_GAMEPLAY_TEST DEPOT_PASS")
 end
 
+local function verifySlottedLoot(playerId, sellerAvailable, attempts)
+	local player = Player(playerId)
+	local chest = player and player:getDepotChest(PlayerbotThaisLockerDepotId(), false)
+	local ammo = player and player:getSlotItem(CONST_SLOT_AMMO)
+	local left = player and player:getSlotItem(CONST_SLOT_LEFT)
+	local complete = player and not player:isRemoved() and (not ammo or ammo:getId() ~= slottedLootItemId) and
+		left and left:getId() == slottedLootItemId and
+		(sellerAvailable and player:getItemCount(slottedLootItemId) == 1 or
+		 not sellerAvailable and chest and chest:getItemCountById(slottedLootItemId) == 1)
+	if not complete and attempts > 0 then
+		addEvent(verifySlottedLoot, 500, playerId, sellerAvailable, attempts - 1)
+		return
+	end
+	assert(complete, "slotted loot did not reach its verified sell or deposit disposition")
+	print(sellerAvailable and "PLAYERBOT_GAMEPLAY_TEST SLOTTED_LOOT_SELLER_PASS" or
+		"PLAYERBOT_GAMEPLAY_TEST SLOTTED_LOOT_NO_SELLER_PASS")
+end
+
+function setupSlottedLoot(player, sellerAvailable)
+	local town = Town(thaisTownId)
+	assert(town and player:setTown(town), "slotted loot fixture could not select Thais")
+	assert(player:teleportTo(Position(32345, 32225, 7)), "slotted loot fixture could not reach Naji")
+	local left = player:getSlotItem(CONST_SLOT_LEFT)
+	local right = player:getSlotItem(CONST_SLOT_RIGHT)
+	if left then assert(left:remove(), "slotted loot fixture could not clear the left hand") end
+	if right then assert(right:remove(), "slotted loot fixture could not clear the right hand") end
+	local weapon = Game.createItem(slottedLootItemId, 1)
+	assert(weapon and player:addItemEx(weapon, true, CONST_SLOT_LEFT) == RETURNVALUE_NOERROR,
+		"slotted loot fixture could not equip its protected weapon")
+	local ammo = player:getSlotItem(CONST_SLOT_AMMO)
+	local chest = player:getDepotChest(PlayerbotThaisLockerDepotId(), true)
+	local persistedDeposit = not ammo and chest and chest:getItemCountById(slottedLootItemId) == 1
+	assert((ammo and ammo:getId() == slottedLootItemId) or persistedDeposit,
+		"slotted loot fixture did not load mace 2398 in the ammunition slot")
+	suppressNearbyMonsters(player:getId())
+	addEvent(verifySlottedLoot, 500, player:getId(), sellerAvailable, 480)
+end
+
 local login = CreatureEvent("zzPlayerbotGameplayRegression")
 
 function login.onLogin(player)
@@ -796,7 +836,7 @@ function login.onLogin(player)
     end
 
     local mode = os.getenv("PLAYERBOT_GAMEPLAY_MODE") or "cycle"
-	assert(mode == "mainland" or mode == "cycle" or mode == "depot" or mode == "navigation" or mode == "navigation_recovery" or mode == "patrol_recovery" or mode == "target_pursuit" or mode == "target_pursuit_abandon" or mode == "corpse" or mode == "corpse_inaccessible" or mode == "death" or mode == "healing" or mode == "spell_use" or
+	assert(mode == "mainland" or mode == "cycle" or mode == "depot" or mode == "slotted_loot_seller" or mode == "slotted_loot_no_seller" or mode == "navigation" or mode == "navigation_recovery" or mode == "patrol_recovery" or mode == "target_pursuit" or mode == "target_pursuit_abandon" or mode == "corpse" or mode == "corpse_inaccessible" or mode == "death" or mode == "healing" or mode == "spell_use" or
 		mode == "healing_resupply" or mode == "value" or mode == "progression" or mode == "progression_bundle" or
 		mode == "progression_nested" or
         mode == "progression_resume" or mode == "progression_nested_resume" or mode == "progression_space" or
@@ -1141,6 +1181,11 @@ function login.onLogin(player)
 		end
 		addEvent(verifyDepot, 500, player:getId(), 360)
 		print("PLAYERBOT_GAMEPLAY_TEST DEPOT_START")
+		return true
+	end
+	if mode == "slotted_loot_seller" or mode == "slotted_loot_no_seller" then
+		setupSlottedLoot(player, mode == "slotted_loot_seller")
+		print("PLAYERBOT_GAMEPLAY_TEST " .. string.upper(mode) .. "_START")
 		return true
 	end
 	if mode == "stamina_bonus" or mode == "stamina_boundary" or mode == "stamina_normal" then

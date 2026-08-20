@@ -60,6 +60,7 @@ void PlayerBotController::beginReturn(Player* player, const Position& position, 
 	pendingLootItemId = 0;
 	pendingDiscardItemId = 0;
 	pendingDepositItemId = 0;
+	pendingDepositSourceSlot = CONST_SLOT_WHEREEVER;
 	depotAttempts = 0;
 	fixedTargetRouteFailureCount = 0;
 	clearDepotDiscovery();
@@ -108,6 +109,9 @@ void PlayerBotController::beginService(Player* player, const Position& position,
 	clearNavigation();
 	pendingLootItemId = 0;
 	pendingDiscardItemId = 0;
+	pendingSlottedSaleItemId = 0;
+	pendingSlottedSaleSourceSlot = CONST_SLOT_WHEREEVER;
+	slottedSaleMoveAttempts = 0;
 	player->closeContainer(corpseContainerId);
 	setStage(ScenarioStage::Traverse, position);
 	serviceShops.clear();
@@ -306,7 +310,6 @@ bool PlayerBotController::openServiceShop(Player* player, ServiceNpc& service, c
 
 void PlayerBotController::refreshItemValues()
 {
-	itemSellValues.clear();
 	for (const auto& entry : g_game.getNpcs()) {
 		Npc* npc = entry.second;
 		const std::string* capability = npc && !npc->isRemoved() ? npc->getParameter("playerbot_service") : nullptr;
@@ -324,6 +327,9 @@ void PlayerBotController::refreshItemValues()
 
 const ShopInfo* PlayerBotController::findOffer(const ServiceNpc& service, uint16_t itemId, bool buying) const
 {
+	if (!buying && testPolicy.suppressSlottedLootSeller && itemId == 2398) {
+		return nullptr;
+	}
 	Npc* npc = g_game.getNpcByID(service.id);
 	if (!npc || npc->isRemoved()) {
 		return nullptr;
@@ -370,7 +376,9 @@ PlayerBotController::ServiceNpc* PlayerBotController::findLootSeller(Player* pla
 			continue;
 		}
 		for (const ShopInfo& offer : npc->getShopOffers()) {
-			if (offer.sellPrice != 0 && getSaleItemCount(*player, offer.itemId) > 0 &&
+			if (offer.sellPrice != 0 &&
+			    !(testPolicy.suppressSlottedLootSeller && offer.itemId == 2398) &&
+			    getSaleItemCount(*player, offer.itemId) > 0 &&
 			    (!nearest || offer.sellPrice > selectedSellPrice ||
 			     (offer.sellPrice == selectedSellPrice && serviceDistance(position, service) < serviceDistance(position, *nearest)))) {
 				itemId = offer.itemId;
@@ -380,6 +388,90 @@ PlayerBotController::ServiceNpc* PlayerBotController::findLootSeller(Player* pla
 		}
 	}
 	return nearest;
+}
+
+bool PlayerBotController::prepareSlottedSaleItem(Player* player, uint16_t itemId, const Position& position)
+{
+	Item* backpackItem = player->getInventoryItem(CONST_SLOT_BACKPACK);
+	Container* backpack = backpackItem ? backpackItem->getContainer() : nullptr;
+	if (!backpack) {
+		return false;
+	}
+	if (pendingSlottedSaleItemId != 0) {
+		Item* sourceAfter = player->getInventoryItem(pendingSlottedSaleSourceSlot);
+		const uint32_t backpackAfter = backpack->getItemTypeCount(pendingSlottedSaleItemId);
+		if ((!sourceAfter || sourceAfter->getID() != pendingSlottedSaleItemId) &&
+		    backpackAfter > pendingSlottedSaleBackpackCount) {
+			emit("action_result", position,
+			     "\"action\":\"item_disposition\",\"result\":\"success\",\"disposition\":\"sell\",\"item_id\":" +
+			         std::to_string(pendingSlottedSaleItemId) + ",\"source_slot\":" +
+			         std::to_string(pendingSlottedSaleSourceSlot) + ",\"provider_available\":true");
+			pendingSlottedSaleItemId = 0;
+			pendingSlottedSaleSourceSlot = CONST_SLOT_WHEREEVER;
+			slottedSaleMoveAttempts = 0;
+			schedule(SCHEDULER_MINTICKS);
+			return true;
+		}
+		const uint16_t failedItemId = pendingSlottedSaleItemId;
+		const slots_t failedSlot = pendingSlottedSaleSourceSlot;
+		pendingSlottedSaleItemId = 0;
+		pendingSlottedSaleSourceSlot = CONST_SLOT_WHEREEVER;
+		if (slottedSaleMoveAttempts >= maximumServiceAttempts) {
+			unavailableSlottedSales[{failedItemId, failedSlot}] =
+				std::chrono::steady_clock::now() + unavailableDispositionCooldown;
+			emit("action_result", position,
+			     "\"action\":\"item_disposition\",\"result\":\"deferred\",\"reason\":\"move_not_verified\",\"disposition\":\"sell\",\"item_id\":" +
+			         std::to_string(failedItemId) + ",\"source_slot\":" + std::to_string(failedSlot) +
+			         ",\"provider_available\":true,\"cooldown_ms\":" +
+			         std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(unavailableDispositionCooldown).count()));
+			serviceStage = ServiceStage::BuyPotions;
+			slottedSaleMoveAttempts = 0;
+			schedule(SCHEDULER_MINTICKS);
+			return true;
+		}
+		schedule(navigationDecisionDelay(*player));
+		return true;
+	}
+
+	slots_t sourceSlot = CONST_SLOT_WHEREEVER;
+	Item* item = findActionableSlottedItem(*player, itemId, sourceSlot);
+	if (!item) {
+		return false;
+	}
+	const int8_t backpackId = player->getContainerID(backpack);
+	if (backpackId < 0) {
+		if (!player->canDoAction()) {
+			schedule(navigationDecisionDelay(*player));
+			return true;
+		}
+		++counters.actionsAttempted;
+		g_game.playerUseItem(playerId, Position(0xFFFF, CONST_SLOT_BACKPACK, 0), 0,
+		                     depotSourceContainerId, backpack->getClientID());
+		schedule(navigationDecisionDelay(*player));
+		return true;
+	}
+	if (!player->canDoAction()) {
+		schedule(navigationDecisionDelay(*player));
+		return true;
+	}
+	Position sourcePosition;
+	uint8_t sourceIndex = 0;
+	g_game.internalGetPosition(item, sourcePosition, sourceIndex);
+	pendingSlottedSaleItemId = itemId;
+	pendingSlottedSaleSourceSlot = sourceSlot;
+	pendingSlottedSaleBackpackCount = backpack->getItemTypeCount(itemId);
+	++slottedSaleMoveAttempts;
+	++counters.actionsAttempted;
+	g_game.playerMoveItem(player, sourcePosition, item->getClientID(), sourceIndex,
+	                      Position(0xFFFF, 0x40 | static_cast<uint8_t>(backpackId),
+	                               containerDestinationIndex(*backpack, *item)),
+	                      static_cast<uint8_t>(item->getItemCount()), item, backpack);
+	emit("action_result", position,
+	     "\"action\":\"item_disposition\",\"result\":\"requested\",\"disposition\":\"sell\",\"item_id\":" +
+	         std::to_string(itemId) + ",\"source_slot\":" + std::to_string(sourceSlot) +
+	         ",\"provider_available\":true,\"attempt\":" + std::to_string(slottedSaleMoveAttempts));
+	schedule(navigationDecisionDelay(*player));
+	return true;
 }
 
 void PlayerBotController::completeServiceAction(Player* player, const char* action, uint16_t itemId, uint32_t amount, const Position& position)
@@ -596,6 +688,10 @@ void PlayerBotController::processService(Player* player, const Position& current
 		return;
 	}
 	if (serviceStage == ServiceStage::SellLoot) {
+		if (pendingSlottedSaleItemId != 0 &&
+		    prepareSlottedSaleItem(player, pendingSlottedSaleItemId, currentPosition)) {
+			return;
+		}
 		uint16_t itemId = 0;
 		ServiceNpc* seller = findLootSeller(player, currentPosition, itemId);
 		if (!seller) {
@@ -606,8 +702,12 @@ void PlayerBotController::processService(Player* player, const Position& current
 		if (serviceTargetId != seller->id) {
 			resetConversation(seller->id);
 		}
+		const uint32_t backpackSaleCount = getBackpackSaleItemCount(*player, itemId);
+		if (backpackSaleCount == 0 && prepareSlottedSaleItem(player, itemId, currentPosition)) {
+			return;
+		}
 		processServiceShop(player, currentPosition, *seller, "sell", itemId,
-		                   std::min<uint32_t>(100, getSaleItemCount(*player, itemId)), false);
+		                   std::min<uint32_t>(100, backpackSaleCount), false);
 		return;
 	}
 	if (serviceStage == ServiceStage::BuyPotions) {
@@ -1199,16 +1299,36 @@ void PlayerBotController::processDeposit(Player* player, const Position& current
 			       << ",\"requested\":" << static_cast<uint32_t>(pendingDepositRequestedCount)
 			       << ",\"verified\":" << movedFromInventory << ",\"inventory_before\":" << pendingDepositInventoryCount
 			       << ",\"inventory_after\":" << inventoryAfter << ",\"depot_before\":" << pendingDepositDestinationCount
-			       << ",\"depot_after\":" << depotAfter;
+			       << ",\"depot_after\":" << depotAfter
+			       << ",\"source_slot\":" << (pendingDepositSourceSlot == CONST_SLOT_WHEREEVER ? "null" : std::to_string(pendingDepositSourceSlot))
+			       << ",\"provider_available\":false,\"disposition\":\"deposit\"";
 			emit("action_result", currentPosition, fields.str());
 			pendingDepositItemId = 0;
+			pendingDepositSourceSlot = CONST_SLOT_WHEREEVER;
 			depotAttempts = 0;
 			depotStage = DepotStage::Deposit;
 		} else if (movedFromInventory != 0 || movedToDepot != 0) {
 			logActionFailure("deposit", "move_delta_mismatch", currentPosition);
 			stop("depot_move_delta_mismatch", currentPosition);
 			return;
-		} else if (++depotAttempts >= maximumDepotAttempts) {
+		} else if (++depotAttempts >= maximumDepotAttempts && pendingDepositSourceSlot != CONST_SLOT_WHEREEVER) {
+			const uint16_t failedItemId = pendingDepositItemId;
+			const slots_t failedSlot = pendingDepositSourceSlot;
+			unavailableSlottedSales[{failedItemId, failedSlot}] =
+				std::chrono::steady_clock::now() + unavailableDispositionCooldown;
+			emit("action_result", currentPosition,
+			     "\"action\":\"deposit\",\"result\":\"deferred\",\"reason\":\"move_not_verified\",\"policy\":\"known_loot\",\"depot_id\":" +
+			         std::to_string(depotId) + ",\"container_id\":" + std::to_string(depotChestContainerId) +
+			         ",\"item_id\":" + std::to_string(failedItemId) + ",\"source_slot\":" + std::to_string(failedSlot) +
+			         ",\"provider_available\":false,\"disposition\":\"deposit\",\"cooldown_ms\":" +
+			         std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(unavailableDispositionCooldown).count()));
+			pendingDepositItemId = 0;
+			pendingDepositSourceSlot = CONST_SLOT_WHEREEVER;
+			depotAttempts = 0;
+			depotStage = DepotStage::Deposit;
+			schedule(SCHEDULER_MINTICKS);
+			return;
+		} else if (depotAttempts >= maximumDepotAttempts) {
 			emit("action_result", currentPosition, "\"action\":\"deposit\",\"result\":\"failed\",\"reason\":\"no_slot_or_move_rejected\",\"policy\":\"known_loot\",\"depot_id\":" +
 			     std::to_string(depotId) + ",\"container_id\":" + std::to_string(depotChestContainerId) +
 			     ",\"item_id\":" + std::to_string(pendingDepositItemId) + ",\"requested\":" +
@@ -1251,6 +1371,7 @@ void PlayerBotController::processDeposit(Player* player, const Position& current
 	Container* source = nullptr;
 	Item* depositItem = nullptr;
 	uint8_t count = 0;
+	slots_t sourceSlot = CONST_SLOT_WHEREEVER;
 	refreshItemValues();
 	Item* upgrade = nullptr;
 	EquipmentUpgrade upgradeInfo{};
@@ -1262,7 +1383,25 @@ void PlayerBotController::processDeposit(Player* player, const Position& current
 		return;
 	}
 	if (!findDepositableItem(*player, backpack, source, depositItem, count)) {
+		depositItem = findActionableSlottedItem(*player, 0, sourceSlot);
+		if (depositItem) {
+			const uint32_t carried = getInventoryItemCount(*player, depositItem->getID());
+			const uint32_t reserve = protectedItemReserve(depositItem->getID());
+			const uint32_t movable = depositItem->isStackable() && carried > reserve ?
+				std::min<uint32_t>(depositItem->getItemCount(), carried - reserve) : (carried > reserve ? 1 : 0);
+			count = static_cast<uint8_t>(std::min<uint32_t>(movable, UINT8_MAX));
+		}
+	}
+	if (!depositItem || count == 0) {
 		if (effectiveFreeCapacity(*player) < returnCapacityThreshold) {
+			const auto now = std::chrono::steady_clock::now();
+			const auto deferred = std::find_if(unavailableSlottedSales.begin(), unavailableSlottedSales.end(),
+			                                   [now](const auto& entry) { return entry.second > now; });
+			if (deferred != unavailableSlottedSales.end()) {
+				schedule(static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+				                                   deferred->second - now).count()));
+				return;
+			}
 			stop("depot_capacity_not_recovered", currentPosition);
 			return;
 		}
@@ -1288,26 +1427,38 @@ void PlayerBotController::processDeposit(Player* player, const Position& current
 		return;
 	}
 
-	if (!openContainer(*player, *source, depotSourceContainerId, currentPosition)) {
+	if (source && !openContainer(*player, *source, depotSourceContainerId, currentPosition)) {
 		return;
 	}
-	const int8_t sourceContainerId = player->getContainerID(source);
-	const ItemDeque& sourceItems = source->getItemList();
-	auto sourceItem = std::find(sourceItems.begin(), sourceItems.end(), depositItem);
-	if (sourceContainerId < 0 || sourceItem == sourceItems.end() ||
-	    std::distance(sourceItems.begin(), sourceItem) > UINT8_MAX) {
-		logActionFailure("deposit", "source_unavailable", currentPosition);
-		schedule(blockedRouteRetryInterval);
-		return;
+	Position sourcePosition;
+	uint8_t sourceIndex = 0;
+	if (source) {
+		const int8_t sourceContainerId = player->getContainerID(source);
+		const ItemDeque& sourceItems = source->getItemList();
+		auto sourceItem = std::find(sourceItems.begin(), sourceItems.end(), depositItem);
+		if (sourceContainerId < 0 || sourceItem == sourceItems.end() ||
+		    std::distance(sourceItems.begin(), sourceItem) > UINT8_MAX) {
+			logActionFailure("deposit", "source_unavailable", currentPosition);
+			schedule(blockedRouteRetryInterval);
+			return;
+		}
+		sourceIndex = static_cast<uint8_t>(std::distance(sourceItems.begin(), sourceItem));
+		sourcePosition = Position(0xFFFF, 0x40 | static_cast<uint8_t>(sourceContainerId), sourceIndex);
+	} else {
+		g_game.internalGetPosition(depositItem, sourcePosition, sourceIndex);
+		if (sourcePosition.x != 0xFFFF || sourcePosition.y != sourceSlot) {
+			logActionFailure("deposit", "slotted_source_unavailable", currentPosition);
+			schedule(blockedRouteRetryInterval);
+			return;
+		}
 	}
 	if (!player->canDoAction()) {
 		schedule(navigationDecisionDelay(*player));
 		return;
 	}
 
-	const uint8_t sourceIndex = static_cast<uint8_t>(std::distance(sourceItems.begin(), sourceItem));
-	const Position sourcePosition(0xFFFF, 0x40 | static_cast<uint8_t>(sourceContainerId), sourceIndex);
 	pendingDepositItemId = depositItem->getID();
+	pendingDepositSourceSlot = sourceSlot;
 	pendingDepositRequestedCount = count;
 	pendingDepositInventoryCount = getInventoryItemCount(*player, pendingDepositItemId);
 	pendingDepositDestinationCount = chest->getItemTypeCount(pendingDepositItemId);
@@ -1321,7 +1472,9 @@ void PlayerBotController::processDeposit(Player* player, const Position& current
 	     std::to_string(depotId) + ",\"container_id\":" + std::to_string(depotChestContainerId) + ",\"item_id\":" +
 	     std::to_string(pendingDepositItemId) + ",\"requested\":" + std::to_string(count) + ",\"submitted\":" +
 	     std::to_string(submittedCount) + ",\"inventory_before\":" +
-	     std::to_string(pendingDepositInventoryCount) + ",\"depot_before\":" + std::to_string(pendingDepositDestinationCount));
+	     std::to_string(pendingDepositInventoryCount) + ",\"depot_before\":" + std::to_string(pendingDepositDestinationCount) +
+	     ",\"source_slot\":" + (sourceSlot == CONST_SLOT_WHEREEVER ? "null" : std::to_string(sourceSlot)) +
+	     ",\"provider_available\":false,\"disposition\":\"deposit\"");
 	if (pauseDepotFixtureForRestart(*player, DepotRestartCheckpoint::Deposit, currentPosition)) {
 		return;
 	}
