@@ -48,7 +48,7 @@ the changed behavior:
 | `-StaminaProjection` | Premium bonus, low-stamina penalty, and ordinary stamina projections. |
 | `-HuntRegionPlanning` | Cached scanner batching, threat rejection, reachability, cooldowns, and observed correction. |
 | `-AdaptiveChallenge` | Synthetic frontier and planner-helper fixture covering idle and no-kill exclusion, sparse-combat escalation, hysteresis, recovery backoff, equipment/recovery prediction, lethal rejection, and local exhaustion. It does not validate real combat sampling or long-running hunt behavior. |
-| `-CombatReadiness` | Equipment, the one-potion return threshold and 10-potion restock target, optional-food hunting, generic food consumption and reclaimable capacity, low-wealth banking, carried-upgrade retention through service, and restart reconstruction. |
+| `-CombatReadiness` | Equipment, the one-potion return threshold and 10-potion restock target, optional-food hunting, generic food consumption and reclaimable capacity, low-wealth banking, carried-upgrade retention through service, and restart reconstruction. It does not cover the terminal case where total funds cannot buy enough potions to exceed the return threshold. |
 | `-EquipmentPurchases` | Justified purchase and equip verification, clean restart persistence, carried-upgrade recovery, displaced-item-space rejection, and rejected transactions. |
 | `-MainlandRewards` | Real Thais reward object from a teleported, high-capacity fixture; scale-armor claim and equip, displaced-item and bundle preservation, restart reconstruction, and non-null battle-axe rejection evidence. It does not prove normal traversal, realistic capacity limits, or a specific rejection reason. |
 | `-Depot` | Real Thais locker/chest discovery from Naji, including exact nearest-locker selection, carried-upgrade equipment, displaced and inferior equipment deposits, nested loot, move verification, retries, and restart checkpoints. |
@@ -108,8 +108,8 @@ stack run with 20 to 60 minute hunts to assess sustained escalation, recovery
 backoff, scan retries, and telemetry volume; short hunts can end before the bot
 reaches deep patrol points or accumulates enough active-combat evidence.
 
-Run the unattended level 8-20 benchmark from a fresh development database with
-45-minute hunt limits:
+Run the unattended benchmark from a fresh level-8 development character and
+evaluate it through the first attainment of level 20. Use 45-minute hunt limits:
 
 ```powershell
 $env:PLAYERBOT_HUNT_DURATION_SECONDS = "2700"

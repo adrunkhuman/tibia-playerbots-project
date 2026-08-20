@@ -158,6 +158,13 @@ within 200 weighted tiles of the registered town temple. The bot greets the
 selected NPC, treats a private reply as focus acknowledgement, and opens the
 normal trade window. Reply text is not interpreted.
 
+Service goal selection counts sellable inventory only when a live tagged NPC
+currently publishes a matching offer. Selling chooses the highest live price,
+then the nearer provider on a tie. Required purchases choose the nearest
+registered offer, then revalidate the NPC and trade window before transacting.
+Missing required offers, unavailable NPCs, and failed shop verification stop
+with explicit service errors instead of completing an unverified transaction.
+
 Spell training currently considers tagged providers within the Thais temple
 scope; Gregor is the initial tag. It derives trainer offers from loaded NPC
 scripts and rejects offers with a registry mismatch, wrong vocation, level,
@@ -280,11 +287,15 @@ All scenarios use controlled Lua setup. They prove forecast arithmetic,
 arbitration, and normal engine casts under those conditions, not frequency or
 utility on an ordinary long-running server.
 
-The service cycle sells known surplus, restores small health potions to a
-target of 10 after the carried count reaches one,
-deposits carried money, and withdraws up to 100 gp without exceeding the bot's
-total available gold. It does not buy food merely because
-none is carried. Hunting ends after the configured duration or below 30 oz
+The service cycle sells known surplus and returns for small health potions when
+the carried count reaches one. It buys enough to carry at least two and targets
+10. A complete restock takes priority when total carried and bank gold can pay
+for it; an optional partial restock preserves the carried-gold reserve. If total
+gold cannot raise stock above the return threshold, service stops with
+`insufficient_potion_funds` without buying an unusable partial reserve. The
+cycle deposits carried money and withdraws up to 100 gp without exceeding the
+bot's total available gold. It does not buy food merely because none is carried.
+Hunting ends after the configured duration or below 30 oz
 effective free capacity. Effective capacity is physical free capacity plus the
 weight of carried standard food, because that cargo can be consumed or replaced
 without service. A backpack may therefore have no physical capacity and remain
@@ -312,7 +323,9 @@ through the normal verified equipment path, then treats displaced and inferior
 equipment as ordinary cargo for sale or deposit. This prevents equipment from
 permanently consuming capacity without discarding upgrades. A carried weapon
 must improve maximum damage with the player's trained weapon skill; higher raw
-attack alone does not justify switching weapon classes.
+attack alone does not justify switching weapon classes. Two-handed weapons are
+outside the current loadout evaluator and remain protected from automatic sale,
+depot deposit, and cargo replacement until two-handed tradeoffs are supported.
 
 Item value comes from tagged shop offers. Currency uses intrinsic value; other
 loot must have a known buyer. Corpse contents are ranked by value per weight,
@@ -359,6 +372,13 @@ vocation `4`, town `2`, and the registered Thais temple position. It remains
 server-owned and continues directly into mainland service.
 
 ## Recovery and configuration
+
+Any relog or server restart creates a fresh controller. Persisted player,
+inventory, equipment, spell, storage, and depot state is authoritative; routes,
+targets, conversations, open containers, pending actions, and objective state
+are discarded and reevaluated. Focused depot restart fixtures cover named
+approach, locker, chest, deposit, and departure checkpoints. They do not claim
+that an arbitrary interrupted shop or item transaction resumes in place.
 
 Death keeps normal corpse creation, penalties, saving, removal, and temple
 login. The manager retains ownership, waits, reloads the same character, and
