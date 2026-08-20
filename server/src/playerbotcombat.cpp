@@ -169,10 +169,10 @@ bool PlayerBotController::handleHealing(Player* player, const Position& currentP
 	return true;
 }
 
-void PlayerBotController::logEatSuccess(uint32_t inventoryCount, int32_t foodTicks, const Position& position)
+void PlayerBotController::logEatSuccess(uint16_t itemId, uint32_t inventoryCount, int32_t foodTicks, const Position& position)
 {
 	std::ostringstream fields;
-	fields << "\"action\":\"eat\",\"result\":\"success\",\"item_id\":" << meatItemId
+	fields << "\"action\":\"eat\",\"result\":\"success\",\"item_id\":" << itemId
 	       << ",\"count\":1,\"inventory_count\":" << inventoryCount << ",\"food_ticks\":" << foodTicks;
 	emit("action_result", position, fields.str());
 }
@@ -185,39 +185,68 @@ bool PlayerBotController::handleFood(Player* player, const Position& currentPosi
 
 	const auto now = std::chrono::steady_clock::now();
 	if (pendingEat) {
-		const uint32_t inventoryCount = getInventoryItemCount(*player, meatItemId);
+		const uint32_t inventoryCount = getInventoryItemCount(*player, pendingEatItemId);
 		const int32_t foodTicks = getFoodTicks(*player);
 		if (inventoryCount + 1 == pendingEatInventoryCount && foodTicks > pendingEatFoodTicks) {
-			logEatSuccess(inventoryCount, foodTicks, currentPosition);
+			logEatSuccess(pendingEatItemId, inventoryCount, foodTicks, currentPosition);
+			eatFailures = 0;
 		} else if (inventoryCount == pendingEatInventoryCount && !canEatCheese(*player)) {
 			// The normal food action leaves the item untouched when the player is full.
+			eatFailures = 0;
 		} else {
 			logActionFailure("eat", "consumption_not_verified", currentPosition);
-			eatRetryAfter = now + std::chrono::seconds(5);
+			if (++eatFailures >= maximumEatFailures) {
+				eatFailures = 0;
+				eatRetryAfter = now + eatFailureCooldown;
+				emit("action_result", currentPosition,
+				     "\"action\":\"eat\",\"result\":\"cooldown\",\"reason\":\"retry_exhausted\",\"retry_after_ms\":" +
+				         std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(eatFailureCooldown).count()));
+			} else {
+				eatRetryAfter = now + std::chrono::seconds(5);
+			}
 		}
 		pendingEat = false;
+		pendingEatItemId = 0;
 	}
 
 	if (now < eatRetryAfter || !canEatCheese(*player)) {
 		return false;
 	}
 
-	if (getInventoryItemCount(*player, meatItemId) <= minimumMeat) {
+	if (getFoodInventory(*player).count <= preferredFoodCount) {
 		return false;
 	}
-	Item* meat = g_game.findItemOfType(player, meatItemId, true);
-	if (!meat) {
+	Item* food = nullptr;
+	std::function<void(Item*)> findFood = [&](Item* item) {
+		if (!item || food) {
+			return;
+		}
+		if (isFoodItem(item->getID())) {
+			food = item;
+			return;
+		}
+		if (Container* container = item->getContainer()) {
+			for (Item* child : container->getItemList()) {
+				findFood(child);
+			}
+		}
+	};
+	for (int32_t slot = CONST_SLOT_FIRST; slot <= CONST_SLOT_LAST && !food; ++slot) {
+		findFood(player->getInventoryItem(static_cast<slots_t>(slot)));
+	}
+	if (!food) {
 		return false;
 	}
 	if (!player->canDoAction()) {
 		return true;
 	}
 
-	pendingEatInventoryCount = getInventoryItemCount(*player, meatItemId);
+	pendingEatItemId = food->getID();
+	pendingEatInventoryCount = getInventoryItemCount(*player, pendingEatItemId);
 	pendingEatFoodTicks = getFoodTicks(*player);
 	pendingEat = true;
 	++counters.actionsAttempted;
-	g_game.playerUseItem(playerId, Position(0xFFFF, 0, 0), 0, 0, meat->getClientID());
+	g_game.playerUseItem(playerId, Position(0xFFFF, 0, 0), 0, 0, food->getClientID());
 	return true;
 }
 
@@ -568,7 +597,8 @@ void PlayerBotController::updateChallengeFrontier(const Player& player, const Po
 {
 	const double uptime = huntDurationSeconds == 0 ? 0 : huntCombatEvidence.activeSeconds / huntDurationSeconds;
 	const uint32_t recoveries = huntCombatEvidence.potionRecoveries + huntCombatEvidence.spellRecoveries;
-	const bool enoughActiveCombat = huntCombatEvidence.activeSeconds >= 30 && uptime >= 0.5;
+	const bool enoughActiveCombat = huntCombatEvidence.activeSeconds >= minimumChallengeActiveSeconds &&
+	                                huntRegionKills >= minimumChallengeKills;
 	const bool nearFullHealth = huntCombatEvidence.minimumHealth != std::numeric_limits<int32_t>::max() &&
 	                            static_cast<int64_t>(huntCombatEvidence.minimumHealth) * 100 >=
 	                                static_cast<int64_t>(player.getMaxHealth()) * challengeHealthSafetyPercent;
@@ -597,6 +627,9 @@ void PlayerBotController::updateChallengeFrontier(const Player& player, const Po
 	       << ",\"hold_qualifying_hunts\":" << static_cast<uint16_t>(challengeFrontier.qualifyingHuntsToHold)
 	       << ",\"active_combat_seconds\":" << huntCombatEvidence.activeSeconds
 	       << ",\"active_combat_uptime\":" << uptime
+	       << ",\"kills\":" << huntRegionKills
+	       << ",\"minimum_active_combat_seconds\":" << minimumChallengeActiveSeconds
+	       << ",\"minimum_kills\":" << minimumChallengeKills
 	       << ",\"minimum_health\":" << (huntCombatEvidence.minimumHealth == std::numeric_limits<int32_t>::max() ? 0 : huntCombatEvidence.minimumHealth)
 	       << ",\"verified_recoveries\":" << recoveries
 	       << ",\"retreat\":" << (retreatObserved ? "true" : "false")
@@ -608,26 +641,29 @@ void PlayerBotController::updateChallengeFrontier(const Player& player, const Po
 void PlayerBotController::runAdaptiveChallengeFixture(Player& player, const Position& position)
 {
 	adaptiveChallengeFixtureRun = true;
-	auto applyEvidence = [this, &player, &position](double activeSeconds, uint32_t potionRecoveries, bool death = false) {
+	auto applyEvidence = [this, &player, &position](double activeSeconds, uint32_t kills,
+	                                             uint32_t potionRecoveries, bool death = false) {
 		huntCombatEvidence = HuntCombatEvidence{};
 		recordHuntCombatObservation(activeSeconds != 0, activeSeconds, player.getMaxHealth(), player.getMaxHealth(), 1);
+		huntRegionKills = kills;
 		huntCombatEvidence.potionRecoveries = potionRecoveries;
 		huntCombatEvidence.deathObserved = death;
-		updateChallengeFrontier(player, position, 60, "adaptive_challenge_fixture");
+		updateChallengeFrontier(player, position, 300, "adaptive_challenge_fixture");
 	};
 	huntCombatEvidence = HuntCombatEvidence{};
 	recordHuntCombatObservation(false, 30, player.getMaxHealth(), player.getMaxHealth(), 1);
 	const double idleObservedSeconds = huntCombatEvidence.activeSeconds;
 	recordHuntCombatObservation(true, 30, player.getMaxHealth(), player.getMaxHealth(), 1);
 	const double activeObservedSeconds = huntCombatEvidence.activeSeconds;
-	applyEvidence(0, 0); // Travel and idle health must not advance the frontier.
-	applyEvidence(30, 0);
-	applyEvidence(30, 0);
-	applyEvidence(30, 1);
-	applyEvidence(30, 0);
-	applyEvidence(30, 0);
-	applyEvidence(30, 0);
-	applyEvidence(0, 0, true);
+	applyEvidence(0, 0, 0); // Travel and idle health must not advance the frontier.
+	applyEvidence(30, 0, 0); // Target engagement without a kill is not qualifying evidence.
+	applyEvidence(30, 1, 0);
+	applyEvidence(30, 1, 0);
+	applyEvidence(30, 1, 1);
+	applyEvidence(30, 1, 0);
+	applyEvidence(30, 1, 0);
+	applyEvidence(30, 1, 0);
+	applyEvidence(0, 0, 0, true);
 
 	const PlayerBotHuntRegionScan scan = huntRegionPlanner.beginScan(player);
 	PlayerBotHuntRegion current;
@@ -675,6 +711,7 @@ void PlayerBotController::runAdaptiveChallengeFixture(Player& player, const Posi
 	       << ",\"helper_scope_exhausted\":" << (playerBotHuntScopeExhausted(exhausted) ? "true" : "false");
 	emit("adaptive_challenge_fixture", position, fields.str());
 	huntCombatEvidence = HuntCombatEvidence{};
+	huntRegionKills = 0;
 }
 
 void PlayerBotController::emitHuntRegionCandidate(const PlayerBotHuntRegion& region, const Position& position) const
@@ -1032,6 +1069,9 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 		emitHuntRegionCandidate(region, position);
 	}
 	if (playerBotHuntScopeExhausted(planning.regions)) {
+		++consecutiveHuntScopeExhaustions;
+		const std::chrono::seconds retryDelay = testPolicy.forceHuntScopeExhaustion ? std::chrono::seconds(1) :
+		                                                                                huntScopeReevaluationDelay;
 		const bool validationBudgetExhausted = std::any_of(planning.regions.begin(), planning.regions.end(),
 			[](const PlayerBotHuntRegion& region) { return region.rejectionReason == "navigation_node_budget"; });
 		emitHuntRegionPlanning(planning, position, "exhausted");
@@ -1048,14 +1088,22 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 		         ",\"suitable_candidate_count\":" + std::to_string(planning.suitableCandidates) +
 		         ",\"reachable_candidate_count\":" + std::to_string(reachableCandidates) +
 		         ",\"frontier\":" + std::to_string(challengeFrontier.target) +
-		         ",\"retry_delay_ms\":" + std::to_string(huntScopeReevaluationDelay.count() * 1000) +
+		         ",\"attempt\":" + std::to_string(consecutiveHuntScopeExhaustions) +
+		         ",\"maximum_attempts\":" + std::to_string(maximumHuntScopeExhaustions) +
+		         ",\"retry_delay_ms\":" + std::to_string(retryDelay.count() * 1000) +
 		         ",\"reason\":" + jsonString(validationBudgetExhausted ? "route_validation_budget_exhausted" : "local_scope_exhausted"));
-		huntScopeReevaluationAfter = now + huntScopeReevaluationDelay;
 		cancelHuntRegionPlanning();
+		if (consecutiveHuntScopeExhaustions >= maximumHuntScopeExhaustions) {
+			stop("hunt_scope_exhausted", position);
+			return false;
+		}
+		huntScopeReevaluationAfter = now + retryDelay;
 		return false;
 	}
 
 	activeHuntRegion = *selected;
+	consecutiveHuntScopeExhaustions = 0;
+	huntScopeReevaluationAfter = {};
 	auto first = std::find(activeHuntRegion->patrolPoints.begin(), activeHuntRegion->patrolPoints.end(),
 	                       activeHuntRegion->destination);
 	if (first != activeHuntRegion->patrolPoints.end()) {
@@ -1168,14 +1216,16 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 		lootCorpse(player, currentPosition);
 		return;
 	}
-	if (cyclePhase == CyclePhase::Hunt &&
-	    (std::chrono::steady_clock::now() >= huntDeadline || player->getFreeCapacity() < returnCapacityThreshold)) {
-		const char* reason = player->getFreeCapacity() < returnCapacityThreshold ? "capacity" : "hunt_deadline";
-		if (testPolicy.progressionEnabled) {
-			finishHuntAndSelectGoal(player, currentPosition, reason);
+	if (cyclePhase == CyclePhase::Hunt) {
+		const uint32_t usableCapacity = effectiveFreeCapacity(*player);
+		if (std::chrono::steady_clock::now() >= huntDeadline || usableCapacity < returnCapacityThreshold) {
+			const char* reason = usableCapacity < returnCapacityThreshold ? "capacity" : "hunt_deadline";
+			if (testPolicy.progressionEnabled) {
+				finishHuntAndSelectGoal(player, currentPosition, reason);
+			} else {
+				beginService(player, currentPosition, reason);
+			}
 			return;
-		} else {
-			beginService(player, currentPosition, reason);
 		}
 	}
 

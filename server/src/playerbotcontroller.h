@@ -49,11 +49,14 @@ namespace playerbot {
 	inline constexpr uint16_t ratCorpseItemId = 5964;
 	inline constexpr uint16_t meatItemId = 2666;
 	inline constexpr uint16_t smallHealthPotionItemId = 8704;
-	inline constexpr uint32_t minimumSmallHealthPotions = 5;
+	inline constexpr uint32_t smallHealthPotionReturnThreshold = 1;
+	inline constexpr uint32_t smallHealthPotionRestockTarget = 10;
 	inline constexpr int32_t healingHealthPercent = 60;
-	inline constexpr uint32_t minimumMeat = 1;
+	inline constexpr uint32_t preferredFoodCount = 2;
 	inline constexpr int32_t meatFoodTicks = 108000;
 	inline constexpr int32_t maximumFoodSeconds = 1200;
+	inline constexpr uint32_t maximumEatFailures = 3;
+	inline constexpr std::chrono::minutes eatFailureCooldown(5);
 	inline constexpr uint8_t corpseContainerId = 0;
 	inline constexpr uint8_t backpackContainerId = 1;
 	inline constexpr uint8_t rewardContainerIdBase = 2;
@@ -77,12 +80,15 @@ namespace playerbot {
 	inline constexpr std::chrono::minutes stableLifetimeReset(5);
 	inline constexpr std::chrono::minutes huntRegionCooldown(10);
 	inline constexpr std::chrono::seconds huntScopeReevaluationDelay(30);
+	inline constexpr uint32_t maximumHuntScopeExhaustions = 3;
 	inline constexpr double initialChallengeFrontier = 0.20;
 	inline constexpr double minimumChallengeFrontier = 0.10;
 	inline constexpr double maximumChallengeFrontier = 0.40;
 	inline constexpr double challengeEscalation = 0.025;
 	inline constexpr double challengeBackoff = 0.05;
 	inline constexpr double challengeHealthSafetyPercent = 85;
+	inline constexpr double minimumChallengeActiveSeconds = 30;
+	inline constexpr uint32_t minimumChallengeKills = 1;
 	inline constexpr std::chrono::minutes pickupRewardSuccessCooldown(5);
 	inline constexpr std::chrono::seconds pickupRewardFailureCooldown(60);
 	inline constexpr std::chrono::minutes spellTrainingSuccessCooldown(5);
@@ -105,7 +111,7 @@ namespace playerbot {
 	inline constexpr int32_t criticalHealingServiceUtility = 1000;
 	inline constexpr size_t maximumEquipmentCandidateSimulations = 16;
 	inline constexpr int32_t missingPotionUtility = 15;
-	inline constexpr int32_t missingFoodUtility = 20;
+	inline constexpr int32_t foodPreferenceUtility = 20;
 	inline constexpr int32_t sellableItemUtility = 10;
 	inline constexpr uint32_t returnCapacityThreshold = 30 * 100;
 	inline constexpr uint32_t carriedGoldReserve = 100;
@@ -207,7 +213,6 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 			Discover,
 			SellLoot,
 			BuyPotions,
-			BuyMeat,
 			Bank,
 			Complete,
 		};
@@ -466,10 +471,16 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 
 		struct CargoCandidate {
 			Item* item;
+			Container* source;
 			uint8_t index;
 			uint32_t unitValue;
 			uint32_t unitWeight;
 			uint32_t availableCount;
+		};
+
+		struct FoodInventory {
+			uint32_t count = 0;
+			uint32_t weight = 0;
 		};
 
 		struct Counters {
@@ -595,6 +606,10 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		void logLootSuccess(uint16_t itemId, uint32_t count, uint32_t inventoryCount, const Position& position);
 
 		uint32_t getInventoryItemCount(const Player& player, uint16_t itemId) const;
+		uint64_t desiredCarriedGold(const Player& player) const;
+		static bool isFoodItem(uint16_t itemId);
+		FoodInventory getFoodInventory(const Player& player) const;
+		uint32_t effectiveFreeCapacity(const Player& player) const;
 
 		uint32_t itemUnitValue(uint16_t itemId) const;
 
@@ -635,7 +650,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		                        const char* need, const char* result, const char* engineResult, const char* reason,
 		                        const PendingSpellCast* pending, const Player* player, const char* fallback) const;
 
-		void logEatSuccess(uint32_t inventoryCount, int32_t foodTicks, const Position& position);
+		void logEatSuccess(uint16_t itemId, uint32_t inventoryCount, int32_t foodTicks, const Position& position);
 
 		bool handleFood(Player* player, const Position& currentPosition);
 
@@ -864,7 +879,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		bool processNavigation(Player* player, const Position& currentPosition, const Position& destination);
 		void adoptNavigationPlan(const Position& destination, std::deque<PlayerBotNavigationStep> steps);
 
-		bool isProtectedDepositItem(const Item& item) const;
+		bool isProtectedDepositItem(const Player& player, const Item& item) const;
 		bool findDepositableItem(const Player& player, Container* container, Container*& source,
 		                         Item*& depositItem, uint8_t& count) const;
 		bool findDepotLocker(const Position& position, uint16_t expectedDepotId, uint16_t& lockerItemId) const;
@@ -916,10 +931,11 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 
 		bool isReplaceableCargo(const Item& item) const;
 
-		bool chooseCargoReplacement(const Container& backpack, const Item& incoming, uint32_t freeCapacity,
+		bool chooseCargoReplacement(const Container& backpack, const Item& incoming, uint8_t incomingCount, uint32_t freeCapacity,
 		                            CargoCandidate& replacement, uint8_t& replacementCount) const;
 
-		void discardCargoForLoot(Player* player, Container* backpack, Item* incoming, const Position& currentPosition);
+		void discardCargoForLoot(Player* player, Container* backpack, Item* incoming, uint8_t incomingCount,
+		                         const Position& currentPosition);
 
 		void verifyPendingLootMoves(Player* player, const Position& currentPosition);
 
@@ -982,8 +998,10 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		std::chrono::steady_clock::time_point spellRetryAfter;
 		PlayerBotSpellCalibration spellCalibration;
 		bool pendingEat = false;
+		uint16_t pendingEatItemId = 0;
 		uint32_t pendingEatInventoryCount = 0;
 		int32_t pendingEatFoodTicks = 0;
+		uint32_t eatFailures = 0;
 		std::chrono::steady_clock::time_point eatRetryAfter;
 		std::chrono::steady_clock::time_point combatStarted;
 		std::chrono::steady_clock::time_point defensiveCombatStarted;
@@ -1022,6 +1040,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		slots_t pendingReadinessSlot = CONST_SLOT_WHEREEVER;
 		uint32_t pendingReadinessAttempts = 0;
 		bool readinessEquipmentPending = false;
+		bool readinessResumeService = false;
 		std::vector<ServiceNpc> serviceShops;
 		std::vector<ServiceNpc> serviceBankers;
 		uint32_t serviceTargetId = 0;
@@ -1047,6 +1066,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		ChallengeFrontier challengeFrontier;
 		HuntCombatEvidence huntCombatEvidence;
 		std::chrono::steady_clock::time_point huntScopeReevaluationAfter;
+		uint32_t consecutiveHuntScopeExhaustions = 0;
 		std::chrono::steady_clock::time_point huntRegionStarted;
 		uint64_t huntRegionStartExperience = 0;
 		uint32_t huntRegionStartLevel = 0;

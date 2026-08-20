@@ -33,6 +33,8 @@ const PlayerBotTestPolicy& playerbot::testPolicyFromEnvironment()
 			 std::strcmp(gameplayMode, "progression_resume") == 0 ||
 			 std::strcmp(gameplayMode, "progression_nested_resume") == 0 ||
 			 std::strcmp(gameplayMode, "progression_space") == 0 ||
+			 std::strcmp(gameplayMode, "readiness_no_food") == 0 ||
+			 std::strcmp(gameplayMode, "readiness_low_wealth") == 0 ||
 			 std::strcmp(gameplayMode, "arbitration") == 0 ||
 			 std::strcmp(gameplayMode, "arbitration_interrupt") == 0 ||
 			 std::strcmp(gameplayMode, "departure") == 0 ||
@@ -57,6 +59,7 @@ const PlayerBotTestPolicy& playerbot::testPolicyFromEnvironment()
 			 std::strcmp(gameplayMode, "adaptive_challenge") == 0 ||
 			 std::strcmp(gameplayMode, "readiness_ready") == 0 || std::strcmp(gameplayMode, "readiness_upgrade") == 0 ||
 			std::strcmp(gameplayMode, "readiness_missing_weapon") == 0 || std::strcmp(gameplayMode, "readiness_supplies") == 0 ||
+			std::strcmp(gameplayMode, "readiness_food_capacity") == 0 ||
 			std::strcmp(gameplayMode, "readiness_retention") == 0 || std::strcmp(gameplayMode, "spell_use") == 0 ||
 			std::strcmp(gameplayMode, "magic_training_hunt") == 0 ||
 			std::strcmp(gameplayMode, "magic_training_post_hunt") == 0 ||
@@ -266,6 +269,57 @@ uint32_t PlayerBotController::getInventoryItemCount(const Player& player, uint16
 	return static_cast<const Cylinder&>(player).getItemTypeCount(itemId);
 }
 
+uint64_t PlayerBotController::desiredCarriedGold(const Player& player) const
+{
+	return std::min<uint64_t>(carriedGoldReserve, player.getMoney() + player.getBankBalance());
+}
+
+bool PlayerBotController::isFoodItem(uint16_t itemId)
+{
+	return itemId == 2362 || (itemId >= 2666 && itemId <= 2691) || (itemId >= 2695 && itemId <= 2696) ||
+	       (itemId >= 2787 && itemId <= 2796) || itemId == 5097 || itemId == 6125 ||
+	       (itemId >= 6278 && itemId <= 6279) || (itemId >= 6393 && itemId <= 6394) || itemId == 6501 ||
+	       (itemId >= 6541 && itemId <= 6545) || itemId == 6569 || itemId == 6574 ||
+	       (itemId >= 7158 && itemId <= 7159) || (itemId >= 7372 && itemId <= 7377) ||
+	       (itemId >= 7909 && itemId <= 7910) || itemId == 7963 || itemId == 8112 ||
+	       (itemId >= 8838 && itemId <= 8845) || itemId == 8847 || itemId == 9005 || itemId == 9114 ||
+	       itemId == 11246 || itemId == 11370 || itemId == 11429 ||
+	       (itemId >= 12415 && itemId <= 12418) || (itemId >= 12637 && itemId <= 12639);
+}
+
+PlayerBotController::FoodInventory PlayerBotController::getFoodInventory(const Player& player) const
+{
+	uint64_t count = 0;
+	uint64_t weight = 0;
+	std::function<void(const Item&)> inspect = [&](const Item& item) {
+		if (isFoodItem(item.getID())) {
+			count += item.getItemCount();
+			weight += static_cast<uint64_t>(item.getItemCount()) * item.getBaseWeight();
+		}
+		if (const Container* container = item.getContainer()) {
+			for (const Item* child : container->getItemList()) {
+				inspect(*child);
+			}
+		}
+	};
+	for (int32_t slot = CONST_SLOT_FIRST; slot <= CONST_SLOT_LAST; ++slot) {
+		if (const Item* item = player.getInventoryItem(static_cast<slots_t>(slot))) {
+			inspect(*item);
+		}
+	}
+	FoodInventory food;
+	food.count = static_cast<uint32_t>(std::min<uint64_t>(count, std::numeric_limits<uint32_t>::max()));
+	food.weight = static_cast<uint32_t>(std::min<uint64_t>(weight, std::numeric_limits<uint32_t>::max()));
+	return food;
+}
+
+uint32_t PlayerBotController::effectiveFreeCapacity(const Player& player) const
+{
+	return static_cast<uint32_t>(std::min<uint64_t>(
+	    static_cast<uint64_t>(player.getFreeCapacity()) + getFoodInventory(player).weight,
+	    std::numeric_limits<uint32_t>::max()));
+}
+
 uint32_t PlayerBotController::itemUnitValue(uint16_t itemId) const
 {
 	const ItemType& type = Item::items[itemId];
@@ -281,21 +335,25 @@ uint32_t PlayerBotController::protectedItemReserve(uint16_t itemId) const
 	if (itemId == ropeItemId || itemId == 2554) {
 		return 1;
 	}
-	if (itemId == meatItemId) {
-		return minimumMeat;
+	if (isFoodItem(itemId)) {
+		return preferredFoodCount;
 	}
 	if (itemId == smallHealthPotionItemId) {
-		return minimumSmallHealthPotions;
+		return smallHealthPotionRestockTarget;
 	}
 	return 0;
 }
 
 uint32_t PlayerBotController::getSaleItemCount(const Player& player, uint16_t itemId) const
 {
+	if (isFoodItem(itemId)) {
+		return 0;
+	}
 	const ItemType& type = Item::items[itemId];
-	if ((type.isContainer() && type.corpseType == RACE_NONE) || type.isFluidContainer() || type.isSplash() ||
-	    type.weaponType != WEAPON_NONE || type.armor > 0 || type.defense > 0 ||
-	    (type.slotPosition & (SLOTP_HEAD | SLOTP_ARMOR | SLOTP_LEGS | SLOTP_FEET)) != 0) {
+	if ((type.isContainer() && type.corpseType == RACE_NONE) || type.isFluidContainer() || type.isSplash()) {
+		return 0;
+	}
+	if ((type.slotPosition & SLOTP_TWO_HAND) != 0 && type.weaponType != WEAPON_NONE) {
 		return 0;
 	}
 	Item* backpackItem = player.getInventoryItem(CONST_SLOT_BACKPACK);
@@ -306,6 +364,9 @@ uint32_t PlayerBotController::getSaleItemCount(const Player& player, uint16_t it
 	uint32_t count = 0;
 	for (Item* item : backpack->getItemList()) {
 		if (item->getID() == itemId) {
+			if (evaluateEquipmentUpgrade(player, *item)) {
+				return 0;
+			}
 			const Container* container = item->getContainer();
 			if (container && !container->empty()) {
 				return 0;
@@ -323,6 +384,9 @@ uint32_t PlayerBotController::getSaleItemCount(const Player& player, uint16_t it
 		for (ContainerIterator it = container->iterator(); it.hasNext(); it.advance()) {
 			Item* nestedItem = *it;
 			if (nestedItem->getID() == itemId) {
+				if (evaluateEquipmentUpgrade(player, *nestedItem)) {
+					return 0;
+				}
 				removableCount += nestedItem->getItemCount();
 			}
 		}

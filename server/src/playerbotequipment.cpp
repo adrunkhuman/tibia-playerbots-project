@@ -205,9 +205,9 @@ bool PlayerBotController::equipmentLoadoutReady(const Player& player, const Equi
 	const bool armorReady = armorItemId != 0 && isLegalEquipmentType(player, Item::items[armorItemId]) &&
 	                        (Item::items[armorItemId].slotPosition & SLOTP_ARMOR) != 0 && Item::items[armorItemId].armor > 0;
 	const Item* backpack = player.getInventoryItem(CONST_SLOT_BACKPACK);
-	const bool suppliesReady = getInventoryItemCount(player, smallHealthPotionItemId) >= minimumSmallHealthPotions &&
-	                           getInventoryItemCount(player, meatItemId) >= minimumMeat;
-	const bool capacityReady = player.getFreeCapacity() >= returnCapacityThreshold + additionalWeight;
+	const bool suppliesReady = getInventoryItemCount(player, smallHealthPotionItemId) > smallHealthPotionReturnThreshold;
+	const bool capacityReady = static_cast<uint64_t>(effectiveFreeCapacity(player)) >=
+	                           static_cast<uint64_t>(returnCapacityThreshold) + additionalWeight;
 	return (isKnightWeapon(loadout.itemIds[CONST_SLOT_LEFT]) || isKnightWeapon(loadout.itemIds[CONST_SLOT_RIGHT])) && armorReady &&
 	       backpack && backpack->getContainer() && suppliesReady && capacityReady;
 }

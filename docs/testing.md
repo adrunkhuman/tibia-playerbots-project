@@ -41,18 +41,18 @@ the changed behavior:
 | `-CorpseLoot` | Non-corpse, empty, guaranteed-loot, and container death items; open-before-inspect ordering. |
 | `-DeathTelemetry` | Death context, exponential relog, fresh controller state, abandonment, and removal. |
 | `-Healing` | Potion verification, threshold recovery, missing-stock service, purchase, and resume behavior. |
-| `-ValueLoot` | Value-per-weight replacement under constrained capacity and bank-funded purchase. |
+| `-ValueLoot` | Value-per-weight replacement under constrained capacity plus generic food replacement and collection cap without mandatory food purchase. |
 | `-PickupProgression` | Nested and multi-root reward inspection, claim verification, upgrades, restart recovery, and space rejection. |
 | `-GoalArbitration` | Pickup, service, hunt, and critical-healing precedence across safe boundaries. |
 | `-OracleDeparture` | Tagged Oracle route, dialogue, vocation/town/position verification, and restart persistence. |
 | `-StaminaProjection` | Premium bonus, low-stamina penalty, and ordinary stamina projections. |
 | `-HuntRegionPlanning` | Cached scanner batching, threat rejection, reachability, cooldowns, and observed correction. |
-| `-AdaptiveChallenge` | Synthetic frontier and planner-helper fixture covering idle exclusion, escalation, hysteresis, recovery backoff, equipment/recovery prediction, lethal rejection, and local exhaustion. It does not validate real combat sampling or long-running hunt behavior. |
-| `-CombatReadiness` | Equipment, supplies, capacity, service recovery, upgrades, and restart reconstruction. |
+| `-AdaptiveChallenge` | Synthetic frontier and planner-helper fixture covering idle and no-kill exclusion, sparse-combat escalation, hysteresis, recovery backoff, equipment/recovery prediction, lethal rejection, and local exhaustion. It does not validate real combat sampling or long-running hunt behavior. |
+| `-CombatReadiness` | Equipment, the one-potion return threshold and 10-potion restock target, optional-food hunting, generic food consumption and reclaimable capacity, low-wealth banking, carried-upgrade retention through service, and restart reconstruction. |
 | `-EquipmentPurchases` | Justified purchase and equip verification, clean restart persistence, carried-upgrade recovery, displaced-item-space rejection, and rejected transactions. |
 | `-MainlandRewards` | Real Thais reward object from a teleported, high-capacity fixture; scale-armor claim and equip, displaced-item and bundle preservation, restart reconstruction, and non-null battle-axe rejection evidence. It does not prove normal traversal, realistic capacity limits, or a specific rejection reason. |
-| `-Depot` | Real Thais locker/chest discovery from Naji, including the exact nearest locker and approach selection, nested deposits, move verification, retries, and restart checkpoints. |
-| `-MainlandLoop` | Two real Thais hunt/depot cycles, local services, restart recovery, and teleport exclusion. |
+| `-Depot` | Real Thais locker/chest discovery from Naji, including exact nearest-locker selection, carried-upgrade equipment, displaced and inferior equipment deposits, nested loot, move verification, retries, and restart checkpoints. |
+| `-MainlandLoop` | Two real Thais hunt/depot cycles, local services, depot fallback for remote-buyer loot, restart recovery, and teleport exclusion. |
 | `-SpellTraining` | Tagged trainer discovery, reserve-backed affordability rejection, normal spell dialogue/payment, and restart persistence. |
 | `-SpellUse` | Light Healing preemption, Haste, Whirlwind Throw, unlearned-spell potion fallback, and mana-reserve melee fallback. |
 | `-SpellCalibration` | Engine-path Light Healing, measured Haste duration, and single-target Whirlwind attribution; deterministic classifier evidence for race-heavy censored/concurrent/ambiguous cases; profile confidence, LRU eviction, bounded values, telemetry, and controller-recreation reset. |
@@ -107,6 +107,23 @@ default five-minute development hunt is smoke evidence. Use a separate normal
 stack run with 20 to 60 minute hunts to assess sustained escalation, recovery
 backoff, scan retries, and telemetry volume; short hunts can end before the bot
 reaches deep patrol points or accumulates enough active-combat evidence.
+
+Run the unattended level 8-20 benchmark from a fresh development database with
+45-minute hunt limits:
+
+```powershell
+$env:PLAYERBOT_HUNT_DURATION_SECONDS = "2700"
+$env:PLAYERBOT_GAMEPLAY_MODE = ""
+$env:PLAYERBOT_REGRESSION_MODE = ""
+docker compose -f server/compose.yaml down --volumes --remove-orphans
+docker compose -f server/compose.yaml up --build --detach
+docker compose -f server/compose.yaml logs --follow --no-log-prefix server
+```
+
+Record completed `hunt_region_outcome` events, service and spell transactions,
+restarts, terminal events, and the final persisted player state. The controller
+continues after level 20; stop it cleanly or run a server save before reading the
+database result.
 
 `-SpellCalibration` marks deterministic classifier-helper evidence as
 `source="classifier_helper"` and confidence/eviction math as

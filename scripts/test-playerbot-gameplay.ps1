@@ -520,17 +520,18 @@ function Assert-HealingResupplyEvents {
         $_.event -eq "action_result" -and $_.action -eq "heal" -and $_.result -eq "success" -and
         $_.objective -eq "service" -and $_.resource_after -eq ($_.resource_before - 1)
     })
-    $serviceResumed = @($events | Where-Object {
-        $_.event -eq "action_result" -and $_.action -eq "buy_meat" -and $_.result -eq "success"
-    })
+	$serviceResumed = @($events | Where-Object {
+		$_.event -eq "objective_transition" -and $_.from -eq "service" -and $_.to -eq "return_to_depot"
+	})
+	$foodPurchases = @($events | Where-Object { $_.action -eq "buy_meat" })
     $transactionFailures = @($events | Where-Object {
         $_.reason -eq "transaction_delta_mismatch" -or $_.reason -eq "shop_transaction_delta_mismatch"
     })
     if ($missingSupply.Count -ne 1 -or $flaskSales.Count -ne 1 -or $purchases.Count -lt 1 -or $heals.Count -lt 1) {
         throw "The bot did not refill and consume potions after the missing-supply healing outcome: missing=$($missingSupply.Count), flaskSales=$($flaskSales.Count), purchases=$($purchases.Count), heals=$($heals.Count)."
     }
-    if ($serviceResumed.Count -lt 1) {
-        throw "The bot did not resume service after healing with newly purchased potions."
+	if ($serviceResumed.Count -lt 1 -or $foodPurchases.Count -ne 0) {
+		throw "The bot did not resume service after healing with newly purchased potions."
     }
     if ($transactionFailures.Count -ne 0 -or @($events | Where-Object { $_.event -eq "terminal" }).Count -ne 0) {
         throw "Healing interfered with service transaction verification."
@@ -541,10 +542,10 @@ function Assert-ValueLootEvents {
     param([string]$Logs)
 
     $events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
-    $replacement = @($events | Where-Object {
-        $_.event -eq "action_result" -and $_.action -eq "loot_replace" -and $_.result -eq "success" -and
-        $_.discarded_item_id -eq 2992 -and $_.discarded_count -eq 1 -and $_.discarded_value -eq 2 -and
-        $_.incoming_item_id -eq 2826
+	$replacement = @($events | Where-Object {
+		$_.event -eq "action_result" -and $_.action -eq "loot_replace" -and $_.result -eq "success" -and
+		$_.discarded_item_id -eq 2671 -and $_.discarded_count -eq 1 -and $_.discarded_value -gt 0 -and
+		$_.incoming_item_id -eq 2826
     })
     $incomingLoot = @($events | Where-Object {
         $_.event -eq "action_result" -and $_.action -eq "loot" -and $_.result -eq "success" -and
@@ -553,12 +554,14 @@ function Assert-ValueLootEvents {
     $capacitySkips = @($events | Where-Object {
         $_.event -eq "action_result" -and $_.action -eq "loot" -and $_.reason -eq "no_capacity"
     })
-    $bankFundedPurchase = @($events | Where-Object {
-        $_.event -eq "action_result" -and $_.action -eq "buy_potions" -and $_.result -eq "success" -and
-        $_.bank_after -lt $_.bank_before
-    })
-    if ($replacement.Count -ne 1 -or $incomingLoot.Count -ne 1 -or $capacitySkips.Count -ne 0 -or
-        $bankFundedPurchase.Count -ne 1) {
+	$foodPurchases = @($events | Where-Object { $_.action -eq "buy_meat" })
+	$foodPreference = @($events | Where-Object {
+		$_.event -eq "action_result" -and $_.action -eq "loot" -and $_.result -eq "skipped" -and
+		$_.reason -eq "food_preference_satisfied" -and $_.item_id -eq 2666 -and
+		$_.carried -ge $_.preferred -and $_.preferred -eq 2
+	})
+	if ($replacement.Count -ne 1 -or $incomingLoot.Count -ne 1 -or $capacitySkips.Count -ne 0 -or
+		$foodPurchases.Count -ne 0 -or $foodPreference.Count -ne 1) {
         throw "The bot did not replace lower-value cargo with the more profitable corpse item."
     }
 }
@@ -904,8 +907,12 @@ function Assert-AdaptiveChallengeEvents {
 
     $events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
     $frontier = @($events | Where-Object { $_.event -eq "hunt_challenge_frontier" })
-    $idle = @($frontier | Where-Object { $_.result -eq "insufficient_active_combat" -and $_.active_combat_seconds -eq 0 })
-    $escalated = @($frontier | Where-Object { $_.result -eq "escalated" })
+	$idle = @($frontier | Where-Object { $_.result -eq "insufficient_active_combat" -and $_.active_combat_seconds -eq 0 -and $_.kills -eq 0 })
+	$noKill = @($frontier | Where-Object { $_.result -eq "insufficient_active_combat" -and $_.active_combat_seconds -ge 30 -and $_.kills -eq 0 })
+	$escalated = @($frontier | Where-Object { $_.result -eq "escalated" })
+	$invalidEscalation = @($escalated | Where-Object {
+		$_.active_combat_seconds -lt $_.minimum_active_combat_seconds -or $_.kills -lt $_.minimum_kills
+	})
     $backoff = @($frontier | Where-Object { $_.result -eq "backoff" })
 	$deathBackoff = @($backoff | Where-Object { $_.death })
     $hold = @($frontier | Where-Object { $_.result -eq "hold" })
@@ -915,11 +922,13 @@ function Assert-AdaptiveChallengeEvents {
         $_.challenge_band_minimum -lt $_.challenge_band_maximum -and $_.predicted_lethal -ne $null
     })
 	$unsafeLethalRecovery = @($candidates | Where-Object { $_.recovery.available_before_lethal -ne 0 })
-    $exhausted = @($events | Where-Object {
-        $_.event -eq "hunt_scope_exhausted" -and $_.reason -eq "local_scope_exhausted" -and $_.retry_delay_ms -eq 30000
-    })
-    $terminal = @($events | Where-Object { $_.event -eq "terminal" })
-    if ($idle.Count -ne 1 -or $escalated.Count -ne 3 -or $backoff.Count -ne 2 -or $deathBackoff.Count -ne 1 -or $hold.Count -ne 2 -or
+	$exhausted = @($events | Where-Object {
+		$_.event -eq "hunt_scope_exhausted" -and $_.reason -eq "local_scope_exhausted" -and
+		$_.retry_delay_ms -eq 1000 -and $_.maximum_attempts -eq 3
+	})
+	$terminal = @($events | Where-Object { $_.event -eq "terminal" -and $_.reason -eq "hunt_scope_exhausted" })
+	if ($idle.Count -ne 1 -or $noKill.Count -ne 1 -or $invalidEscalation.Count -ne 0 -or
+		$escalated.Count -ne 3 -or $backoff.Count -ne 2 -or $deathBackoff.Count -ne 1 -or $hold.Count -ne 2 -or
         [Math]::Abs($escalated[0].frontier_before - 0.20) -gt 0.001 -or
         [Math]::Abs($escalated[1].frontier_after - 0.25) -gt 0.001 -or
 		[Math]::Abs($escalated[2].frontier_after - 0.225) -gt 0.001 -or
@@ -931,16 +940,35 @@ function Assert-AdaptiveChallengeEvents {
 		$fixture[0].idle_observed_seconds -ne 0 -or $fixture[0].active_observed_seconds -ne 30 -or
 		-not $fixture[0].in_band_outranks_easier -or -not $fixture[0].wounded_lethal -or
 		-not $fixture[0].zero_health_lethal -or -not $fixture[0].helper_scope_exhausted -or
-		$candidates.Count -lt 1 -or $unsafeLethalRecovery.Count -ne 0 -or $exhausted.Count -ne 1 -or $terminal.Count -ne 0) {
-        throw "Adaptive challenge evidence was incomplete. idle=$($idle.Count), escalated=$($escalated.Count), backoff=$($backoff.Count), hold=$($hold.Count), fixture=$($fixture.Count), candidates=$($candidates.Count), exhausted=$($exhausted.Count), terminal=$($terminal.Count)."
+		$candidates.Count -lt 1 -or $unsafeLethalRecovery.Count -ne 0 -or $exhausted.Count -ne 3 -or
+		@($exhausted | Where-Object { $_.attempt -notin @(1, 2, 3) }).Count -ne 0 -or $terminal.Count -ne 1) {
+		throw "Adaptive challenge evidence was incomplete. idle=$($idle.Count), noKill=$($noKill.Count), invalidEscalation=$($invalidEscalation.Count), escalated=$($escalated.Count), backoff=$($backoff.Count), hold=$($hold.Count), fixture=$($fixture.Count), candidates=$($candidates.Count), exhausted=$($exhausted.Count), terminal=$($terminal.Count)."
     }
 }
 
 function Assert-CombatReadinessEvents {
     param([string]$Logs, [string]$Mode)
 
-    $events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
-    $readiness = @($events | Where-Object {
+	$events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
+	if ($Mode -eq "no_food") {
+		$service = @($events | Where-Object { $_.selected_recovery -eq "service" -or $_.action -eq "buy_meat" })
+		$serviceCandidates = @($events | Where-Object {
+			$_.event -eq "goal_candidate" -and $_.goal -eq "service" -and -not $_.feasible -and
+			$_.reason -eq "no_service_need" -and $_.food_count -eq 0 -and $_.food_gap -eq 2 -and $_.food_utility -gt 0
+		})
+		if ($service.Count -ne 0 -or $serviceCandidates.Count -lt 1) { throw "Missing optional food made service feasible." }
+		return
+	}
+	if ($Mode -eq "supplies") {
+		$service = @($events | Where-Object { $_.event -eq "combat_readiness" -and $_.selected_recovery -eq "service" })
+		$potions = @($events | Where-Object {
+			$_.action -eq "buy_potions" -and $_.result -eq "success" -and $_.count -eq 9
+		})
+		$food = @($events | Where-Object { $_.action -eq "buy_meat" -and $_.result -eq "success" })
+		if ($service.Count -lt 1 -or $potions.Count -lt 1 -or $food.Count -ne 0) { throw "Missing healing supplies did not select potion-only service recovery." }
+		return
+	}
+	$readiness = @($events | Where-Object {
         $_.event -eq "combat_readiness" -and $_.vocation_id -eq 4 -and $_.requirements.Count -eq 5
     })
     if ($readiness.Count -lt 1) {
@@ -957,7 +985,9 @@ function Assert-CombatReadinessEvents {
         }
         return
     }
-    $ready = @($readiness | Where-Object { $_.result -eq "ready" -and @($_.requirements | Where-Object { -not $_.ready }).Count -eq 0 })
+	$ready = @($readiness | Where-Object {
+		$_.result -eq "ready" -and @($_.requirements | Where-Object { $_.required -ne $false -and -not $_.ready }).Count -eq 0
+	})
     if ($ready.Count -lt 1) {
         throw "Combat readiness did not reach a fully evidenced ready state for $Mode."
     }
@@ -965,12 +995,21 @@ function Assert-CombatReadinessEvents {
         $equip = @($events | Where-Object { $_.event -eq "action_result" -and $_.action -eq "equip_readiness" -and $_.result -eq "success" -and $_.item_id -eq 2384 })
         if ($equip.Count -ne 1) { throw "Carried legal weapon was not equipped and verified." }
     }
-    if ($Mode -eq "supplies") {
-        $service = @($events | Where-Object { $_.event -eq "combat_readiness" -and $_.selected_recovery -eq "service" })
-        $potions = @($events | Where-Object { $_.action -eq "buy_potions" -and $_.result -eq "success" })
-        $food = @($events | Where-Object { $_.action -eq "buy_meat" -and $_.result -eq "success" })
-        if ($service.Count -lt 1 -or $potions.Count -lt 1 -or $food.Count -lt 1) { throw "Missing supplies did not select and complete service recovery." }
-    }
+	if ($Mode -eq "food_capacity") {
+		$capacity = @($latest.requirements | Where-Object {
+			$_.name -eq "free_capacity" -and $_.ready -and $_.current -lt $_.minimum -and
+			$_.reclaimable_food -ge 3200 -and $_.effective -ge $_.minimum
+		})
+		$food = @($latest.requirements | Where-Object {
+			$_.name -eq "food" -and $_.count -eq 8 -and $_.reclaimable_weight -ge 3200
+		})
+		$service = @($events | Where-Object { $_.selected_recovery -eq "service" })
+		$hunts = @($events | Where-Object { $_.action -eq "hunt_cycle" -and $_.result -eq "started" })
+		$eaten = @($events | Where-Object { $_.action -eq "eat" -and $_.result -eq "success" -and $_.item_id -eq 2696 })
+		if ($capacity.Count -ne 1 -or $food.Count -ne 1 -or $service.Count -ne 0 -or $hunts.Count -lt 1 -or $eaten.Count -ne 6) {
+			throw "Food weight did not remain reclaimable when physical capacity was exhausted."
+		}
+	}
     if ($Mode -eq "retention") {
         $depositedUnknown = @($events | Where-Object { $_.action -eq "deposit" -and $_.item_id -eq 2050 })
         if ($depositedUnknown.Count -ne 0) { throw "Depot policy deposited an unknown retained item." }
@@ -1269,7 +1308,7 @@ function Assert-CorpseEvents {
 }
 
 function Assert-DepotEvents {
-	param([string]$Logs, [int]$ExpectedDepositedCount)
+	param([string]$Logs, [int]$ExpectedDepositedCount, [int]$ExpectedEquipmentDeposits)
 
 	$events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
 	$discovery = @($events | Where-Object {
@@ -1299,16 +1338,25 @@ function Assert-DepotEvents {
 		$_.event -eq "action_result" -and $_.action -eq "deposit" -and
 		$_.result -eq "complete" -and $_.depot_id -eq $depotId -and $_.container_id -eq 13
 	})
+	$equipmentDeposits = @($events | Where-Object {
+		$_.event -eq "action_result" -and $_.action -eq "deposit" -and $_.result -in @("success", "partial") -and
+		$_.item_id -in @(2380, 2382) -and $_.verified -eq 1
+	})
+	$equipmentUpgrades = @($events | Where-Object {
+		$_.event -eq "action_result" -and $_.action -eq "equip_readiness" -and $_.result -eq "success" -and
+		$_.item_id -in @(2389, 2461, 2643)
+	})
 	$deposited = ($verified | Measure-Object -Property verified -Sum).Sum
 	$unsafeMoves = @($events | Where-Object {
 		$_.event -eq "action_result" -and $_.action -eq "deposit" -and
-		$_.item_id -in @(2050, 2120, 2554, 2382, 2467, 2666, 7618)
+		$_.item_id -in @(2050, 2120, 2554, 2467, 2666, 7618)
 	})
 	$terminal = @($events | Where-Object { $_.event -eq "terminal" })
 	if ($discovery.Count -lt 1 -or $locker.Count -lt 1 -or $chest.Count -lt 1 -or
 		$deposited -ne $ExpectedDepositedCount -or $complete.Count -lt 1 -or
+		$equipmentDeposits.Count -ne $ExpectedEquipmentDeposits -or $equipmentUpgrades.Count -ne (3 * [Math]::Min($ExpectedEquipmentDeposits, 1)) -or
 		$unsafeMoves.Count -ne 0 -or $terminal.Count -ne 0) {
-		throw "Real Thais depot evidence was incomplete. discovery=$($discovery.Count), depotId=$depotId, locker=$($locker.Count), chest=$($chest.Count), deposited=$deposited, complete=$($complete.Count), unsafe=$($unsafeMoves.Count), terminal=$($terminal.Count)."
+		throw "Real Thais depot evidence was incomplete. discovery=$($discovery.Count), depotId=$depotId, locker=$($locker.Count), chest=$($chest.Count), deposited=$deposited, equipment_deposits=$($equipmentDeposits.Count), equipment_upgrades=$($equipmentUpgrades.Count), complete=$($complete.Count), unsafe=$($unsafeMoves.Count), terminal=$($terminal.Count)."
 	}
 }
 
@@ -1327,7 +1375,7 @@ function Assert-DepotRecoveryEvents {
 		$_.event -eq "action_result" -and $_.action -eq "deposit" -and
 		$_.result -in @("success", "partial") -and $_.item_id -eq 2684
 	})
-	$expectedVerified = if ($Phase -in @("deposit", "depart")) { 0 } else { 2 }
+	$expectedVerified = if ($Phase -eq "depart") { 0 } else { 2 }
 	$verifiedCount = ($verified | Measure-Object -Property verified -Sum).Sum
 	if ($null -eq $verifiedCount) { $verifiedCount = 0 }
 	$terminal = @($events | Where-Object { $_.event -eq "terminal" })
@@ -1365,13 +1413,21 @@ function Assert-MainlandLoopEvents {
 		$_.event -eq "action_result" -and $_.action -eq "deposit" -and $_.result -in @("success", "partial") -and
 		$_.item_id -eq 2696
 	})
+	$remoteBuyerDeposit = @($events | Where-Object {
+		$_.event -eq "action_result" -and $_.action -eq "deposit" -and $_.result -in @("success", "partial") -and
+		$_.item_id -eq 2826
+	})
+	$remoteBuyerSale = @($events | Where-Object {
+		$_.event -eq "action_result" -and $_.action -eq "sell" -and $_.result -eq "success" -and $_.item_id -eq 2826
+	})
 	$rookService = @($events | Where-Object {
 		$_.event -eq "npc_reply" -and $_.npc_name -in @("Billy", "Willie", "Lily", "Paulie")
 	})
 	$terminal = @($events | Where-Object { $_.event -eq "terminal" })
 	if ($hunts.Count -lt $MinimumCycles -or $deposits.Count -lt $MinimumDeposits -or $realDepot.Count -lt 1 -or
 		$trainingRoomDepot.Count -ne 0 -or
-		$selection.Count -lt 1 -or $cheeseDeposit.Count -lt 1 -or $rookService.Count -ne 0 -or $terminal.Count -ne 0) {
+		$selection.Count -lt 1 -or $cheeseDeposit.Count -lt 1 -or $remoteBuyerDeposit.Count -lt 1 -or
+		$remoteBuyerSale.Count -ne 0 -or $rookService.Count -ne 0 -or $terminal.Count -ne 0) {
 		throw "Mainland loop failed. hunts=$($hunts.Count), deposits=$($deposits.Count), realDepot=$($realDepot.Count), trainingRoomDepot=$($trainingRoomDepot.Count), localSelections=$($selection.Count), cheeseDeposits=$($cheeseDeposit.Count), rookService=$($rookService.Count), terminal=$($terminal.Count)."
 	}
 }
@@ -1669,9 +1725,8 @@ try {
 			$env:PLAYERBOT_DEPOT_MOVE_CASE = "normal"
 			Invoke-Compose up --detach
 			Invoke-DatabaseCommand -Query "INSERT INTO player_depotitems (player_id, sid, pid, itemtype, count, attributes) SELECT id, 9001, 2, 2684, 7, X'' FROM players WHERE name = 'Rook Tester'"
-			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST DEPOT_PASS' | Out-Null
 			$firstCycleLogs = Wait-ForLog -Pattern '"action":"deposit","result":"complete"'
-			Assert-DepotEvents -Logs $firstCycleLogs -ExpectedDepositedCount 2
+			Assert-DepotEvents -Logs $firstCycleLogs -ExpectedDepositedCount 2 -ExpectedEquipmentDeposits 2
 
 			$restartLineCount = @((Get-ServerLogs) -split "`r?`n").Count
 			Invoke-Compose stop server
@@ -1680,10 +1735,9 @@ try {
 			for ($attempt = 0; $attempt -lt 180; $attempt++) {
 				Start-Sleep -Seconds 1
 				$secondCycleLogs = ((Get-ServerLogs) -split "`r?`n" | Select-Object -Skip $restartLineCount) -join "`n"
-				if ($secondCycleLogs -match 'PLAYERBOT_GAMEPLAY_TEST DEPOT_PASS' -and
-						$secondCycleLogs -match '"action":"deposit","result":"complete"') { break }
+				if ($secondCycleLogs -match '"action":"deposit","result":"complete"') { break }
 			}
-			Assert-DepotEvents -Logs $secondCycleLogs -ExpectedDepositedCount 1
+			Assert-DepotEvents -Logs $secondCycleLogs -ExpectedDepositedCount 1 -ExpectedEquipmentDeposits 0
 			$sentinelCount = Invoke-DatabaseScalar -Query "SELECT COALESCE(SUM(count), 0) FROM player_depotitems JOIN players ON players.id = player_depotitems.player_id WHERE players.name = 'Rook Tester' AND pid = 2 AND itemtype = 2684"
 			if ($sentinelCount -ne 7) {
 				throw "Bot One's depot cycle changed Rook Tester's persisted depot sentinel."
@@ -1713,8 +1767,7 @@ try {
 				for ($attempt = 0; $attempt -lt 150; $attempt++) {
 					Start-Sleep -Seconds 1
 					$recoveryLogs = ((Get-ServerLogs) -split "`r?`n" | Select-Object -Skip $restartLineCount) -join "`n"
-					if ($recoveryLogs -match 'PLAYERBOT_GAMEPLAY_TEST DEPOT_PASS' -and
-						$recoveryLogs -match '"action":"deposit","result":"complete"') { break }
+					if ($recoveryLogs -match '"action":"deposit","result":"complete"') { break }
 				}
 				Assert-DepotRecoveryEvents -Logs $recoveryLogs -Phase $phase
 			}
@@ -1726,13 +1779,12 @@ try {
 			$env:PLAYERBOT_DEPOT_RESTART_PHASE = ""
 			$env:PLAYERBOT_DEPOT_MOVE_CASE = "partial"
 			Invoke-Compose up --detach
-			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST DEPOT_PASS' | Out-Null
 			$partialLogs = Wait-ForLog -Pattern '"action":"deposit","result":"complete","depot_id":2'
 			$events = @(ConvertFrom-PlayerbotLogs -Logs $partialLogs)
 			$partial = @($events | Where-Object {
 				$_.action -eq "deposit" -and $_.result -eq "partial" -and $_.item_id -eq 2684 -and
-				$_.requested -eq 2 -and $_.verified -eq 1 -and $_.inventory_before -eq 2 -and
-				$_.inventory_after -eq 1 -and $_.depot_before -eq 0 -and $_.depot_after -eq 1
+				$_.requested -eq 2 -and $_.verified -eq 1 -and $_.inventory_before -eq 4 -and
+				$_.inventory_after -eq 3 -and $_.depot_before -eq 0 -and $_.depot_after -eq 1
 			})
 			$submitted = @($events | Where-Object {
 				$_.action -eq "deposit" -and $_.result -eq "requested" -and $_.requested -eq 2 -and $_.submitted -eq 1
@@ -1751,19 +1803,19 @@ try {
 			Invoke-Compose up --detach
 			$rejectedLogs = Wait-ForLog -Pattern '"event":"terminal".*"reason":"depot_no_slot_or_move_rejected"'
 			$events = @(ConvertFrom-PlayerbotLogs -Logs $rejectedLogs)
-			$requests = @($events | Where-Object { $_.action -eq "deposit" -and $_.result -eq "requested" -and $_.item_id -eq 2684 })
+			$requests = @($events | Where-Object { $_.action -eq "deposit" -and $_.result -eq "requested" -and $_.item_id -eq 2382 })
 			$retries = @($events | Where-Object {
-				$_.action -eq "deposit" -and $_.result -eq "retry" -and $_.verified -eq 0 -and
-				$_.inventory_before -eq 2 -and $_.inventory_after -eq 2 -and $_.depot_before -eq 0 -and $_.depot_after -eq 0
+				$_.action -eq "deposit" -and $_.result -eq "retry" -and $_.item_id -eq 2382 -and $_.verified -eq 0 -and
+				$_.inventory_before -eq 1 -and $_.inventory_after -eq 1 -and $_.depot_before -eq 0 -and $_.depot_after -eq 0
 			})
 			$failed = @($events | Where-Object {
-				$_.action -eq "deposit" -and $_.result -eq "failed" -and $_.reason -eq "no_slot_or_move_rejected" -and
-				$_.retry -eq 3 -and $_.verified -eq 0 -and $_.inventory_before -eq 2 -and $_.inventory_after -eq 2 -and
+				$_.action -eq "deposit" -and $_.result -eq "failed" -and $_.reason -eq "no_slot_or_move_rejected" -and $_.item_id -eq 2382 -and
+				$_.retry -eq 3 -and $_.verified -eq 0 -and $_.inventory_before -eq 1 -and $_.inventory_after -eq 1 -and
 				$_.depot_before -eq 0 -and $_.depot_after -eq 0
 			})
 			$terminals = @($events | Where-Object { $_.event -eq "terminal" -and $_.reason -eq "depot_no_slot_or_move_rejected" })
 			if ($requests.Count -ne 3 -or $retries.Count -ne 2 -or $failed.Count -ne 1 -or $terminals.Count -ne 1) {
-				throw "Rejected depot moves were not bounded to three attempts with unchanged exact deltas."
+				throw "Rejected depot moves were not bounded to three attempts with unchanged exact deltas. requests=$($requests.Count), retries=$($retries.Count), failed=$($failed.Count), terminals=$($terminals.Count)."
 			}
 		}
 	}
@@ -1930,14 +1982,49 @@ try {
             $missingWeaponLogs = Wait-ForLog -Pattern '"reason":"combat_readiness_missing_legal_melee_weapon"'
             Assert-CombatReadinessEvents -Logs $missingWeaponLogs -Mode "missing_weapon"
         }
-        Invoke-Scenario -Name "combat_readiness_supplies" -DefaultTimeoutSeconds 120 -Body {
+		Invoke-Scenario -Name "combat_readiness_supplies" -DefaultTimeoutSeconds 120 -Body {
             Invoke-Compose down --volumes --remove-orphans
             $env:PLAYERBOT_GAMEPLAY_MODE = "readiness_supplies"
-            Invoke-Compose up --detach
-            Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST READINESS_SUPPLIES_PASS' | Out-Null
-            $supplyLogs = Wait-ForLog -Pattern '"event":"combat_readiness".*"result":"ready"'
-            Assert-CombatReadinessEvents -Logs $supplyLogs -Mode "supplies"
-        }
+			Invoke-Compose up --detach
+			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST READINESS_SUPPLIES_PASS' | Out-Null
+			$supplyLogs = Wait-ForLog -Pattern '"action":"buy_potions".*"result":"success"'
+			Assert-CombatReadinessEvents -Logs $supplyLogs -Mode "supplies"
+		}
+		Invoke-Scenario -Name "combat_readiness_no_food" -DefaultTimeoutSeconds 60 -Body {
+			Invoke-Compose down --volumes --remove-orphans
+			$env:PLAYERBOT_GAMEPLAY_MODE = "readiness_no_food"
+			Invoke-Compose up --detach
+			$noFoodLogs = Wait-ForLog -Pattern '"event":"goal_candidate".*"goal":"service".*"feasible":false.*"reason":"no_service_need"'
+			Assert-CombatReadinessEvents -Logs $noFoodLogs -Mode "no_food"
+		}
+		Invoke-Scenario -Name "combat_readiness_low_wealth" -DefaultTimeoutSeconds 120 -Body {
+			Invoke-Compose down --volumes --remove-orphans
+			$env:PLAYERBOT_GAMEPLAY_MODE = "readiness_low_wealth"
+			Invoke-Compose up --detach
+			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST READINESS_LOW_WEALTH_PASS' | Out-Null
+			$lowWealthLogs = Wait-ForLog -Pattern '"action":"hunt_cycle".*"result":"started"'
+			$events = @(ConvertFrom-PlayerbotLogs -Logs $lowWealthLogs)
+			$withdrawal = @($events | Where-Object {
+				$_.action -eq "bank_withdraw" -and $_.result -eq "success" -and $_.count -eq 56 -and
+				$_.bank_before -eq 56 -and $_.bank_after -eq 0
+			})
+			$upgrade = @($events | Where-Object {
+				$_.action -eq "equip_readiness" -and $_.result -eq "success" -and $_.item_id -eq 2384
+			})
+			$soldUpgrade = @($events | Where-Object { $_.action -eq "sell" -and $_.item_id -eq 2384 })
+			if ($withdrawal.Count -lt 1 -or $upgrade.Count -ne 1 -or $soldUpgrade.Count -ne 0 -or
+				@($events | Where-Object { $_.event -eq "terminal" }).Count -ne 0) {
+				throw "Low-wealth service did not withdraw the available balance and resume hunting."
+			}
+		}
+		Invoke-Scenario -Name "combat_readiness_food_capacity" -DefaultTimeoutSeconds 60 -Body {
+			Invoke-Compose down --volumes --remove-orphans
+			$env:PLAYERBOT_GAMEPLAY_MODE = "readiness_food_capacity"
+			Invoke-Compose up --detach
+			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST READINESS_FOOD_CAPACITY_PASS' | Out-Null
+			$foodCapacityLogs = Wait-ForLog -Pattern '"action":"eat".*"item_id":2696.*"inventory_count":2'
+			Assert-CombatReadinessEvents -Logs $foodCapacityLogs -Mode "food_capacity"
+		}
         Invoke-Scenario -Name "combat_readiness_retention" -DefaultTimeoutSeconds 120 -Body {
             Invoke-Compose down --volumes --remove-orphans
             $env:PLAYERBOT_GAMEPLAY_MODE = "readiness_retention"
@@ -2057,7 +2144,7 @@ try {
 			$env:PLAYERBOT_HUNT_DURATION_SECONDS = "60"
 			Invoke-Compose up --detach
 			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST ADAPTIVE_CHALLENGE_START' | Out-Null
-			$challengeLogs = Wait-ForLog -Pattern '"event":"hunt_scope_exhausted"'
+			$challengeLogs = Wait-ForLog -Pattern '"event":"terminal".*"reason":"hunt_scope_exhausted"'
 			Assert-AdaptiveChallengeEvents -Logs $challengeLogs
 		}
 	}
@@ -2391,7 +2478,7 @@ try {
 			$env:PLAYERBOT_GAMEPLAY_MODE = "healing_resupply"
 			Invoke-Compose up --detach
 			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST HEALING_RESUPPLY_STATE_PASS' | Out-Null
-			$resupplyLogs = Wait-ForLog -Pattern '"action":"buy_meat".*"result":"success"'
+			$resupplyLogs = Wait-ForLog -Pattern '"event":"objective_transition".*"from":"service".*"to":"return_to_depot"'
 			Assert-HealingResupplyEvents -Logs $resupplyLogs
 		}
 	}
@@ -2402,7 +2489,7 @@ try {
 			$env:PLAYERBOT_GAMEPLAY_MODE = "value"
 			$env:PLAYERBOT_HUNT_DURATION_SECONDS = "900"
 			Invoke-Compose up --detach
-			$valueLogs = Wait-ForLog -Pattern '"action":"buy_potions".*"result":"success"'
+			$valueLogs = Wait-ForLog -Pattern '"action":"loot".*"result":"success".*"item_id":2826'
 			Assert-ValueLootEvents -Logs $valueLogs
 		}
 	}

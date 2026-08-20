@@ -12,6 +12,7 @@
 
 #include "playerbotcontroller.h"
 #include "playerbotarea.h"
+#include "weapons.h"
 
 // Goal arbitration and reward discovery, claiming, and equipment.
 using namespace playerbot;
@@ -64,6 +65,13 @@ std::optional<PlayerBotController::EquipmentUpgrade> PlayerBotController::evalua
 			currentValue = equipped->getDefense();
 		} else {
 			currentValue = equipped->getAttack();
+			const int32_t candidateMaximumDamage = Weapons::getMaxWeaponDamage(
+				player.getLevel(), player.getWeaponSkill(&candidate), candidate.getAttack(), player.getAttackFactor());
+			const int32_t currentMaximumDamage = Weapons::getMaxWeaponDamage(
+				player.getLevel(), player.getWeaponSkill(equipped), equipped->getAttack(), player.getAttackFactor());
+			if (candidateMaximumDamage <= currentMaximumDamage) {
+				return std::nullopt;
+			}
 		}
 	}
 	if (candidateValue <= currentValue) {
@@ -111,8 +119,9 @@ bool PlayerBotController::isCombatEquipment(const Item& item) const
 bool PlayerBotController::isProtectedInventoryItem(const Item& item) const
 {
 	const ItemType& type = Item::items[item.getID()];
-	return type.isContainer() || isCombatEquipment(item) || item.getID() == ropeItemId || item.getID() == 2554 ||
-	       item.getID() == meatItemId || item.getID() == smallHealthPotionItemId || item.getWorth() != 0 ||
+	return type.isContainer() || item.getID() == ropeItemId || item.getID() == 2554 ||
+	       ((type.slotPosition & SLOTP_TWO_HAND) != 0 && type.weaponType != WEAPON_NONE) ||
+	       isFoodItem(item.getID()) || item.getID() == smallHealthPotionItemId || item.getWorth() != 0 ||
 	       itemSellValues.find(item.getID()) == itemSellValues.end();
 }
 
@@ -131,9 +140,8 @@ bool PlayerBotController::isCombatReady(const Player& player, std::string& recov
 	const bool armorReady = armor && isLegalEquipmentItem(player, *armor) &&
 	                        (armor->getSlotPosition() & SLOTP_ARMOR) != 0 && armor->getArmor() > 0;
 	const bool loadoutReady = backpack && backpack->getContainer();
-	const bool suppliesReady = getInventoryItemCount(player, smallHealthPotionItemId) >= minimumSmallHealthPotions &&
-	                           getInventoryItemCount(player, meatItemId) >= minimumMeat;
-	const bool capacityReady = player.getFreeCapacity() >= returnCapacityThreshold;
+	const bool suppliesReady = getInventoryItemCount(player, smallHealthPotionItemId) > smallHealthPotionReturnThreshold;
+	const bool capacityReady = effectiveFreeCapacity(player) >= returnCapacityThreshold;
 	Item* upgrade = nullptr;
 	EquipmentUpgrade upgradeInfo{};
 	if (findCarriedEquipmentUpgrade(const_cast<Player&>(player), upgrade, upgradeInfo)) {
@@ -162,6 +170,8 @@ void PlayerBotController::emitCombatReadiness(const Player& player, const Positi
 	Item* right = player.getInventoryItem(CONST_SLOT_RIGHT);
 	Item* armor = player.getInventoryItem(CONST_SLOT_ARMOR);
 	Item* backpack = player.getInventoryItem(CONST_SLOT_BACKPACK);
+	const FoodInventory food = getFoodInventory(player);
+	const uint32_t usableCapacity = effectiveFreeCapacity(player);
 	const bool weaponReady = (left && isKnightMeleeWeapon(player, *left)) || (right && isKnightMeleeWeapon(player, *right));
 	const bool armorReady = armor && isLegalEquipmentItem(player, *armor) && armor->getArmor() > 0;
 	std::ostringstream fields;
@@ -174,13 +184,19 @@ void PlayerBotController::emitCombatReadiness(const Player& player, const Positi
 	       << ",\"armor_item_id\":" << (armor ? std::to_string(armor->getID()) : "null")
 	       << ",\"armor\":" << (armor ? armor->getArmor() : 0) << '}'
 	       << ",{\"name\":\"small_health_potions\",\"ready\":" <<
-	          (getInventoryItemCount(player, smallHealthPotionItemId) >= minimumSmallHealthPotions ? "true" : "false")
+	          (getInventoryItemCount(player, smallHealthPotionItemId) > smallHealthPotionReturnThreshold ? "true" : "false")
 	       << ",\"count\":" << getInventoryItemCount(player, smallHealthPotionItemId)
-	       << ",\"minimum\":" << minimumSmallHealthPotions << '}'
-	       << ",{\"name\":\"food\",\"ready\":" << (getInventoryItemCount(player, meatItemId) >= minimumMeat ? "true" : "false")
-	       << ",\"count\":" << getInventoryItemCount(player, meatItemId) << ",\"minimum\":" << minimumMeat << '}'
-	       << ",{\"name\":\"free_capacity\",\"ready\":" << (player.getFreeCapacity() >= returnCapacityThreshold ? "true" : "false")
-	       << ",\"current\":" << player.getFreeCapacity() << ",\"minimum\":" << returnCapacityThreshold << "}]"
+	       << ",\"return_threshold\":" << smallHealthPotionReturnThreshold
+	       << ",\"restock_target\":" << smallHealthPotionRestockTarget << '}'
+	       << ",{\"name\":\"food\",\"required\":false,\"ready\":true"
+	       << ",\"count\":" << food.count << ",\"preferred\":" << preferredFoodCount
+	       << ",\"reclaimable_weight\":" << food.weight
+	       << ",\"preference_utility\":" <<
+	          std::max<int32_t>(0, static_cast<int32_t>(preferredFoodCount -
+	              std::min<uint32_t>(preferredFoodCount, food.count))) * foodPreferenceUtility << '}'
+	       << ",{\"name\":\"free_capacity\",\"ready\":" << (usableCapacity >= returnCapacityThreshold ? "true" : "false")
+	       << ",\"current\":" << player.getFreeCapacity() << ",\"reclaimable_food\":" << food.weight
+	       << ",\"effective\":" << usableCapacity << ",\"minimum\":" << returnCapacityThreshold << "}]"
 	       << ",\"selected_recovery\":" << (recovery.empty() ? "null" : jsonString(recovery))
 	       << ",\"terminal_reason\":" << (terminalReason.empty() ? "null" : jsonString(terminalReason));
 	emit("combat_readiness", position, fields.str());
@@ -281,7 +297,17 @@ void PlayerBotController::processReadinessEquipment(Player* player, const Positi
 		emitCombatReadiness(*player, position, ready ? "ready" : "recovery", recovery, terminalReason);
 		readinessEquipmentPending = false;
 		pendingReadinessAttempts = 0;
+		if (readinessResumeService) {
+			readinessResumeService = false;
+			depotStage = DepotStage::Deposit;
+			schedule(SCHEDULER_MINTICKS);
+			return;
+		}
 		if (ready) {
+			if (activeHuntRegion) {
+				schedule(SCHEDULER_MINTICKS);
+				return;
+			}
 			startHunt(player, position, "readiness_carried_upgrade");
 			return;
 		}
@@ -293,6 +319,7 @@ void PlayerBotController::processReadinessEquipment(Player* player, const Positi
 		std::string terminalReason;
 		isCombatReady(*player, recovery, terminalReason);
 		readinessEquipmentPending = false;
+		readinessResumeService = false;
 		emit("action_result", position, "\"action\":\"equip_readiness\",\"result\":\"failed\",\"reason\":\"move_not_verified\"");
 		emitCombatReadiness(*player, position, "failed", recovery, terminalReason);
 		if (!terminalReason.empty()) {
@@ -443,7 +470,7 @@ void PlayerBotController::inspectRewardItem(Player& player, const Item& item, ui
 	if (item.getID() == smallHealthPotionItemId) {
 		inspected.classes.emplace_back("required_supply");
 		inspection.potionCount += item.getItemCount();
-	} else if (item.getID() == meatItemId) {
+	} else if (isFoodItem(item.getID())) {
 		inspected.classes.emplace_back("food");
 		inspection.foodCount += item.getItemCount();
 	} else if (item.getID() == ropeItemId) {
@@ -454,7 +481,11 @@ void PlayerBotController::inspectRewardItem(Player& player, const Item& item, ui
 		inspection.shovelCount += item.getItemCount();
 	}
 	const auto sellIt = itemSellValues.find(item.getID());
-	const uint32_t sellPrice = inspected.worth == 0 && sellIt != itemSellValues.end() ? sellIt->second : 0;
+	const ItemType& itemType = Item::items[item.getID()];
+	const bool unsupportedTwoHandedWeapon = (itemType.slotPosition & SLOTP_TWO_HAND) != 0 &&
+	                                      itemType.weaponType != WEAPON_NONE;
+	const uint32_t sellPrice = inspected.worth == 0 && !unsupportedTwoHandedWeapon &&
+	                           sellIt != itemSellValues.end() ? sellIt->second : 0;
 	if (sellPrice != 0) {
 		inspected.classes.emplace_back("sellable");
 		inspected.sellValue = sellPrice * item.getItemCount();
@@ -463,8 +494,8 @@ void PlayerBotController::inspectRewardItem(Player& player, const Item& item, ui
 	uint32_t itemUtility = inspected.worth + inspected.sellValue;
 	if (item.getID() == smallHealthPotionItemId) {
 		itemUtility += missingPotionUtility * item.getItemCount();
-	} else if (item.getID() == meatItemId) {
-		itemUtility += missingFoodUtility * item.getItemCount();
+	} else if (isFoodItem(item.getID())) {
+		itemUtility += foodPreferenceUtility * item.getItemCount();
 	} else if (item.getID() == ropeItemId || item.getID() == 2554) {
 		itemUtility += 100;
 	}
@@ -545,11 +576,11 @@ void PlayerBotController::finalizeRewardInspection(Player& player, RewardInspect
 	}
 	inspection.knownUtility += static_cast<int32_t>(inspection.currencyValue + inspection.sellValue);
 	const uint32_t heldPotions = getInventoryItemCount(player, smallHealthPotionItemId);
-	const uint32_t heldFood = getInventoryItemCount(player, meatItemId);
-	const uint32_t potionNeed = heldPotions < minimumSmallHealthPotions ? minimumSmallHealthPotions - heldPotions : 0;
-	const uint32_t foodNeed = heldFood < minimumMeat ? minimumMeat - heldFood : 0;
+	const uint32_t heldFood = getFoodInventory(player).count;
+	const uint32_t potionNeed = heldPotions < smallHealthPotionRestockTarget ? smallHealthPotionRestockTarget - heldPotions : 0;
+	const uint32_t foodNeed = heldFood < preferredFoodCount ? preferredFoodCount - heldFood : 0;
 	inspection.knownUtility += static_cast<int32_t>(std::min(inspection.potionCount, potionNeed) * missingPotionUtility +
-	                                                  std::min(inspection.foodCount, foodNeed) * missingFoodUtility);
+	                                                  std::min(inspection.foodCount, foodNeed) * foodPreferenceUtility);
 	if (inspection.ropeCount != 0 && !g_game.findItemOfType(&player, ropeItemId, true)) {
 		inspection.knownUtility += 100;
 	}
@@ -1116,8 +1147,17 @@ const char* PlayerBotController::topLevelGoalName(TopLevelGoal goal) const
 uint32_t PlayerBotController::saleableItemCount(const Player& player) const
 {
 	uint32_t count = 0;
-	for (const auto& entry : itemSellValues) {
-		count += getSaleItemCount(player, entry.first);
+	std::unordered_set<uint16_t> countedItems;
+	for (const ServiceNpc& service : serviceShops) {
+		Npc* npc = g_game.getNpcByID(service.id);
+		if (!npc || npc->isRemoved()) {
+			continue;
+		}
+		for (const ShopInfo& offer : npc->getShopOffers()) {
+			if (offer.sellPrice != 0 && countedItems.emplace(offer.itemId).second) {
+				count += getSaleItemCount(player, offer.itemId);
+			}
+		}
 	}
 	return count;
 }
@@ -1125,17 +1165,15 @@ uint32_t PlayerBotController::saleableItemCount(const Player& player) const
 PlayerBotController::GoalCandidate PlayerBotController::serviceGoalCandidate(const Player& player) const
 {
 	const uint32_t potionCount = getInventoryItemCount(player, smallHealthPotionItemId);
-	const uint32_t meatCount = getInventoryItemCount(player, meatItemId);
-	const uint32_t missingPotions = potionCount < minimumSmallHealthPotions ?
-	                                  minimumSmallHealthPotions - potionCount : 0;
-	const uint32_t missingMeat = meatCount < minimumMeat ? minimumMeat - meatCount : 0;
+	const uint32_t missingPotions = potionCount <= smallHealthPotionReturnThreshold ?
+	                                  smallHealthPotionRestockTarget - potionCount : 0;
 	const uint32_t sellable = saleableItemCount(player);
-	const bool lowCapacity = player.getFreeCapacity() < returnCapacityThreshold;
+	const bool lowCapacity = effectiveFreeCapacity(player) < returnCapacityThreshold;
 	const bool criticalHealing = needsHealing(player) && missingPotions != 0;
-	const bool cashAdjustment = player.getMoney() != carriedGoldReserve;
-	const bool feasible = lowCapacity || missingPotions != 0 || missingMeat != 0 || sellable != 0 || cashAdjustment;
+	const bool cashAdjustment = player.getMoney() != desiredCarriedGold(player);
+	const bool feasible = lowCapacity || missingPotions != 0 || sellable != 0 || cashAdjustment;
 	int32_t utility = feasible ? serviceGoalBaseUtility : 0;
-	utility += static_cast<int32_t>(missingPotions * missingPotionUtility + missingMeat * missingFoodUtility +
+	utility += static_cast<int32_t>(missingPotions * missingPotionUtility +
 	                                std::min<uint32_t>(sellable, 20) * sellableItemUtility);
 	utility += cashAdjustment ? 10 : 0;
 	if (lowCapacity) {
@@ -1146,8 +1184,7 @@ PlayerBotController::GoalCandidate PlayerBotController::serviceGoalCandidate(con
 	}
 	const char* reason = criticalHealing ? "critical_healing" : lowCapacity ? "capacity" :
 	                     missingPotions != 0 ? "healing_reserve" :
-	                     missingMeat != 0 ? "food_reserve" : sellable != 0 ? "sellable_inventory" :
-	                     cashAdjustment ? "cash_reserve" : "no_service_need";
+	                     sellable != 0 ? "sellable_inventory" : cashAdjustment ? "cash_reserve" : "no_service_need";
 	return GoalCandidate{TopLevelGoal::Service, feasible, utility, reason};
 }
 
@@ -1163,8 +1200,14 @@ void PlayerBotController::emitGoalCandidate(const Player& player, const GoalCand
 	       << ",\"feasible\":" << (candidate.feasible ? "true" : "false")
 	       << ",\"utility\":" << candidate.utility << ",\"reason\":" << jsonString(candidate.reason);
 	if (candidate.goal == TopLevelGoal::Service) {
+		const FoodInventory food = getFoodInventory(player);
+		const uint32_t foodGap = food.count < preferredFoodCount ? preferredFoodCount - food.count : 0;
 		fields << ",\"potion_count\":" << getInventoryItemCount(player, smallHealthPotionItemId)
-		       << ",\"meat_count\":" << getInventoryItemCount(player, meatItemId)
+		       << ",\"potion_return_threshold\":" << smallHealthPotionReturnThreshold
+		       << ",\"potion_restock_target\":" << smallHealthPotionRestockTarget
+		       << ",\"food_count\":" << food.count << ",\"food_weight\":" << food.weight
+		       << ",\"food_preferred\":" << preferredFoodCount << ",\"food_gap\":" << foodGap
+		       << ",\"food_utility\":" << foodGap * foodPreferenceUtility
 		       << ",\"sellable_count\":" << saleableItemCount(player);
 	}
 	if (reward) {

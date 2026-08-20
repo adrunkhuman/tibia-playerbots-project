@@ -16,7 +16,7 @@ local defensiveMonsterName = "Playerbot Defensive Threat"
 local levelEightMonsterName = "Playerbot Level Eight Target"
 local deathMonsterName = "Playerbot Death Threat"
 local spellTargetMonsterName = "Playerbot Spell Target"
-local valueMonsterName = "Playerbot Value Corpse"
+local valueMonsterName = "Playerbot Food Value Corpse"
 local healingPotionCount = 3
 local starterArmorId = 2650
 local starterWeaponId = 2382
@@ -94,10 +94,15 @@ end
 local function verifyReadiness(playerId, mode, attempts)
     local player = Player(playerId)
     assert(player and not player:isRemoved(), "Bot One disappeared during readiness fixture")
-    local ready = player:getVocation():getId() == 4 and player:getSlotItem(CONST_SLOT_ARMOR) and
-        player:getSlotItem(CONST_SLOT_LEFT) and player:getItemCount(potionItemId) >= 5 and player:getItemCount(meatItemId) >= 1
-    if mode == "upgrade" then ready = ready and player:getSlotItem(CONST_SLOT_LEFT):getId() == pickupRewardId end
-    if mode == "retention" then ready = ready and player:getItemCount(2050) >= 1 and player:getItemCount(starterWeaponId) >= 1 end
+	local ready = player:getVocation():getId() == 4 and player:getSlotItem(CONST_SLOT_ARMOR) and
+		player:getSlotItem(CONST_SLOT_LEFT) and player:getItemCount(potionItemId) > 1
+	if mode == "supplies" then ready = ready and player:getItemCount(potionItemId) >= 10 end
+	if mode == "upgrade" then ready = ready and player:getSlotItem(CONST_SLOT_LEFT):getId() == pickupRewardId end
+	if mode == "retention" then ready = ready and player:getItemCount(2050) >= 1 and player:getItemCount(starterWeaponId) >= 1 end
+	if mode == "no_food" then ready = ready and player:getItemCount(meatItemId) == 0 end
+	if mode == "food_capacity" then
+		ready = ready and player:getFreeCapacity() == ItemType(2696):getWeight() * 6 and player:getItemCount(2696) == 2
+	end
     if not ready and attempts > 0 then
         addEvent(verifyReadiness, 500, playerId, mode, attempts - 1)
         return
@@ -107,6 +112,20 @@ local function verifyReadiness(playerId, mode, attempts)
         assert(player:teleportTo(depotPosition), "readiness fixture could not return to the depot")
     end
     print("PLAYERBOT_GAMEPLAY_TEST READINESS_" .. string.upper(mode) .. "_PASS")
+end
+
+verifyLowWealth = function(playerId, attempts)
+	local player = Player(playerId)
+	assert(player and not player:isRemoved(), "Bot One disappeared during low-wealth fixture")
+	if (player:getMoney() ~= 56 or player:getBankBalance() ~= 0 or
+		player:getSlotItem(CONST_SLOT_LEFT):getId() ~= pickupRewardId) and attempts > 0 then
+		addEvent(verifyLowWealth, 500, playerId, attempts - 1)
+		return
+	end
+	assert(player:getMoney() == 56 and player:getBankBalance() == 0 and
+		player:getSlotItem(CONST_SLOT_LEFT):getId() == pickupRewardId,
+		"service did not carry the available gold below the normal reserve")
+	print("PLAYERBOT_GAMEPLAY_TEST READINESS_LOW_WEALTH_PASS")
 end
 
 local function verifyEquipmentShadow(playerId, mode, money, leftItemId, rightItemId, armorItemId, position)
@@ -199,9 +218,10 @@ local function suppressNearbyMonsters(playerId)
         return
     end
     for _, creature in ipairs(Game.getSpectators(player:getPosition(), true, false, 10, 10, 10, 10)) do
-        if creature:isMonster() and creature:getName() ~= emptyMonsterName and creature:getName() ~= lootMonsterName and
-            creature:getName() ~= nonlootableMonsterName and creature:getName() ~= containerDeathItemMonsterName and
-            creature:getName() ~= valueMonsterName and creature:getName() ~= spellTargetMonsterName then
+		if creature:isMonster() and creature:getName() ~= emptyMonsterName and creature:getName() ~= lootMonsterName and
+			creature:getName() ~= nonlootableMonsterName and creature:getName() ~= containerDeathItemMonsterName and
+			creature:getName() ~= valueMonsterName and creature:getName() ~= "Playerbot Food Cap Corpse" and
+			creature:getName() ~= spellTargetMonsterName then
             creature:remove()
         end
     end
@@ -655,21 +675,19 @@ local function verifyService(playerId, initialDepotBagCount, attempts)
 
     local depotTile = Tile(depotTilePosition)
     assert(depotTile, "fake depot tile is unavailable")
-    local depositedBags = depotTile:getItemCountById(ITEM_BAG) - initialDepotBagCount
-    local complete = depositedBags == 1 and player:getItemCount(saleItemId) == 0 and
-        player:getItemCount(potionItemId) >= 5 and player:getItemCount(meatItemId) >= 1 and
-        player:getMoney() == 100 and player:getBankBalance() == 134
+	local depositedBags = depotTile:getItemCountById(ITEM_BAG) - initialDepotBagCount
+	local complete = depositedBags == 1 and player:getItemCount(saleItemId) == 0 and
+		player:getItemCount(potionItemId) >= 10 and player:getMoney() == 100 and player:getBankBalance() == 39
     if not complete and attempts > 0 then
         addEvent(verifyService, 500, playerId, initialDepotBagCount, attempts - 1)
         return
     end
 
     assert(depositedBags == 1, "unexpected deposited loot-bag count: " .. depositedBags)
-    assert(player:getItemCount(saleItemId) == 0, "policy-approved loot was not sold")
-    assert(player:getItemCount(potionItemId) >= 5, "small health potion reserve was not purchased")
-    assert(player:getItemCount(meatItemId) >= 1, "meat reserve was not purchased")
-    assert(player:getMoney() == 100, "banker did not leave the carried gold reserve")
-	assert(player:getBankBalance() == 134, "shop purchases and bank transactions produced the wrong balance")
+	assert(player:getItemCount(saleItemId) == 0, "policy-approved loot was not sold")
+	assert(player:getItemCount(potionItemId) >= 10, "small health potion restock target was not purchased")
+	assert(player:getMoney() == 100, "banker did not leave the carried gold reserve")
+	assert(player:getBankBalance() == 39, "shop purchases and bank transactions produced the wrong balance")
 	assert(player:getSlotItem(CONST_SLOT_ARMOR):getId() == starterArmorId, "starter jacket was deposited")
 	local right = player:getSlotItem(CONST_SLOT_RIGHT)
 	assert(not right or right:getId() == meatItemId, "unexpected item appeared in the starter shield slot")
@@ -701,9 +719,15 @@ local function verifyDepot(playerId, attempts)
         return
     end
     assert(complete, "real Thais depot did not retain prior contents and nested loot")
-    assert(player:getItemCount(depotLootItemId) == 0, "nested policy-approved loot remained carried")
-    assert(player:getSlotItem(CONST_SLOT_ARMOR):getId() == starterArmorId, "equipped armor was deposited")
-    assert(player:getSlotItem(CONST_SLOT_LEFT):getId() == starterWeaponId, "equipped weapon was deposited")
+	assert(player:getItemCount(depotLootItemId) == 2, "depot did not retain the preferred food reserve")
+	assert(chest:getItemCountById(2380) == 1 and chest:getItemCountById(starterWeaponId) == 1,
+		"depot did not retain inferior and displaced equipment")
+	assert(player:getItemCount(2380) == 0 and player:getItemCount(starterWeaponId) == 0,
+		"inferior or displaced equipment remained carried")
+	assert(player:getSlotItem(CONST_SLOT_ARMOR):getId() == starterArmorId, "equipped armor was deposited")
+	assert(player:getSlotItem(CONST_SLOT_LEFT):getId() == 2389, "carried weapon upgrade was not equipped")
+	assert(player:getSlotItem(CONST_SLOT_HEAD):getId() == 2461, "carried helmet upgrade was not equipped")
+	assert(player:getSlotItem(CONST_SLOT_FEET):getId() == 2643, "carried boot upgrade was not equipped")
     assert(player:getItemCount(2120) == 1 and player:getItemCount(2554) == 1, "navigation tools were deposited")
     assert(player:getItemCount(potionItemId) >= 5 and player:getItemCount(meatItemId) >= 1, "supply reserves were deposited")
     print("PLAYERBOT_GAMEPLAY_TEST DEPOT_PASS")
@@ -726,7 +750,8 @@ function login.onLogin(player)
         mode == "departure_recovery" or mode == "spell_training" or mode == "stamina_bonus" or mode == "stamina_boundary" or
 		mode == "stamina_normal" or mode == "hunt_planning" or mode == "spell_calibration" or mode == "readiness_ready" or
 		mode == "adaptive_challenge" or
-        mode == "readiness_upgrade" or mode == "readiness_missing_weapon" or mode == "readiness_supplies" or
+		mode == "readiness_upgrade" or mode == "readiness_missing_weapon" or mode == "readiness_supplies" or
+		mode == "readiness_no_food" or mode == "readiness_low_wealth" or mode == "readiness_food_capacity" or
 		mode == "readiness_retention" or mode == "equipment_shadow" or mode == "equipment_shadow_unaffordable" or
 		mode == "equipment_shadow_no_upgrade" or mode == "equipment_buy" or mode == "equipment_buy_resume" or
 		mode == "equipment_buy_space" or
@@ -815,6 +840,7 @@ function login.onLogin(player)
 			"mainland fixture did not load plate armor")
 		local backpack = player:getSlotItem(CONST_SLOT_BACKPACK)
 		assert(backpack and backpack:addItem(2696, 1), "mainland fixture could not seed local-service loot")
+		assert(backpack:addItem(2826, 1), "mainland fixture could not seed remote-buyer loot")
 		print("PLAYERBOT_GAMEPLAY_TEST MAINLAND_START")
 		return true
 	end
@@ -954,7 +980,9 @@ function login.onLogin(player)
 	end
 	restoreRookgaardBaseline(player)
 	if mode == "readiness_ready" or mode == "readiness_upgrade" or mode == "readiness_missing_weapon" or
-		mode == "readiness_supplies" or mode == "readiness_retention" then
+		mode == "readiness_supplies" or mode == "readiness_no_food" or mode == "readiness_low_wealth" or
+		mode == "readiness_food_capacity" or
+		mode == "readiness_retention" then
 		assert(player:setVocation(4), "readiness fixture could not select Knight vocation")
 		assert(player:teleportTo(depotPosition), "readiness fixture could not reach the depot")
 		suppressNearbyMonsters(player:getId())
@@ -969,7 +997,34 @@ function login.onLogin(player)
 		elseif mode == "readiness_supplies" then
 			removeAll(player, potionItemId)
 			removeAll(player, meatItemId)
+			assert(player:addItem(potionItemId, 1), "readiness supplies fixture could not seed the return threshold")
 			addEvent(verifyReadiness, 500, player:getId(), "supplies", 240)
+		elseif mode == "readiness_no_food" then
+			removeAll(player, meatItemId)
+			local money = player:getMoney()
+			if money > 0 then assert(player:removeMoney(money), "no-food fixture could not clear carried money") end
+			assert(player:addMoney(100), "no-food fixture could not normalize carried money")
+		elseif mode == "readiness_low_wealth" then
+			local money = player:getMoney()
+			if money > 0 then assert(player:removeMoney(money), "low-wealth fixture could not clear carried money") end
+			assert(player:setBankBalance(50), "low-wealth fixture could not set the bank balance")
+			local backpack = player:getSlotItem(CONST_SLOT_BACKPACK)
+			assert(backpack and backpack:addItem(pickupRewardId, 1), "low-wealth fixture could not add a carried upgrade")
+			assert(backpack:addItem(saleItemId, 1) and backpack:addItem(saleItemId, 1) and
+				backpack:addItem(saleItemId, 1), "low-wealth fixture could not add saleable capacity cargo")
+			local usedCapacity = player:getCapacity() - player:getFreeCapacity()
+			assert(player:setCapacity(usedCapacity), "low-wealth fixture could not exhaust physical capacity")
+			addEvent(verifyLowWealth, 500, player:getId(), 240)
+		elseif mode == "readiness_food_capacity" then
+			removeAll(player, meatItemId)
+			removeAll(player, 2696)
+			local backpack = player:getSlotItem(CONST_SLOT_BACKPACK)
+			for _ = 1, 8 do
+				assert(backpack and backpack:addItem(2696, 1), "food-capacity fixture could not add eight cheeses")
+			end
+			local usedCapacity = player:getCapacity() - player:getFreeCapacity()
+			assert(player:setCapacity(usedCapacity), "food-capacity fixture could not exhaust physical capacity")
+			addEvent(verifyReadiness, 500, player:getId(), "food_capacity", 120)
 		elseif mode == "readiness_retention" then
 			removeAll(player, meatItemId)
 			local backpack = player:getSlotItem(CONST_SLOT_BACKPACK)
@@ -977,6 +1032,8 @@ function login.onLogin(player)
 			assert(backpack:addItem(saleItemId, 1), "retention fixture could not add sale item")
 			addEvent(verifyReadiness, 500, player:getId(), "retention", 240)
 		else
+			removeAll(player, potionItemId)
+			assert(player:addItem(potionItemId, 2), "readiness fixture could not seed the hunt-ready potion count")
 			addEvent(verifyReadiness, 500, player:getId(), "ready", 120)
 		end
 		print("PLAYERBOT_GAMEPLAY_TEST READINESS_" .. string.upper(mode:gsub("readiness_", "")) .. "_START")
@@ -999,6 +1056,10 @@ function login.onLogin(player)
 		return true
 	end
 	if mode == "depot" then
+		player:removeCondition(CONDITION_REGENERATION)
+		local food = Condition(CONDITION_REGENERATION, CONDITIONID_DEFAULT)
+		food:setParameter(CONDITION_PARAM_TICKS, 1200000)
+		assert(player:addCondition(food), "depot fixture could not fill the food timer")
 		local fixtureState = player:getStorageValue(depotFixtureStorage)
 		if fixtureState == -1 then
 			local thais = Town(thaisTownId)
@@ -1009,8 +1070,11 @@ function login.onLogin(player)
 			local backpack = player:getSlotItem(CONST_SLOT_BACKPACK)
 			local outer = backpack and backpack:addItem(ITEM_BAG, 1)
 			local nested = outer and outer:addItem(ITEM_BAG, 1)
-			assert(nested and nested:addItem(depotLootItemId, 1) and nested:addItem(depotLootItemId, 1),
+			assert(nested and nested:addItem(depotLootItemId, 1) and nested:addItem(depotLootItemId, 1) and
+				nested:addItem(depotLootItemId, 1) and nested:addItem(depotLootItemId, 1),
 				"depot fixture could not seed nested loot")
+			assert(nested:addItem(2380, 1) and nested:addItem(2389, 1) and nested:addItem(2461, 1) and
+				nested:addItem(2643, 1), "depot fixture could not seed surplus equipment")
 			assert(backpack:addItem(2050, 1), "depot fixture could not seed an unknown retained item")
 			local restartPhase = os.getenv("PLAYERBOT_DEPOT_RESTART_PHASE") or ""
 			assert(player:setStorageValue(depotFixtureStorage, restartPhase == "" and 0 or 2),
@@ -1278,16 +1342,19 @@ function login.onLogin(player)
         print("PLAYERBOT_GAMEPLAY_TEST CORPSE_START")
         return true
     end
-    if mode == "value" then
-        local backpack = player:getSlotItem(CONST_SLOT_BACKPACK)
-        assert(backpack and backpack:addItem(saleItemId, 1), "low-value replacement cargo could not be added")
-        assert(player:removeMoney(player:getMoney()), "value fixture could not force bank-funded supply purchases")
-        local incomingWeight = ItemType(2826):getWeight()
+	if mode == "value" then
+		local backpack = player:getSlotItem(CONST_SLOT_BACKPACK)
+		removeAll(player, meatItemId)
+		removeAll(player, 2671)
+		local foodBag = backpack and backpack:addItem(ITEM_BAG, 1)
+		assert(foodBag and foodBag:addItem(2671, 2), "nested food replacement cargo could not be added")
+		local incomingWeight = ItemType(2826):getWeight()
         local usedCapacity = player:getCapacity() - player:getFreeCapacity()
         assert(incomingWeight > 1, "value replacement fixture has invalid incoming weight")
-        player:setCapacity(usedCapacity + incomingWeight - 1)
-        suppressNearbyMonsters(player:getId())
-        addEvent(spawnCorpseMonster, 500, player:getId(), valueMonsterName)
+		player:setCapacity(usedCapacity + incomingWeight - 1)
+		suppressNearbyMonsters(player:getId())
+		spawnCorpseMonster(player:getId(), "Playerbot Food Cap Corpse")
+		addEvent(spawnCorpseMonster, 8000, player:getId(), valueMonsterName)
         print("PLAYERBOT_GAMEPLAY_TEST VALUE_START")
         return true
     end

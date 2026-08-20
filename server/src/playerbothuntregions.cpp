@@ -39,6 +39,7 @@ namespace {
 	constexpr uint16_t spawnBucketSize = heatRadius * 2 + 1;
 	constexpr uint32_t maximumRegionDistancePadding = maximumRegionRadius * 2;
 	constexpr uint32_t maximumHuntTravelDistance = 300;
+	constexpr size_t maximumModeledAttackers = 5;
 	constexpr double challengeBandWidth = 0.05;
 	constexpr uint16_t smallHealthPotionItemId = 8704;
 	constexpr double smallHealthPotionMinimumHealing = 60;
@@ -279,7 +280,7 @@ namespace {
 			std::sort(localAttackers.begin(), localAttackers.end(), [](const LocalAttacker& left, const LocalAttacker& right) {
 				return left.damagePerSecond > right.damagePerSecond;
 			});
-			const size_t attackers = std::min<size_t>(3, localAttackers.size());
+			const size_t attackers = std::min(maximumModeledAttackers, localAttackers.size());
 			double remainingDamagePerSecond = 0;
 			for (size_t index = 0; index < attackers; ++index) {
 				remainingDamagePerSecond += localAttackers[index].damagePerSecond;

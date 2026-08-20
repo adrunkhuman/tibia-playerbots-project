@@ -116,28 +116,36 @@ uint8_t PlayerBotController::backpackDestinationIndex(const Container& backpack,
 bool PlayerBotController::isReplaceableCargo(const Item& item) const
 {
 	const ItemType& type = Item::items[item.getID()];
-	return !isProtectedInventoryItem(item) && type.corpseType == RACE_NONE && itemUnitValue(item.getID()) != 0 &&
+	const bool food = isFoodItem(item.getID());
+	const bool protectedItem = isProtectedInventoryItem(item) && !food;
+	return !protectedItem && type.corpseType == RACE_NONE && (food || itemUnitValue(item.getID()) != 0) &&
 	       item.getBaseWeight() != 0;
 }
 
-bool PlayerBotController::chooseCargoReplacement(const Container& backpack, const Item& incoming, uint32_t freeCapacity,
+bool PlayerBotController::chooseCargoReplacement(const Container& backpack, const Item& incoming, uint8_t incomingCount,
+                            uint32_t freeCapacity,
                             CargoCandidate& replacement, uint8_t& replacementCount) const
 {
-	const uint32_t incomingWeight = incoming.getWeight();
+	const uint32_t incomingWeight = incoming.getBaseWeight() * incomingCount;
 	if (incomingWeight <= freeCapacity || incomingWeight == 0) {
 		return false;
 	}
 
 	std::vector<CargoCandidate> candidates;
-	const ItemDeque& items = backpack.getItemList();
-	for (size_t index = 0; index < items.size() && index <= UINT8_MAX; ++index) {
-		Item* item = items[index];
-		if (!isReplaceableCargo(*item)) {
-			continue;
+	std::function<void(Container&)> collect = [&](Container& source) {
+		const ItemDeque& items = source.getItemList();
+		for (size_t index = 0; index < items.size() && index <= UINT8_MAX; ++index) {
+			Item* item = items[index];
+			if (isReplaceableCargo(*item)) {
+				candidates.push_back({item, &source, static_cast<uint8_t>(index), itemUnitValue(item->getID()),
+				                      item->getBaseWeight(), item->getItemCount()});
+			}
+			if (Container* nested = item->getContainer()) {
+				collect(*nested);
+			}
 		}
-		candidates.push_back({item, static_cast<uint8_t>(index), itemUnitValue(item->getID()),
-		                      item->getBaseWeight(), item->getItemCount()});
-	}
+	};
+	collect(const_cast<Container&>(backpack));
 	std::sort(candidates.begin(), candidates.end(), [](const CargoCandidate& left, const CargoCandidate& right) {
 		const uint64_t leftDensity = static_cast<uint64_t>(left.unitValue) * right.unitWeight;
 		const uint64_t rightDensity = static_cast<uint64_t>(right.unitValue) * left.unitWeight;
@@ -167,18 +175,19 @@ bool PlayerBotController::chooseCargoReplacement(const Container& backpack, cons
 		requiredWeight -= releasedWeight;
 	}
 
-	const uint64_t incomingValue = static_cast<uint64_t>(itemUnitValue(incoming.getID())) * incoming.getItemCount();
+	const uint64_t incomingValue = static_cast<uint64_t>(itemUnitValue(incoming.getID())) * incomingCount;
 	if (!selected || requiredWeight != 0 || incomingValue <= totalDiscardedValue) {
 		return false;
 	}
 	return true;
 }
 
-void PlayerBotController::discardCargoForLoot(Player* player, Container* backpack, Item* incoming, const Position& currentPosition)
+void PlayerBotController::discardCargoForLoot(Player* player, Container* backpack, Item* incoming, uint8_t incomingCount,
+                                               const Position& currentPosition)
 {
 	CargoCandidate replacement{};
 	uint8_t replacementCount = 0;
-	if (!chooseCargoReplacement(*backpack, *incoming, player->getFreeCapacity(), replacement,
+	if (!chooseCargoReplacement(*backpack, *incoming, incomingCount, player->getFreeCapacity(), replacement,
 	                            replacementCount)) {
 		std::ostringstream fields;
 		fields << "\"action\":\"loot\",\"result\":\"skipped\",\"reason\":\"no_capacity\""
@@ -194,12 +203,20 @@ void PlayerBotController::discardCargoForLoot(Player* player, Container* backpac
 	if (!destination || !player->canDoAction()) {
 		return;
 	}
+	if (player->getContainerID(replacement.source) < 0 &&
+	    !openContainer(*player, *replacement.source, rewardContainerIdBase, currentPosition)) {
+		return;
+	}
+	const int8_t sourceContainerId = player->getContainerID(replacement.source);
+	if (sourceContainerId < 0) {
+		return;
+	}
 	pendingDiscardItemId = replacement.item->getID();
 	pendingDiscardCount = replacementCount;
 	pendingDiscardInventoryCount = getInventoryItemCount(*player, pendingDiscardItemId);
 	pendingDiscardValue = replacementCount * replacement.unitValue;
 	pendingDiscardIncomingItemId = incoming->getID();
-	const Position fromPosition(0xFFFF, 0x40 | backpackContainerId, replacement.index);
+	const Position fromPosition(0xFFFF, 0x40 | static_cast<uint8_t>(sourceContainerId), replacement.index);
 	++counters.actionsAttempted;
 	g_game.playerMoveItem(player, fromPosition, replacement.item->getClientID(), replacement.index,
 	                      currentPosition, replacementCount, replacement.item, destination);
@@ -314,11 +331,20 @@ void PlayerBotController::lootCorpse(Player* player, const Position& currentPosi
 
 	Item* lootItem = nullptr;
 	uint8_t lootIndex = 0;
+	const uint32_t heldFood = getFoodInventory(*player).count;
+	bool skippedSurplusFood = false;
+	uint16_t skippedFoodItemId = 0;
 	const ItemDeque& corpseItems = corpse->getItemList();
 	for (size_t index = 0; index < corpseItems.size(); ++index) {
 		Item* candidate = corpseItems[index];
-		const uint32_t candidateValue = itemUnitValue(candidate->getID());
+		const bool foodCandidate = isFoodItem(candidate->getID());
+		const uint32_t candidateValue = std::max<uint32_t>(itemUnitValue(candidate->getID()), foodCandidate ? 1 : 0);
 		if (candidateValue == 0 || unavailableLootItemIds.find(candidate->getID()) != unavailableLootItemIds.end()) {
+			continue;
+		}
+		if (foodCandidate && heldFood >= preferredFoodCount) {
+			skippedSurplusFood = true;
+			skippedFoodItemId = candidate->getID();
 			continue;
 		}
 		if (!lootItem) {
@@ -337,17 +363,27 @@ void PlayerBotController::lootCorpse(Player* player, const Position& currentPosi
 
 	if (!lootItem) {
 		if (!lootedCurrentCorpse) {
-			emit("action_result", currentPosition,
-			     "\"action\":\"loot\",\"result\":\"skipped\",\"reason\":\"no_eligible_loot\"");
+			if (skippedSurplusFood) {
+				emit("action_result", currentPosition,
+				     "\"action\":\"loot\",\"result\":\"skipped\",\"reason\":\"food_preference_satisfied\",\"item_id\":" +
+				         std::to_string(skippedFoodItemId) + ",\"carried\":" + std::to_string(heldFood) +
+				         ",\"preferred\":" + std::to_string(preferredFoodCount));
+			} else {
+				emit("action_result", currentPosition,
+				     "\"action\":\"loot\",\"result\":\"skipped\",\"reason\":\"no_eligible_loot\"");
+			}
 		}
 		finishLoot(player, currentPosition);
 		return;
 	}
 
 	const uint32_t inventoryCount = getInventoryItemCount(*player, lootItem->getID());
-	const uint8_t moveCount = static_cast<uint8_t>(lootItem->getItemCount());
-	if (lootItem->getWeight() > player->getFreeCapacity()) {
-		discardCargoForLoot(player, backpack, lootItem, currentPosition);
+	const uint8_t moveCount = isFoodItem(lootItem->getID()) ?
+	                          static_cast<uint8_t>(std::min<uint32_t>(lootItem->getItemCount(), preferredFoodCount - heldFood)) :
+	                          static_cast<uint8_t>(lootItem->getItemCount());
+	const uint32_t moveWeight = lootItem->getBaseWeight() * moveCount;
+	if (moveWeight > player->getFreeCapacity()) {
+		discardCargoForLoot(player, backpack, lootItem, moveCount, currentPosition);
 		return;
 	}
 	const Position fromPosition(0xFFFF, 0x40 | corpseContainerId, lootIndex);
