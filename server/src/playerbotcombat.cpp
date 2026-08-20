@@ -1321,6 +1321,13 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 		processTargetPursuit(player, currentPosition);
 		return;
 	}
+	const bool blockedNavigationTargetActive = blockedNavigationTargetExpires > std::chrono::steady_clock::now();
+	if ((patrolRouteFailureCount != 0 || blockedStepCount != 0 || blockedNavigationTargetActive) &&
+	    attackDefensiveThreat(player, currentPosition)) {
+		resetPatrolRouteFailures();
+		schedule(navigationInterval);
+		return;
+	}
 	if (attackVisibleMonster(player, currentPosition)) {
 		schedule(navigationInterval);
 		return;
@@ -1333,25 +1340,48 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 	const std::vector<Position>* patrolPoints = activeHuntRegion ? &activeHuntRegion->patrolPoints : nullptr;
 	const Position& target = patrolPoints && !patrolPoints->empty() ?
 	                         (*patrolPoints)[huntRouteIndex % patrolPoints->size()] : huntingLoop[huntRouteIndex];
+	if (patrolRouteFailureTarget != target) {
+		resetPatrolRouteFailures();
+		patrolRouteFailureTarget = target;
+	}
 	if (!processNavigation(player, currentPosition, target)) {
+		const bool forcedStepRecoveryPending = testPolicy.forceRepeatedNavigationStepFailures &&
+		                                       forcedNavigationStepFailuresRemaining != 0;
+		if (lastNavigationRouteUnavailable && forcedStepRecoveryPending) {
+			temporarilyBlockedPositions.clear();
+		}
+		if (lastNavigationRouteUnavailable && !forcedStepRecoveryPending) {
+			if (patrolRouteFailureCount == 0) {
+				patrolRouteFailureStarted = std::chrono::steady_clock::now();
+			}
+			++patrolRouteFailureCount;
+			patrolRouteFailureExpandedNodes += lastNavigationExpandedNodes;
+		}
 		const bool repeatedStepFailure = blockedStepCount >= maximumRepeatedNavigationStepFailures;
-		if (navigationOscillationDetected || repeatedStepFailure ||
-		    (activeHuntRegion && fixedTargetRouteFailureCount >= 3)) {
+		const bool repeatedRouteFailure = patrolRouteFailureCount >= maximumPatrolRouteFailures;
+		if (navigationOscillationDetected || repeatedStepFailure || repeatedRouteFailure) {
 			const char* reason = navigationOscillationDetected ? "position_oscillation" :
-			                     repeatedStepFailure ? "repeated_step_failure" : "unreachable";
+			                     repeatedStepFailure ? "repeated_step_failure" : "route_unavailable";
+			const auto routeFailureElapsed = patrolRouteFailureStarted == std::chrono::steady_clock::time_point{} ? 0 :
+			                                 std::chrono::duration_cast<std::chrono::milliseconds>(
+			                                     std::chrono::steady_clock::now() - patrolRouteFailureStarted).count();
 			emit("hunt_region_patrol", currentPosition,
 			     "\"result\":\"skipped\",\"reason\":" +
 			         jsonString(reason) +
 			         ",\"step_failures\":" + std::to_string(blockedStepCount) +
+			         ",\"route_failures\":" + std::to_string(patrolRouteFailureCount) +
+			         ",\"elapsed_ms\":" + std::to_string(routeFailureElapsed) +
+			         ",\"expanded_nodes\":" + std::to_string(patrolRouteFailureExpandedNodes) +
 			         ",\"region_id\":" +
 			         (activeHuntRegion ? std::to_string(activeHuntRegion->id) : "null") +
 			         ",\"destination\":{\"x\":" +
 			         std::to_string(target.x) + ",\"y\":" + std::to_string(target.y) +
 			         ",\"z\":" + std::to_string(target.z) + "}");
-			if (repeatedStepFailure) {
+			if (repeatedStepFailure || repeatedRouteFailure) {
 				++counters.stuckEvents;
 			}
-			fixedTargetRouteFailureCount = 0;
+			resetPatrolRouteFailures();
+			temporarilyBlockedPositions.clear();
 			blockedStepCount = 0;
 			clearNavigation();
 			if (activeHuntRegion) {
@@ -1368,6 +1398,7 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 		}
 		return;
 	}
+	resetPatrolRouteFailures();
 	huntRouteIndex = patrolPoints && !patrolPoints->empty() ?
 	                 (huntRouteIndex + 1) % patrolPoints->size() : (huntRouteIndex + 1) % huntingLoop.size();
 	std::ostringstream fields;

@@ -51,6 +51,7 @@ const PlayerBotTestPolicy& playerbot::testPolicyFromEnvironment()
 		const bool startInHunt = gameplayMode &&
 			(std::strcmp(gameplayMode, "navigation") == 0 || std::strcmp(gameplayMode, "navigation_recovery") == 0 ||
 			 (std::strcmp(gameplayMode, "corpse") == 0 || std::strcmp(gameplayMode, "corpse_inaccessible") == 0) ||
+			 std::strcmp(gameplayMode, "patrol_recovery") == 0 ||
 			 (std::strcmp(gameplayMode, "target_pursuit") == 0 || std::strcmp(gameplayMode, "target_pursuit_abandon") == 0) ||
 			 std::strcmp(gameplayMode, "healing") == 0 || std::strcmp(gameplayMode, "healing_resupply") == 0 ||
 			 std::strcmp(gameplayMode, "value") == 0 || std::strcmp(gameplayMode, "departure_interrupt") == 0 ||
@@ -104,6 +105,7 @@ const PlayerBotTestPolicy& playerbot::testPolicyFromEnvironment()
 			gameplayMode && std::strcmp(gameplayMode, "hunt_planning") == 0,
 			gameplayMode && std::strcmp(gameplayMode, "navigation_recovery") == 0,
 			gameplayMode && std::strcmp(gameplayMode, "corpse_inaccessible") == 0,
+			gameplayMode && std::strcmp(gameplayMode, "patrol_recovery") == 0,
 			!gameplayMode || (std::strcmp(gameplayMode, "equipment_shadow") != 0 &&
 			                  std::strcmp(gameplayMode, "equipment_shadow_unaffordable") != 0 &&
 			                  std::strcmp(gameplayMode, "equipment_shadow_no_upgrade") != 0),
@@ -129,6 +131,9 @@ PlayerBotController::PlayerBotController(const Player& player,
 	}
 	if (testPolicy.forceCorpseNavigationFailures) {
 		forcedNavigationStepFailuresRemaining = maximumCorpseNavigationFailures;
+	}
+	if (testPolicy.forcePatrolRouteFailures) {
+		forcedNavigationPlanFailuresRemaining = maximumPatrolRouteFailures;
 	}
 }
 
@@ -482,6 +487,15 @@ void PlayerBotController::clearNavigation()
 	worldChangePending = false;
 	navigationTarget = Position();
 	blockedStepCount = 0;
+	fixedTargetRouteFailureCount = 0;
+}
+
+void PlayerBotController::resetPatrolRouteFailures()
+{
+	patrolRouteFailureCount = 0;
+	patrolRouteFailureExpandedNodes = 0;
+	patrolRouteFailureTarget = Position();
+	patrolRouteFailureStarted = {};
 }
 
 void PlayerBotController::adoptNavigationPlan(const Position& destination, std::deque<PlayerBotNavigationStep> steps)
@@ -711,6 +725,8 @@ bool PlayerBotController::detectNavigationOscillation(const Position& currentPos
 
 bool PlayerBotController::processNavigation(Player* player, const Position& currentPosition, const Position& destination)
 {
+	lastNavigationRouteUnavailable = false;
+	lastNavigationExpandedNodes = 0;
 	if (currentPosition == destination) {
 		clearNavigation();
 		return true;
@@ -776,11 +792,20 @@ bool PlayerBotController::processNavigation(Player* player, const Position& curr
 		uint64_t expandedNodes = 0;
 		++counters.pathfindingCalls;
 		const auto startedAt = std::chrono::steady_clock::now();
-		const PlayerBotNavigationResult planResult = navigator.plan(*player, destination, blockedPositions, navigationSteps, expandedNodes);
+		PlayerBotNavigationResult planResult;
+		if (forcedNavigationPlanFailuresRemaining != 0) {
+			--forcedNavigationPlanFailuresRemaining;
+			expandedNodes = playerBotNavigationMaximumExpandedNodes;
+			planResult = PlayerBotNavigationResult::Unreachable;
+		} else {
+			planResult = navigator.plan(*player, destination, blockedPositions, navigationSteps, expandedNodes);
+		}
 		const bool planned = planResult == PlayerBotNavigationResult::Reached;
 		counters.pathfindingTimeUs += std::chrono::duration_cast<std::chrono::microseconds>(
 			std::chrono::steady_clock::now() - startedAt).count();
 		if (!planned || navigationSteps.empty()) {
+			lastNavigationRouteUnavailable = true;
+			lastNavigationExpandedNodes = expandedNodes;
 			++counters.pathfindingFailures;
 			emit("navigation_progress", currentPosition,
 			     "\"result\":\"failed\",\"reason\":\"route_unavailable\",\"cycle_phase\":" +

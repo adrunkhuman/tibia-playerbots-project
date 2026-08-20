@@ -80,6 +80,7 @@ namespace playerbot {
 	inline constexpr std::chrono::minutes navigationOscillationSuppression(2);
 	inline constexpr std::chrono::seconds navigationStepTimeout(2);
 	inline constexpr uint32_t maximumRepeatedNavigationStepFailures = 3;
+	inline constexpr uint32_t maximumPatrolRouteFailures = 3;
 	inline constexpr std::chrono::seconds healingRetryInterval(2);
 	inline constexpr std::chrono::minutes stableLifetimeReset(5);
 	inline constexpr std::chrono::minutes huntRegionCooldown(10);
@@ -178,6 +179,7 @@ namespace playerbot {
 		bool cancelHuntPlanningAtScoreBarrier;
 		bool forceRepeatedNavigationStepFailures;
 		bool forceCorpseNavigationFailures;
+		bool forcePatrolRouteFailures;
 		bool equipmentPurchasesEnabled;
 		bool forceEquipmentPurchaseRejected;
 		bool adaptiveChallengeFixture;
@@ -827,6 +829,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		void setCyclePhase(CyclePhase phase, const Position& position, const char* reason);
 
 		void clearNavigation();
+		void resetPatrolRouteFailures();
 
 		void beginReturn(Player* player, const Position& position, const char* reason);
 
@@ -960,8 +963,14 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		Position lootPosition;
 		ScenarioStage scenarioStage = ScenarioStage::Traverse;
 		uint32_t fixedTargetRouteFailureCount = 0;
+		uint32_t patrolRouteFailureCount = 0;
+		uint64_t patrolRouteFailureExpandedNodes = 0;
+		Position patrolRouteFailureTarget;
+		std::chrono::steady_clock::time_point patrolRouteFailureStarted;
+		uint64_t lastNavigationExpandedNodes = 0;
 		uint32_t blockedStepCount = 0;
 		uint32_t forcedNavigationStepFailuresRemaining = 0;
+		uint32_t forcedNavigationPlanFailuresRemaining = 0;
 		uint32_t corpseSearchAttempts = 0;
 		uint32_t corpseOpenAttempts = 0;
 		uint32_t corpseNavigationFailures = 0;
@@ -978,6 +987,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		bool lootedCurrentCorpse = false;
 		bool corpseObserved = false;
 		bool corpseNavigationSuspended = false;
+		bool lastNavigationRouteUnavailable = false;
 		uint16_t pendingDepositItemId = 0;
 		uint32_t pendingLootInventoryCount = 0;
 		uint8_t pendingDiscardCount = 0;

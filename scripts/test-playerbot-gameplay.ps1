@@ -1180,6 +1180,38 @@ function Assert-NavigationRecoveryEvents {
 	}
 }
 
+function Assert-PatrolRecoveryEvents {
+	param([string]$Logs)
+
+	$events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
+	$routeFailures = @($events | Where-Object {
+		$_.event -eq "navigation_progress" -and $_.result -eq "failed" -and
+		$_.reason -eq "route_unavailable"
+	})
+	$skipped = @($events | Where-Object {
+		$_.event -eq "hunt_region_patrol" -and $_.result -eq "skipped" -and
+		$_.reason -eq "route_unavailable" -and $_.route_failures -eq 3 -and
+		$_.expanded_nodes -le 300000 -and $_.elapsed_ms -le 3000
+	})
+	$continued = @($events | Where-Object {
+		$_.event -eq "action_result" -and $_.action -eq "plan" -and $_.result -eq "success"
+	})
+	$terminal = @($events | Where-Object { $_.event -eq "terminal" })
+	$failureDestinations = @($routeFailures | ForEach-Object {
+		"$($_.destination.x),$($_.destination.y),$($_.destination.z)"
+	} | Sort-Object -Unique)
+	$skippedDestination = $skipped.Count -eq 1 ?
+		"$($skipped[0].destination.x),$($skipped[0].destination.y),$($skipped[0].destination.z)" : ""
+	$continuedDestination = $continued.Count -ge 1 ?
+		"$($continued[0].destination.x),$($continued[0].destination.y),$($continued[0].destination.z)" : ""
+	if ($routeFailures.Count -ne 3 -or $failureDestinations.Count -ne 1 -or
+		$skipped.Count -ne 1 -or $skipped[0].expanded_nodes -ne 300000 -or
+		$failureDestinations[0] -ne $skippedDestination -or $continuedDestination -eq $skippedDestination -or
+		$continued.Count -lt 1 -or $terminal.Count -ne 0) {
+		throw "Patrol route recovery was not bounded. failures=$($routeFailures.Count), skipped=$($skipped.Count), continued=$($continued.Count), terminal=$($terminal.Count)."
+	}
+}
+
 function Assert-TargetPursuitEvents {
 	param([string]$Logs)
 
@@ -2292,6 +2324,15 @@ try {
 			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST NAVIGATION_RECOVERY_START' | Out-Null
 			$recoveryLogs = Wait-ForPlayerbotEventCount -Action "hunt_waypoint" -Count 1
 			Assert-NavigationRecoveryEvents -Logs $recoveryLogs
+		}
+		Invoke-Scenario -Name "patrol_recovery" -DefaultTimeoutSeconds 120 -Body {
+			Invoke-Compose down --volumes --remove-orphans
+			$env:PLAYERBOT_GAMEPLAY_MODE = "patrol_recovery"
+			$env:PLAYERBOT_HUNT_DURATION_SECONDS = "900"
+			Invoke-Compose up --detach
+			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST PATROL_RECOVERY_START' | Out-Null
+			$recoveryLogs = Wait-ForLog -Pattern '"action":"plan","result":"success"'
+			Assert-PatrolRecoveryEvents -Logs $recoveryLogs
 		}
 	}
 
