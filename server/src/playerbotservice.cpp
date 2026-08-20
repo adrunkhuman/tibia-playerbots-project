@@ -109,6 +109,7 @@ void PlayerBotController::beginService(Player* player, const Position& position,
 	pendingLootItemId = 0;
 	pendingDiscardItemId = 0;
 	player->closeContainer(corpseContainerId);
+	setStage(ScenarioStage::Traverse, position);
 	serviceShops.clear();
 	serviceBankers.clear();
 	serviceTargetId = 0;
@@ -128,6 +129,7 @@ void PlayerBotController::finishHuntAndSelectGoal(Player* player, const Position
 	pendingLootItemId = 0;
 	pendingDiscardItemId = 0;
 	player->closeContainer(corpseContainerId);
+	setStage(ScenarioStage::Traverse, position);
 	setCyclePhase(CyclePhase::Idle, position, reason);
 	emit("goal_result", position,
 	     "\"decision_id\":" + std::to_string(goalDecisionId) +

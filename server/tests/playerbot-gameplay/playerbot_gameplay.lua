@@ -13,6 +13,7 @@ local lootMonsterName = "Playerbot Loot Corpse"
 local nonlootableMonsterName = "Playerbot Nonlootable Corpse"
 local containerDeathItemMonsterName = "Playerbot Container Death Item"
 local defensiveMonsterName = "Playerbot Defensive Threat"
+local corpseBlockerMonsterName = "Playerbot Corpse Blocker"
 local levelEightMonsterName = "Playerbot Level Eight Target"
 local deathMonsterName = "Playerbot Death Threat"
 local spellTargetMonsterName = "Playerbot Spell Target"
@@ -39,6 +40,38 @@ local spellSupportObserved = false
 local spellCalibrationFixture = false
 local removeAll
 local verifyBerserkSingleTarget
+
+local inaccessibleCorpseDeath = CreatureEvent("PlayerbotInaccessibleCorpseDeath")
+
+function inaccessibleCorpseDeath.onDeath(creature, corpse)
+    if creature:getName() ~= lootMonsterName or (os.getenv("PLAYERBOT_GAMEPLAY_MODE") or "") ~= "corpse_inaccessible" then
+        return true
+    end
+    local player = Player(botName)
+    assert(player and corpse, "inaccessible corpse fixture lost Bot One or the corpse")
+    local origin = corpse:getPosition()
+    for _, position in ipairs({
+        Position(origin.x - 3, origin.y, origin.z),
+        Position(origin.x + 3, origin.y, origin.z),
+        Position(origin.x, origin.y - 3, origin.z),
+        Position(origin.x, origin.y + 3, origin.z),
+    }) do
+        local tile = Tile(position)
+        if tile and tile:isWalkable() and player:teleportTo(position) then
+			local stepX = origin.x == position.x and 0 or origin.x > position.x and 1 or -1
+			local stepY = origin.y == position.y and 0 or origin.y > position.y and 1 or -1
+			local blockerPosition = Position(position.x + stepX, position.y + stepY, position.z)
+			local blocker = Game.createMonster(corpseBlockerMonsterName, blockerPosition, true, true)
+			assert(blocker and blocker:selectTarget(player),
+				"inaccessible corpse fixture could not create its attacking blocker")
+            print("PLAYERBOT_GAMEPLAY_TEST CORPSE_INACCESSIBLE_DISPLACED")
+            return true
+        end
+    end
+    error("inaccessible corpse fixture could not displace Bot One")
+end
+
+inaccessibleCorpseDeath:register()
 
 function PlayerbotThaisLockerDepotId()
     local tile = Tile(Position(32352, 32225, 7))
@@ -221,7 +254,7 @@ local function suppressNearbyMonsters(playerId)
 		if creature:isMonster() and creature:getName() ~= emptyMonsterName and creature:getName() ~= lootMonsterName and
 			creature:getName() ~= nonlootableMonsterName and creature:getName() ~= containerDeathItemMonsterName and
 			creature:getName() ~= valueMonsterName and creature:getName() ~= "Playerbot Food Cap Corpse" and
-			creature:getName() ~= spellTargetMonsterName then
+			creature:getName() ~= spellTargetMonsterName and creature:getName() ~= corpseBlockerMonsterName then
             creature:remove()
         end
     end
@@ -509,6 +542,28 @@ local function spawnCorpseMonster(playerId, monsterName)
     error("no adjacent tile was available for corpse test monster")
 end
 
+function PlayerbotSpawnInaccessibleCorpseMonster(playerId)
+    local player = Player(playerId)
+    assert(player and not player:isRemoved(), "Bot One disappeared before inaccessible corpse spawn")
+    local origin = player:getPosition()
+    for _, position in ipairs({
+        Position(origin.x + 1, origin.y, origin.z),
+        Position(origin.x, origin.y + 1, origin.z),
+        Position(origin.x - 1, origin.y, origin.z),
+        Position(origin.x, origin.y - 1, origin.z),
+    }) do
+        local tile = Tile(position)
+        if tile and tile:isWalkable() then
+            local monster = Game.createMonster(lootMonsterName, position, true, true)
+            assert(monster and monster:registerEvent("PlayerbotInaccessibleCorpseDeath"),
+                "inaccessible corpse monster could not register its death event")
+            print("PLAYERBOT_GAMEPLAY_TEST CORPSE_INACCESSIBLE_START")
+            return
+        end
+    end
+    error("no adjacent tile was available for inaccessible corpse test monster")
+end
+
 local function spawnDepartureDefensiveThreat(playerId)
     local player = Player(playerId)
     assert(player and not player:isRemoved(), "Bot One disappeared before departure defensive combat")
@@ -741,7 +796,7 @@ function login.onLogin(player)
     end
 
     local mode = os.getenv("PLAYERBOT_GAMEPLAY_MODE") or "cycle"
-	assert(mode == "mainland" or mode == "cycle" or mode == "depot" or mode == "navigation" or mode == "navigation_recovery" or mode == "target_pursuit" or mode == "target_pursuit_abandon" or mode == "corpse" or mode == "death" or mode == "healing" or mode == "spell_use" or
+	assert(mode == "mainland" or mode == "cycle" or mode == "depot" or mode == "navigation" or mode == "navigation_recovery" or mode == "target_pursuit" or mode == "target_pursuit_abandon" or mode == "corpse" or mode == "corpse_inaccessible" or mode == "death" or mode == "healing" or mode == "spell_use" or
 		mode == "healing_resupply" or mode == "value" or mode == "progression" or mode == "progression_bundle" or
 		mode == "progression_nested" or
         mode == "progression_resume" or mode == "progression_nested_resume" or mode == "progression_space" or
@@ -1342,6 +1397,11 @@ function login.onLogin(player)
         print("PLAYERBOT_GAMEPLAY_TEST CORPSE_START")
         return true
     end
+	if mode == "corpse_inaccessible" then
+		suppressNearbyMonsters(player:getId())
+		PlayerbotSpawnInaccessibleCorpseMonster(player:getId())
+		return true
+	end
 	if mode == "value" then
 		local backpack = player:getSlotItem(CONST_SLOT_BACKPACK)
 		removeAll(player, meatItemId)

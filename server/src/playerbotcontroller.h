@@ -65,11 +65,15 @@ namespace playerbot {
 	inline constexpr uint8_t depotLockerContainerId = 14;
 	inline constexpr uint8_t maximumContainerId = 0x0F;
 	inline constexpr uint32_t maxCorpseSearchAttempts = 4;
+	inline constexpr uint32_t maximumCorpseNavigationFailures = 6;
+	inline constexpr uint32_t corpseNavigationSuspendThreshold = 3;
+	inline constexpr uint32_t corpseNavigationRetryInterval = 2000;
+	inline constexpr std::chrono::seconds corpseLootTimeout(20);
 	inline constexpr uint16_t ropeItemId = 2120;
 	inline constexpr std::chrono::seconds traversalCombatTimeout(60);
 	inline constexpr std::chrono::seconds traversalTargetSuppression(120);
 	inline constexpr std::chrono::seconds lostTargetPursuitTimeout(5);
-	inline constexpr std::chrono::seconds lostTargetSuppression(10);
+	inline constexpr std::chrono::seconds lostTargetSuppression(120);
 	inline constexpr uint32_t maximumLostTargetPursuitDistance = 6;
 	inline constexpr uint32_t maximumTargetReacquisitionDistance = 6;
 	inline constexpr std::chrono::seconds navigationBlockSuppression(10);
@@ -173,6 +177,7 @@ namespace playerbot {
 		bool forceSecondHuntCandidateNodeLimit;
 		bool cancelHuntPlanningAtScoreBarrier;
 		bool forceRepeatedNavigationStepFailures;
+		bool forceCorpseNavigationFailures;
 		bool equipmentPurchasesEnabled;
 		bool forceEquipmentPurchaseRejected;
 		bool adaptiveChallengeFixture;
@@ -924,6 +929,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		void beginLoot(Player* player, const Position& currentPosition);
 
 		void finishLoot(Player* player, const Position& currentPosition);
+		void finishLootFailure(Player* player, const Position& currentPosition, const char* reason);
 
 		Container* findCorpse(Player* player, const Position& searchPosition);
 
@@ -950,6 +956,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		Position lastPosition;
 		Position ratPosition;
 		Position defensiveTargetPosition;
+		Position corpseDeathPosition;
 		Position lootPosition;
 		ScenarioStage scenarioStage = ScenarioStage::Traverse;
 		uint32_t fixedTargetRouteFailureCount = 0;
@@ -957,11 +964,20 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		uint32_t forcedNavigationStepFailuresRemaining = 0;
 		uint32_t corpseSearchAttempts = 0;
 		uint32_t corpseOpenAttempts = 0;
+		uint32_t corpseNavigationFailures = 0;
+		uint32_t consecutiveCorpseNavigationFailures = 0;
+		uint32_t corpseNavigationSuspensions = 0;
+		uint32_t lootTargetId = 0;
+		Position corpseNavigationFailurePosition;
+		std::chrono::steady_clock::time_point corpseLootStarted;
+		std::chrono::steady_clock::time_point corpseNavigationRetryAt;
 		uint16_t pendingLootItemId = 0;
 		uint16_t pendingDiscardItemId = 0;
 		uint16_t expectedCorpseItemId = 0;
 		bool expectedCorpseLootable = false;
 		bool lootedCurrentCorpse = false;
+		bool corpseObserved = false;
+		bool corpseNavigationSuspended = false;
 		uint16_t pendingDepositItemId = 0;
 		uint32_t pendingLootInventoryCount = 0;
 		uint8_t pendingDiscardCount = 0;
@@ -1005,6 +1021,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		std::chrono::steady_clock::time_point eatRetryAfter;
 		std::chrono::steady_clock::time_point combatStarted;
 		std::chrono::steady_clock::time_point defensiveCombatStarted;
+		bool defensiveTargetRouteCritical = false;
 		std::chrono::steady_clock::time_point targetPursuitStarted;
 		Position targetPursuitStartPosition;
 		Position targetPursuitDestination;
