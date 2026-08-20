@@ -626,7 +626,6 @@ bool PlayerBotController::tryOffensiveSpell(Player* player, const Position& curr
 uint64_t PlayerBotController::spellTrainingReserve(const Player& player) const
 {
 	uint32_t potionPrice = std::numeric_limits<uint32_t>::max();
-	uint32_t foodPrice = std::numeric_limits<uint32_t>::max();
 	for (const auto& entry : g_game.getNpcs()) {
 		Npc* npc = entry.second;
 		const std::string* capability = npc && !npc->isRemoved() ? npc->getParameter("playerbot_service") : nullptr;
@@ -636,16 +635,16 @@ uint64_t PlayerBotController::spellTrainingReserve(const Player& player) const
 		for (const ShopInfo& offer : npc->getShopOffers()) {
 			if (offer.itemId == smallHealthPotionItemId && offer.buyPrice != 0) {
 				potionPrice = std::min(potionPrice, offer.buyPrice);
-			} else if (offer.itemId == meatItemId && offer.buyPrice != 0) {
-				foodPrice = std::min(foodPrice, offer.buyPrice);
 			}
 		}
 	}
-	if (potionPrice == std::numeric_limits<uint32_t>::max() || foodPrice == std::numeric_limits<uint32_t>::max()) {
+	if (potionPrice == std::numeric_limits<uint32_t>::max()) {
 		return std::numeric_limits<uint64_t>::max();
 	}
-	return carriedGoldReserve + static_cast<uint64_t>(minimumSmallHealthPotions) * potionPrice +
-	       static_cast<uint64_t>(minimumMeat) * foodPrice;
+	const uint32_t potionCount = getInventoryItemCount(player, smallHealthPotionItemId);
+	const uint32_t potionGap = potionCount < smallHealthPotionRestockTarget ?
+	                               smallHealthPotionRestockTarget - potionCount : 0;
+	return carriedGoldReserve + static_cast<uint64_t>(potionGap) * potionPrice;
 }
 
 void PlayerBotController::emitSpellCandidate(const Npc& npc, const NpcSpellOffer& offer, const Position& position,
@@ -674,8 +673,7 @@ bool PlayerBotController::findSpellTraining(Player& player, const Position& posi
 	const uint16_t vocationId = player.getVocationId();
 	const uint16_t baseVocationId = player.getVocation()->getFromVocation() == 0 ? vocationId :
 	                               player.getVocation()->getFromVocation();
-	const bool suppliesReady = getInventoryItemCount(player, smallHealthPotionItemId) >= minimumSmallHealthPotions &&
-	                           getInventoryItemCount(player, meatItemId) >= minimumMeat;
+	const bool suppliesReady = getInventoryItemCount(player, smallHealthPotionItemId) > smallHealthPotionReturnThreshold;
 	bool found = false;
 
 	for (const auto& entry : g_game.getNpcs()) {

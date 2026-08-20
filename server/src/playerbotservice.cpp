@@ -257,6 +257,19 @@ bool PlayerBotController::openServiceShop(Player* player, ServiceNpc& service, c
 		stop("service_npc_unavailable", position);
 		return false;
 	}
+	int32_t onBuy;
+	int32_t onSell;
+	Npc* shopOwner = player->getShopOwner(onBuy, onSell);
+	if (shopOwner == npc && !player->getShopItemList().empty()) {
+		if (conversationStep != ConversationStep::Verify) {
+			conversationStep = ConversationStep::Ready;
+		}
+		serviceAttempts = 0;
+		return true;
+	}
+	if (shopOwner && shopOwner != npc && conversationStep == ConversationStep::Greet) {
+		player->closeShopWindow(false);
+	}
 	if (conversationStep == ConversationStep::Greet) {
 		++counters.actionsAttempted;
 		npc->receiveSpeech(player, TALKTYPE_PRIVATE_PN, "hi");
@@ -279,11 +292,6 @@ bool PlayerBotController::openServiceShop(Player* player, ServiceNpc& service, c
 		conversationStep = ConversationStep::Ready;
 		schedule(1000);
 		return false;
-	}
-	int32_t onBuy;
-	int32_t onSell;
-	if (player->getShopOwner(onBuy, onSell) == npc && !player->getShopItemList().empty()) {
-		return true;
 	}
 	if (++serviceAttempts >= maximumServiceAttempts) {
 		logActionFailure("shop", "shop_window_unavailable", position);
@@ -490,6 +498,7 @@ void PlayerBotController::processBank(Player* player, const Position& currentPos
 		if (serviceBeforeMoney == 0) {
 			bankDepositComplete = true;
 			conversationStep = ConversationStep::Ready;
+			schedule(SCHEDULER_MINTICKS);
 			return;
 		}
 		++counters.actionsAttempted;
@@ -526,8 +535,14 @@ void PlayerBotController::processBank(Player* player, const Position& currentPos
 	}
 	if (conversationStep == ConversationStep::Ready) {
 		serviceBeforeBalance = player->getBankBalance();
+		serviceAmount = static_cast<uint32_t>(std::min<uint64_t>(carriedGoldReserve, serviceBeforeBalance));
+		if (serviceAmount == 0) {
+			serviceStage = ServiceStage::Complete;
+			schedule(SCHEDULER_MINTICKS);
+			return;
+		}
 		++counters.actionsAttempted;
-		npc->receiveSpeech(player, TALKTYPE_PRIVATE_PN, "withdraw " + std::to_string(carriedGoldReserve));
+		npc->receiveSpeech(player, TALKTYPE_PRIVATE_PN, "withdraw " + std::to_string(serviceAmount));
 		conversationStep = ConversationStep::Confirm;
 		schedule(SCHEDULER_MINTICKS);
 		return;
@@ -539,8 +554,9 @@ void PlayerBotController::processBank(Player* player, const Position& currentPos
 		schedule(SCHEDULER_MINTICKS);
 		return;
 	}
-	if (player->getMoney() == carriedGoldReserve && player->getBankBalance() + carriedGoldReserve == serviceBeforeBalance) {
-		emit("action_result", currentPosition, "\"action\":\"bank_withdraw\",\"result\":\"success\",\"count\":100,\"bank_before\":" +
+	if (player->getMoney() == serviceAmount && player->getBankBalance() + serviceAmount == serviceBeforeBalance) {
+		emit("action_result", currentPosition, "\"action\":\"bank_withdraw\",\"result\":\"success\",\"count\":" +
+		     std::to_string(serviceAmount) + ",\"bank_before\":" +
 		     std::to_string(serviceBeforeBalance) + ",\"bank_after\":" + std::to_string(player->getBankBalance()));
 		serviceStage = ServiceStage::Complete;
 		schedule(SCHEDULER_MINTICKS);
@@ -564,8 +580,7 @@ void PlayerBotController::processService(Player* player, const Position& current
 		return;
 	}
 	if (conversationStep == ConversationStep::Verify && serviceItemId != 0 && serviceAmount != 0 &&
-	    (serviceStage == ServiceStage::SellLoot || serviceStage == ServiceStage::BuyPotions ||
-	     serviceStage == ServiceStage::BuyMeat)) {
+	    (serviceStage == ServiceStage::SellLoot || serviceStage == ServiceStage::BuyPotions)) {
 		auto service = std::find_if(serviceShops.begin(), serviceShops.end(), [this](const ServiceNpc& candidate) {
 			return candidate.id == serviceTargetId;
 		});
@@ -574,8 +589,7 @@ void PlayerBotController::processService(Player* player, const Position& current
 			return;
 		}
 		const bool purchase = serviceStage != ServiceStage::SellLoot;
-		const char* action = serviceStage == ServiceStage::SellLoot ? "sell" :
-		                     (serviceStage == ServiceStage::BuyPotions ? "buy_potions" : "buy_meat");
+		const char* action = serviceStage == ServiceStage::SellLoot ? "sell" : "buy_potions";
 		processServiceShop(player, currentPosition, *service, action, serviceItemId, serviceAmount, purchase);
 		return;
 	}
@@ -594,12 +608,11 @@ void PlayerBotController::processService(Player* player, const Position& current
 		                   std::min<uint32_t>(100, getSaleItemCount(*player, itemId)), false);
 		return;
 	}
-	if (serviceStage == ServiceStage::BuyPotions || serviceStage == ServiceStage::BuyMeat) {
-		const uint16_t itemId = serviceStage == ServiceStage::BuyPotions ? smallHealthPotionItemId : meatItemId;
-		const uint32_t minimum = serviceStage == ServiceStage::BuyPotions ? minimumSmallHealthPotions : minimumMeat;
+	if (serviceStage == ServiceStage::BuyPotions) {
+		const uint16_t itemId = smallHealthPotionItemId;
 		const uint32_t currentCount = getInventoryItemCount(*player, itemId);
-		if (currentCount >= minimum) {
-			serviceStage = serviceStage == ServiceStage::BuyPotions ? ServiceStage::BuyMeat : ServiceStage::Bank;
+		if (currentCount >= smallHealthPotionRestockTarget) {
+			serviceStage = ServiceStage::Bank;
 			schedule(SCHEDULER_MINTICKS);
 			return;
 		}
@@ -608,11 +621,35 @@ void PlayerBotController::processService(Player* player, const Position& current
 			stop("required_shop_offer_unavailable", currentPosition);
 			return;
 		}
+		const ShopInfo* offer = findOffer(*seller, itemId, true);
+		if (!offer || offer->buyPrice == 0) {
+			stop("required_shop_offer_unavailable", currentPosition);
+			return;
+		}
+		const uint32_t targetGap = smallHealthPotionRestockTarget - currentCount;
+		const uint64_t totalMoney = player->getMoney() + player->getBankBalance();
+		const uint64_t reserve = desiredCarriedGold(*player);
+		const uint32_t requiredGap = currentCount <= smallHealthPotionReturnThreshold ?
+		                                 smallHealthPotionReturnThreshold + 1 - currentCount : 0;
+		if (totalMoney / offer->buyPrice < requiredGap) {
+			stop("insufficient_potion_funds", currentPosition);
+			return;
+		}
+		uint32_t amount = totalMoney / offer->buyPrice >= targetGap ? targetGap :
+			static_cast<uint32_t>(std::min<uint64_t>(targetGap,
+				totalMoney > reserve ? (totalMoney - reserve) / offer->buyPrice : 0));
+		if (currentCount <= smallHealthPotionReturnThreshold) {
+			amount = std::max(amount, static_cast<uint32_t>(std::min<uint64_t>(requiredGap, totalMoney / offer->buyPrice)));
+		}
+		if (amount == 0) {
+			serviceStage = ServiceStage::Bank;
+			schedule(SCHEDULER_MINTICKS);
+			return;
+		}
 		if (serviceTargetId != seller->id) {
 			resetConversation(seller->id);
 		}
-		processServiceShop(player, currentPosition, *seller, serviceStage == ServiceStage::BuyPotions ? "buy_potions" : "buy_meat",
-		                   itemId, minimum - currentCount, true);
+		processServiceShop(player, currentPosition, *seller, "buy_potions", itemId, amount, true);
 		return;
 	}
 	if (serviceStage == ServiceStage::Bank) {
@@ -630,11 +667,13 @@ void PlayerBotController::processService(Player* player, const Position& current
 	beginReturn(player, currentPosition, "service_complete");
 }
 
-bool PlayerBotController::isProtectedDepositItem(const Item& item) const
+bool PlayerBotController::isProtectedDepositItem(const Player& player, const Item& item) const
 {
 	const ItemType& type = Item::items[item.getID()];
-	return type.isContainer() || isCombatEquipment(item) || item.getID() == ropeItemId || item.getID() == 2554 ||
-	       item.getWorth() != 0 || itemSellValues.find(item.getID()) == itemSellValues.end();
+	return type.isContainer() || item.getID() == ropeItemId || item.getID() == 2554 ||
+	       ((type.slotPosition & SLOTP_TWO_HAND) != 0 && type.weaponType != WEAPON_NONE) ||
+	       evaluateEquipmentUpgrade(player, item).has_value() || item.getWorth() != 0 ||
+	       itemSellValues.find(item.getID()) == itemSellValues.end();
 }
 
 bool PlayerBotController::findDepositableItem(const Player& player, Container* container, Container*& source,
@@ -645,7 +684,7 @@ bool PlayerBotController::findDepositableItem(const Player& player, Container* c
 		    findDepositableItem(player, nested, source, depositItem, count)) {
 			return true;
 		}
-		if (isProtectedDepositItem(*item)) {
+		if (isProtectedDepositItem(player, *item)) {
 			continue;
 		}
 		const uint32_t carried = getInventoryItemCount(player, item->getID());
@@ -888,6 +927,7 @@ bool PlayerBotController::openContainer(Player& player, Container& container, ui
 		const int32_t index = parentId < 0 ? -1 : parent->getThingIndex(&container);
 		if (index < 0 || index > UINT8_MAX) {
 			logActionFailure("depot_open_source", "container_parent_unavailable", currentPosition);
+			schedule(blockedRouteRetryInterval);
 			return false;
 		}
 		fromPosition = Position(0xFFFF, 0x40 | static_cast<uint8_t>(parentId), static_cast<uint8_t>(index));
@@ -897,6 +937,7 @@ bool PlayerBotController::openContainer(Player& player, Container& container, ui
 		}
 	} else if (player.getInventoryItem(CONST_SLOT_BACKPACK) != &container) {
 		logActionFailure("depot_open_source", "container_not_carried", currentPosition);
+		schedule(blockedRouteRetryInterval);
 		return false;
 	}
 	player.closeContainer(containerId);
@@ -917,6 +958,9 @@ bool PlayerBotController::openDepotLocker(Player& player, const Position& curren
 	Tile* tile = g_game.map.getTile(depotLockerPosition);
 	TileItemVector* items = tile ? tile->getItemList() : nullptr;
 	if (!items) {
+		clearDepotDiscovery();
+		setCyclePhase(CyclePhase::ReturnToDepot, currentPosition, "depot_locker_tile_unavailable");
+		schedule(blockedRouteRetryInterval);
 		return false;
 	}
 	if (!player.canDoAction()) {
@@ -964,6 +1008,7 @@ bool PlayerBotController::openDepotChest(Player& player, const Position& current
 	Container* locker = player.getContainerByID(depotLockerContainerId);
 	if (!locker || !locker->getDepotLocker() || locker->getDepotLocker()->getDepotId() != depotId) {
 		depotStage = DepotStage::OpenLocker;
+		schedule(blockedRouteRetryInterval);
 		return false;
 	}
 	DepotChest* chest = player.getDepotChest(depotId, false);
@@ -1077,6 +1122,15 @@ void PlayerBotController::processFixtureDeposit(Player* player, const Position& 
 		schedule(navigationDecisionDelay(*player));
 		return;
 	}
+	Item* upgrade = nullptr;
+	EquipmentUpgrade upgradeInfo{};
+	if (findCarriedEquipmentUpgrade(*player, upgrade, upgradeInfo)) {
+		readinessResumeService = true;
+		if (!beginReadinessEquipment(player, currentPosition, "depot_carried_upgrade")) {
+			schedule(navigationDecisionDelay(*player));
+		}
+		return;
+	}
 	Container* source = nullptr;
 	Item* depositItem = nullptr;
 	for (Item* item : backpack->getItemList()) {
@@ -1087,7 +1141,7 @@ void PlayerBotController::processFixtureDeposit(Player* player, const Position& 
 		}
 	}
 	if (!depositItem) {
-		if (player->getFreeCapacity() < returnCapacityThreshold) {
+		if (effectiveFreeCapacity(*player) < returnCapacityThreshold) {
 			stop("depot_capacity_not_recovered", currentPosition);
 			return;
 		}
@@ -1188,6 +1242,7 @@ void PlayerBotController::processDeposit(Player* player, const Position& current
 	Container* chest = player->getContainerByID(depotChestContainerId);
 	if (!chest || player->getDepotChest(depotId, false) != chest) {
 		depotStage = DepotStage::OpenChest;
+		schedule(blockedRouteRetryInterval);
 		return;
 	}
 
@@ -1195,8 +1250,17 @@ void PlayerBotController::processDeposit(Player* player, const Position& current
 	Item* depositItem = nullptr;
 	uint8_t count = 0;
 	refreshItemValues();
+	Item* upgrade = nullptr;
+	EquipmentUpgrade upgradeInfo{};
+	if (findCarriedEquipmentUpgrade(*player, upgrade, upgradeInfo)) {
+		readinessResumeService = true;
+		if (!beginReadinessEquipment(player, currentPosition, "depot_carried_upgrade")) {
+			schedule(navigationDecisionDelay(*player));
+		}
+		return;
+	}
 	if (!findDepositableItem(*player, backpack, source, depositItem, count)) {
-		if (player->getFreeCapacity() < returnCapacityThreshold) {
+		if (effectiveFreeCapacity(*player) < returnCapacityThreshold) {
 			stop("depot_capacity_not_recovered", currentPosition);
 			return;
 		}
@@ -1230,7 +1294,8 @@ void PlayerBotController::processDeposit(Player* player, const Position& current
 	auto sourceItem = std::find(sourceItems.begin(), sourceItems.end(), depositItem);
 	if (sourceContainerId < 0 || sourceItem == sourceItems.end() ||
 	    std::distance(sourceItems.begin(), sourceItem) > UINT8_MAX) {
-		stop("depot_source_unavailable", currentPosition);
+		logActionFailure("deposit", "source_unavailable", currentPosition);
+		schedule(blockedRouteRetryInterval);
 		return;
 	}
 	if (!player->canDoAction()) {

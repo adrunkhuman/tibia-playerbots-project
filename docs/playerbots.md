@@ -87,7 +87,7 @@ or a health decrease cancels the scan. Other equipment, mana, potion, or learned
 spell changes apply to the next scan. Candidate telemetry describes the captured
 snapshot rather than necessarily the player's state when selection completes.
 
-Predicted pressure models up to three overlapping hostile spawns, current
+Predicted pressure models up to five overlapping hostile spawns, current
 equipment, one conservative small-health-potion recovery, and learned Light
 Healing when its loaded metadata, current mana, cooldown, and legality allow
 it. The prediction uses the spell's minimum server formula and preserves
@@ -100,12 +100,15 @@ does not credit potion or spell recovery before that lethal point.
 
 Each controller starts with a `0.20` pressure frontier and rewards the highest
 projected-XP reachable region in its `+/-0.05` band. Safer regions remain a
-fallback. Thirty seconds of active combat with at least 50% hunt uptime,
+fallback. Thirty seconds of active combat, at least one recorded kill,
 near-full health, and no verified recovery escalates the frontier by `0.025`.
 Verified potion or healing-spell pressure, observed danger, or death backs it
 off by `0.05`; the next two qualifying hunts hold before escalation resumes.
 The target stays within `0.10` through `0.40`. It is an adaptation bound, not a
-lethal threshold. Travel and idle full health do not count as easy evidence.
+lethal threshold. Travel, idle full health, and target engagement without a
+kill do not count as easy evidence. Active-combat uptime remains diagnostic; it
+is not an escalation threshold because sparse, fast-kill hunts naturally have
+low uptime.
 Frontier and performance state are per-controller and reset on relog or restart.
 
 Taking one maximum health pool of active-combat damage within the first two
@@ -113,8 +116,9 @@ minutes abandons the region for ten minutes. Completed hunts update a
 per-controller XP correction after at least 30 seconds and one kill; the sample
 is clamped to `0.25` through `2.0` and uses a 65/35 rolling blend. When all
 locally scanned candidates are unavailable, the controller emits
-`hunt_scope_exhausted` and retries the same bounded scope after 30 seconds. It
-does not expand geography or stop the controller.
+`hunt_scope_exhausted` and retries the same bounded scope after 30 seconds. A
+successful selection resets the counter; three consecutive exhausted scans stop
+the controller instead of rescanning an unchanged scope forever.
 
 When an attacked monster leaves normal positional or creature visibility, or
 the attack association is lost, the bot clears chase and pursues a reachable
@@ -140,8 +144,11 @@ dynamic planning or pursuit.
 
 At or below 60% health, the bot uses one small health potion through normal
 use-with-creature handling and verifies consumption and net healing. Missing
-stock redirects it to service. Food use preserves one meat and respects the
-fullness limit.
+stock redirects it to service. Food is optional: its absence does not block a
+hunt or select service. The current soft preference collects up to two standard
+8.60 food items. The bot can consume any item classified as standard food,
+respects the normal fullness limit, and backs off for five minutes after three
+unverified uses.
 
 Service NPCs require an exact `playerbot_service` XML tag of `shop`, `banker`,
 `oracle`, or `spell_trainer`. Shops publish their loaded offers to the bot;
@@ -151,12 +158,20 @@ within 200 weighted tiles of the registered town temple. The bot greets the
 selected NPC, treats a private reply as focus acknowledgement, and opens the
 normal trade window. Reply text is not interpreted.
 
+Service goal selection counts sellable inventory only when a live tagged NPC
+currently publishes a matching offer. Selling chooses the highest live price,
+then the nearer provider on a tie. Required purchases choose the nearest
+registered offer, then revalidate the NPC and trade window before transacting.
+Missing required offers, unavailable NPCs, and failed shop verification stop
+with explicit service errors instead of completing an unverified transaction.
+
 Spell training currently considers tagged providers within the Thais temple
 scope; Gregor is the initial tag. It derives trainer offers from loaded NPC
 scripts and rejects offers with a registry mismatch, wrong vocation, level,
 premium status, learned state, missing supply reserve, insufficient funds after
-the 100 gp carried reserve plus five potion and one meat replacement costs, or
-an unavailable route. A selected spell uses normal `hi`, keyword, and `yes`
+the 100 gp carried reserve plus the cost of the current stock gap to the
+10-potion restock target, or an unavailable route. A selected spell uses normal
+`hi`, keyword, and `yes`
 dialogue. Completion requires both learned state and the exact total-money
 delta. Learned-spell persistence reconstructs completion after restart and
 prevents a repurchase.
@@ -272,9 +287,20 @@ All scenarios use controlled Lua setup. They prove forecast arithmetic,
 arbitration, and normal engine casts under those conditions, not frequency or
 utility on an ordinary long-running server.
 
-The service cycle sells known surplus, restores five small health potions and
-one meat, deposits carried money, and withdraws 100 gp. Hunting ends after the
-configured duration or below 30 oz free capacity. Remaining top-level backpack
+The service cycle sells known surplus and returns for small health potions when
+the carried count reaches one. It buys enough to carry at least two and targets
+10. A complete restock takes priority when total carried and bank gold can pay
+for it; an optional partial restock preserves the carried-gold reserve. If total
+gold cannot raise stock above the return threshold, service stops with
+`insufficient_potion_funds` without buying an unusable partial reserve. The
+cycle deposits carried money and withdraws up to 100 gp without exceeding the
+bot's total available gold. It does not buy food merely because none is carried.
+Hunting ends after the configured duration or below 30 oz
+effective free capacity. Effective capacity is physical free capacity plus the
+weight of carried standard food, because that cargo can be consumed or replaced
+without service. A backpack may therefore have no physical capacity and remain
+hunt-ready when its reclaimable food weight keeps effective capacity above the
+reserve. Remaining top-level backpack
 loot is moved through a reachable local depot locker into that player's real
 depot chest. Depot locality and locker identity are independent: discovery
 enumerates map-indexed lockers, keeps only lockers in the 200-tile weighted
@@ -291,14 +317,27 @@ scan. A selected route is transferred into
 normal navigation, so it is not planned again. The selected actual locker ID,
 rather than the town ID, identifies the opened locker and player depot storage.
 Nested containers are opened and deposits are verified through normal item
-movement. Equipped items, the root backpack, currency, rope, shovel, and
-supply reserves are retained.
+movement. Equipped items, the root backpack, currency, rope, shovel, the potion
+reserve, food, and unknown items are retained. The depot equips carried upgrades
+through the normal verified equipment path, then treats displaced and inferior
+equipment as ordinary cargo for sale or deposit. This prevents equipment from
+permanently consuming capacity without discarding upgrades. A carried weapon
+must improve maximum damage with the player's trained weapon skill; higher raw
+attack alone does not justify switching weapon classes. Two-handed weapons are
+outside the current loadout evaluator and remain protected from automatic sale,
+depot deposit, and cargo replacement until two-handed tradeoffs are supported.
 
 Item value comes from tagged shop offers. Currency uses intrinsic value; other
 loot must have a known buyer. Corpse contents are ranked by value per weight,
-and more valuable loot may replace lower-density sellable cargo. Unknown items,
-equipment, containers, currency, tools, and supplies are not replacement
-candidates.
+and more valuable loot may replace lower-density sellable cargo. Once two food
+items are carried, further food is skipped. Any food remains replaceable by a
+more valuable known item because the preference is not a reserve. Known
+unequipped equipment is also replaceable; equipped gear is outside the backpack
+cargo path. Unknown items, containers, currency, tools, and the potion reserve
+are not replacement candidates. Food count, weight, reclaimable capacity, and preference
+utility are observable, but food does not yet select a separate acquisition
+goal. Later goal arbitration can weigh measured regeneration benefit against
+travel, capacity, and service costs without restoring a hard requirement.
 
 The bot identifies only server-classified corpse containers and checks normal
 corpse ownership. It opens the corpse through normal item use before inspecting
@@ -333,6 +372,13 @@ vocation `4`, town `2`, and the registered Thais temple position. It remains
 server-owned and continues directly into mainland service.
 
 ## Recovery and configuration
+
+Any relog or server restart creates a fresh controller. Persisted player,
+inventory, equipment, spell, storage, and depot state is authoritative; routes,
+targets, conversations, open containers, pending actions, and objective state
+are discarded and reevaluated. Focused depot restart fixtures cover named
+approach, locker, chest, deposit, and departure checkpoints. They do not claim
+that an arbitrary interrupted shop or item transaction resumes in place.
 
 Death keeps normal corpse creation, penalties, saving, removal, and temple
 login. The manager retains ownership, waits, reloads the same character, and
@@ -377,7 +423,7 @@ States, actions, results, statuses, and reasons use stable lowercase values.
 | Spell casting | `action_result` with `action="cast_spell"` records the need, semantic `policy_candidate`, selected method, mana reserve, normal-path request, engine result, observed outcome, fallback, captured engine bounds, monotonic observation age, target class, distinct synchronous spell-victim count, measured Haste condition ticks, and controller-local calibration counts, range, conservative value, ranking estimate, confidence, and evidence reason. `spell_calibration` separates `classifier_helper` and `profile_math` fixture evidence; `spell_calibration_eviction` records bounded-profile replacement. `legal_candidates` contains only normal-path casts confirmed by resource evidence. |
 | Magic training | `goal_candidate`, `goal_selection`, and `goal_result` expose overflow arbitration. `action_result` with `action="magic_training"` emits a requested `engine_path` record and a success or failure `engine_verification` record with spell, reserve, current/maximum/predicted/lost mana, aggregated gain, aligned interval/remaining time, loaded cost, mana delta, and magic progression. `magic_training_fixture` with `source="authoritative_forecast"` is controlled fixture evidence, not a live cast. |
 | Actions | `action_result`, `target_changed`, `service_discovered`, `npc_reply`, `stuck` record externally relevant attempts and outcomes. |
-| Hunting | `hunt_region_candidate`, `hunt_region_scan`, `hunt_region_selection`, `hunt_region_outcome`, `hunt_challenge_frontier`, `hunt_scope_exhausted`, and `hunt_region_patrol` expose planner inputs, recovery assumptions, active-combat evidence, frontier updates, and bounded local exhaustion. |
+| Hunting | `hunt_region_candidate`, `hunt_region_scan`, `hunt_region_selection`, `hunt_region_outcome`, `hunt_challenge_frontier`, `hunt_scope_exhausted`, and `hunt_region_patrol` expose planner inputs, recovery assumptions, active-combat and kill evidence, frontier updates, and bounded local exhaustion. |
 | Navigation | `navigation_progress` records bounded recovery such as oscillation suppression. |
 | Health | `summary` reports cumulative timing, action, failure, stuck, and suppression counters every 60 seconds. |
 
@@ -394,7 +440,9 @@ they are not live engine-attribution evidence.
 
 `hunt_challenge_frontier.result` is `escalated`, `backoff`, `hold`, `clamped`,
 or `insufficient_active_combat`. Its `retreat` field is true only for the
-`hunt_region_observed_danger` exit reason. `hunt_scope_exhausted` reports total,
+`hunt_region_observed_danger` exit reason. It reports kills and the active-time
+and kill thresholds used for qualification; `active_combat_uptime` is diagnostic.
+`hunt_scope_exhausted` reports total,
 scored, suitable, and reachable candidate counts plus the retry delay and either
 `local_scope_exhausted` or `route_validation_budget_exhausted`.
 

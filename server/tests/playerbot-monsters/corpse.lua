@@ -36,8 +36,11 @@ registerCorpseTestMonster("Playerbot Nonlootable Corpse", {}, ITEM_GOLD_COIN)
 registerCorpseTestMonster("Playerbot Container Death Item", {}, ITEM_BAG)
 registerCorpseTestMonster("Playerbot Defensive Threat", {}, nil, false, 1)
 registerCorpseTestMonster("Playerbot Level Eight Target", {}, nil, false, 1, nil, 1)
-registerCorpseTestMonster("Playerbot Value Corpse", {
+registerCorpseTestMonster("Playerbot Food Value Corpse", {
     {id = 2826, chance = 100000, maxCount = 1},
+})
+registerCorpseTestMonster("Playerbot Food Cap Corpse", {
+	{id = 2666, chance = 100000, maxCount = 1},
 })
 registerCorpseTestMonster("Playerbot Spell Target", {}, nil, false, 1000)
 registerCorpseTestMonster("Playerbot Death Threat", {}, nil, true, 100000, {
