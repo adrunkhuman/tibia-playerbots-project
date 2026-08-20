@@ -796,7 +796,7 @@ function login.onLogin(player)
     end
 
     local mode = os.getenv("PLAYERBOT_GAMEPLAY_MODE") or "cycle"
-	assert(mode == "mainland" or mode == "cycle" or mode == "depot" or mode == "navigation" or mode == "navigation_recovery" or mode == "target_pursuit" or mode == "target_pursuit_abandon" or mode == "corpse" or mode == "corpse_inaccessible" or mode == "death" or mode == "healing" or mode == "spell_use" or
+	assert(mode == "mainland" or mode == "cycle" or mode == "depot" or mode == "navigation" or mode == "navigation_recovery" or mode == "patrol_recovery" or mode == "target_pursuit" or mode == "target_pursuit_abandon" or mode == "corpse" or mode == "corpse_inaccessible" or mode == "death" or mode == "healing" or mode == "spell_use" or
 		mode == "healing_resupply" or mode == "value" or mode == "progression" or mode == "progression_bundle" or
 		mode == "progression_nested" or
         mode == "progression_resume" or mode == "progression_nested_resume" or mode == "progression_space" or
@@ -1358,6 +1358,11 @@ function login.onLogin(player)
 	if mode == "navigation_recovery" then
 		suppressNearbyMonsters(player:getId())
 		print("PLAYERBOT_GAMEPLAY_TEST NAVIGATION_RECOVERY_START")
+		return true
+	end
+	if mode == "patrol_recovery" then
+		suppressNearbyMonsters(player:getId())
+		print("PLAYERBOT_GAMEPLAY_TEST PATROL_RECOVERY_START")
 		return true
 	end
     if mode == "healing" then
