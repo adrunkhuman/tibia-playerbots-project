@@ -50,7 +50,7 @@ const PlayerBotTestPolicy& playerbot::testPolicyFromEnvironment()
 			  std::strcmp(gameplayMode, "magic_training_hunt") != 0));
 		const bool startInHunt = gameplayMode &&
 			(std::strcmp(gameplayMode, "navigation") == 0 || std::strcmp(gameplayMode, "navigation_recovery") == 0 ||
-			 std::strcmp(gameplayMode, "corpse") == 0 ||
+			 (std::strcmp(gameplayMode, "corpse") == 0 || std::strcmp(gameplayMode, "corpse_inaccessible") == 0) ||
 			 (std::strcmp(gameplayMode, "target_pursuit") == 0 || std::strcmp(gameplayMode, "target_pursuit_abandon") == 0) ||
 			 std::strcmp(gameplayMode, "healing") == 0 || std::strcmp(gameplayMode, "healing_resupply") == 0 ||
 			 std::strcmp(gameplayMode, "value") == 0 || std::strcmp(gameplayMode, "departure_interrupt") == 0 ||
@@ -103,6 +103,7 @@ const PlayerBotTestPolicy& playerbot::testPolicyFromEnvironment()
 			gameplayMode && std::strcmp(gameplayMode, "hunt_planning") == 0,
 			gameplayMode && std::strcmp(gameplayMode, "hunt_planning") == 0,
 			gameplayMode && std::strcmp(gameplayMode, "navigation_recovery") == 0,
+			gameplayMode && std::strcmp(gameplayMode, "corpse_inaccessible") == 0,
 			!gameplayMode || (std::strcmp(gameplayMode, "equipment_shadow") != 0 &&
 			                  std::strcmp(gameplayMode, "equipment_shadow_unaffordable") != 0 &&
 			                  std::strcmp(gameplayMode, "equipment_shadow_no_upgrade") != 0),
@@ -125,6 +126,9 @@ PlayerBotController::PlayerBotController(const Player& player,
 {
 	if (testPolicy.forceRepeatedNavigationStepFailures) {
 		forcedNavigationStepFailuresRemaining = maximumRepeatedNavigationStepFailures;
+	}
+	if (testPolicy.forceCorpseNavigationFailures) {
+		forcedNavigationStepFailuresRemaining = maximumCorpseNavigationFailures;
 	}
 }
 

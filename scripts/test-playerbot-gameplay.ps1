@@ -1307,6 +1307,37 @@ function Assert-CorpseEvents {
     }
 }
 
+function Assert-InaccessibleCorpseEvents {
+	param([string]$Logs)
+
+	$events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
+	$suspended = @($events | Where-Object {
+		$_.event -eq "navigation_progress" -and $_.result -eq "suspended" -and
+		$_.reason -eq "corpse_route_unchanged"
+	})
+	$terminalResult = @($events | Where-Object {
+		$_.event -eq "action_result" -and $_.action -eq "loot" -and $_.result -eq "failed" -and
+		$_.reason -eq "corpse_inaccessible"
+	})
+	$combatPreemption = @($events | Where-Object {
+		$_.event -eq "target_changed" -and $_.target_name -eq "Playerbot Corpse Blocker" -and
+		$_.reason -in @("defensive_path_blocker", "defensive_attacker")
+	})
+	$blockerEngaged = @($events | Where-Object {
+		$_.event -eq "action_result" -and $_.action -eq "defensive_combat" -and
+		$_.result -eq "started" -and
+		$combatPreemption.Count -ge 1 -and $_.target_id -eq $combatPreemption[0].target_id
+	})
+	$controllerTerminal = @($events | Where-Object { $_.event -eq "terminal" })
+	if ($suspended.Count -lt 1 -or $combatPreemption.Count -ne 1 -or $blockerEngaged.Count -ne 1 -or
+		$terminalResult.Count -ne 1 -or
+		$terminalResult[0].target_id -le 0 -or
+		$terminalResult[0].navigation_failures -gt 6 -or $terminalResult[0].navigation_suspensions -lt 1 -or
+		$terminalResult[0].elapsed_ms -gt 22000 -or $controllerTerminal.Count -ne 0) {
+		throw "Inaccessible corpse work was not bounded. suspended=$($suspended.Count), preemption=$($combatPreemption.Count)/$($blockerEngaged.Count), results=$($terminalResult.Count), terminal=$($controllerTerminal.Count)."
+	}
+}
+
 function Assert-DepotEvents {
 	param([string]$Logs, [int]$ExpectedDepositedCount, [int]$ExpectedEquipmentDeposits)
 
@@ -2439,6 +2470,14 @@ try {
 			Invoke-Compose up --detach
 			$corpseLogs = Wait-ForLog -Pattern '"reason":"corpse_not_lootable","expected_corpse_item_id":1987'
 			Assert-CorpseEvents -Logs $corpseLogs
+		}
+		Invoke-Scenario -Name "corpse_inaccessible" -DefaultTimeoutSeconds 75 -Body {
+			Invoke-Compose down --volumes --remove-orphans
+			$env:PLAYERBOT_GAMEPLAY_MODE = "corpse_inaccessible"
+			$env:PLAYERBOT_HUNT_DURATION_SECONDS = "900"
+			Invoke-Compose up --detach
+			$corpseLogs = Wait-ForLog -Pattern '"action":"loot","result":"failed","reason":"corpse_inaccessible"'
+			Assert-InaccessibleCorpseEvents -Logs $corpseLogs
 		}
 	}
 

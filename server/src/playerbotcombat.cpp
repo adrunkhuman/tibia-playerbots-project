@@ -342,8 +342,9 @@ bool PlayerBotController::attackDefensiveThreat(Player* player, const Position& 
 	});
 
 	for (Creature* creature : spectators) {
+		const bool routeCritical = isRouteCritical(creature);
 		if (!creature->getMonster() || creature->isRemoved() || creature->isDead() ||
-		    creature->getAttackedCreature() != player || !player->canSee(creature->getPosition()) ||
+		    (creature->getAttackedCreature() != player && !routeCritical) || !player->canSee(creature->getPosition()) ||
 		    !Position::areInRange<1, 1, 0>(currentPosition, creature->getPosition())) {
 			continue;
 		}
@@ -359,7 +360,7 @@ bool PlayerBotController::attackDefensiveThreat(Player* player, const Position& 
 		defensiveTargetId = creature->getID();
 		defensiveTargetPosition = creature->getPosition();
 		defensiveCombatStarted = std::chrono::steady_clock::now();
-		const bool routeCritical = isRouteCritical(creature);
+		defensiveTargetRouteCritical = routeCritical;
 		clearNavigation();
 		std::ostringstream targetFields;
 		targetFields << "\"previous_target_id\":null,\"target_id\":" << defensiveTargetId
@@ -386,6 +387,7 @@ void PlayerBotController::finishDefensiveCombat(Player* player, const Position& 
 		g_game.playerSetAttackedCreature(playerId, 0);
 	}
 	defensiveTargetId = 0;
+	defensiveTargetRouteCritical = false;
 	clearNavigation();
 	emit("target_changed", currentPosition, "\"previous_target_id\":" + std::to_string(previousTarget) +
 	     ",\"target_id\":null,\"reason\":" + jsonString(reason));
@@ -399,7 +401,7 @@ void PlayerBotController::processDefensiveCombat(Player* player, const Position&
 	Creature* target = g_game.getCreatureByID(defensiveTargetId);
 	if (!target || target->isRemoved() || target->isDead()) {
 		finishDefensiveCombat(player, currentPosition, "success", "target_defeated");
-	} else if (target->getAttackedCreature() != player || !player->canSee(target->getPosition()) ||
+	} else if ((!defensiveTargetRouteCritical && target->getAttackedCreature() != player) || !player->canSee(target->getPosition()) ||
 	           !Position::areInRange<1, 1, 0>(currentPosition, target->getPosition())) {
 		finishDefensiveCombat(player, currentPosition, "skipped", "threat_disengaged");
 	} else if (player->getAttackedCreature() != target) {
@@ -1189,6 +1191,14 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 			return;
 		}
 	}
+	if (defensiveTargetId != 0) {
+		if (scenarioStage == ScenarioStage::LootCorpse && corpseNavigationSuspended &&
+		    std::chrono::steady_clock::now() - corpseLootStarted >= corpseLootTimeout) {
+			finishLootFailure(player, currentPosition, "corpse_inaccessible");
+		}
+		processDefensiveCombat(player, currentPosition);
+		return;
+	}
 	if (progressionObjective != ProgressionObjective::None) {
 		processProgression(player, currentPosition);
 		return;
@@ -1211,6 +1221,17 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 			schedule(SCHEDULER_MINTICKS);
 		}
 		return;
+	}
+	if (scenarioStage == ScenarioStage::LootCorpse && corpseNavigationSuspended) {
+		if (std::chrono::steady_clock::now() - corpseLootStarted >= corpseLootTimeout) {
+			finishLootFailure(player, currentPosition, "corpse_inaccessible");
+			schedule(navigationInterval);
+			return;
+		}
+		if (attackDefensiveThreat(player, currentPosition)) {
+			schedule(navigationInterval);
+			return;
+		}
 	}
 	if (scenarioStage == ScenarioStage::LootCorpse) {
 		lootCorpse(player, currentPosition);

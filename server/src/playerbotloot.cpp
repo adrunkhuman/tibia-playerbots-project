@@ -31,13 +31,23 @@ void PlayerBotController::beginLoot(Player* player, const Position& currentPosit
 	if (activeHuntRegion) {
 		++huntRegionKills;
 	}
+	lootTargetId = ratId;
+	corpseDeathPosition = ratPosition;
 	clearRatTarget(currentPosition, "target_defeated");
-	lootPosition = ratPosition;
+	lootPosition = corpseDeathPosition;
 	corpseSearchAttempts = 0;
 	corpseOpenAttempts = 0;
+	corpseNavigationFailures = 0;
+	consecutiveCorpseNavigationFailures = 0;
+	corpseNavigationSuspensions = 0;
+	corpseNavigationFailurePosition = currentPosition;
+	corpseLootStarted = std::chrono::steady_clock::now();
+	corpseNavigationRetryAt = {};
 	pendingLootItemId = 0;
 	pendingDiscardItemId = 0;
 	lootedCurrentCorpse = false;
+	corpseObserved = false;
+	corpseNavigationSuspended = false;
 	unavailableLootItemIds.clear();
 	if (!expectedCorpseLootable) {
 		std::ostringstream fields;
@@ -53,11 +63,41 @@ void PlayerBotController::beginLoot(Player* player, const Position& currentPosit
 void PlayerBotController::finishLoot(Player* player, const Position& currentPosition)
 {
 	player->closeContainer(corpseContainerId);
+	clearNavigation();
 	pendingLootItemId = 0;
 	pendingDiscardItemId = 0;
 	expectedCorpseItemId = 0;
 	expectedCorpseLootable = false;
+	lootTargetId = 0;
+	corpseNavigationSuspended = false;
+	corpseObserved = false;
 	setStage(ScenarioStage::Traverse, currentPosition);
+}
+
+void PlayerBotController::finishLootFailure(Player* player, const Position& currentPosition, const char* reason)
+{
+	++counters.actionsFailed;
+	const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+		std::chrono::steady_clock::now() - corpseLootStarted).count();
+	std::ostringstream fields;
+	fields << "\"action\":\"loot\",\"result\":\"failed\",\"reason\":" << jsonString(reason)
+	       << ",\"target_id\":" << lootTargetId
+	       << ",\"expected_corpse_item_id\":" << expectedCorpseItemId
+	       << ",\"last_known_death_position\":{\"x\":" << corpseDeathPosition.x << ",\"y\":" << corpseDeathPosition.y
+	       << ",\"z\":" << static_cast<uint16_t>(corpseDeathPosition.z) << '}'
+	       << ",\"corpse_position\":";
+	if (corpseObserved) {
+		fields << "{\"x\":" << lootPosition.x << ",\"y\":" << lootPosition.y
+		       << ",\"z\":" << static_cast<uint16_t>(lootPosition.z) << '}';
+	} else {
+		fields << "null";
+	}
+	fields << ",\"search_attempts\":" << corpseSearchAttempts
+	       << ",\"navigation_failures\":" << corpseNavigationFailures
+	       << ",\"navigation_suspensions\":" << corpseNavigationSuspensions
+	       << ",\"elapsed_ms\":" << elapsed;
+	emit("action_result", currentPosition, fields.str());
+	finishLoot(player, currentPosition);
 }
 
 Container* PlayerBotController::findCorpse(Player* player, const Position& searchPosition)
@@ -260,8 +300,60 @@ void PlayerBotController::lootCorpse(Player* player, const Position& currentPosi
 	if (!corpse || Item::items[corpse->getID()].corpseType == RACE_NONE) {
 		corpse = findCorpse(player, lootPosition);
 	}
+	if (corpse) {
+		corpseObserved = true;
+	} else if (corpseObserved) {
+		finishLootFailure(player, currentPosition, "corpse_expired");
+		schedule(navigationInterval);
+		return;
+	}
 	if (!Position::areInRange<1, 1, 0>(currentPosition, lootPosition)) {
+		const auto now = std::chrono::steady_clock::now();
+		if (now - corpseLootStarted >= corpseLootTimeout) {
+			finishLootFailure(player, currentPosition, "corpse_inaccessible");
+			schedule(navigationInterval);
+			return;
+		}
+		if (corpseNavigationSuspended) {
+			if (currentPosition != corpseNavigationFailurePosition || now >= corpseNavigationRetryAt) {
+				corpseNavigationSuspended = false;
+				consecutiveCorpseNavigationFailures = 0;
+				clearNavigation();
+				emit("navigation_progress", currentPosition,
+				     "\"result\":\"resumed\",\"reason\":\"corpse_retry\",\"navigation_failures\":" +
+				         std::to_string(corpseNavigationFailures));
+			} else {
+				const auto delay = std::chrono::duration_cast<std::chrono::milliseconds>(corpseNavigationRetryAt - now).count();
+				schedule(static_cast<uint32_t>(std::max<int64_t>(SCHEDULER_MINTICKS, delay)));
+				return;
+			}
+		}
+		if (currentPosition != corpseNavigationFailurePosition) {
+			corpseNavigationFailurePosition = currentPosition;
+			consecutiveCorpseNavigationFailures = 0;
+		}
+		const uint64_t pathfindingFailuresBefore = counters.pathfindingFailures;
+		const uint32_t blockedStepsBefore = blockedStepCount;
 		processNavigation(player, currentPosition, lootPosition);
+		if (counters.pathfindingFailures > pathfindingFailuresBefore || blockedStepCount > blockedStepsBefore) {
+			++corpseNavigationFailures;
+			++consecutiveCorpseNavigationFailures;
+			corpseNavigationFailurePosition = currentPosition;
+			if (corpseNavigationFailures >= maximumCorpseNavigationFailures) {
+				finishLootFailure(player, currentPosition, "corpse_inaccessible");
+				return;
+			}
+			if (consecutiveCorpseNavigationFailures >= corpseNavigationSuspendThreshold) {
+				corpseNavigationSuspended = true;
+				corpseNavigationRetryAt = std::chrono::steady_clock::now() +
+				                          std::chrono::milliseconds(corpseNavigationRetryInterval);
+				++corpseNavigationSuspensions;
+				clearNavigation();
+				emit("navigation_progress", currentPosition,
+				     "\"result\":\"suspended\",\"reason\":\"corpse_route_unchanged\",\"navigation_failures\":" +
+				         std::to_string(corpseNavigationFailures));
+			}
+		}
 		return;
 	}
 	schedule(navigationInterval);
