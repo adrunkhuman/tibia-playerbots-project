@@ -205,8 +205,8 @@ bool PlayerBotController::equipmentLoadoutReady(const Player& player, const Equi
 	const bool armorReady = armorItemId != 0 && isLegalEquipmentType(player, Item::items[armorItemId]) &&
 	                        (Item::items[armorItemId].slotPosition & SLOTP_ARMOR) != 0 && Item::items[armorItemId].armor > 0;
 	const Item* backpack = player.getInventoryItem(CONST_SLOT_BACKPACK);
-	const bool suppliesReady = getInventoryItemCount(player, smallHealthPotionItemId) > smallHealthPotionReturnThreshold;
-	const bool capacityReady = static_cast<uint64_t>(effectiveFreeCapacity(player)) >=
+	const bool suppliesReady = inventoryPolicy.inventoryItemCount(player, smallHealthPotionItemId) > smallHealthPotionReturnThreshold;
+	const bool capacityReady = static_cast<uint64_t>(inventoryPolicy.effectiveFreeCapacity(player)) >=
 	                           static_cast<uint64_t>(returnCapacityThreshold) + additionalWeight;
 	return (isKnightWeapon(loadout.itemIds[CONST_SLOT_LEFT]) || isKnightWeapon(loadout.itemIds[CONST_SLOT_RIGHT])) && armorReady &&
 	       backpack && backpack->getContainer() && suppliesReady && capacityReady;
@@ -674,7 +674,7 @@ void PlayerBotController::processEquipmentPurchase(Player* player, const Positio
 			finishEquipmentPurchase(player, position, "failed", "reserve_changed");
 			return;
 		}
-		serviceBeforeItemCount = getInventoryItemCount(*player, equipmentPurchase.itemId);
+		serviceBeforeItemCount = inventoryPolicy.inventoryItemCount(*player, equipmentPurchase.itemId);
 		serviceBeforeMoney = player->getMoney();
 		serviceBeforeBalance = player->getBankBalance();
 		equipmentPurchaseStage = EquipmentPurchaseStage::VerifyPurchase;
@@ -688,7 +688,7 @@ void PlayerBotController::processEquipmentPurchase(Player* player, const Positio
 	}
 
 	if (equipmentPurchaseStage == EquipmentPurchaseStage::VerifyPurchase) {
-		const uint32_t currentCount = getInventoryItemCount(*player, equipmentPurchase.itemId);
+		const uint32_t currentCount = inventoryPolicy.inventoryItemCount(*player, equipmentPurchase.itemId);
 		const uint64_t expectedMoney = serviceBeforeMoney > equipmentPurchase.price ?
 		                               serviceBeforeMoney - equipmentPurchase.price : 0;
 		const uint64_t expectedBalance = equipmentPurchase.price > serviceBeforeMoney ?
@@ -821,7 +821,7 @@ void PlayerBotController::processEquipmentPurchase(Player* player, const Positio
 		for (uint16_t itemId : {equipmentPurchase.replacedItemId, equipmentPurchase.displacedLeftItemId,
 		                        equipmentPurchase.displacedRightItemId}) {
 			if (itemId != 0) {
-				pendingEquipmentDisplacedCounts[itemId] = getInventoryItemCount(*player, itemId);
+				pendingEquipmentDisplacedCounts[itemId] = inventoryPolicy.inventoryItemCount(*player, itemId);
 			}
 		}
 		++counters.actionsAttempted;
@@ -842,7 +842,7 @@ void PlayerBotController::processEquipmentPurchase(Player* player, const Positio
 	const bool displacedPreserved = std::all_of(pendingEquipmentDisplacedCounts.begin(),
 	                                           pendingEquipmentDisplacedCounts.end(),
 	                                           [this, player](const auto& entry) {
-		                                           return getInventoryItemCount(*player, entry.first) >= entry.second;
+			                                           return inventoryPolicy.inventoryItemCount(*player, entry.first) >= entry.second;
 	                                           });
 	if (!equipped || equipped->getID() != equipmentPurchase.itemId || !displacedPreserved) {
 		if (++progressionAttempts >= maximumProgressionAttempts) {

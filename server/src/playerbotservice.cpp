@@ -511,7 +511,7 @@ void PlayerBotController::processServiceShop(Player* player, const Position& cur
 		return;
 	}
 	if (conversationStep == ConversationStep::Ready) {
-		serviceBeforeItemCount = getInventoryItemCount(*player, itemId);
+		serviceBeforeItemCount = inventoryPolicy.inventoryItemCount(*player, itemId);
 		serviceBeforeMoney = player->getMoney();
 		serviceBeforeBalance = player->getBankBalance();
 		serviceItemId = itemId;
@@ -529,7 +529,7 @@ void PlayerBotController::processServiceShop(Player* player, const Position& cur
 		return;
 	}
 
-	const uint32_t currentCount = getInventoryItemCount(*player, serviceItemId);
+	const uint32_t currentCount = inventoryPolicy.inventoryItemCount(*player, serviceItemId);
 	const uint64_t expectedMoneyDelta = static_cast<uint64_t>(serviceAmount) *
 	                                    (purchase ? offer->buyPrice : offer->sellPrice);
 	const bool itemChanged = purchase ? currentCount == serviceBeforeItemCount + serviceAmount :
@@ -705,7 +705,7 @@ void PlayerBotController::processService(Player* player, const Position& current
 		if (serviceTargetId != seller->id) {
 			resetConversation(seller->id);
 		}
-		const uint32_t backpackSaleCount = getBackpackSaleItemCount(*player, itemId);
+		const uint32_t backpackSaleCount = inventoryPolicy.backpackSaleItemCount(*player, itemId);
 		if (backpackSaleCount == 0 && prepareSlottedSaleItem(player, itemId, currentPosition)) {
 			return;
 		}
@@ -715,7 +715,7 @@ void PlayerBotController::processService(Player* player, const Position& current
 	}
 	if (serviceStage == ServiceStage::BuyPotions) {
 		const uint16_t itemId = smallHealthPotionItemId;
-		const uint32_t currentCount = getInventoryItemCount(*player, itemId);
+		const uint32_t currentCount = inventoryPolicy.inventoryItemCount(*player, itemId);
 		if (currentCount >= smallHealthPotionRestockTarget) {
 			serviceStage = ServiceStage::Bank;
 			schedule(SCHEDULER_MINTICKS);
@@ -733,7 +733,7 @@ void PlayerBotController::processService(Player* player, const Position& current
 		}
 		const uint32_t targetGap = smallHealthPotionRestockTarget - currentCount;
 		const uint64_t totalMoney = player->getMoney() + player->getBankBalance();
-		const uint64_t reserve = desiredCarriedGold(*player);
+		const uint64_t reserve = inventoryPolicy.desiredCarriedGold(*player);
 		const uint32_t requiredGap = currentCount <= smallHealthPotionReturnThreshold ?
 		                                 smallHealthPotionReturnThreshold + 1 - currentCount : 0;
 		if (totalMoney / offer->buyPrice < requiredGap) {
@@ -776,15 +776,6 @@ void PlayerBotController::processService(Player* player, const Position& current
 	beginReturn(player, currentPosition, "service_complete");
 }
 
-bool PlayerBotController::isProtectedDepositItem(const Player& player, const Item& item) const
-{
-	const ItemType& type = Item::items[item.getID()];
-	return (type.isContainer() && type.corpseType == RACE_NONE) || item.getID() == ropeItemId || item.getID() == 2554 ||
-	       ((type.slotPosition & SLOTP_TWO_HAND) != 0 && type.weaponType != WEAPON_NONE) ||
-	       evaluateEquipmentUpgrade(player, item).has_value() || item.getWorth() != 0 ||
-	       itemSellValues.find(item.getID()) == itemSellValues.end();
-}
-
 bool PlayerBotController::findDepositableItem(const Player& player, Container* container, Container*& source,
                                               Item*& depositItem, uint8_t& count) const
 {
@@ -793,11 +784,11 @@ bool PlayerBotController::findDepositableItem(const Player& player, Container* c
 		    findDepositableItem(player, nested, source, depositItem, count)) {
 			return true;
 		}
-		if (isProtectedDepositItem(player, *item)) {
+		if (inventoryPolicy.isProtectedDepositItem(player, *item)) {
 			continue;
 		}
-		const uint32_t carried = getInventoryItemCount(player, item->getID());
-		const uint32_t reserve = protectedItemReserve(item->getID());
+		const uint32_t carried = inventoryPolicy.inventoryItemCount(player, item->getID());
+		const uint32_t reserve = inventoryPolicy.protectedItemReserve(item->getID());
 		const uint32_t movable = item->isStackable() && carried > reserve ?
 			std::min<uint32_t>(item->getItemCount(), carried - reserve) : (carried > reserve ? 1 : 0);
 		if (movable != 0 && movable <= UINT8_MAX) {
@@ -1243,14 +1234,14 @@ void PlayerBotController::processFixtureDeposit(Player* player, const Position& 
 	Container* source = nullptr;
 	Item* depositItem = nullptr;
 	for (Item* item : backpack->getItemList()) {
-		if (item->getContainer() || !isProtectedInventoryItem(*item)) {
+		if (item->getContainer() || !inventoryPolicy.isProtectedInventoryItem(*item)) {
 			source = backpack;
 			depositItem = item;
 			break;
 		}
 	}
 	if (!depositItem) {
-		if (effectiveFreeCapacity(*player) < returnCapacityThreshold) {
+		if (inventoryPolicy.effectiveFreeCapacity(*player) < returnCapacityThreshold) {
 			stop("depot_capacity_not_recovered", currentPosition);
 			return;
 		}
@@ -1297,7 +1288,7 @@ void PlayerBotController::processDeposit(Player* player, const Position& current
 			schedule(navigationDecisionDelay(*player));
 			return;
 		}
-		const uint32_t inventoryAfter = getInventoryItemCount(*player, pendingDepositItemId);
+		const uint32_t inventoryAfter = inventoryPolicy.inventoryItemCount(*player, pendingDepositItemId);
 		const uint32_t depotAfter = chest->getItemTypeCount(pendingDepositItemId);
 		const uint32_t movedFromInventory = pendingDepositInventoryCount - std::min(pendingDepositInventoryCount, inventoryAfter);
 		const uint32_t movedToDepot = depotAfter - std::min(pendingDepositDestinationCount, depotAfter);
@@ -1395,15 +1386,15 @@ void PlayerBotController::processDeposit(Player* player, const Position& current
 	if (!findDepositableItem(*player, backpack, source, depositItem, count)) {
 		depositItem = findActionableSlottedItem(*player, 0, sourceSlot);
 		if (depositItem) {
-			const uint32_t carried = getInventoryItemCount(*player, depositItem->getID());
-			const uint32_t reserve = protectedItemReserve(depositItem->getID());
+			const uint32_t carried = inventoryPolicy.inventoryItemCount(*player, depositItem->getID());
+			const uint32_t reserve = inventoryPolicy.protectedItemReserve(depositItem->getID());
 			const uint32_t movable = depositItem->isStackable() && carried > reserve ?
 				std::min<uint32_t>(depositItem->getItemCount(), carried - reserve) : (carried > reserve ? 1 : 0);
 			count = static_cast<uint8_t>(std::min<uint32_t>(movable, UINT8_MAX));
 		}
 	}
 	if (!depositItem || count == 0) {
-		if (effectiveFreeCapacity(*player) < returnCapacityThreshold) {
+		if (inventoryPolicy.effectiveFreeCapacity(*player) < returnCapacityThreshold) {
 			const auto now = std::chrono::steady_clock::now();
 			const auto deferred = std::find_if(unavailableSlottedSales.begin(), unavailableSlottedSales.end(),
 			                                   [now](const auto& entry) { return entry.second > now; });
@@ -1470,7 +1461,7 @@ void PlayerBotController::processDeposit(Player* player, const Position& current
 	pendingDepositItemId = depositItem->getID();
 	pendingDepositSourceSlot = sourceSlot;
 	pendingDepositRequestedCount = count;
-	pendingDepositInventoryCount = getInventoryItemCount(*player, pendingDepositItemId);
+	pendingDepositInventoryCount = inventoryPolicy.inventoryItemCount(*player, pendingDepositItemId);
 	pendingDepositDestinationCount = chest->getItemTypeCount(pendingDepositItemId);
 	depotStage = DepotStage::VerifyMove;
 	const uint8_t submittedCount = testPolicy.depotMoveFixture == DepotMoveFixture::Partial && count > 1 ? count - 1 : count;

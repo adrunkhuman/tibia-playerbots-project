@@ -99,7 +99,7 @@ bool PlayerBotController::handleHealing(Player* player, const Position& currentP
 {
 	const auto now = std::chrono::steady_clock::now();
 	if (pendingHeal) {
-		const uint32_t potionCount = getInventoryItemCount(*player, smallHealthPotionItemId);
+		const uint32_t potionCount = inventoryPolicy.inventoryItemCount(*player, smallHealthPotionItemId);
 		const int32_t health = player->getHealth();
 		if (potionCount < pendingHealPotionCount && health > pendingHealHealth) {
 			logHealResult("success", nullptr, health, potionCount, currentPosition);
@@ -127,7 +127,7 @@ bool PlayerBotController::handleHealing(Player* player, const Position& currentP
 		return true;
 	}
 
-	const uint32_t potionCount = getInventoryItemCount(*player, smallHealthPotionItemId);
+	const uint32_t potionCount = inventoryPolicy.inventoryItemCount(*player, smallHealthPotionItemId);
 	if (potionCount == 0) {
 		if (shouldEmitRepeated("heal:missing_supply")) {
 			std::ostringstream fields;
@@ -185,7 +185,7 @@ bool PlayerBotController::handleFood(Player* player, const Position& currentPosi
 
 	const auto now = std::chrono::steady_clock::now();
 	if (pendingEat) {
-		const uint32_t inventoryCount = getInventoryItemCount(*player, pendingEatItemId);
+		const uint32_t inventoryCount = inventoryPolicy.inventoryItemCount(*player, pendingEatItemId);
 		const int32_t foodTicks = getFoodTicks(*player);
 		if (inventoryCount + 1 == pendingEatInventoryCount && foodTicks > pendingEatFoodTicks) {
 			logEatSuccess(pendingEatItemId, inventoryCount, foodTicks, currentPosition);
@@ -213,7 +213,7 @@ bool PlayerBotController::handleFood(Player* player, const Position& currentPosi
 		return false;
 	}
 
-	if (getFoodInventory(*player).count <= preferredFoodCount) {
+	if (inventoryPolicy.foodInventory(*player).count <= preferredFoodCount) {
 		return false;
 	}
 	Item* food = nullptr;
@@ -221,7 +221,7 @@ bool PlayerBotController::handleFood(Player* player, const Position& currentPosi
 		if (!item || food) {
 			return;
 		}
-		if (isFoodItem(item->getID())) {
+		if (PlayerBotInventoryPolicy::isFoodItem(item->getID())) {
 			food = item;
 			return;
 		}
@@ -242,7 +242,7 @@ bool PlayerBotController::handleFood(Player* player, const Position& currentPosi
 	}
 
 	pendingEatItemId = food->getID();
-	pendingEatInventoryCount = getInventoryItemCount(*player, pendingEatItemId);
+	pendingEatInventoryCount = inventoryPolicy.inventoryItemCount(*player, pendingEatItemId);
 	pendingEatFoodTicks = getFoodTicks(*player);
 	pendingEat = true;
 	++counters.actionsAttempted;
@@ -1232,7 +1232,7 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 		return;
 	}
 	if (cyclePhase == CyclePhase::Hunt) {
-		const uint32_t usableCapacity = effectiveFreeCapacity(*player);
+		const uint32_t usableCapacity = inventoryPolicy.effectiveFreeCapacity(*player);
 		if (std::chrono::steady_clock::now() >= huntDeadline || usableCapacity < returnCapacityThreshold) {
 			const char* reason = usableCapacity < returnCapacityThreshold ? "capacity" : "hunt_deadline";
 			if (testPolicy.progressionEnabled) {
