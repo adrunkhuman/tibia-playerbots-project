@@ -1245,6 +1245,7 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 				finishHuntAndSelectGoal(player, currentPosition, reason);
 			} else {
 				beginService(player, currentPosition, reason);
+				schedule(navigationInterval);
 			}
 			return;
 		}

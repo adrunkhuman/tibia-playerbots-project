@@ -705,7 +705,14 @@ bool PlayerBotController::findSpellTraining(Player& player, const Position& posi
 					}
 				}
 			}
-			std::sort(approaches.begin(), approaches.end(), [&position](const Position& left, const Position& right) {
+			std::sort(approaches.begin(), approaches.end(), [&position, npc](const Position& left, const Position& right) {
+				const int32_t leftNpcDistance = std::max(Position::getDistanceX(npc->getPosition(), left),
+				                                             Position::getDistanceY(npc->getPosition(), left));
+				const int32_t rightNpcDistance = std::max(Position::getDistanceX(npc->getPosition(), right),
+				                                              Position::getDistanceY(npc->getPosition(), right));
+				if (leftNpcDistance != rightNpcDistance) {
+					return leftNpcDistance < rightNpcDistance;
+				}
 				const int32_t leftDistance = std::max(Position::getDistanceX(position, left), Position::getDistanceY(position, left));
 				const int32_t rightDistance = std::max(Position::getDistanceX(position, right), Position::getDistanceY(position, right));
 				return leftDistance == rightDistance ? left < right : leftDistance < rightDistance;

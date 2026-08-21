@@ -269,8 +269,8 @@ bool PlayerBotController::openServiceShop(Player* player, ServiceNpc& service, c
 	if (shopOwner == npc && !player->getShopItemList().empty()) {
 		if (conversationStep != ConversationStep::Verify) {
 			conversationStep = ConversationStep::Ready;
+			serviceAttempts = 0;
 		}
-		serviceAttempts = 0;
 		return true;
 	}
 	if (shopOwner && shopOwner != npc && conversationStep == ConversationStep::Greet) {
@@ -630,6 +630,10 @@ void PlayerBotController::processBank(Player* player, const Position& currentPos
 	if (conversationStep == ConversationStep::Ready) {
 		serviceBeforeBalance = player->getBankBalance();
 		serviceAmount = static_cast<uint32_t>(std::min<uint64_t>(carriedGoldReserve, serviceBeforeBalance));
+		const uint32_t coinWeight = Item::items[ITEM_GOLD_COIN].weight;
+		if (coinWeight != 0) {
+			serviceAmount = std::min(serviceAmount, player->getFreeCapacity() / coinWeight);
+		}
 		if (serviceAmount == 0) {
 			serviceStage = ServiceStage::Complete;
 			schedule(SCHEDULER_MINTICKS);
@@ -743,6 +747,10 @@ void PlayerBotController::processService(Player* player, const Position& current
 		if (currentCount <= smallHealthPotionReturnThreshold) {
 			amount = std::max(amount, static_cast<uint32_t>(std::min<uint64_t>(requiredGap, totalMoney / offer->buyPrice)));
 		}
+		const uint32_t itemWeight = Item::items[itemId].weight;
+		if (itemWeight != 0) {
+			amount = std::min<uint32_t>(amount, player->getFreeCapacity() / itemWeight);
+		}
 		if (amount == 0) {
 			serviceStage = ServiceStage::Bank;
 			schedule(SCHEDULER_MINTICKS);
@@ -772,7 +780,7 @@ void PlayerBotController::processService(Player* player, const Position& current
 bool PlayerBotController::isProtectedDepositItem(const Player& player, const Item& item) const
 {
 	const ItemType& type = Item::items[item.getID()];
-	return type.isContainer() || item.getID() == ropeItemId || item.getID() == 2554 ||
+	return (type.isContainer() && type.corpseType == RACE_NONE) || item.getID() == ropeItemId || item.getID() == 2554 ||
 	       ((type.slotPosition & SLOTP_TWO_HAND) != 0 && type.weaponType != WEAPON_NONE) ||
 	       evaluateEquipmentUpgrade(player, item).has_value() || item.getWorth() != 0 ||
 	       itemSellValues.find(item.getID()) == itemSellValues.end();
@@ -1250,7 +1258,10 @@ void PlayerBotController::processFixtureDeposit(Player* player, const Position& 
 		emit("action_result", currentPosition, "\"action\":\"deposit\",\"result\":\"complete\",\"fixture\":true,\"cycle\":" +
 		     std::to_string(completedCycles));
 		if (testPolicy.progressionEnabled) {
-			selectTopLevelGoal(*player, currentPosition, "fixture_deposit_complete");
+			emit("goal_result", currentPosition,
+			     "\"decision_id\":" + std::to_string(goalDecisionId) +
+			         ",\"goal\":\"service\",\"result\":\"success\",\"reason\":\"service_complete\"");
+			selectTopLevelGoal(*player, currentPosition, "service_complete");
 		} else {
 			startHunt(player, currentPosition, "fixture_deposit_complete");
 		}
