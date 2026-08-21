@@ -58,7 +58,7 @@ void PlayerBotController::beginReturn(Player* player, const Position& position, 
 	g_game.playerCancelAttackAndFollow(playerId);
 	clearTraversalTarget(position, reason);
 	clearNavigation();
-	lootSession.reset();
+	lootWorkflow.reset();
 	depotSession.reset();
 	fixedTargetRouteFailureCount = 0;
 	player->closeContainer(corpseContainerId);
@@ -103,7 +103,7 @@ void PlayerBotController::beginService(Player* player, const Position& position,
 	g_game.playerCancelAttackAndFollow(playerId);
 	clearTraversalTarget(position, reason);
 	clearNavigation();
-	lootSession.reset();
+	lootWorkflow.reset();
 	pendingSlottedSaleItemId = 0;
 	pendingSlottedSaleSourceSlot = CONST_SLOT_WHEREEVER;
 	slottedSaleMoveAttempts = 0;
@@ -124,7 +124,7 @@ void PlayerBotController::finishHuntAndSelectGoal(Player* player, const Position
 	g_game.playerCancelAttackAndFollow(playerId);
 	clearTraversalTarget(position, reason);
 	clearNavigation();
-	lootSession.reset();
+	lootWorkflow.reset();
 	player->closeContainer(corpseContainerId);
 	setStage(ScenarioStage::Traverse, position);
 	setCyclePhase(CyclePhase::Idle, position, reason);

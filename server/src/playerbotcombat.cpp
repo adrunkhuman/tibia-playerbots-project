@@ -93,7 +93,7 @@ PlayerBotSurvivalSnapshot PlayerBotController::survivalSnapshot(const Player& pl
 	}
 	snapshot.canDoAction = player.canDoAction();
 	snapshot.buyingPotions = serviceStage == ServiceStage::BuyPotions;
-	snapshot.lootMovePending = lootSession.hasPendingLootMove();
+	snapshot.lootMovePending = lootWorkflow.hasPendingLootMove();
 	snapshot.progressionActive = progressionSession.active() != PlayerBotProgressionProcedure::None;
 	snapshot.progressionDeparture = progressionSession.active(PlayerBotProgressionProcedure::OracleDeparture);
 	snapshot.hunting = cyclePhase == CyclePhase::Hunt;
@@ -1020,8 +1020,8 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 		}
 	}
 	if (combatRuntime.hasDefensiveCombat()) {
-		if (scenarioStage == ScenarioStage::LootCorpse && lootSession.navigationSuspended() &&
-		    lootSession.timedOut(std::chrono::steady_clock::now(), corpseLootTimeout)) {
+		if (scenarioStage == ScenarioStage::LootCorpse && lootWorkflow.navigationSuspended() &&
+		    lootWorkflow.timedOut(std::chrono::steady_clock::now())) {
 			finishLootFailure(player, currentPosition, "corpse_inaccessible");
 		}
 		processDefensiveCombat(player, currentPosition);
@@ -1050,8 +1050,8 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 		}
 		return;
 	}
-	if (scenarioStage == ScenarioStage::LootCorpse && lootSession.navigationSuspended()) {
-		if (lootSession.timedOut(std::chrono::steady_clock::now(), corpseLootTimeout)) {
+	if (scenarioStage == ScenarioStage::LootCorpse && lootWorkflow.navigationSuspended()) {
+		if (lootWorkflow.timedOut(std::chrono::steady_clock::now())) {
 			finishLootFailure(player, currentPosition, "corpse_inaccessible");
 			schedule(navigationInterval);
 			return;

@@ -1,6 +1,6 @@
 /**
  * Per-bot corpse access and loot transaction state.
- * World discovery, inventory policy, game dispatch, and telemetry remain controller work.
+ * Workflow-owned transaction bookkeeping; it has no world or inventory dependencies.
  */
 #ifndef FS_PLAYERBOTLOOTSESSION_H
 #define FS_PLAYERBOTLOOTSESSION_H
@@ -102,6 +102,7 @@ class PlayerBotLootSession
 		std::optional<PlayerBotLootDiscardVerification> verifyDiscardMove(uint32_t inventoryCount);
 
 		bool lootItemUnavailable(uint16_t itemId) const;
+		const std::set<uint16_t>& unavailableLootItems() const { return unavailableItems; }
 		void suppressLootItem(uint16_t itemId);
 
 	private:

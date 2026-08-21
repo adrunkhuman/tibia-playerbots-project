@@ -22,7 +22,7 @@
 #include "playerbothuntplanningsession.h"
 #include "playerbothuntpolicy.h"
 #include "playerbotinventorypolicy.h"
-#include "playerbotlootsession.h"
+#include "playerbotlootworkflow.h"
 #include "playerbotnavigationruntime.h"
 #include "playerbotnpcsession.h"
 #include "playerbotprogressionsession.h"
@@ -537,15 +537,6 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 
 		Container* findCorpse(Player* player, const Position& searchPosition);
 
-		uint8_t backpackDestinationIndex(const Container& backpack, const Item& item) const;
-
-		bool isReplaceableCargo(const Item& item) const;
-
-		void discardCargoForLoot(Player* player, Container* backpack, Item* incoming, uint8_t incomingCount,
-		                         const Position& currentPosition);
-
-		void verifyPendingLootMoves(Player* player, const Position& currentPosition);
-
 		void lootCorpse(Player* player, const Position& currentPosition);
 
 		uint32_t playerId;
@@ -572,7 +563,11 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 			playerbot::lostTargetPursuitTimeout, playerbot::lostTargetSuppression,
 			playerbot::maximumLostTargetPursuitDistance, playerbot::maximumTargetReacquisitionDistance,
 		}};
-		PlayerBotLootSession lootSession;
+		PlayerBotLootWorkflow lootWorkflow{PlayerBotLootWorkflowConfig{
+			playerbot::maxCorpseSearchAttempts, playerbot::maximumCorpseNavigationFailures,
+			playerbot::corpseNavigationSuspendThreshold, std::chrono::milliseconds(playerbot::corpseNavigationRetryInterval),
+			playerbot::corpseLootTimeout, playerbot::preferredFoodCount,
+		}};
 		CyclePhase cyclePhase = CyclePhase::ReturnToDepot;
 		ServiceStage serviceStage = ServiceStage::Discover;
 		PlayerBotProgressionSession progressionSession;

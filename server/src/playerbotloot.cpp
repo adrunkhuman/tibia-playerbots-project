@@ -12,18 +12,56 @@
 
 #include "playerbotcontroller.h"
 
-// Corpse access, loot selection, and capacity-aware cargo replacement.
+// This file is the engine adapter: it discovers owned corpses, snapshots opened containers, and dispatches workflow commands.
 using namespace playerbot;
 
 namespace {
-	struct CargoCandidate {
-		Item* item;
-		Container* source;
-		uint8_t index;
-		uint32_t unitValue;
-		uint32_t unitWeight;
-		uint32_t availableCount;
+	struct CorpseDiscovery {
+		Container* corpse = nullptr;
+		Position position;
 	};
+
+	std::optional<CorpseDiscovery> findOwnedCorpse(Player& player, const Position& searchPosition)
+	{
+		std::optional<CorpseDiscovery> fallback;
+		for (int32_t offsetX = -1; offsetX <= 1; ++offsetX) {
+			for (int32_t offsetY = -1; offsetY <= 1; ++offsetY) {
+				Position position(searchPosition.x + offsetX, searchPosition.y + offsetY, searchPosition.z);
+				Tile* tile = g_game.map.getTile(position);
+				TileItemVector* items = tile ? tile->getItemList() : nullptr;
+				if (!items) continue;
+				for (auto it = items->getBeginDownItem(); it != items->getEndDownItem(); ++it) {
+					Item* item = *it;
+					Container* corpse = item->getContainer();
+					if (!corpse || Item::items[item->getID()].corpseType == RACE_NONE) continue;
+					const uint32_t owner = corpse->getCorpseOwner();
+					if (owner != 0 && !player.canOpenCorpse(owner)) continue;
+					if (position == searchPosition) return {{corpse, position}};
+					if (!fallback) fallback = {{corpse, position}};
+				}
+			}
+		}
+		return fallback;
+	}
+
+	bool isReplaceableCargo(const PlayerBotInventoryPolicy& inventoryPolicy, const Item& item)
+	{
+		const ItemType& type = Item::items[item.getID()];
+		const bool food = PlayerBotInventoryPolicy::isFoodItem(item.getID());
+		return !(inventoryPolicy.isProtectedInventoryItem(item) && !food) && type.corpseType == RACE_NONE &&
+		       (food || inventoryPolicy.itemUnitValue(item.getID()) != 0) && item.getBaseWeight() != 0;
+	}
+
+	uint8_t backpackDestinationIndex(const Container& backpack, const Item& item)
+	{
+		if (item.isStackable()) {
+			const ItemDeque& items = backpack.getItemList();
+			for (size_t index = 0; index < items.size(); ++index) {
+				if (items[index]->getID() == item.getID() && items[index]->getItemCount() < 100) return static_cast<uint8_t>(index);
+			}
+		}
+		return static_cast<uint8_t>(backpack.size());
+	}
 }
 
 void PlayerBotController::logLootSuccess(uint16_t itemId, uint32_t count, uint32_t inventoryCount, const Position& position)
@@ -39,9 +77,7 @@ void PlayerBotController::logLootSuccess(uint16_t itemId, uint32_t count, uint32
 
 void PlayerBotController::beginLoot(Player* player, const Position& currentPosition, const PlayerBotCombatDecision& defeatedTarget)
 {
-	if (activeHuntRegion) {
-		huntPolicy.observeKill();
-	}
+	if (activeHuntRegion) huntPolicy.observeKill();
 	if (defeatedTarget.target.id == 0) {
 		setStage(ScenarioStage::Traverse, currentPosition);
 		return;
@@ -50,12 +86,13 @@ void PlayerBotController::beginLoot(Player* player, const Position& currentPosit
 		emit("target_changed", currentPosition, "\"previous_target_id\":" + std::to_string(defeatedTarget.target.id) +
 		     ",\"target_id\":null,\"reason\":\"target_defeated\"");
 	}
-	lootSession.begin(defeatedTarget.target.id, defeatedTarget.target.position, defeatedTarget.expectedCorpse, currentPosition,
-	                  std::chrono::steady_clock::now());
-	if (!lootSession.expectedCorpse().lootable) {
+	const PlayerBotLootCommand command = lootWorkflow.begin(defeatedTarget.target.id, defeatedTarget.target.position,
+	                                                        defeatedTarget.expectedCorpse, currentPosition,
+	                                                        std::chrono::steady_clock::now());
+	if (command.outcome == PlayerBotLootOutcome::CorpseNotLootable) {
 		std::ostringstream fields;
 		fields << "\"action\":\"loot\",\"result\":\"skipped\",\"reason\":\"corpse_not_lootable\""
-		       << ",\"expected_corpse_item_id\":" << lootSession.expectedCorpse().itemId;
+		       << ",\"expected_corpse_item_id\":" << lootWorkflow.expectedCorpse().itemId;
 		emit("action_result", currentPosition, fields.str());
 		finishLoot(player, currentPosition);
 		return;
@@ -67,393 +104,215 @@ void PlayerBotController::finishLoot(Player* player, const Position& currentPosi
 {
 	player->closeContainer(corpseContainerId);
 	clearNavigation();
-	lootSession.reset();
+	lootWorkflow.reset();
 	setStage(ScenarioStage::Traverse, currentPosition);
 }
 
 void PlayerBotController::finishLootFailure(Player* player, const Position& currentPosition, const char* reason)
 {
 	telemetry.recordActionFailure();
-	const auto elapsed = lootSession.elapsedMilliseconds(std::chrono::steady_clock::now());
+	const auto elapsed = lootWorkflow.elapsedMilliseconds(std::chrono::steady_clock::now());
 	std::ostringstream fields;
 	fields << "\"action\":\"loot\",\"result\":\"failed\",\"reason\":" << jsonString(reason)
-	       << ",\"target_id\":" << lootSession.targetId()
-	       << ",\"expected_corpse_item_id\":" << lootSession.expectedCorpse().itemId
-	       << ",\"last_known_death_position\":{\"x\":" << lootSession.deathPosition().x << ",\"y\":" << lootSession.deathPosition().y
-	       << ",\"z\":" << static_cast<uint16_t>(lootSession.deathPosition().z) << '}'
-	       << ",\"corpse_position\":";
-	if (lootSession.corpseObserved()) {
-		fields << "{\"x\":" << lootSession.corpsePosition().x << ",\"y\":" << lootSession.corpsePosition().y
-		       << ",\"z\":" << static_cast<uint16_t>(lootSession.corpsePosition().z) << '}';
-	} else {
-		fields << "null";
-	}
-	fields << ",\"search_attempts\":" << lootSession.searchAttempts()
-	       << ",\"navigation_failures\":" << lootSession.navigationFailures()
-	       << ",\"navigation_suspensions\":" << lootSession.navigationSuspensions()
+	       << ",\"target_id\":" << lootWorkflow.targetId()
+	       << ",\"expected_corpse_item_id\":" << lootWorkflow.expectedCorpse().itemId
+	       << ",\"last_known_death_position\":{\"x\":" << lootWorkflow.deathPosition().x << ",\"y\":" << lootWorkflow.deathPosition().y
+	       << ",\"z\":" << static_cast<uint16_t>(lootWorkflow.deathPosition().z) << '}' << ",\"corpse_position\":";
+	if (lootWorkflow.corpseObserved()) {
+		fields << "{\"x\":" << lootWorkflow.corpsePosition().x << ",\"y\":" << lootWorkflow.corpsePosition().y
+		       << ",\"z\":" << static_cast<uint16_t>(lootWorkflow.corpsePosition().z) << '}';
+	} else fields << "null";
+	fields << ",\"search_attempts\":" << lootWorkflow.searchAttempts()
+	       << ",\"navigation_failures\":" << lootWorkflow.navigationFailures()
+	       << ",\"navigation_suspensions\":" << lootWorkflow.navigationSuspensions()
 	       << ",\"elapsed_ms\":" << elapsed;
 	emit("action_result", currentPosition, fields.str());
 	finishLoot(player, currentPosition);
 }
 
-Container* PlayerBotController::findCorpse(Player* player, const Position& searchPosition)
-{
-	Container* fallback = nullptr;
-	Position fallbackPosition;
-	for (int32_t offsetX = -1; offsetX <= 1; ++offsetX) {
-		for (int32_t offsetY = -1; offsetY <= 1; ++offsetY) {
-			Position position(searchPosition.x + offsetX, searchPosition.y + offsetY, searchPosition.z);
-			Tile* tile = g_game.map.getTile(position);
-			TileItemVector* items = tile ? tile->getItemList() : nullptr;
-			if (!items) {
-				continue;
-			}
-
-			for (auto it = items->getBeginDownItem(); it != items->getEndDownItem(); ++it) {
-				Item* item = *it;
-				Container* corpse = item->getContainer();
-				if (!corpse || Item::items[item->getID()].corpseType == RACE_NONE) {
-					continue;
-				}
-				const uint32_t corpseOwner = corpse->getCorpseOwner();
-				if (corpseOwner != 0 && !player->canOpenCorpse(corpseOwner)) {
-					continue;
-				}
-				if (position == searchPosition) {
-					lootSession.observeCorpse(item->getID(), corpseOwner, position);
-					return corpse;
-				}
-				if (!fallback) {
-					fallback = corpse;
-					fallbackPosition = position;
-				}
-			}
-		}
-	}
-	if (fallback) {
-		lootSession.observeCorpse(fallback->getID(), fallback->getCorpseOwner(), fallbackPosition);
-	}
-	return fallback;
-}
-
-uint8_t PlayerBotController::backpackDestinationIndex(const Container& backpack, const Item& item) const
-{
-	if (item.isStackable()) {
-		const ItemDeque& items = backpack.getItemList();
-		for (size_t index = 0; index < items.size(); ++index) {
-			if (items[index]->getID() == item.getID() && items[index]->getItemCount() < 100) {
-				return static_cast<uint8_t>(index);
-			}
-		}
-	}
-	return static_cast<uint8_t>(backpack.size());
-}
-
-bool PlayerBotController::isReplaceableCargo(const Item& item) const
-{
-	const ItemType& type = Item::items[item.getID()];
-	const bool food = PlayerBotInventoryPolicy::isFoodItem(item.getID());
-	const bool protectedItem = inventoryPolicy.isProtectedInventoryItem(item) && !food;
-	return !protectedItem && type.corpseType == RACE_NONE && (food || inventoryPolicy.itemUnitValue(item.getID()) != 0) &&
-	       item.getBaseWeight() != 0;
-}
-
-void PlayerBotController::discardCargoForLoot(Player* player, Container* backpack, Item* incoming, uint8_t incomingCount,
-                                               const Position& currentPosition)
-{
-	CargoCandidate replacement{};
-	uint8_t replacementCount = 0;
-	const uint32_t incomingWeight = incoming->getBaseWeight() * incomingCount;
-	std::vector<CargoCandidate> candidates;
-	std::function<void(Container&)> collect = [&](Container& source) {
-		const ItemDeque& items = source.getItemList();
-		for (size_t index = 0; index < items.size() && index <= UINT8_MAX; ++index) {
-			Item* item = items[index];
-			if (isReplaceableCargo(*item)) {
-				candidates.push_back({item, &source, static_cast<uint8_t>(index), inventoryPolicy.itemUnitValue(item->getID()),
-				                      item->getBaseWeight(), item->getItemCount()});
-			}
-			if (Container* nested = item->getContainer()) {
-				collect(*nested);
-			}
-		}
-	};
-	collect(*backpack);
-	std::sort(candidates.begin(), candidates.end(), [](const CargoCandidate& left, const CargoCandidate& right) {
-		const uint64_t leftDensity = static_cast<uint64_t>(left.unitValue) * right.unitWeight;
-		const uint64_t rightDensity = static_cast<uint64_t>(right.unitValue) * left.unitWeight;
-		return leftDensity == rightDensity ? left.item->getID() < right.item->getID() : leftDensity < rightDensity;
-	});
-
-	uint32_t requiredWeight = incomingWeight > player->getFreeCapacity() ? incomingWeight - player->getFreeCapacity() : 0;
-	uint64_t totalDiscardedValue = 0;
-	for (const CargoCandidate& candidate : candidates) {
-		const uint32_t count = std::min(candidate.availableCount,
-		                                (requiredWeight + candidate.unitWeight - 1) / candidate.unitWeight);
-		if (count == 0) {
-			continue;
-		}
-		if (replacementCount == 0) {
-			replacement = candidate;
-			replacementCount = static_cast<uint8_t>(count);
-		}
-		totalDiscardedValue += static_cast<uint64_t>(count) * candidate.unitValue;
-		const uint32_t releasedWeight = count * candidate.unitWeight;
-		if (releasedWeight >= requiredWeight) {
-			requiredWeight = 0;
-			break;
-		}
-		requiredWeight -= releasedWeight;
-	}
-	const uint64_t incomingValue = static_cast<uint64_t>(inventoryPolicy.itemUnitValue(incoming->getID())) * incomingCount;
-	if (incomingWeight == 0 || incomingWeight <= player->getFreeCapacity() || replacementCount == 0 || requiredWeight != 0 ||
-	    incomingValue <= totalDiscardedValue) {
-		std::ostringstream fields;
-		fields << "\"action\":\"loot\",\"result\":\"skipped\",\"reason\":\"no_capacity\""
-		       << ",\"item_id\":" << incoming->getID() << ",\"count\":" << incoming->getItemCount()
-		       << ",\"unit_value\":" << inventoryPolicy.itemUnitValue(incoming->getID())
-		       << ",\"weight\":" << incoming->getWeight() << ",\"free_capacity\":" << player->getFreeCapacity();
-		emit("action_result", currentPosition, fields.str());
-		lootSession.suppressLootItem(incoming->getID());
-		return;
-	}
-
-	Tile* destination = g_game.map.getTile(currentPosition);
-	if (!destination || !player->canDoAction()) {
-		return;
-	}
-	if (player->getContainerID(replacement.source) < 0 &&
-	    !openContainer(*player, *replacement.source, rewardContainerIdBase, currentPosition)) {
-		return;
-	}
-	const int8_t sourceContainerId = player->getContainerID(replacement.source);
-	if (sourceContainerId < 0) {
-		return;
-	}
-	lootSession.beginDiscardMove({replacement.item->getID(), replacementCount,
-	                              inventoryPolicy.inventoryItemCount(*player, replacement.item->getID()),
-	                              replacementCount * replacement.unitValue, incoming->getID()});
-	const Position fromPosition(0xFFFF, 0x40 | static_cast<uint8_t>(sourceContainerId), replacement.index);
-	telemetry.recordActionAttempt();
-	g_game.playerMoveItem(player, fromPosition, replacement.item->getClientID(), replacement.index,
-	                      currentPosition, replacementCount, replacement.item, destination);
-}
-
-void PlayerBotController::verifyPendingLootMoves(Player* player, const Position& currentPosition)
-{
-	if (lootSession.hasPendingLootMove()) {
-		const uint16_t itemId = lootSession.pendingLootMove()->itemId;
-		const auto verification = lootSession.verifyLootMove(inventoryPolicy.inventoryItemCount(*player, itemId));
-		if (verification->moved) {
-			logLootSuccess(verification->move.itemId, verification->movedCount, verification->inventoryCount, currentPosition);
-			lootSession.markLooted();
-		} else {
-			logActionFailure("loot", "item_move_failed", currentPosition);
-		}
-	}
-	if (lootSession.hasPendingDiscardMove()) {
-		const uint16_t itemId = lootSession.pendingDiscardMove()->itemId;
-		const auto verification = lootSession.verifyDiscardMove(inventoryPolicy.inventoryItemCount(*player, itemId));
-		if (verification->discarded) {
-			std::ostringstream fields;
-			fields << "\"action\":\"loot_replace\",\"result\":\"success\",\"discarded_item_id\":"
-			       << verification->move.itemId << ",\"discarded_count\":"
-			       << static_cast<uint32_t>(verification->move.requestedCount)
-			       << ",\"discarded_value\":" << verification->move.value
-			       << ",\"incoming_item_id\":" << verification->move.incomingItemId
-			       << ",\"incoming_unit_value\":" << inventoryPolicy.itemUnitValue(verification->move.incomingItemId);
-			emit("action_result", currentPosition, fields.str());
-		} else {
-			logActionFailure("loot_replace", "discard_not_verified", currentPosition);
-		}
-	}
-}
-
 void PlayerBotController::lootCorpse(Player* player, const Position& currentPosition)
 {
-	verifyPendingLootMoves(player, currentPosition);
-	Container* corpse = player->getContainerByID(corpseContainerId);
-	lootSession.setCorpseContainerOpen(corpse && Item::items[corpse->getID()].corpseType != RACE_NONE);
-	if (!corpse || Item::items[corpse->getID()].corpseType == RACE_NONE) {
-		corpse = findCorpse(player, lootSession.corpsePosition());
-	}
-	if (corpse) {
-		lootSession.observeCorpse(corpse->getID(), corpse->getCorpseOwner(), lootSession.corpsePosition());
-	} else if (lootSession.corpseObserved()) {
-		finishLootFailure(player, currentPosition, "corpse_expired");
-		schedule(navigationInterval);
-		return;
-	}
-	if (!Position::areInRange<1, 1, 0>(currentPosition, lootSession.corpsePosition())) {
-		const auto now = std::chrono::steady_clock::now();
-		if (lootSession.timedOut(now, corpseLootTimeout)) {
+	const auto now = std::chrono::steady_clock::now();
+	if (lootWorkflow.navigationSuspended()) {
+		if (lootWorkflow.timedOut(now)) {
 			finishLootFailure(player, currentPosition, "corpse_inaccessible");
 			schedule(navigationInterval);
 			return;
 		}
-		if (lootSession.navigationSuspended()) {
-			if (lootSession.resumeNavigation(currentPosition, now) == PlayerBotLootNavigationTransition::Resumed) {
-				clearNavigation();
-				emit("navigation_progress", currentPosition,
-				     "\"result\":\"resumed\",\"reason\":\"corpse_retry\",\"navigation_failures\":" +
-				         std::to_string(lootSession.navigationFailures()));
-			} else {
-				const auto delay = std::chrono::duration_cast<std::chrono::milliseconds>(lootSession.navigationRetryAt() - now).count();
-				schedule(static_cast<uint32_t>(std::max<int64_t>(SCHEDULER_MINTICKS, delay)));
-				return;
-			}
-		}
-		const uint64_t pathfindingFailuresBefore = telemetry.pathfindingFailures();
-		const uint32_t blockedStepsBefore = navigationRuntime.stepFailureCount();
-		processNavigation(player, currentPosition, lootSession.corpsePosition());
-		if (telemetry.pathfindingFailures() > pathfindingFailuresBefore ||
-		    navigationRuntime.stepFailureCount() > blockedStepsBefore) {
-			const PlayerBotLootNavigationTransition transition = lootSession.observeNavigationFailure(
-				currentPosition, now, maximumCorpseNavigationFailures, corpseNavigationSuspendThreshold,
-				std::chrono::milliseconds(corpseNavigationRetryInterval));
-			if (transition == PlayerBotLootNavigationTransition::Failed) {
-				finishLootFailure(player, currentPosition, "corpse_inaccessible");
-				return;
-			}
-			if (transition == PlayerBotLootNavigationTransition::Suspended) {
-				clearNavigation();
-				emit("navigation_progress", currentPosition,
-				     "\"result\":\"suspended\",\"reason\":\"corpse_route_unchanged\",\"navigation_failures\":" +
-				         std::to_string(lootSession.navigationFailures()));
-			}
-		}
-		return;
-	}
-	schedule(navigationInterval);
-
-	if (!corpse) {
-		if (lootSession.incrementSearchAttempts() >= maxCorpseSearchAttempts) {
-			logActionFailure("loot", "owned_corpse_unavailable", currentPosition);
-			finishLoot(player, currentPosition);
-		}
-		return;
-	}
-
-	if (!lootSession.corpseContainerOpen() || player->getContainerByID(corpseContainerId) != corpse) {
-		if (!player->canDoAction()) {
+		if (lootWorkflow.resumeNavigation(currentPosition, now) == PlayerBotLootNavigationTransition::Resumed) {
+			clearNavigation();
+			emit("navigation_progress", currentPosition, "\"result\":\"resumed\",\"reason\":\"corpse_retry\",\"navigation_failures\":" +
+			     std::to_string(lootWorkflow.navigationFailures()));
+		} else {
+			const auto delay = std::chrono::duration_cast<std::chrono::milliseconds>(lootWorkflow.navigationRetryAt() - now).count();
+			schedule(static_cast<uint32_t>(std::max<int64_t>(SCHEDULER_MINTICKS, delay)));
 			return;
 		}
-		if (lootSession.incrementOpenAttempts() > 2) {
-			logActionFailure("loot", "corpse_open_failed", currentPosition);
-			finishLoot(player, currentPosition);
-			return;
-		}
-		player->closeContainer(corpseContainerId);
-		Tile* tile = g_game.map.getTile(lootSession.corpsePosition());
-		const int32_t stackPosition = tile ? tile->getThingIndex(corpse) : -1;
-		if (stackPosition < 0 || stackPosition > UINT8_MAX) {
-			return;
-		}
-		telemetry.recordActionAttempt();
-		g_game.playerUseItem(playerId, lootSession.corpsePosition(), static_cast<uint8_t>(stackPosition), corpseContainerId, corpse->getClientID());
-		return;
 	}
 
-	if (corpse->empty()) {
-		if (!lootSession.lootedCurrentCorpse()) {
-			std::ostringstream fields;
-			fields << "\"action\":\"loot\",\"result\":\"skipped\",\"reason\":\"corpse_empty\""
-			       << ",\"corpse_item_id\":" << corpse->getID() << ",\"corpse_owner_id\":" << corpse->getCorpseOwner()
-			       << ",\"corpse_position\":{\"x\":" << lootSession.corpsePosition().x << ",\"y\":" << lootSession.corpsePosition().y
-			       << ",\"z\":" << static_cast<uint16_t>(lootSession.corpsePosition().z) << '}';
-			emit("action_result", currentPosition, fields.str());
-		}
-		finishLoot(player, currentPosition);
-		return;
-	}
+	Container* openedCorpse = player->getContainerByID(corpseContainerId);
+	if (openedCorpse && Item::items[openedCorpse->getID()].corpseType == RACE_NONE) openedCorpse = nullptr;
+	std::optional<CorpseDiscovery> discovery;
+	if (openedCorpse) discovery = {{openedCorpse, lootWorkflow.corpsePosition()}};
+	else discovery = findOwnedCorpse(*player, lootWorkflow.corpsePosition());
 
+	PlayerBotLootWorkflowSnapshot snapshot;
+	snapshot.currentPosition = currentPosition;
+	snapshot.now = now;
+	snapshot.canDoAction = player->canDoAction();
+	snapshot.inventory.freeCapacity = player->getFreeCapacity();
+	snapshot.inventory.heldFood = inventoryPolicy.foodInventory(*player).count;
+	if (discovery) {
+		snapshot.discoveredCorpse = {{discovery->corpse->getID(), discovery->corpse->getClientID(),
+		                             discovery->corpse->getCorpseOwner(), discovery->position}};
+		snapshot.corpseContainerOpen = openedCorpse == discovery->corpse;
+		if (snapshot.corpseContainerOpen) {
+			const ItemDeque& items = discovery->corpse->getItemList();
+			for (size_t index = 0; index < items.size() && index <= UINT8_MAX; ++index) {
+				Item* item = items[index];
+				const uint32_t inventoryCount = inventoryPolicy.inventoryItemCount(*player, item->getID());
+				snapshot.inventory.itemCounts[item->getID()] = inventoryCount;
+				snapshot.corpseItems.push_back({item->getID(), item->getClientID(), static_cast<uint8_t>(item->getItemCount()),
+				                                static_cast<uint8_t>(item->getItemCount()), static_cast<uint8_t>(index),
+				                                item->getBaseWeight(), inventoryPolicy.itemUnitValue(item->getID()),
+				                                inventoryCount,
+				                                PlayerBotInventoryPolicy::isFoodItem(item->getID())});
+			}
+		}
+	}
 	Item* backpackItem = player->getInventoryItem(CONST_SLOT_BACKPACK);
 	Container* backpack = backpackItem ? backpackItem->getContainer() : nullptr;
-	if (!backpack) {
-		logActionFailure("loot", "backpack_unavailable", currentPosition);
-		finishLoot(player, currentPosition);
-		return;
+	snapshot.backpackAvailable = backpack != nullptr;
+	snapshot.backpackContainerOpen = backpack && player->getContainerByID(backpackContainerId) == backpack;
+	if (backpack) {
+		std::function<void(Container&)> collectCargo = [&](Container& source) {
+			const ItemDeque& items = source.getItemList();
+			for (size_t index = 0; index < items.size() && index <= UINT8_MAX; ++index) {
+				Item* item = items[index];
+				snapshot.inventory.itemCounts[item->getID()] = inventoryPolicy.inventoryItemCount(*player, item->getID());
+				snapshot.inventory.cargo.push_back({&source, item->getID(), item->getClientID(), static_cast<uint8_t>(item->getItemCount()),
+				                                  static_cast<uint8_t>(index), item->getBaseWeight(), inventoryPolicy.itemUnitValue(item->getID()),
+				                                  isReplaceableCargo(inventoryPolicy, *item), player->getContainerID(&source)});
+				if (Container* nested = item->getContainer()) collectCargo(*nested);
+			}
+		};
+		collectCargo(*backpack);
 	}
 
-	lootSession.setBackpackContainerOpen(player->getContainerByID(backpackContainerId) == backpack);
-	if (!lootSession.backpackContainerOpen()) {
-		if (!player->canDoAction()) {
-			return;
-		}
-		const int8_t existingContainerId = player->getContainerID(backpack);
-		if (existingContainerId >= 0) {
-			player->closeContainer(static_cast<uint8_t>(existingContainerId));
-		}
-		const Position backpackPosition(0xFFFF, CONST_SLOT_BACKPACK, 0);
-		telemetry.recordActionAttempt();
-		g_game.playerUseItem(playerId, backpackPosition, 0, backpackContainerId, backpack->getClientID());
-		return;
+	const PlayerBotLootDecision decision = lootWorkflow.advance(snapshot);
+	if (decision.lootVerification) {
+		if (decision.lootVerification->moved) logLootSuccess(decision.lootVerification->move.itemId,
+			decision.lootVerification->movedCount, decision.lootVerification->inventoryCount, currentPosition);
+		else logActionFailure("loot", "item_move_failed", currentPosition);
+	}
+	if (decision.discardVerification) {
+		if (decision.discardVerification->discarded) {
+			std::ostringstream fields;
+			fields << "\"action\":\"loot_replace\",\"result\":\"success\",\"discarded_item_id\":"
+			       << decision.discardVerification->move.itemId << ",\"discarded_count\":"
+			       << static_cast<uint32_t>(decision.discardVerification->move.requestedCount) << ",\"discarded_value\":"
+			       << decision.discardVerification->move.value << ",\"incoming_item_id\":" << decision.discardVerification->move.incomingItemId
+			       << ",\"incoming_unit_value\":" << inventoryPolicy.itemUnitValue(decision.discardVerification->move.incomingItemId);
+			emit("action_result", currentPosition, fields.str());
+		} else logActionFailure("loot_replace", "discard_not_verified", currentPosition);
 	}
 
-	Item* lootItem = nullptr;
-	uint8_t lootIndex = 0;
-	const uint32_t heldFood = inventoryPolicy.foodInventory(*player).count;
-	bool skippedSurplusFood = false;
-	uint16_t skippedFoodItemId = 0;
-	const ItemDeque& corpseItems = corpse->getItemList();
-	for (size_t index = 0; index < corpseItems.size(); ++index) {
-		Item* candidate = corpseItems[index];
-		const bool foodCandidate = PlayerBotInventoryPolicy::isFoodItem(candidate->getID());
-		const uint32_t candidateValue = std::max<uint32_t>(inventoryPolicy.itemUnitValue(candidate->getID()), foodCandidate ? 1 : 0);
-		if (candidateValue == 0 || lootSession.lootItemUnavailable(candidate->getID())) {
-			continue;
-		}
-		if (foodCandidate && heldFood >= preferredFoodCount) {
-			skippedSurplusFood = true;
-			skippedFoodItemId = candidate->getID();
-			continue;
-		}
-		if (!lootItem) {
-			lootItem = candidate;
-			lootIndex = static_cast<uint8_t>(index);
-			continue;
-		}
-		const uint64_t candidateDensity = static_cast<uint64_t>(candidateValue) * lootItem->getBaseWeight();
-		const uint64_t selectedDensity = static_cast<uint64_t>(inventoryPolicy.itemUnitValue(lootItem->getID())) * candidate->getBaseWeight();
-		if (candidateDensity > selectedDensity ||
-		    (candidateDensity == selectedDensity && candidateValue > inventoryPolicy.itemUnitValue(lootItem->getID()))) {
-			lootItem = candidate;
-			lootIndex = static_cast<uint8_t>(index);
-		}
-	}
-
-	if (!lootItem) {
-		if (!lootSession.lootedCurrentCorpse()) {
-			if (skippedSurplusFood) {
-				emit("action_result", currentPosition,
-				     "\"action\":\"loot\",\"result\":\"skipped\",\"reason\":\"food_preference_satisfied\",\"item_id\":" +
-				         std::to_string(skippedFoodItemId) + ",\"carried\":" + std::to_string(heldFood) +
-				         ",\"preferred\":" + std::to_string(preferredFoodCount));
-			} else {
-				emit("action_result", currentPosition,
-				     "\"action\":\"loot\",\"result\":\"skipped\",\"reason\":\"no_eligible_loot\"");
+	const PlayerBotLootCommand& command = decision.command;
+	if (command.type == PlayerBotLootCommandType::Navigate) {
+		const uint64_t pathfindingFailuresBefore = telemetry.pathfindingFailures();
+		const uint32_t blockedStepsBefore = navigationRuntime.stepFailureCount();
+		processNavigation(player, currentPosition, command.destination);
+		if (telemetry.pathfindingFailures() > pathfindingFailuresBefore || navigationRuntime.stepFailureCount() > blockedStepsBefore) {
+			const auto transition = lootWorkflow.observeNavigationFailure(currentPosition, now);
+			if (transition == PlayerBotLootNavigationTransition::Failed) {
+				finishLootFailure(player, currentPosition, "corpse_inaccessible");
+			} else if (transition == PlayerBotLootNavigationTransition::Suspended) {
+				clearNavigation();
+				emit("navigation_progress", currentPosition, "\"result\":\"suspended\",\"reason\":\"corpse_route_unchanged\",\"navigation_failures\":" +
+				     std::to_string(lootWorkflow.navigationFailures()));
 			}
 		}
+		return;
+	}
+
+	if (command.outcome == PlayerBotLootOutcome::NoCapacity) {
+		std::ostringstream fields;
+		fields << "\"action\":\"loot\",\"result\":\"skipped\",\"reason\":\"no_capacity\""
+		       << ",\"item_id\":" << command.item.itemId << ",\"count\":" << static_cast<uint32_t>(command.item.availableCount)
+		       << ",\"unit_value\":" << command.item.unitValue << ",\"weight\":" << command.item.unitWeight * command.item.availableCount
+		       << ",\"free_capacity\":" << player->getFreeCapacity();
+		emit("action_result", currentPosition, fields.str());
+	}
+	if (command.type == PlayerBotLootCommandType::Fail) {
+		finishLootFailure(player, currentPosition, command.outcome == PlayerBotLootOutcome::CorpseExpired ? "corpse_expired" : "corpse_inaccessible");
+		schedule(navigationInterval);
+		return;
+	}
+	if (command.type == PlayerBotLootCommandType::Finish) {
+		if (command.outcome == PlayerBotLootOutcome::OwnedCorpseUnavailable) logActionFailure("loot", "owned_corpse_unavailable", currentPosition);
+		if (command.outcome == PlayerBotLootOutcome::CorpseOpenFailed) logActionFailure("loot", "corpse_open_failed", currentPosition);
+		if (command.outcome == PlayerBotLootOutcome::BackpackUnavailable) logActionFailure("loot", "backpack_unavailable", currentPosition);
+		if (command.outcome == PlayerBotLootOutcome::CorpseEmpty && !lootWorkflow.lootedCurrentCorpse() && discovery) {
+			std::ostringstream fields;
+			fields << "\"action\":\"loot\",\"result\":\"skipped\",\"reason\":\"corpse_empty\",\"corpse_item_id\":"
+			       << discovery->corpse->getID() << ",\"corpse_owner_id\":" << discovery->corpse->getCorpseOwner()
+			       << ",\"corpse_position\":{\"x\":" << discovery->position.x << ",\"y\":" << discovery->position.y
+			       << ",\"z\":" << static_cast<uint16_t>(discovery->position.z) << '}';
+			emit("action_result", currentPosition, fields.str());
+		}
+		if (command.outcome == PlayerBotLootOutcome::FoodPreferenceSatisfied && !lootWorkflow.lootedCurrentCorpse()) {
+			emit("action_result", currentPosition, "\"action\":\"loot\",\"result\":\"skipped\",\"reason\":\"food_preference_satisfied\",\"item_id\":" +
+			     std::to_string(command.item.itemId) + ",\"carried\":" + std::to_string(snapshot.inventory.heldFood) +
+			     ",\"preferred\":" + std::to_string(preferredFoodCount));
+		}
+		if (command.outcome == PlayerBotLootOutcome::NoEligibleLoot && !lootWorkflow.lootedCurrentCorpse())
+			emit("action_result", currentPosition, "\"action\":\"loot\",\"result\":\"skipped\",\"reason\":\"no_eligible_loot\"");
 		finishLoot(player, currentPosition);
 		return;
 	}
 
-	const uint32_t inventoryCount = inventoryPolicy.inventoryItemCount(*player, lootItem->getID());
-	const uint8_t moveCount = PlayerBotInventoryPolicy::isFoodItem(lootItem->getID()) ?
-	                          static_cast<uint8_t>(std::min<uint32_t>(lootItem->getItemCount(), preferredFoodCount - heldFood)) :
-	                          static_cast<uint8_t>(lootItem->getItemCount());
-	lootSession.selectLootMove({lootItem->getID(), moveCount, inventoryCount, lootIndex});
-	const uint32_t moveWeight = lootItem->getBaseWeight() * moveCount;
-	if (moveWeight > player->getFreeCapacity()) {
-		discardCargoForLoot(player, backpack, lootItem, moveCount, currentPosition);
+	schedule(navigationInterval);
+	if (command.type == PlayerBotLootCommandType::OpenCorpse && discovery) {
+		player->closeContainer(corpseContainerId);
+		Tile* tile = g_game.map.getTile(discovery->position);
+		const int32_t stackPosition = tile ? tile->getThingIndex(discovery->corpse) : -1;
+		if (stackPosition >= 0 && stackPosition <= UINT8_MAX) {
+			telemetry.recordActionAttempt();
+			g_game.playerUseItem(playerId, discovery->position, static_cast<uint8_t>(stackPosition), corpseContainerId,
+			                   discovery->corpse->getClientID());
+		}
 		return;
 	}
-	const Position fromPosition(0xFFFF, 0x40 | corpseContainerId, lootIndex);
-	const Position toPosition(0xFFFF, 0x40 | backpackContainerId, backpackDestinationIndex(*backpack, *lootItem));
-	if (!player->canDoAction()) {
+	if (command.type == PlayerBotLootCommandType::OpenBackpack && backpack) {
+		const int8_t existingContainerId = player->getContainerID(backpack);
+		if (existingContainerId >= 0) player->closeContainer(static_cast<uint8_t>(existingContainerId));
+		telemetry.recordActionAttempt();
+		g_game.playerUseItem(playerId, Position(0xFFFF, CONST_SLOT_BACKPACK, 0), 0, backpackContainerId, backpack->getClientID());
 		return;
 	}
-	lootSession.beginLootMove({lootItem->getID(), moveCount, inventoryCount, lootIndex});
-	telemetry.recordActionAttempt();
-	g_game.playerMoveItem(player, fromPosition, lootItem->getClientID(), lootIndex, toPosition, moveCount, lootItem, backpack);
+	if (command.type == PlayerBotLootCommandType::OpenCargo) {
+		Container* source = const_cast<Container*>(static_cast<const Container*>(command.cargo.source));
+		if (source) openContainer(*player, *source, rewardContainerIdBase, currentPosition);
+		return;
+	}
+	if (command.type == PlayerBotLootCommandType::MoveItem && discovery && backpack) {
+		const ItemDeque& items = discovery->corpse->getItemList();
+		if (command.item.index < items.size()) {
+			Item* item = items[command.item.index];
+			telemetry.recordActionAttempt();
+			g_game.playerMoveItem(player, Position(0xFFFF, 0x40 | corpseContainerId, command.item.index), item->getClientID(), command.item.index,
+			                   Position(0xFFFF, 0x40 | backpackContainerId, backpackDestinationIndex(*backpack, *item)), command.count, item, backpack);
+		}
+		return;
+	}
+	if (command.type == PlayerBotLootCommandType::DiscardCargo) {
+		Container* source = const_cast<Container*>(static_cast<const Container*>(command.cargo.source));
+		Tile* destination = g_game.map.getTile(currentPosition);
+		if (source && destination && command.cargo.index < source->getItemList().size()) {
+			Item* item = source->getItemList()[command.cargo.index];
+			telemetry.recordActionAttempt();
+			g_game.playerMoveItem(player, Position(0xFFFF, 0x40 | static_cast<uint8_t>(command.cargo.containerId), command.cargo.index),
+			                   item->getClientID(), command.cargo.index, currentPosition, command.count, item, destination);
+		}
+	}
 }
