@@ -57,6 +57,7 @@ set(tfs_SRC
 	${CMAKE_CURRENT_LIST_DIR}/playerbotinventorypolicy.cpp
 	${CMAKE_CURRENT_LIST_DIR}/playerbotloot.cpp
 	${CMAKE_CURRENT_LIST_DIR}/playerbotprogression.cpp
+	${CMAKE_CURRENT_LIST_DIR}/playerbotprogressionsession.cpp
 	${CMAKE_CURRENT_LIST_DIR}/playerbotrecoverysession.cpp
 	${CMAKE_CURRENT_LIST_DIR}/playerbotspellcalibration.cpp
 	${CMAKE_CURRENT_LIST_DIR}/playerbotspellruntime.cpp

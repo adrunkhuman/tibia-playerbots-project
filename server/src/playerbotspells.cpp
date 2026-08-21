@@ -305,7 +305,7 @@ void PlayerBotController::verifySpellCast(Player& player, const Position& positi
 const char* PlayerBotController::magicTrainingSafetyReason(const Player& player) const
 {
 	if (cyclePhase == CyclePhase::Hunt) return "hunting";
-	if (progressionObjective != ProgressionObjective::None) return "progression_objective";
+	if (progressionSession.active() != PlayerBotProgressionProcedure::None) return "progression_objective";
 	if (scenarioStage != ScenarioStage::Traverse || targetingSession.traversalTarget() || targetingSession.defensiveTarget() ||
 	    const_cast<Player&>(player).getAttackedCreature() != nullptr) return "combat_or_pursuit";
 	if (navigationSession.hasPendingWork()) return "pending_navigation";
@@ -637,7 +637,7 @@ void PlayerBotController::emitSpellCandidate(const Npc& npc, const NpcSpellOffer
 	emit("spell_candidate", position, fields.str());
 }
 
-bool PlayerBotController::findSpellTraining(Player& player, const Position& position, SpellTrainingPlan& plan,
+bool PlayerBotController::findSpellTraining(Player& player, const Position& position, PlayerBotSpellTrainingPlan& plan,
                                             std::deque<PlayerBotNavigationStep>& selectedSteps)
 {
 	const uint64_t reserve = spellTrainingReserve(player);
@@ -758,7 +758,7 @@ bool PlayerBotController::findSpellTraining(Player& player, const Position& posi
 				emitSpellCandidate(*npc, offer, position, "rejected", "trainer_unreachable", reserve);
 				continue;
 			}
-			SpellTrainingPlan candidate{npc->getID(), npc->getPosition(), trainerApproach, offer.spellName, offer.keyword,
+			PlayerBotSpellTrainingPlan candidate{npc->getID(), npc->getPosition(), trainerApproach, offer.spellName, offer.keyword,
 			                            offer.price, offer.level, static_cast<uint32_t>(trainerSteps.size()), reserve};
 			emitSpellCandidate(*npc, offer, position, "feasible", nullptr, reserve, candidate.travelSteps);
 			if (!found || candidate.price < plan.price ||
@@ -773,36 +773,34 @@ bool PlayerBotController::findSpellTraining(Player& player, const Position& posi
 	return found;
 }
 
-void PlayerBotController::beginSpellTraining(Player& player, const Position& position, SpellTrainingPlan plan,
+void PlayerBotController::beginSpellTraining(Player& player, const Position& position, PlayerBotSpellTrainingPlan plan,
                                              std::deque<PlayerBotNavigationStep> steps)
 {
-	spellTrainingPlan = std::move(plan);
-	progressionObjective = ProgressionObjective::LearnSpell;
-	spellTrainingStage = SpellTrainingStage::Travel;
-	progressionAttempts = 0;
-	npcSession.reset(spellTrainingPlan.npcId);
-	navigationSession.adopt(spellTrainingPlan.approachPosition, std::move(steps));
+	spellTrainingSession.begin(std::move(plan));
+	progressionSession.begin(PlayerBotProgressionProcedure::LearnSpell);
+	const auto& training = spellTrainingSession.plan();
+	npcSession.reset(training.npcId);
+	navigationSession.adopt(training.approachPosition, std::move(steps));
 	emit("strategy_selection", position, "\"goal\":\"learn_spell\",\"npc_id\":" +
-	     std::to_string(spellTrainingPlan.npcId) + ",\"spell\":" + jsonString(spellTrainingPlan.spellName) +
-	     ",\"keyword\":" + jsonString(spellTrainingPlan.keyword) + ",\"price\":" +
-	     std::to_string(spellTrainingPlan.price) + ",\"reserve\":" + std::to_string(spellTrainingPlan.reserve) +
-	     ",\"travel_steps\":" + std::to_string(spellTrainingPlan.travelSteps));
-	say(player, "Going to learn " + spellTrainingPlan.spellName + ".");
+	     std::to_string(training.npcId) + ",\"spell\":" + jsonString(training.spellName) +
+	     ",\"keyword\":" + jsonString(training.keyword) + ",\"price\":" +
+	     std::to_string(training.price) + ",\"reserve\":" + std::to_string(training.reserve) +
+	     ",\"travel_steps\":" + std::to_string(training.travelSteps));
+	say(player, "Going to learn " + training.spellName + ".");
 }
 
 void PlayerBotController::finishSpellTraining(Player* player, const Position& position, const char* result, const char* reason)
 {
 	emit("strategy_objective_result", position, "\"goal\":\"learn_spell\",\"spell\":" +
-	     jsonString(spellTrainingPlan.spellName) + ",\"result\":" + jsonString(result) + ",\"reason\":" +
+	     jsonString(spellTrainingSession.plan().spellName) + ",\"result\":" + jsonString(result) + ",\"reason\":" +
 	     jsonString(reason));
 	emit("goal_result", position, "\"decision_id\":" + std::to_string(goalArbiter.decisionId()) +
 	     ",\"goal\":\"learn_spell\",\"result\":" + jsonString(result) + ",\"reason\":" + jsonString(reason));
 	if (player) {
 		say(*player, "Spell training " + std::string(result) + ": " + reason + '.');
 	}
-	progressionObjective = ProgressionObjective::None;
-	spellTrainingStage = SpellTrainingStage::Travel;
-	spellTrainingPlan = SpellTrainingPlan{};
+	progressionSession.reset();
+	spellTrainingSession.reset();
 	npcSession.reset();
 	clearNavigation();
 	goalArbiter.setCooldown(TopLevelGoal::LearnSpell,
@@ -815,75 +813,76 @@ void PlayerBotController::finishSpellTraining(Player* player, const Position& po
 
 void PlayerBotController::processSpellTraining(Player* player, const Position& currentPosition)
 {
-	if (spellTrainingStage == SpellTrainingStage::Travel) {
-		if (!processNavigation(player, currentPosition, spellTrainingPlan.approachPosition)) {
+	const auto& training = spellTrainingSession.plan();
+	if (spellTrainingSession.stage() == PlayerBotSpellTrainingStage::Travel) {
+		if (!processNavigation(player, currentPosition, training.approachPosition)) {
 			if (fixedTargetRouteFailureCount >= maximumProgressionAttempts) {
 				finishSpellTraining(player, currentPosition, "failed", "route_unavailable");
 			}
 			return;
 		}
-		spellTrainingStage = SpellTrainingStage::Greet;
+		spellTrainingSession.setStage(PlayerBotSpellTrainingStage::Greet);
 		schedule(SCHEDULER_MINTICKS);
 		return;
 	}
 
-	Npc* trainer = g_game.getNpcByID(spellTrainingPlan.npcId);
+	Npc* trainer = g_game.getNpcByID(training.npcId);
 	if (!trainer || trainer->isRemoved() || !Position::areInRange<3, 3, 0>(currentPosition, trainer->getPosition())) {
 		finishSpellTraining(player, currentPosition, "failed", "trainer_unavailable");
 		return;
 	}
-	if (spellTrainingStage == SpellTrainingStage::Greet) {
+	if (spellTrainingSession.stage() == PlayerBotSpellTrainingStage::Greet) {
 		npcSession.resetGreetingAcknowledgement();
 		++counters.actionsAttempted;
 		trainer->receiveSpeech(player, TALKTYPE_PRIVATE_PN, "hi");
-		spellTrainingStage = SpellTrainingStage::Request;
+		spellTrainingSession.setStage(PlayerBotSpellTrainingStage::Request);
 		schedule(1000);
 		return;
 	}
-	if (spellTrainingStage == SpellTrainingStage::Request) {
+	if (spellTrainingSession.stage() == PlayerBotSpellTrainingStage::Request) {
 		if (!npcSession.isGreetingAcknowledged()) {
-			if (++progressionAttempts >= maximumProgressionAttempts) {
+			if (spellTrainingSession.incrementRetries() >= maximumProgressionAttempts) {
 				finishSpellTraining(player, currentPosition, "failed", "trainer_focus_unconfirmed");
 				return;
 			}
-			spellTrainingStage = SpellTrainingStage::Greet;
+			spellTrainingSession.setStage(PlayerBotSpellTrainingStage::Greet);
 			schedule(1000);
 			return;
 		}
 		++counters.actionsAttempted;
-		trainer->receiveSpeech(player, TALKTYPE_PRIVATE_PN, spellTrainingPlan.keyword);
-		spellTrainingStage = SpellTrainingStage::Confirm;
+		trainer->receiveSpeech(player, TALKTYPE_PRIVATE_PN, training.keyword);
+		spellTrainingSession.setStage(PlayerBotSpellTrainingStage::Confirm);
 		schedule(1000);
 		return;
 	}
-	if (spellTrainingStage == SpellTrainingStage::Confirm) {
-		spellTrainingPlan.moneyBefore = player->getMoney() + player->getBankBalance();
+	if (spellTrainingSession.stage() == PlayerBotSpellTrainingStage::Confirm) {
+		spellTrainingSession.setMoneyBefore(player->getMoney() + player->getBankBalance());
 		++counters.actionsAttempted;
 		trainer->receiveSpeech(player, TALKTYPE_PRIVATE_PN, "yes");
-		spellTrainingStage = SpellTrainingStage::Verify;
+		spellTrainingSession.setStage(PlayerBotSpellTrainingStage::Verify);
 		schedule(1000);
 		return;
 	}
 
 	const uint64_t totalMoney = player->getMoney() + player->getBankBalance();
-	const bool learned = player->hasLearnedInstantSpell(spellTrainingPlan.spellName);
-	if (learned && spellTrainingPlan.moneyBefore >= spellTrainingPlan.price &&
-	    totalMoney == spellTrainingPlan.moneyBefore - spellTrainingPlan.price) {
+	const bool learned = player->hasLearnedInstantSpell(training.spellName);
+	if (learned && spellTrainingSession.moneyBefore() >= training.price &&
+	    totalMoney == spellTrainingSession.moneyBefore() - training.price) {
 		emit("action_result", currentPosition, "\"action\":\"learn_spell\",\"result\":\"success\",\"spell\":" +
-	     jsonString(spellTrainingPlan.spellName) + ",\"price\":" + std::to_string(spellTrainingPlan.price) +
-	     ",\"money_before\":" + std::to_string(spellTrainingPlan.moneyBefore) + ",\"money_after\":" +
+	     jsonString(training.spellName) + ",\"price\":" + std::to_string(training.price) +
+	     ",\"money_before\":" + std::to_string(spellTrainingSession.moneyBefore()) + ",\"money_after\":" +
 	     std::to_string(totalMoney));
 		finishSpellTraining(player, currentPosition, "success", "learned_state_and_payment_verified");
 		return;
 	}
-	if (learned || totalMoney != spellTrainingPlan.moneyBefore) {
+	if (learned || totalMoney != spellTrainingSession.moneyBefore()) {
 		finishSpellTraining(player, currentPosition, "failed", "transaction_delta_mismatch");
 		return;
 	}
-	if (++progressionAttempts >= maximumProgressionAttempts) {
+	if (spellTrainingSession.incrementRetries() >= maximumProgressionAttempts) {
 		finishSpellTraining(player, currentPosition, "failed", "learning_not_verified");
 		return;
 	}
-	spellTrainingStage = SpellTrainingStage::Greet;
+	spellTrainingSession.setStage(PlayerBotSpellTrainingStage::Greet);
 	schedule(1000);
 }
