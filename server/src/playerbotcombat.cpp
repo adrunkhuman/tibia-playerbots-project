@@ -76,19 +76,19 @@ bool PlayerBotController::needsHealing(const Player& player) const
 	       static_cast<int64_t>(player.getMaxHealth()) * healingHealthPercent;
 }
 
-void PlayerBotController::logHealResult(const char* result, const char* reason, int32_t healthAfter,
-                   uint32_t potionCountAfter, const Position& position)
+void PlayerBotController::logHealResult(const char* result, const char* reason, const PlayerBotPotionAttempt& before,
+					const PlayerBotPotionAttempt& after, const Position& position)
 {
 	std::ostringstream fields;
 	fields << "\"action\":\"heal\",\"result\":" << jsonString(result)
 	       << ",\"method\":\"small_health_potion\",\"item_id\":" << smallHealthPotionItemId
 	       << ",\"trigger\":\"health_threshold\",\"objective\":" << jsonString(objectiveName())
 	       << ",\"state\":" << jsonString(stageName(scenarioStage))
-	       << ",\"health_before\":" << pendingHealHealth
-	       << ",\"health_after\":" << healthAfter
-	       << ",\"health_max\":" << pendingHealHealthMax
-	       << ",\"resource_before\":" << pendingHealPotionCount
-	       << ",\"resource_after\":" << potionCountAfter;
+	       << ",\"health_before\":" << before.health
+	       << ",\"health_after\":" << after.health
+	       << ",\"health_max\":" << before.healthMaximum
+	       << ",\"resource_before\":" << before.potionCount
+	       << ",\"resource_after\":" << after.potionCount;
 	if (reason) {
 		fields << ",\"reason\":" << jsonString(reason);
 	}
@@ -98,19 +98,17 @@ void PlayerBotController::logHealResult(const char* result, const char* reason, 
 bool PlayerBotController::handleHealing(Player* player, const Position& currentPosition)
 {
 	const auto now = std::chrono::steady_clock::now();
-	if (pendingHeal) {
-		const uint32_t potionCount = inventoryPolicy.inventoryItemCount(*player, smallHealthPotionItemId);
-		const int32_t health = player->getHealth();
-		if (potionCount < pendingHealPotionCount && health > pendingHealHealth) {
-			logHealResult("success", nullptr, health, potionCount, currentPosition);
+	if (const auto verification = recoverySession.verifyPotion(
+		{player->getHealth(), player->getMaxHealth(), inventoryPolicy.inventoryItemCount(*player, smallHealthPotionItemId)},
+		now, healingRetryInterval)) {
+		if (verification->result == PlayerBotPotionVerificationResult::Success) {
+			logHealResult("success", nullptr, verification->before, verification->after, currentPosition);
 			recordHuntRecovery(true);
 		} else {
 			++counters.actionsFailed;
-			logHealResult("failed", potionCount < pendingHealPotionCount ? "ineffective_recovery" : "use_not_verified",
-			              health, potionCount, currentPosition);
-			healRetryAfter = now + healingRetryInterval;
+			logHealResult("failed", verification->result == PlayerBotPotionVerificationResult::IneffectiveRecovery ?
+			              "ineffective_recovery" : "use_not_verified", verification->before, verification->after, currentPosition);
 		}
-		pendingHeal = false;
 	}
 	if (serviceStage == ServiceStage::BuyPotions) {
 		return false;
@@ -120,7 +118,7 @@ bool PlayerBotController::handleHealing(Player* player, const Position& currentP
 		return false;
 	}
 	cancelHuntRegionPlanning();
-	if (now < healRetryAfter || !player->canDoAction()) {
+	if (!recoverySession.canRetryPotion(now) || !player->canDoAction()) {
 		return true;
 	}
 	if (handleSpellHealing(player, currentPosition)) {
@@ -160,10 +158,7 @@ bool PlayerBotController::handleHealing(Player* player, const Position& currentP
 		return true;
 	}
 
-	pendingHealHealth = player->getHealth();
-	pendingHealHealthMax = player->getMaxHealth();
-	pendingHealPotionCount = potionCount;
-	pendingHeal = true;
+	recoverySession.beginPotion({player->getHealth(), player->getMaxHealth(), potionCount});
 	++counters.actionsAttempted;
 	g_game.playerUseWithCreature(playerId, Position(0xFFFF, 0, 0), 0, playerId, potion->getClientID());
 	return true;
@@ -184,32 +179,25 @@ bool PlayerBotController::handleFood(Player* player, const Position& currentPosi
 	}
 
 	const auto now = std::chrono::steady_clock::now();
-	if (pendingEat) {
-		const uint32_t inventoryCount = inventoryPolicy.inventoryItemCount(*player, pendingEatItemId);
+	if (const PlayerBotFoodAttempt* pending = recoverySession.pendingFood()) {
+		const uint32_t inventoryCount = inventoryPolicy.inventoryItemCount(*player, pending->itemId);
 		const int32_t foodTicks = getFoodTicks(*player);
-		if (inventoryCount + 1 == pendingEatInventoryCount && foodTicks > pendingEatFoodTicks) {
-			logEatSuccess(pendingEatItemId, inventoryCount, foodTicks, currentPosition);
-			eatFailures = 0;
-		} else if (inventoryCount == pendingEatInventoryCount && !canEatCheese(*player)) {
-			// The normal food action leaves the item untouched when the player is full.
-			eatFailures = 0;
-		} else {
+		const auto verification = recoverySession.verifyFood(inventoryCount, foodTicks, canEatCheese(*player), now,
+		                                                   maximumEatFailures, std::chrono::seconds(5), eatFailureCooldown);
+		if (verification->result == PlayerBotFoodVerificationResult::Success) {
+			logEatSuccess(verification->before.itemId, verification->inventoryCount, verification->foodTicks, currentPosition);
+		} else if (verification->result == PlayerBotFoodVerificationResult::Failed ||
+		           verification->result == PlayerBotFoodVerificationResult::Cooldown) {
 			logActionFailure("eat", "consumption_not_verified", currentPosition);
-			if (++eatFailures >= maximumEatFailures) {
-				eatFailures = 0;
-				eatRetryAfter = now + eatFailureCooldown;
+			if (verification->result == PlayerBotFoodVerificationResult::Cooldown) {
 				emit("action_result", currentPosition,
 				     "\"action\":\"eat\",\"result\":\"cooldown\",\"reason\":\"retry_exhausted\",\"retry_after_ms\":" +
 				         std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(eatFailureCooldown).count()));
-			} else {
-				eatRetryAfter = now + std::chrono::seconds(5);
 			}
 		}
-		pendingEat = false;
-		pendingEatItemId = 0;
 	}
 
-	if (now < eatRetryAfter || !canEatCheese(*player)) {
+	if (!recoverySession.canRetryFood(now) || !canEatCheese(*player)) {
 		return false;
 	}
 
@@ -241,10 +229,7 @@ bool PlayerBotController::handleFood(Player* player, const Position& currentPosi
 		return true;
 	}
 
-	pendingEatItemId = food->getID();
-	pendingEatInventoryCount = inventoryPolicy.inventoryItemCount(*player, pendingEatItemId);
-	pendingEatFoodTicks = getFoodTicks(*player);
-	pendingEat = true;
+	recoverySession.beginFood({food->getID(), inventoryPolicy.inventoryItemCount(*player, food->getID()), getFoodTicks(*player)});
 	++counters.actionsAttempted;
 	g_game.playerUseItem(playerId, Position(0xFFFF, 0, 0), 0, 0, food->getClientID());
 	return true;

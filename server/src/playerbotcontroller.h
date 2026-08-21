@@ -19,7 +19,9 @@
 #include "playerbotnavigation.h"
 #include "playerbotnavigationsession.h"
 #include "playerbotnpcsession.h"
+#include "playerbotrecoverysession.h"
 #include "playerbotspellcalibration.h"
+#include "playerbotspellruntime.h"
 
 #include "container.h"
 #include "condition.h"
@@ -435,35 +437,6 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 			uint64_t moneyBefore = 0;
 		};
 
-		struct PendingSpellCast {
-			std::string name;
-			std::string role;
-			std::string need;
-			uint32_t manaBefore = 0;
-			uint32_t manaReserve = 0;
-			int32_t healthBefore = 0;
-			uint32_t targetId = 0;
-			int32_t targetHealthBefore = 0;
-			int32_t missingHealth = 0;
-			int32_t hasteTicksBefore = 0;
-			int32_t hasteTicksAfterCast = 0;
-			int32_t hasteTicksObserved = 0;
-			int32_t hasteDurationMeasured = 0;
-			int64_t hasteEndTimeAfterCast = 0;
-			PlayerBotSpellEnvelope envelope;
-			std::string targetClass;
-			uint32_t observedSpellHealing = 0;
-			uint32_t observedSpellDamage = 0;
-			bool concurrentDamage = false;
-			bool otherRecovery = false;
-			bool otherAttacker = false;
-			bool meleeOrOtherBotDamage = false;
-			std::array<uint32_t, 4> spellVictimIds{};
-			uint8_t spellVictimCount = 0;
-			bool spellVictimOverflow = false;
-			std::chrono::steady_clock::time_point observedAt;
-		};
-
 		enum class ScenarioStage : uint8_t {
 			LootCorpse,
 			Traverse,
@@ -624,8 +597,8 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		void processReadinessEquipment(Player* player, const Position& position);
 		bool ensureCombatReady(Player* player, const Position& position, const char* reason);
 
-		void logHealResult(const char* result, const char* reason, int32_t healthAfter,
-		                   uint32_t potionCountAfter, const Position& position);
+		void logHealResult(const char* result, const char* reason, const PlayerBotPotionAttempt& before,
+		                   const PlayerBotPotionAttempt& after, const Position& position);
 
 		bool handleHealing(Player* player, const Position& currentPosition);
 		bool handleSpellHealing(Player* player, const Position& currentPosition);
@@ -636,7 +609,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		void verifySpellCast(Player& player, const Position& position);
 		void emitSpellCastEvent(const Position& position, const char* spellName, const char* words, const char* role,
 		                        const char* need, const char* result, const char* engineResult, const char* reason,
-		                        const PendingSpellCast* pending, const Player* player, const char* fallback) const;
+		                        const PlayerBotSpellPendingCast* pending, const Player* player, const char* fallback) const;
 
 		void logEatSuccess(uint16_t itemId, uint32_t inventoryCount, int32_t foodTicks, const Position& position);
 
@@ -988,21 +961,9 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		std::set<uint16_t> unavailableLootItemIds;
 		std::map<uint16_t, uint32_t> itemSellValues;
 		playerbot::PlayerBotInventoryPolicy inventoryPolicy;
-		bool pendingHeal = false;
-		int32_t pendingHealHealth = 0;
-		int32_t pendingHealHealthMax = 0;
-		uint32_t pendingHealPotionCount = 0;
-		std::chrono::steady_clock::time_point healRetryAfter;
-		PendingSpellCast pendingSpellCast;
-		bool spellCastExecuting = false;
-		std::chrono::steady_clock::time_point spellRetryAfter;
+		PlayerBotRecoverySession recoverySession;
+		PlayerBotSpellRuntime spellRuntime;
 		PlayerBotSpellCalibration spellCalibration;
-		bool pendingEat = false;
-		uint16_t pendingEatItemId = 0;
-		uint32_t pendingEatInventoryCount = 0;
-		int32_t pendingEatFoodTicks = 0;
-		uint32_t eatFailures = 0;
-		std::chrono::steady_clock::time_point eatRetryAfter;
 		std::chrono::steady_clock::time_point combatStarted;
 		std::chrono::steady_clock::time_point defensiveCombatStarted;
 		bool defensiveTargetRouteCritical = false;
