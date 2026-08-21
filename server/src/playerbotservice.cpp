@@ -90,16 +90,16 @@ void PlayerBotController::beginService(Player* player, const Position& position,
 		emit("goal_result", position,
 		     "\"decision_id\":" + std::to_string(goalArbiter.decisionId()) +
 		         ",\"goal\":\"hunt\",\"result\":\"interrupted\",\"reason\":" + jsonString(reason));
-		const PlayerBotGoalArbiter::GoalDecision decision = goalArbiter.force(
+		const PlayerBotGoalArbiter::GoalDecision decision = progressionRuntime.force(
 		    {TopLevelGoal::Service, true, criticalHealingServiceUtility, "forced_interrupt"});
-		goalArbiter.apply(decision);
+		progressionRuntime.apply(decision);
 		emit("goal_selection", position,
 		     "\"decision_id\":" + std::to_string(decision.id) + ",\"decision_reason\":" + jsonString(reason) +
 		         ",\"from_goal\":\"hunt\",\"to_goal\":\"service\",\"utility\":" +
 		         std::to_string(criticalHealingServiceUtility) + ',' +
 		         "\"reason\":\"forced_interrupt\",\"forced\":true");
 	}
-	goalArbiter.setActiveGoal(TopLevelGoal::Service);
+	progressionRuntime.setActiveGoal(TopLevelGoal::Service);
 	g_game.playerCancelAttackAndFollow(playerId);
 	clearTraversalTarget(position, reason);
 	clearNavigation();

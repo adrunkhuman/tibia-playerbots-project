@@ -176,7 +176,7 @@ void PlayerBotController::verifySpellCast(Player& player, const Position& positi
 
 void PlayerBotController::finishMagicTraining(Player& player, const Position& position, const char* result, const char* reason)
 {
-	goalArbiter.setCooldown(TopLevelGoal::MagicTraining, magicTrainingRetryDelay);
+	progressionRuntime.setCooldown(TopLevelGoal::MagicTraining, magicTrainingRetryDelay);
 	if (goalArbiter.activeGoal() == TopLevelGoal::MagicTraining) {
 		emit("goal_result", position, "\"decision_id\":" + std::to_string(goalArbiter.decisionId()) +
 		     ",\"goal\":\"magic_training\",\"result\":" + jsonString(result) + ",\"reason\":" + jsonString(reason));
@@ -593,8 +593,7 @@ bool PlayerBotController::findSpellTraining(Player& player, const Position& posi
 void PlayerBotController::beginSpellTraining(Player& player, const Position& position, PlayerBotSpellTrainingPlan plan,
                                              std::deque<PlayerBotNavigationStep> steps)
 {
-	spellTrainingSession.begin(std::move(plan));
-	progressionSession.begin(PlayerBotProgressionProcedure::LearnSpell);
+	progressionRuntime.beginSpellTraining(std::move(plan));
 	const auto& training = spellTrainingSession.plan();
 	serviceWorkflow.resetNpc(training.npcId);
 	navigationRuntime.adopt(training.approachPosition, std::move(steps));
@@ -616,11 +615,10 @@ void PlayerBotController::finishSpellTraining(Player* player, const Position& po
 	if (player) {
 		say(*player, "Spell training " + std::string(result) + ": " + reason + '.');
 	}
-	progressionSession.reset();
-	spellTrainingSession.reset();
+	progressionRuntime.finish();
 	serviceWorkflow.resetNpc();
 	clearNavigation();
-	goalArbiter.setCooldown(TopLevelGoal::LearnSpell,
+	progressionRuntime.setCooldown(TopLevelGoal::LearnSpell,
 	                       std::strcmp(result, "success") == 0 ? spellTrainingSuccessCooldown : spellTrainingFailureCooldown);
 	if (player && fixtureRuntime.progressionEnabled()) {
 		selectTopLevelGoal(*player, position, std::strcmp(result, "success") == 0 ? "spell_training_complete" : "spell_training_failed");
@@ -631,75 +629,36 @@ void PlayerBotController::finishSpellTraining(Player* player, const Position& po
 void PlayerBotController::processSpellTraining(Player* player, const Position& currentPosition)
 {
 	const auto& training = spellTrainingSession.plan();
-	if (spellTrainingSession.stage() == PlayerBotSpellTrainingStage::Travel) {
-		if (!processNavigation(player, currentPosition, training.approachPosition)) {
-			if (navigationRuntime.fixedTargetRouteFailureCount() >= maximumProgressionAttempts) {
-				finishSpellTraining(player, currentPosition, "failed", "route_unavailable");
-			}
-			return;
-		}
-		spellTrainingSession.setStage(PlayerBotSpellTrainingStage::Greet);
-		schedule(SCHEDULER_MINTICKS);
-		return;
-	}
-
 	Npc* trainer = g_game.getNpcByID(training.npcId);
-	if (!trainer || trainer->isRemoved() || !Position::areInRange<3, 3, 0>(currentPosition, trainer->getPosition())) {
-		finishSpellTraining(player, currentPosition, "failed", "trainer_unavailable");
-		return;
+	PlayerBotSpellTrainingObservation observation;
+	observation.totalMoney = player->getMoney() + player->getBankBalance();
+	if (spellTrainingSession.stage() == PlayerBotSpellTrainingStage::Travel) {
+		observation.navigationReached = processNavigation(player, currentPosition, training.approachPosition);
+		observation.navigationFailed = navigationRuntime.fixedTargetRouteFailureCount() >= maximumProgressionAttempts;
+	} else {
+		observation.npcAvailable = trainer && !trainer->isRemoved() && Position::areInRange<3, 3, 0>(currentPosition, trainer->getPosition());
+		observation.greetingAcknowledged = serviceWorkflow.isGreetingAcknowledged();
+		observation.learned = player->hasLearnedInstantSpell(training.spellName);
 	}
-	if (spellTrainingSession.stage() == PlayerBotSpellTrainingStage::Greet) {
-		serviceWorkflow.resetGreetingAcknowledgement();
-		telemetry.recordActionAttempt();
-		trainer->receiveSpeech(player, TALKTYPE_PRIVATE_PN, "hi");
-		spellTrainingSession.setStage(PlayerBotSpellTrainingStage::Request);
-		schedule(1000);
-		return;
-	}
-	if (spellTrainingSession.stage() == PlayerBotSpellTrainingStage::Request) {
-		if (!serviceWorkflow.isGreetingAcknowledged()) {
-			if (spellTrainingSession.incrementRetries() >= maximumProgressionAttempts) {
-				finishSpellTraining(player, currentPosition, "failed", "trainer_focus_unconfirmed");
-				return;
-			}
-			spellTrainingSession.setStage(PlayerBotSpellTrainingStage::Greet);
-			schedule(1000);
-			return;
-		}
-		telemetry.recordActionAttempt();
-		trainer->receiveSpeech(player, TALKTYPE_PRIVATE_PN, training.keyword);
-		spellTrainingSession.setStage(PlayerBotSpellTrainingStage::Confirm);
-		schedule(1000);
-		return;
-	}
-	if (spellTrainingSession.stage() == PlayerBotSpellTrainingStage::Confirm) {
-		spellTrainingSession.setMoneyBefore(player->getMoney() + player->getBankBalance());
-		telemetry.recordActionAttempt();
-		trainer->receiveSpeech(player, TALKTYPE_PRIVATE_PN, "yes");
-		spellTrainingSession.setStage(PlayerBotSpellTrainingStage::Verify);
-		schedule(1000);
-		return;
-	}
-
-	const uint64_t totalMoney = player->getMoney() + player->getBankBalance();
-	const bool learned = player->hasLearnedInstantSpell(training.spellName);
-	if (learned && spellTrainingSession.moneyBefore() >= training.price &&
-	    totalMoney == spellTrainingSession.moneyBefore() - training.price) {
+	const PlayerBotProgressionOutcome result = progressionRuntime.advanceSpellTraining(observation);
+	if (result.type == PlayerBotProgressionOutcomeType::Succeeded) {
 		emit("action_result", currentPosition, "\"action\":\"learn_spell\",\"result\":\"success\",\"spell\":" +
 	     jsonString(training.spellName) + ",\"price\":" + std::to_string(training.price) +
 	     ",\"money_before\":" + std::to_string(spellTrainingSession.moneyBefore()) + ",\"money_after\":" +
-	     std::to_string(totalMoney));
-		finishSpellTraining(player, currentPosition, "success", "learned_state_and_payment_verified");
+	     std::to_string(observation.totalMoney));
+		finishSpellTraining(player, currentPosition, "success", result.reason);
 		return;
 	}
-	if (learned || totalMoney != spellTrainingSession.moneyBefore()) {
-		finishSpellTraining(player, currentPosition, "failed", "transaction_delta_mismatch");
+	if (result.type == PlayerBotProgressionOutcomeType::Failed) {
+		finishSpellTraining(player, currentPosition, "failed", result.reason);
 		return;
 	}
-	if (spellTrainingSession.incrementRetries() >= maximumProgressionAttempts) {
-		finishSpellTraining(player, currentPosition, "failed", "learning_not_verified");
-		return;
+	if (result.command.type == PlayerBotProgressionCommandType::Speak) {
+		if (!trainer || trainer->isRemoved()) return;
+		const char* words = std::strcmp(result.command.reason, "request") == 0 ? training.keyword.c_str() : result.command.reason;
+		if (std::strcmp(words, "hi") == 0) serviceWorkflow.resetGreetingAcknowledgement();
+		telemetry.recordActionAttempt();
+		trainer->receiveSpeech(player, TALKTYPE_PRIVATE_PN, words);
 	}
-	spellTrainingSession.setStage(PlayerBotSpellTrainingStage::Greet);
-	schedule(1000);
+	if (result.command.type != PlayerBotProgressionCommandType::Navigate) schedule(result.command.type == PlayerBotProgressionCommandType::Speak ? 1000 : SCHEDULER_MINTICKS);
 }

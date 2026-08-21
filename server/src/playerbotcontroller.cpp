@@ -56,13 +56,13 @@ void PlayerBotController::start(const Position& position, bool recovered, uint32
 	} else if (useGoalSelector) {
 		// The selected goal initialized its own executor state.
 	} else if (startInHunt) {
-		goalArbiter.setActiveGoal(TopLevelGoal::Hunt);
+		progressionRuntime.setActiveGoal(TopLevelGoal::Hunt);
 		startHunt(g_game.getPlayerByID(playerId), position, "focused_fixture");
 	} else if (fixtureRuntime.depotFixture()) {
-		goalArbiter.setActiveGoal(TopLevelGoal::Service);
+		progressionRuntime.setActiveGoal(TopLevelGoal::Service);
 		cyclePhase = CyclePhase::ReturnToDepot;
 	} else {
-		goalArbiter.setActiveGoal(TopLevelGoal::Service);
+		progressionRuntime.setActiveGoal(TopLevelGoal::Service);
 		cyclePhase = CyclePhase::Service;
 	}
 	setStage(ScenarioStage::Traverse, position);
@@ -455,10 +455,10 @@ void PlayerBotController::navigate()
 				return;
 			}
 		} else if (fixtureRuntime.startInHunt()) {
-			goalArbiter.setActiveGoal(TopLevelGoal::Hunt);
+			progressionRuntime.setActiveGoal(TopLevelGoal::Hunt);
 			startHunt(player, currentPosition, "focused_fixture");
 		} else {
-			goalArbiter.setActiveGoal(TopLevelGoal::Service);
+			progressionRuntime.setActiveGoal(TopLevelGoal::Service);
 			cyclePhase = CyclePhase::Service;
 		}
 		schedule(navigationInterval);

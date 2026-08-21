@@ -18,12 +18,11 @@
 #include "playerbotdepotworkflow.h"
 #include "playerboteconomy.h"
 #include "playerbotequipmentpolicy.h"
-#include "playerbotgoalarbiter.h"
 #include "playerbothuntruntime.h"
 #include "playerbotinventorypolicy.h"
 #include "playerbotlootworkflow.h"
 #include "playerbotnavigationruntime.h"
-#include "playerbotprogressionsession.h"
+#include "playerbotprogressionruntime.h"
 #include "playerbotsurvivalruntime.h"
 #include "playerbottestpolicy.h"
 #include "playerbottelemetry.h"
@@ -350,13 +349,14 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 
 		uint32_t matchingRewardRootCount(Player& player, const std::string& signature) const;
 
-		bool allRewardRootsAdded(Player& player) const;
-
 		Item* findMatchingRewardRoot(Player& player, const std::string& signature) const;
 
 		Item* resolveRewardPath(Item* root, const std::vector<uint16_t>& path, size_t length) const;
 
-		bool prepareRewardItemAccess(Player& player, const Position& position, Item*& selectedItem, std::string& failure);
+		PlayerBotRewardObservation::ItemAccess observeRewardItemAccess(Player& player, size_t& containerDepth) const;
+		Item* rewardItemForAccess(Player& player) const;
+		void openRewardBackpack(Player& player);
+		void openRewardContainer(Player& player, const Position& position, size_t depth);
 
 		bool isRewardPosition(const Player& player, const Position& position) const;
 
@@ -550,12 +550,15 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 			playerbot::corpseLootTimeout, playerbot::preferredFoodCount,
 		}};
 		CyclePhase cyclePhase = CyclePhase::ReturnToDepot;
-		PlayerBotProgressionSession progressionSession;
-		PlayerBotRewardSession rewardSession;
-		PlayerBotOracleDepartureSession departureSession;
-		PlayerBotSpellTrainingSession spellTrainingSession;
-		PlayerBotEquipmentPurchaseSession equipmentPurchaseSession;
-		PlayerBotGoalArbiter goalArbiter;
+		PlayerBotProgressionRuntime progressionRuntime;
+		// These references keep the game-adapter code narrow while the runtime owns
+		// all progression state. New procedure logic must use progressionRuntime.
+		const PlayerBotProgressionSession& progressionSession = progressionRuntime.session();
+		const PlayerBotRewardSession& rewardSession = progressionRuntime.reward();
+		const PlayerBotOracleDepartureSession& departureSession = progressionRuntime.departure();
+		const PlayerBotSpellTrainingSession& spellTrainingSession = progressionRuntime.spellTraining();
+		const PlayerBotEquipmentPurchaseSession& equipmentPurchaseSession = progressionRuntime.equipmentPurchase();
+		const PlayerBotGoalArbiter& goalArbiter = progressionRuntime.goalArbiter();
 		std::map<uint16_t, std::string> rewardInspectionFingerprints;
 		uint16_t pendingReadinessItemId = 0;
 		slots_t pendingReadinessSlot = CONST_SLOT_WHEREEVER;

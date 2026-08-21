@@ -775,7 +775,7 @@ void PlayerBotController::startHunt(Player* player, const Position& position, co
 	if (!ensureCombatReady(player, position, reason)) {
 		return;
 	}
-	goalArbiter.setActiveGoal(TopLevelGoal::Hunt);
+	progressionRuntime.setActiveGoal(TopLevelGoal::Hunt);
 	setCyclePhase(CyclePhase::Hunt, position, reason);
 	if (!fixtureRuntime.fixedFixtureRoute() && !huntRuntime.active()) {
 		if (!selectHuntRegion(*player, position, "hunt_started")) {

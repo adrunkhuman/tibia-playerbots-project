@@ -83,19 +83,20 @@ class PlayerBotRewardSession
 	void reset();
 
 	const PlayerBotRewardPlan& plan() const { return reward; }
-	PlayerBotRewardPlan& plan() { return reward; }
 	PlayerBotRewardStage stage() const { return currentStage; }
-	void setStage(PlayerBotRewardStage stage) { currentStage = stage; }
 	uint32_t retries() const { return attempts; }
-	uint32_t incrementRetries() { return ++attempts; }
-	void resetRetries() { attempts = 0; }
-	PlayerBotRewardClaimSnapshot& claimSnapshot() { return claim; }
 	const PlayerBotRewardClaimSnapshot& claimSnapshot() const { return claim; }
-	PlayerBotNestedContainerAccessState& containerAccess() { return nestedContainer; }
-	std::map<uint16_t, uint32_t>& displacedItemCounts() { return displaced; }
-	const std::map<uint16_t, uint32_t>& displacedItemCounts() const { return displaced; }
 
 	private:
+	friend class PlayerBotProgressionRuntime;
+	void setStage(PlayerBotRewardStage stage) { currentStage = stage; }
+	uint32_t incrementRetries() { return ++attempts; }
+	void resetRetries() { attempts = 0; }
+	void captureClaimSnapshot(PlayerBotRewardClaimSnapshot snapshot) { claim = std::move(snapshot); }
+	uint32_t beginContainerAccess(size_t depth);
+	void observeContainerOpen(size_t depth);
+	bool displacedItemsPreserved(const std::map<uint16_t, uint32_t>& counts) const;
+	void captureDisplacedItemCounts(std::map<uint16_t, uint32_t> counts) { displaced = std::move(counts); }
 	PlayerBotRewardPlan reward;
 	PlayerBotRewardStage currentStage = PlayerBotRewardStage::Travel;
 	uint32_t attempts = 0;
@@ -130,11 +131,13 @@ class PlayerBotOracleDepartureSession
 
 	const PlayerBotOracleDeparturePlan& plan() const { return departure; }
 	PlayerBotOracleDepartureStage stage() const { return currentStage; }
+	uint32_t retries() const { return attempts; }
+
+	private:
+	friend class PlayerBotProgressionRuntime;
 	void setStage(PlayerBotOracleDepartureStage stage) { currentStage = stage; }
 	uint32_t incrementRetries() { return ++attempts; }
 	void resetRetries() { attempts = 0; }
-
-	private:
 	PlayerBotOracleDeparturePlan departure;
 	PlayerBotOracleDepartureStage currentStage = PlayerBotOracleDepartureStage::Travel;
 	uint32_t attempts = 0;
@@ -168,13 +171,15 @@ class PlayerBotSpellTrainingSession
 
 	const PlayerBotSpellTrainingPlan& plan() const { return training; }
 	PlayerBotSpellTrainingStage stage() const { return currentStage; }
+	uint32_t retries() const { return attempts; }
+	uint64_t moneyBefore() const { return beforeMoney; }
+
+	private:
+	friend class PlayerBotProgressionRuntime;
 	void setStage(PlayerBotSpellTrainingStage stage) { currentStage = stage; }
 	uint32_t incrementRetries() { return ++attempts; }
 	void resetRetries() { attempts = 0; }
-	uint64_t moneyBefore() const { return beforeMoney; }
 	void setMoneyBefore(uint64_t money) { beforeMoney = money; }
-
-	private:
 	PlayerBotSpellTrainingPlan training;
 	PlayerBotSpellTrainingStage currentStage = PlayerBotSpellTrainingStage::Travel;
 	uint32_t attempts = 0;
@@ -196,17 +201,18 @@ class PlayerBotEquipmentPurchaseSession
 	void reset();
 
 	const PlayerBotEquipmentOfferEvaluation& plan() const { return purchase; }
-	PlayerBotEquipmentOfferEvaluation& plan() { return purchase; }
 	PlayerBotEquipmentPurchaseStage stage() const { return currentStage; }
-	void setStage(PlayerBotEquipmentPurchaseStage stage) { currentStage = stage; }
 	uint32_t retries() const { return attempts; }
-	uint32_t incrementRetries() { return ++attempts; }
-	void resetRetries() { attempts = 0; }
-	std::map<uint16_t, uint32_t>& displacedItemCounts() { return displaced; }
-	const std::map<uint16_t, uint32_t>& displacedItemCounts() const { return displaced; }
-	PlayerBotNestedContainerAccessState& containerAccess() { return nestedContainer; }
 
 	private:
+	friend class PlayerBotProgressionRuntime;
+	void setStage(PlayerBotEquipmentPurchaseStage stage) { currentStage = stage; }
+	uint32_t incrementRetries() { return ++attempts; }
+	void resetRetries() { attempts = 0; }
+	void captureDisplacedItemCounts(std::map<uint16_t, uint32_t> counts) { displaced = std::move(counts); }
+	bool displacedItemsPreserved(const std::map<uint16_t, uint32_t>& counts) const;
+	uint32_t beginContainerAccess(size_t depth);
+	void observeContainerOpen(size_t depth);
 	PlayerBotEquipmentOfferEvaluation purchase;
 	PlayerBotEquipmentPurchaseStage currentStage = PlayerBotEquipmentPurchaseStage::Travel;
 	uint32_t attempts = 0;
