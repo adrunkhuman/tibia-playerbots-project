@@ -147,6 +147,7 @@ namespace playerbot {
 	inline constexpr uint32_t depotRetryInitialInterval = 1000;
 	inline constexpr uint32_t depotRetryMaximumInterval = 4000;
 	inline constexpr uint32_t depotRestartCheckpointStorage = 50096;
+	inline constexpr uint32_t gameplayFixtureReadyStorage = 50099;
 	inline constexpr std::array<Position, 4> huntingLoop = {{
 		Position(32084, 32144, 5),
 		Position(32103, 32124, 8),
@@ -184,9 +185,12 @@ namespace playerbot {
 		bool forcePatrolRouteFailures;
 		bool suppressSlottedLootSeller;
 		bool equipmentPurchasesEnabled;
+		bool equipmentPurchaseFixture;
 		bool forceEquipmentPurchaseRejected;
+		bool pauseAfterEquipmentStorageRejection;
 		bool adaptiveChallengeFixture;
 		bool forceHuntScopeExhaustion;
+		bool deferProgressionFixtureInitialization;
 		bool spellCalibrationFixture;
 		bool magicTrainingFixture;
 		bool forceMagicTrainingVerificationFailure;
@@ -1132,7 +1136,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		std::map<Position, std::chrono::steady_clock::time_point> temporarilyBlockedPositions;
 		bool navigationPending = false;
 		bool worldChangePending = false;
-		bool magicTrainingFixtureInitializationPending = false;
+		bool fixtureInitializationPending = false;
 		Counters counters;
 		std::unordered_map<std::string, std::chrono::steady_clock::time_point> repeatedEventTimes;
 		const std::chrono::steady_clock::time_point started = std::chrono::steady_clock::now();

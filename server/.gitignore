@@ -188,3 +188,4 @@ config.lua
 
 # Docker artifacts
 db-volume/
+data/monster/lua/playerbot_corpse_monsters.lua

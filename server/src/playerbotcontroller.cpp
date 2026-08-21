@@ -33,6 +33,7 @@ const PlayerBotTestPolicy& playerbot::testPolicyFromEnvironment()
 			 std::strcmp(gameplayMode, "progression_resume") == 0 ||
 			 std::strcmp(gameplayMode, "progression_nested_resume") == 0 ||
 			 std::strcmp(gameplayMode, "progression_space") == 0 ||
+			 std::strcmp(gameplayMode, "mainland_reward") == 0 ||
 			 std::strcmp(gameplayMode, "readiness_no_food") == 0 ||
 			 std::strcmp(gameplayMode, "readiness_low_wealth") == 0 ||
 			 std::strcmp(gameplayMode, "arbitration") == 0 ||
@@ -114,9 +115,14 @@ const PlayerBotTestPolicy& playerbot::testPolicyFromEnvironment()
 			!gameplayMode || (std::strcmp(gameplayMode, "equipment_shadow") != 0 &&
 			                  std::strcmp(gameplayMode, "equipment_shadow_unaffordable") != 0 &&
 			                  std::strcmp(gameplayMode, "equipment_shadow_no_upgrade") != 0),
+			gameplayMode && std::strncmp(gameplayMode, "equipment_buy", 13) == 0,
 			gameplayMode && std::strcmp(gameplayMode, "equipment_buy_rejected") == 0,
+			gameplayMode && std::strcmp(gameplayMode, "equipment_buy_space") == 0,
 			adaptiveChallengeFixture,
 			adaptiveChallengeFixture,
+			gameplayMode && (std::strcmp(gameplayMode, "mainland_reward") == 0 ||
+			                 std::strcmp(gameplayMode, "spell_training") == 0 ||
+			                 std::strncmp(gameplayMode, "equipment_buy", 13) == 0),
 			spellCalibrationFixture,
 			magicTrainingFixture,
 			gameplayMode && std::strcmp(gameplayMode, "magic_training_failed") == 0,
@@ -152,14 +158,15 @@ void PlayerBotController::start(const Position& position, bool recovered, uint32
 	const bool departureRequired = controlledPlayer && requiresRookgaardDeparture(*controlledPlayer);
 	const bool useGoalSelector = controlledPlayer && !startInHunt &&
 	                             (departureRequired || (!recovered && testPolicy.progressionEnabled));
-	if (!testPolicy.magicTrainingFixture && useGoalSelector && !selectTopLevelGoal(*controlledPlayer, position, "startup")) {
+	if (!testPolicy.magicTrainingFixture && !testPolicy.deferProgressionFixtureInitialization && useGoalSelector &&
+	    !selectTopLevelGoal(*controlledPlayer, position, "startup")) {
 		return;
 	}
 	std::ostringstream lifecycle;
 	lifecycle << "\"status\":\"online\",\"message\":\"Playerbot online\""
 	          << ",\"recovered\":" << (recovered ? "true" : "false")
 	          << ",\"recovery_count\":" << recoveryCount
-	          << ",\"objective\":" << jsonString(testPolicy.magicTrainingFixture ? "fixture_pending" : useGoalSelector ? topLevelGoalName(activeGoal) :
+	          << ",\"objective\":" << jsonString((testPolicy.magicTrainingFixture || testPolicy.deferProgressionFixtureInitialization) ? "fixture_pending" : useGoalSelector ? topLevelGoalName(activeGoal) :
 	                                                    (startInHunt ? "hunt" : "service"))
 	          << ",\"step_speed\":" << (g_game.getPlayerByID(playerId) ? g_game.getPlayerByID(playerId)->getSpeed() : 0)
 		          << ",\"spell_calibration_profiles\":" << spellCalibration.size();
@@ -167,8 +174,8 @@ void PlayerBotController::start(const Position& position, bool recovered, uint32
 	if (testPolicy.spellCalibrationFixture && controlledPlayer) {
 		runSpellCalibrationFixture(*controlledPlayer, position);
 	}
-	if (testPolicy.magicTrainingFixture) {
-		magicTrainingFixtureInitializationPending = true;
+	if (testPolicy.magicTrainingFixture || testPolicy.deferProgressionFixtureInitialization) {
+		fixtureInitializationPending = true;
 	} else if (useGoalSelector) {
 		// The selected goal initialized its own executor state.
 	} else if (startInHunt) {
@@ -945,9 +952,23 @@ void PlayerBotController::navigate()
 
 	const Position currentPosition = player->getPosition();
 	lastPosition = currentPosition;
-	if (magicTrainingFixtureInitializationPending) {
-		magicTrainingFixtureInitializationPending = false;
-		runMagicTrainingFixture(*player, currentPosition);
+	if (fixtureInitializationPending) {
+		int32_t fixtureReady = -1;
+		if (testPolicy.deferProgressionFixtureInitialization) {
+			player->getStorageValue(gameplayFixtureReadyStorage, fixtureReady);
+			if (fixtureReady == 2) {
+				fixtureInitializationPending = false;
+				return;
+			}
+			if (fixtureReady != 1) {
+				schedule(navigationInterval);
+				return;
+			}
+		}
+		fixtureInitializationPending = false;
+		if (testPolicy.magicTrainingFixture) {
+			runMagicTrainingFixture(*player, currentPosition);
+		}
 		const bool useGoalSelector = !testPolicy.startInHunt &&
 		                             (requiresRookgaardDeparture(*player) || testPolicy.progressionEnabled);
 		if (useGoalSelector) {

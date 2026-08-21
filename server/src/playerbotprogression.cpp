@@ -1330,6 +1330,9 @@ bool PlayerBotController::selectTopLevelGoal(Player& player, const Position& pos
 	                  equipmentFound ? &*equipment : nullptr);
 	emitGoalCandidate(player, magicTraining, position, decisionReason);
 	emitGoalCandidate(player, hunt, position, decisionReason);
+	if (testPolicy.pauseAfterEquipmentStorageRejection) {
+		return false;
+	}
 
 	const GoalCandidate* selected = nullptr;
 	const std::array<const GoalCandidate*, 7> candidates = {

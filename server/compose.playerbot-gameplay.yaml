@@ -1,4 +1,8 @@
 services:
+  database:
+    volumes:
+      - ./schema/insertPlayerbots.sql:/test-schema/04-playerbots.sql:ro
+
   server:
     environment:
       PLAYERBOT_GAMEPLAY_MODE: "${PLAYERBOT_GAMEPLAY_MODE:-cycle}"

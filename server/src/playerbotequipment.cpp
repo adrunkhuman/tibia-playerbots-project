@@ -586,11 +586,17 @@ void PlayerBotController::finishEquipmentPurchase(Player* player, const Position
 	     "\"decision_id\":" + std::to_string(goalDecisionId) +
 	         ",\"goal\":\"buy_equipment\",\"result\":" + jsonString(result) +
 	         ",\"reason\":" + jsonString(reason));
+	const bool succeeded = std::strcmp(result, "success") == 0;
 	if (player) {
+		if (succeeded) {
+			Npc* npc = g_game.getNpcByID(equipmentPurchase.npcId);
+			if (npc && !npc->isRemoved()) {
+				npc->receiveSpeech(player, TALKTYPE_PRIVATE_PN, "bye");
+			}
+		}
 		player->closeShopWindow();
 		say(*player, std::string("Equipment purchase ") + result + ": " + reason + '.');
 	}
-	const bool succeeded = std::strcmp(result, "success") == 0;
 	equipmentPurchaseCooldownUntil = std::chrono::steady_clock::now() +
 	                                 (succeeded ? equipmentPurchaseSuccessCooldown : equipmentPurchaseFailureCooldown);
 	progressionObjective = ProgressionObjective::None;
@@ -602,6 +608,12 @@ void PlayerBotController::finishEquipmentPurchase(Player* player, const Position
 	conversationStep = ConversationStep::Greet;
 	clearNavigation();
 	cyclePhase = CyclePhase::Service;
+	if (succeeded && testPolicy.equipmentPurchaseFixture) {
+		if (player) {
+			player->addStorageValue(gameplayFixtureReadyStorage, -1);
+		}
+		return;
+	}
 	if (testPolicy.progressionEnabled && player) {
 		selectTopLevelGoal(*player, position, succeeded ? "equipment_purchase_complete" : "equipment_purchase_failed");
 	} else {

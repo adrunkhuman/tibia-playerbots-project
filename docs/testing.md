@@ -22,9 +22,10 @@ execute gameplay actions.
 
 ## Gameplay suite
 
-The PowerShell driver builds the server, creates disposable scenario stacks,
-asserts against JSONL telemetry, reports per-scenario timing, and removes the
-stack afterward:
+The PowerShell driver builds the server, starts one disposable MariaDB container,
+restores the ordered schema and development-character baseline before each
+scenario, recreates the server process, asserts against streamed JSONL telemetry,
+reports per-scenario timing, and removes the stack afterward:
 
 ```powershell
 pwsh -File scripts/test-playerbot-gameplay.ps1
@@ -77,6 +78,10 @@ not prove that the image matches the worktree. `-KeepStack` preserves the final
 stack for debugging. `-TimeoutSeconds` accepts `30` through `3600` and replaces
 each scenario's fail-fast deadline.
 
+Use `-MagicTrainingCase <name>` with `-Focused` to run one case from the
+16-scenario magic-training matrix without paying for the other server
+recreations. PowerShell validates the case name from the supported mode list.
+
 ```powershell
 docker compose -f server/compose.yaml build server
 pwsh -File scripts/test-playerbot-gameplay.ps1 -Healing -Focused -SkipBuild
@@ -84,6 +89,18 @@ pwsh -File scripts/test-playerbot-gameplay.ps1 -Healing -Focused -SkipBuild
 
 The driver includes Compose status and the last 80 server-log lines in timeout
 failures. Docker builds reuse a persistent BuildKit `ccache` mount.
+
+Independent scenarios still receive a fresh database and server process. The
+database container remains healthy between them to avoid repeated MariaDB and
+volume initialization. Scenarios that verify clean-shutdown persistence stop and
+restart only the server while retaining that scenario's database.
+
+The PowerShell entrypoint contains CLI handling and suite lifecycle only. It
+dot-sources the `scripts/playerbot-gameplay/runtime.ps1` harness, domain assertion
+files, and domain scenario files into the same script scope. The in-server Lua
+entrypoint loads ordered `.inc` files from
+`server/tests/playerbot-gameplay/includes/`; only `playerbot_gameplay.lua` is
+auto-loaded and registers the fixture events.
 
 ### Limits
 
