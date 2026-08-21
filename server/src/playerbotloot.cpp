@@ -301,10 +301,10 @@ void PlayerBotController::lootCorpse(Player* player, const Position& currentPosi
 			}
 		}
 		const uint64_t pathfindingFailuresBefore = counters.pathfindingFailures;
-		const uint32_t blockedStepsBefore = navigationSession.stepFailureCount();
+		const uint32_t blockedStepsBefore = navigationRuntime.stepFailureCount();
 		processNavigation(player, currentPosition, lootSession.corpsePosition());
 		if (counters.pathfindingFailures > pathfindingFailuresBefore ||
-		    navigationSession.stepFailureCount() > blockedStepsBefore) {
+		    navigationRuntime.stepFailureCount() > blockedStepsBefore) {
 			const PlayerBotLootNavigationTransition transition = lootSession.observeNavigationFailure(
 				currentPosition, now, maximumCorpseNavigationFailures, corpseNavigationSuspendThreshold,
 				std::chrono::milliseconds(corpseNavigationRetryInterval));

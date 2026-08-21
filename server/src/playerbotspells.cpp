@@ -308,7 +308,7 @@ const char* PlayerBotController::magicTrainingSafetyReason(const Player& player)
 	if (progressionSession.active() != PlayerBotProgressionProcedure::None) return "progression_objective";
 	if (scenarioStage != ScenarioStage::Traverse || targetingSession.traversalTarget() || targetingSession.defensiveTarget() ||
 	    const_cast<Player&>(player).getAttackedCreature() != nullptr) return "combat_or_pursuit";
-	if (navigationSession.hasPendingWork()) return "pending_navigation";
+	if (navigationRuntime.hasPendingWork()) return "pending_navigation";
 	if (spellRuntime.hasPending() || recoverySession.hasPendingPotion() || recoverySession.hasPendingFood() || needsHealing(player)) return "defensive_work";
 	if (!player.canDoAction() || player.hasCondition(CONDITION_EXHAUST_HEAL)) return "spell_cooldown";
 	return nullptr;
@@ -564,7 +564,7 @@ bool PlayerBotController::handleSpellHealing(Player* player, const Position& cur
 bool PlayerBotController::trySupportSpell(Player* player, const Position& currentPosition)
 {
 	if (!player || spellRuntime.hasPending() || player->hasCondition(CONDITION_HASTE) ||
-		!spellRuntime.canRetry(std::chrono::steady_clock::now()) || navigationSession.routeSize() < minimumHasteRouteSteps ||
+		!spellRuntime.canRetry(std::chrono::steady_clock::now()) || navigationRuntime.routeSize() < minimumHasteRouteSteps ||
 		needsHealing(*player)) {
 		return false;
 	}
@@ -698,8 +698,13 @@ bool PlayerBotController::findSpellTraining(Player& player, const Position& posi
 				uint64_t expandedNodes = 0;
 				++counters.pathfindingCalls;
 				const auto startedAt = std::chrono::steady_clock::now();
-				const PlayerBotNavigationResult result = approach == position ? PlayerBotNavigationResult::Reached :
-				                                        navigator.plan(player, approach, {}, steps, expandedNodes);
+				const PlayerBotNavigationRoutePlan routePlan = approach == position ? PlayerBotNavigationRoutePlan{} :
+					navigationRuntime.plan(player, approach);
+				const PlayerBotNavigationResult result = approach == position ? PlayerBotNavigationResult::Reached : routePlan.metrics.result;
+				if (approach != position) {
+					steps = routePlan.steps;
+					expandedNodes = routePlan.metrics.expandedNodes;
+				}
 				counters.pathfindingTimeUs += std::chrono::duration_cast<std::chrono::microseconds>(
 					std::chrono::steady_clock::now() - startedAt).count();
 				if (result != PlayerBotNavigationResult::Reached || (approach != position && steps.empty())) {
@@ -780,7 +785,7 @@ void PlayerBotController::beginSpellTraining(Player& player, const Position& pos
 	progressionSession.begin(PlayerBotProgressionProcedure::LearnSpell);
 	const auto& training = spellTrainingSession.plan();
 	npcSession.reset(training.npcId);
-	navigationSession.adopt(training.approachPosition, std::move(steps));
+	navigationRuntime.adopt(training.approachPosition, std::move(steps));
 	emit("strategy_selection", position, "\"goal\":\"learn_spell\",\"npc_id\":" +
 	     std::to_string(training.npcId) + ",\"spell\":" + jsonString(training.spellName) +
 	     ",\"keyword\":" + jsonString(training.keyword) + ",\"price\":" +

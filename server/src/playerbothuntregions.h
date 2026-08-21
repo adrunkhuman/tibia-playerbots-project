@@ -20,7 +20,6 @@
 #include <vector>
 
 class Player;
-class PlayerBotNavigator;
 
 struct PlayerBotCombatProfile {
 	uint32_t level = 0;

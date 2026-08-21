@@ -214,8 +214,10 @@ bool PlayerBotController::approachServiceNpc(Player* player, ServiceNpc& service
 		uint64_t expandedNodes = 0;
 		++counters.pathfindingCalls;
 		const auto startedAt = std::chrono::steady_clock::now();
-		const bool planned = navigator.plan(*player, candidate, {}, candidateSteps, expandedNodes) ==
-		                     PlayerBotNavigationResult::Reached;
+		PlayerBotNavigationRoutePlan routePlan = navigationRuntime.plan(*player, candidate);
+		const bool planned = routePlan.metrics.result == PlayerBotNavigationResult::Reached;
+		candidateSteps = std::move(routePlan.steps);
+		expandedNodes = routePlan.metrics.expandedNodes;
 		counters.pathfindingTimeUs += std::chrono::duration_cast<std::chrono::microseconds>(
 			std::chrono::steady_clock::now() - startedAt).count();
 		if (!planned || candidateSteps.empty()) {
@@ -225,9 +227,9 @@ bool PlayerBotController::approachServiceNpc(Player* player, ServiceNpc& service
 			return false;
 		}
 		serviceApproachTarget = candidate;
-		navigationSession.adopt(candidate, std::move(candidateSteps));
+		navigationRuntime.adopt(candidate, std::move(candidateSteps));
 		std::ostringstream fields;
-		fields << "\"action\":\"plan\",\"result\":\"success\",\"steps\":" << navigationSession.routeSize()
+		fields << "\"action\":\"plan\",\"result\":\"success\",\"steps\":" << navigationRuntime.routeSize()
 		       << ",\"expanded_nodes\":" << expandedNodes << ",\"destination\":{\"x\":" << candidate.x
 		       << ",\"y\":" << candidate.y << ",\"z\":" << static_cast<uint16_t>(candidate.z) << '}';
 		emit("action_result", currentPosition, fields.str());
@@ -893,8 +895,13 @@ bool PlayerBotController::discoverDepot(Player& player, const Position& currentP
 		++routeValidations;
 		++counters.pathfindingCalls;
 		const auto startedAt = std::chrono::steady_clock::now();
-		const PlayerBotNavigationResult result = candidate.approachPosition == currentPosition ? PlayerBotNavigationResult::Reached :
-		                                         navigator.plan(player, candidate.approachPosition, {}, steps, expandedNodes);
+		const PlayerBotNavigationRoutePlan routePlan = candidate.approachPosition == currentPosition ? PlayerBotNavigationRoutePlan{} :
+			navigationRuntime.plan(player, candidate.approachPosition);
+		const PlayerBotNavigationResult result = candidate.approachPosition == currentPosition ? PlayerBotNavigationResult::Reached : routePlan.metrics.result;
+		if (candidate.approachPosition != currentPosition) {
+			steps = routePlan.steps;
+			expandedNodes = routePlan.metrics.expandedNodes;
+		}
 		counters.pathfindingTimeUs += std::chrono::duration_cast<std::chrono::microseconds>(
 			std::chrono::steady_clock::now() - startedAt).count();
 		if (result != PlayerBotNavigationResult::Reached ||
