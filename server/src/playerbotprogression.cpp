@@ -134,7 +134,7 @@ void PlayerBotController::processReadinessEquipment(Player* player, const Positi
 		pendingReadinessAttempts = 0;
 		if (readinessResumeService) {
 			readinessResumeService = false;
-			depotStage = DepotStage::Deposit;
+			depotSession.setStage(PlayerBotDepotStage::Deposit);
 			schedule(SCHEDULER_MINTICKS);
 			return;
 		}

@@ -1133,9 +1133,9 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 		if (pauseDepotFixtureForRestart(*player, DepotRestartCheckpoint::Approach, currentPosition)) {
 			return;
 		}
-		if (!processNavigation(player, currentPosition, depotApproachPosition)) {
+		if (!processNavigation(player, currentPosition, depotSession.approachPosition())) {
 			if (fixedTargetRouteFailureCount != 0) {
-				rejectedDepotApproaches[depotApproachPosition] = std::chrono::steady_clock::now() + depotApproachSuppression;
+				depotSession.rejectApproach(depotSession.approachPosition(), std::chrono::steady_clock::now() + depotApproachSuppression);
 				clearDepotDiscovery();
 				clearNavigation();
 			}
@@ -1159,12 +1159,12 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 		if (!discoverDepot(*player, currentPosition)) {
 			return;
 		}
-		if (!Position::areInRange<1, 1, 0>(currentPosition, depotLockerPosition)) {
+		if (!Position::areInRange<1, 1, 0>(currentPosition, depotSession.lockerPosition())) {
 			setCyclePhase(CyclePhase::ReturnToDepot, currentPosition, "displaced_during_deposit");
 			clearNavigation();
-			if (!processNavigation(player, currentPosition, depotApproachPosition)) {
+			if (!processNavigation(player, currentPosition, depotSession.approachPosition())) {
 				if (fixedTargetRouteFailureCount != 0) {
-					rejectedDepotApproaches[depotApproachPosition] = std::chrono::steady_clock::now() + depotApproachSuppression;
+					depotSession.rejectApproach(depotSession.approachPosition(), std::chrono::steady_clock::now() + depotApproachSuppression);
 					clearDepotDiscovery();
 					clearNavigation();
 				}

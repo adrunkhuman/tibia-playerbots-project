@@ -300,6 +300,7 @@ void PlayerBotController::beginEquipmentPurchase(Player& player, const Position&
 	equipmentPurchaseStage = equipmentPurchase.carried ? EquipmentPurchaseStage::Equip : EquipmentPurchaseStage::Travel;
 	progressionAttempts = 0;
 	pendingEquipmentDisplacedCounts.clear();
+	serviceSession.reset();
 	if (!equipmentPurchase.carried) {
 		npcSession.reset(equipmentPurchase.npcId);
 		serviceApproachTarget = Position();
@@ -349,6 +350,7 @@ void PlayerBotController::finishEquipmentPurchase(Player* player, const Position
 	progressionAttempts = 0;
 	pendingEquipmentDisplacedCounts.clear();
 	npcSession.reset();
+	serviceSession.reset();
 	clearNavigation();
 	cyclePhase = CyclePhase::Service;
 	if (succeeded && testPolicy.equipmentPurchaseFixture) {
@@ -423,9 +425,11 @@ void PlayerBotController::processEquipmentPurchase(Player* player, const Positio
 			finishEquipmentPurchase(player, position, "failed", "reserve_changed");
 			return;
 		}
-		serviceBeforeItemCount = inventoryPolicy.inventoryItemCount(*player, equipmentPurchase.itemId);
-		serviceBeforeMoney = player->getMoney();
-		serviceBeforeBalance = player->getBankBalance();
+		if (!serviceSession.hasShopTransaction()) {
+			serviceSession.beginShopTransaction({equipmentPurchase.itemId, 1,
+			                                     inventoryPolicy.inventoryItemCount(*player, equipmentPurchase.itemId),
+			                                     player->getMoney(), player->getBankBalance()});
+		}
 		equipmentPurchaseStage = EquipmentPurchaseStage::VerifyPurchase;
 		++counters.actionsAttempted;
 		if (!testPolicy.forceEquipmentPurchaseRejected) {
@@ -437,38 +441,33 @@ void PlayerBotController::processEquipmentPurchase(Player* player, const Positio
 	}
 
 	if (equipmentPurchaseStage == EquipmentPurchaseStage::VerifyPurchase) {
-		const uint32_t currentCount = inventoryPolicy.inventoryItemCount(*player, equipmentPurchase.itemId);
-		const uint64_t expectedMoney = serviceBeforeMoney > equipmentPurchase.price ?
-		                               serviceBeforeMoney - equipmentPurchase.price : 0;
-		const uint64_t expectedBalance = equipmentPurchase.price > serviceBeforeMoney ?
-		                                 serviceBeforeBalance - (equipmentPurchase.price - serviceBeforeMoney) :
-		                                 serviceBeforeBalance;
-		const bool itemChanged = currentCount == serviceBeforeItemCount + 1;
-		const bool economyChanged = player->getMoney() == expectedMoney && player->getBankBalance() == expectedBalance;
-		if (itemChanged && economyChanged) {
+		const PlayerBotServiceVerification verification = serviceSession.verifyShopTransaction(
+			inventoryPolicy.inventoryItemCount(*player, equipmentPurchase.itemId), player->getMoney(), player->getBankBalance(),
+			true, equipmentPurchase.price, maximumProgressionAttempts);
+		if (verification.result == PlayerBotServiceVerificationResult::Success) {
 			emit("action_result", position,
 			     "\"action\":\"buy_equipment\",\"result\":\"success\",\"item_id\":" +
 			         std::to_string(equipmentPurchase.itemId) + ",\"price\":" + std::to_string(equipmentPurchase.price) +
-			         ",\"carried_before\":" + std::to_string(serviceBeforeMoney) +
+			         ",\"carried_before\":" + std::to_string(verification.before.money) +
 			         ",\"carried_after\":" + std::to_string(player->getMoney()) +
-			         ",\"bank_before\":" + std::to_string(serviceBeforeBalance) +
+			         ",\"bank_before\":" + std::to_string(verification.before.balance) +
 			         ",\"bank_after\":" + std::to_string(player->getBankBalance()));
 			progressionAttempts = 0;
 			equipmentPurchaseStage = EquipmentPurchaseStage::Equip;
 			schedule(SCHEDULER_MINTICKS);
 			return;
 		}
-		if (currentCount != serviceBeforeItemCount || player->getMoney() != serviceBeforeMoney ||
-		    player->getBankBalance() != serviceBeforeBalance) {
+		if (verification.result == PlayerBotServiceVerificationResult::Mismatch) {
 			logActionFailure("buy_equipment", "transaction_delta_mismatch", position);
 			stop("equipment_purchase_delta_mismatch", position);
 			return;
 		}
-		if (++progressionAttempts >= maximumProgressionAttempts) {
+		if (verification.result == PlayerBotServiceVerificationResult::Rejected) {
 			logActionFailure("buy_equipment", "transaction_rejected", position);
 			finishEquipmentPurchase(player, position, "failed", "transaction_rejected");
 			return;
 		}
+		++progressionAttempts;
 		equipmentPurchaseStage = EquipmentPurchaseStage::Purchase;
 		npcSession.setStep(PlayerBotNpcConversationStep::Ready);
 		schedule(navigationDecisionDelay(*player));
