@@ -15,6 +15,7 @@
 
 #include "playerbot.h"
 #include "playerbothuntregions.h"
+#include "playerbothuntpolicy.h"
 #include "playerbotinventorypolicy.h"
 #include "playerbotnavigation.h"
 #include "playerbotnavigationsession.h"
@@ -87,14 +88,6 @@ namespace playerbot {
 	inline constexpr std::chrono::minutes huntRegionCooldown(10);
 	inline constexpr std::chrono::seconds huntScopeReevaluationDelay(30);
 	inline constexpr uint32_t maximumHuntScopeExhaustions = 3;
-	inline constexpr double initialChallengeFrontier = 0.20;
-	inline constexpr double minimumChallengeFrontier = 0.10;
-	inline constexpr double maximumChallengeFrontier = 0.40;
-	inline constexpr double challengeEscalation = 0.025;
-	inline constexpr double challengeBackoff = 0.05;
-	inline constexpr double challengeHealthSafetyPercent = 85;
-	inline constexpr double minimumChallengeActiveSeconds = 30;
-	inline constexpr uint32_t minimumChallengeKills = 1;
 	inline constexpr std::chrono::minutes pickupRewardSuccessCooldown(5);
 	inline constexpr std::chrono::seconds pickupRewardFailureCooldown(60);
 	inline constexpr std::chrono::minutes spellTrainingSuccessCooldown(5);
@@ -519,24 +512,6 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 			uint32_t distance = 0;
 		};
 
-		struct ChallengeFrontier {
-			double target = playerbot::initialChallengeFrontier;
-			uint8_t qualifyingHuntsToHold = 0;
-		};
-
-		struct HuntCombatEvidence {
-			double activeSeconds = 0;
-			uint32_t damageTaken = 0;
-			uint32_t potionRecoveries = 0;
-			uint32_t spellRecoveries = 0;
-			uint32_t maximumAttackerOverlap = 0;
-			int32_t minimumHealth = std::numeric_limits<int32_t>::max();
-			bool dangerObserved = false;
-			bool deathObserved = false;
-			std::array<uint32_t, 101> healthPercentSamples{};
-			std::chrono::steady_clock::time_point lastSample;
-		};
-
 		class DecisionTimer
 		{
 			public:
@@ -849,13 +824,10 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 
 		void emitHuntRegionCandidate(const PlayerBotHuntRegion& region, const Position& position) const;
 		bool isActiveHuntCombat(const Player& player) const;
-		void recordHuntCombatObservation(bool active, double elapsedSeconds, int32_t health, int32_t maximumHealth,
-		                                 uint32_t attackers);
 		void recordActiveHuntCombat(const Player& player);
-		uint8_t p10HuntCombatHealthPercent() const;
 		void recordHuntRecovery(bool potion);
-		void updateChallengeFrontier(const Player& player, const Position& position, uint64_t huntDurationSeconds,
-		                             const char* reason);
+		void emitChallengeFrontier(const PlayerBotHuntChallengeUpdate& update, const Position& position,
+		                           const char* reason) const;
 		void runAdaptiveChallengeFixture(Player& player, const Position& position);
 		void runSpellCalibrationFixture(Player& player, const Position& position);
 		void runMagicTrainingFixture(Player& player, const Position& position);
@@ -1015,16 +987,12 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		std::optional<HuntRegionPlanning> huntRegionPlanning;
 		std::optional<PlayerBotHuntRegion> activeHuntRegion;
 		std::map<Position, std::chrono::steady_clock::time_point>& huntRegionCooldowns;
-		std::map<Position, PlayerBotHuntRegionPerformance> huntRegionPerformance;
-		ChallengeFrontier challengeFrontier;
-		HuntCombatEvidence huntCombatEvidence;
+		PlayerBotHuntPolicy huntPolicy;
 		std::chrono::steady_clock::time_point huntScopeReevaluationAfter;
 		uint32_t consecutiveHuntScopeExhaustions = 0;
 		std::chrono::steady_clock::time_point huntRegionStarted;
 		uint64_t huntRegionStartExperience = 0;
 		uint32_t huntRegionStartLevel = 0;
-		uint32_t huntRegionKills = 0;
-		uint32_t huntRegionDamageTaken = 0;
 		bool adaptiveChallengeFixtureRun = false;
 		PlayerBotNavigationSession navigationSession;
 		bool huntPlanningFixtureCancelled = false;
