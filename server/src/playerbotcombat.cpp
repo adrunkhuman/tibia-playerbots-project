@@ -59,21 +59,51 @@ PlayerBotExpectedCorpse PlayerBotController::expectedCorpseFor(const Creature& t
 	return expectation;
 }
 
-int32_t PlayerBotController::getFoodTicks(const Player& player) const
+PlayerBotSurvivalSnapshot PlayerBotController::survivalSnapshot(const Player& player) const
 {
-	Condition* condition = player.getCondition(CONDITION_REGENERATION, CONDITIONID_DEFAULT, 0);
-	return condition ? condition->getTicks() : 0;
-}
-
-bool PlayerBotController::canEatCheese(const Player& player) const
-{
-	return getFoodTicks(player) / 1000 + meatFoodTicks / 1000 < maximumFoodSeconds;
-}
-
-bool PlayerBotController::needsHealing(const Player& player) const
-{
-	return static_cast<int64_t>(player.getHealth()) * 100 <=
-	       static_cast<int64_t>(player.getMaxHealth()) * healingHealthPercent;
+	PlayerBotSurvivalSnapshot snapshot;
+	snapshot.health = player.getHealth();
+	snapshot.healthMaximum = player.getMaxHealth();
+	snapshot.mana = player.getMana();
+	snapshot.manaMaximum = player.getMaxMana();
+	snapshot.potionCount = inventoryPolicy.inventoryItemCount(player, smallHealthPotionItemId);
+	snapshot.foodInventoryCount = inventoryPolicy.foodInventory(player).count;
+	if (const uint16_t pendingFoodId = survivalRuntime.pendingFoodItemId()) {
+		snapshot.pendingFoodCount = inventoryPolicy.inventoryItemCount(player, pendingFoodId);
+	}
+	if (Condition* condition = player.getCondition(CONDITION_REGENERATION, CONDITIONID_DEFAULT, 0)) {
+		snapshot.foodTicks = condition->getTicks();
+	}
+	std::function<Item*(Item*)> findFood = [&](Item* item) -> Item* {
+		if (!item) return nullptr;
+		if (PlayerBotInventoryPolicy::isFoodItem(item->getID())) return item;
+		if (Container* container = item->getContainer()) {
+			for (Item* child : container->getItemList()) {
+				if (Item* food = findFood(child)) return food;
+			}
+		}
+		return nullptr;
+	};
+	for (int32_t slot = CONST_SLOT_FIRST; slot <= CONST_SLOT_LAST && snapshot.foodClientId == 0; ++slot) {
+		if (Item* food = findFood(player.getInventoryItem(static_cast<slots_t>(slot)))) {
+			snapshot.foodItemId = food->getID();
+			snapshot.foodClientId = food->getClientID();
+			snapshot.foodCount = inventoryPolicy.inventoryItemCount(player, food->getID());
+		}
+	}
+	snapshot.canDoAction = player.canDoAction();
+	snapshot.buyingPotions = serviceStage == ServiceStage::BuyPotions;
+	snapshot.lootMovePending = lootSession.hasPendingLootMove();
+	snapshot.progressionActive = progressionSession.active() != PlayerBotProgressionProcedure::None;
+	snapshot.progressionDeparture = progressionSession.active(PlayerBotProgressionProcedure::OracleDeparture);
+	snapshot.hunting = cyclePhase == CyclePhase::Hunt;
+	snapshot.combatOrPursuit = scenarioStage != ScenarioStage::Traverse || combatRuntime.hasActiveCombat() ||
+	                          const_cast<Player&>(player).getAttackedCreature() != nullptr;
+	snapshot.navigationPending = navigationRuntime.hasPendingWork();
+	snapshot.healingExhausted = player.hasCondition(CONDITION_EXHAUST_HEAL);
+	snapshot.hasteActive = player.hasCondition(CONDITION_HASTE);
+	snapshot.routeSteps = navigationRuntime.routeSize();
+	return snapshot;
 }
 
 void PlayerBotController::logHealResult(const char* result, const char* reason, const PlayerBotPotionAttempt& before,
@@ -98,35 +128,25 @@ void PlayerBotController::logHealResult(const char* result, const char* reason, 
 bool PlayerBotController::handleHealing(Player* player, const Position& currentPosition)
 {
 	const auto now = std::chrono::steady_clock::now();
-	if (const auto verification = recoverySession.verifyPotion(
-		{player->getHealth(), player->getMaxHealth(), inventoryPolicy.inventoryItemCount(*player, smallHealthPotionItemId)},
-		now, healingRetryInterval)) {
-		if (verification->result == PlayerBotPotionVerificationResult::Success) {
-			logHealResult("success", nullptr, verification->before, verification->after, currentPosition);
+	const PlayerBotSurvivalCommand command = survivalRuntime.decideHealing(*player, survivalSnapshot(*player), currentPosition, now);
+	if (command.potionVerification) {
+		const auto& verification = *command.potionVerification;
+		if (verification.result == PlayerBotPotionVerificationResult::Success) {
+			logHealResult("success", nullptr, verification.before, verification.after, currentPosition);
 			recordHuntRecovery(true);
 		} else {
 			telemetry.recordActionFailure();
-			logHealResult("failed", verification->result == PlayerBotPotionVerificationResult::IneffectiveRecovery ?
-			              "ineffective_recovery" : "use_not_verified", verification->before, verification->after, currentPosition);
+			logHealResult("failed", verification.result == PlayerBotPotionVerificationResult::IneffectiveRecovery ?
+			              "ineffective_recovery" : "use_not_verified", verification.before, verification.after, currentPosition);
 		}
 	}
-	if (serviceStage == ServiceStage::BuyPotions) {
-		return false;
+	if (command.reason && command.candidate) {
+		dispatchSpellCommand(*player, currentPosition, command);
 	}
-
-	if (!needsHealing(*player)) {
-		return false;
-	}
-	cancelHuntRegionPlanning();
-	if (!recoverySession.canRetryPotion(now) || !player->canDoAction()) {
-		return true;
-	}
-	if (handleSpellHealing(player, currentPosition)) {
-		return true;
-	}
-
-	const uint32_t potionCount = inventoryPolicy.inventoryItemCount(*player, smallHealthPotionItemId);
-	if (potionCount == 0) {
+	if (command.type == PlayerBotSurvivalCommandType::None) return false;
+	if (command.type == PlayerBotSurvivalCommandType::CastSpell) return dispatchSpellCommand(*player, currentPosition, command);
+	if (command.type == PlayerBotSurvivalCommandType::Wait) return true;
+	if (command.type == PlayerBotSurvivalCommandType::InterruptForService) {
 		if (shouldEmitRepeated("heal:missing_supply")) {
 			std::ostringstream fields;
 			fields << "\"action\":\"heal\",\"result\":\"skipped\",\"reason\":\"missing_supply\""
@@ -152,13 +172,13 @@ bool PlayerBotController::handleHealing(Player* player, const Position& currentP
 		}
 		return false;
 	}
-
+	cancelHuntRegionPlanning();
 	Item* potion = g_game.findItemOfType(player, smallHealthPotionItemId, true);
 	if (!potion) {
 		return true;
 	}
 
-	recoverySession.beginPotion({player->getHealth(), player->getMaxHealth(), potionCount});
+	survivalRuntime.beginPotion(survivalSnapshot(*player));
 	telemetry.recordActionAttempt();
 	g_game.playerUseWithCreature(playerId, Position(0xFFFF, 0, 0), 0, playerId, potion->getClientID());
 	return true;
@@ -174,64 +194,26 @@ void PlayerBotController::logEatSuccess(uint16_t itemId, uint32_t inventoryCount
 
 bool PlayerBotController::handleFood(Player* player, const Position& currentPosition)
 {
-	if (lootSession.hasPendingLootMove()) {
-		return false;
-	}
-
 	const auto now = std::chrono::steady_clock::now();
-	if (const PlayerBotFoodAttempt* pending = recoverySession.pendingFood()) {
-		const uint32_t inventoryCount = inventoryPolicy.inventoryItemCount(*player, pending->itemId);
-		const int32_t foodTicks = getFoodTicks(*player);
-		const auto verification = recoverySession.verifyFood(inventoryCount, foodTicks, canEatCheese(*player), now,
-		                                                   maximumEatFailures, std::chrono::seconds(5), eatFailureCooldown);
-		if (verification->result == PlayerBotFoodVerificationResult::Success) {
-			logEatSuccess(verification->before.itemId, verification->inventoryCount, verification->foodTicks, currentPosition);
-		} else if (verification->result == PlayerBotFoodVerificationResult::Failed ||
-		           verification->result == PlayerBotFoodVerificationResult::Cooldown) {
+	const PlayerBotSurvivalCommand command = survivalRuntime.decideFood(survivalSnapshot(*player), now);
+	if (command.foodVerification) {
+		const auto& verification = *command.foodVerification;
+		if (verification.result == PlayerBotFoodVerificationResult::Success) {
+			logEatSuccess(verification.before.itemId, verification.inventoryCount, verification.foodTicks, currentPosition);
+		} else if (verification.result == PlayerBotFoodVerificationResult::Failed ||
+		           verification.result == PlayerBotFoodVerificationResult::Cooldown) {
 			logActionFailure("eat", "consumption_not_verified", currentPosition);
-			if (verification->result == PlayerBotFoodVerificationResult::Cooldown) {
+			if (verification.result == PlayerBotFoodVerificationResult::Cooldown) {
 				emit("action_result", currentPosition,
 				     "\"action\":\"eat\",\"result\":\"cooldown\",\"reason\":\"retry_exhausted\",\"retry_after_ms\":" +
 				         std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(eatFailureCooldown).count()));
 			}
 		}
 	}
-
-	if (!recoverySession.canRetryFood(now) || !canEatCheese(*player)) {
-		return false;
-	}
-
-	if (inventoryPolicy.foodInventory(*player).count <= preferredFoodCount) {
-		return false;
-	}
-	Item* food = nullptr;
-	std::function<void(Item*)> findFood = [&](Item* item) {
-		if (!item || food) {
-			return;
-		}
-		if (PlayerBotInventoryPolicy::isFoodItem(item->getID())) {
-			food = item;
-			return;
-		}
-		if (Container* container = item->getContainer()) {
-			for (Item* child : container->getItemList()) {
-				findFood(child);
-			}
-		}
-	};
-	for (int32_t slot = CONST_SLOT_FIRST; slot <= CONST_SLOT_LAST && !food; ++slot) {
-		findFood(player->getInventoryItem(static_cast<slots_t>(slot)));
-	}
-	if (!food) {
-		return false;
-	}
-	if (!player->canDoAction()) {
-		return true;
-	}
-
-	recoverySession.beginFood({food->getID(), inventoryPolicy.inventoryItemCount(*player, food->getID()), getFoodTicks(*player)});
+	if (command.type == PlayerBotSurvivalCommandType::None) return false;
+	if (command.type == PlayerBotSurvivalCommandType::Wait) return true;
 	telemetry.recordActionAttempt();
-	g_game.playerUseItem(playerId, Position(0xFFFF, 0, 0), 0, 0, food->getClientID());
+	g_game.playerUseItem(playerId, Position(0xFFFF, 0, 0), 0, 0, command.itemClientId);
 	return true;
 }
 

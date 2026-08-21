@@ -26,9 +26,7 @@
 #include "playerbotnavigationruntime.h"
 #include "playerbotnpcsession.h"
 #include "playerbotprogressionsession.h"
-#include "playerbotrecoverysession.h"
-#include "playerbotspellcalibration.h"
-#include "playerbotspellruntime.h"
+#include "playerbotsurvivalruntime.h"
 #include "playerbottestpolicy.h"
 #include "playerbottelemetry.h"
 #include "playerbotservicesession.h"
@@ -275,11 +273,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		uint32_t getSaleItemCount(const Player& player, uint16_t itemId) const;
 		Item* findActionableSlottedItem(const Player& player, uint16_t itemId, slots_t& slot) const;
 
-		int32_t getFoodTicks(const Player& player) const;
-
-		bool canEatCheese(const Player& player) const;
-
-		bool needsHealing(const Player& player) const;
+		PlayerBotSurvivalSnapshot survivalSnapshot(const Player& player) const;
 		void emitCombatReadiness(const Player& player, const Position& position, const char* result,
 		                         const std::string& recovery, const std::string& terminalReason) const;
 		PlayerBotEquipmentReadinessInput equipmentReadinessInput(const Player& player) const;
@@ -291,11 +285,9 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		                   const PlayerBotPotionAttempt& after, const Position& position);
 
 		bool handleHealing(Player* player, const Position& currentPosition);
-		bool handleSpellHealing(Player* player, const Position& currentPosition);
 		bool trySupportSpell(Player* player, const Position& currentPosition);
 		bool tryOffensiveSpell(Player* player, const Position& currentPosition);
-		bool startSpellCast(Player& player, const Position& position, const char* spellName, const char* need,
-		                    Creature* target = nullptr);
+		bool dispatchSpellCommand(Player& player, const Position& position, PlayerBotSurvivalCommand command);
 		void verifySpellCast(Player& player, const Position& position);
 		void emitSpellCastEvent(const Position& position, const char* spellName, const char* words, const char* role,
 		                        const char* need, const char* result, const char* engineResult, const char* reason,
@@ -419,9 +411,6 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		void processSpellTraining(Player* player, const Position& currentPosition);
 
 		bool processMagicTraining(Player& player, const Position& position);
-		const char* magicTrainingCandidateReason(const Player& player) const;
-		bool magicTrainingSafe(const Player& player) const;
-		const char* magicTrainingSafetyReason(const Player& player) const;
 		void finishMagicTraining(Player& player, const Position& position, const char* result, const char* reason);
 
 		uint32_t saleableItemCount(const Player& player) const;
@@ -576,10 +565,8 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		std::map<uint16_t, uint32_t> itemSellValues;
 		PlayerBotEquipmentPolicy equipmentPolicy;
 		playerbot::PlayerBotInventoryPolicy inventoryPolicy;
-		PlayerBotRecoverySession recoverySession;
+		PlayerBotSurvivalRuntime survivalRuntime;
 		PlayerBotDepotSession depotSession;
-		PlayerBotSpellRuntime spellRuntime;
-		PlayerBotSpellCalibration spellCalibration;
 		PlayerBotCombatRuntime combatRuntime{PlayerBotCombatRuntimeConfig{
 			playerbot::traversalCombatTimeout, playerbot::traversalTargetSuppression,
 			playerbot::lostTargetPursuitTimeout, playerbot::lostTargetSuppression,
