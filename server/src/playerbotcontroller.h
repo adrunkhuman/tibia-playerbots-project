@@ -15,6 +15,7 @@
 
 #include "playerbot.h"
 #include "playerbothuntregions.h"
+#include "playerbothuntplanningsession.h"
 #include "playerbothuntpolicy.h"
 #include "playerbotinventorypolicy.h"
 #include "playerbotnavigation.h"
@@ -470,40 +471,6 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 			Depart,
 		};
 
-		struct HuntRegionPlanning {
-			enum class Phase : uint8_t {
-				Scoring,
-				Reachability,
-			};
-
-			std::vector<PlayerBotHuntRegion> regions;
-			std::vector<size_t> candidateIndices;
-			std::string reason;
-			std::chrono::steady_clock::time_point started;
-			size_t nextCandidate = 0;
-			size_t nextScoringCandidate = 0;
-			Phase phase = Phase::Scoring;
-			uint32_t pathfindingCalls = 0;
-			uint32_t batchPathfindingCalls = 0;
-			uint64_t expandedNodes = 0;
-			uint32_t yields = 0;
-			uint32_t suitableCandidates = 0;
-			uint32_t scoredCandidates = 0;
-			uint32_t totalCandidates = 0;
-			bool cacheHit = false;
-			uint64_t snapshotTimeUs = 0;
-			uint64_t clusteringTimeUs = 0;
-			uint64_t scoringTimeUs = 0;
-			Position playerPosition;
-			uint32_t playerLevel = 0;
-			uint16_t staminaMinutes = 0;
-			bool fixtureForcedUnreachable = false;
-			bool fixtureForcedNodeLimit = false;
-			uint64_t cacheRevision = 0;
-			std::set<Position> excludedRegions;
-			PlayerBotHuntPlanningProfile profile;
-		};
-
 		struct DepotCandidate {
 			uint16_t depotId = 0;
 			uint16_t lockerItemId = 0;
@@ -832,7 +799,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		void runSpellCalibrationFixture(Player& player, const Position& position);
 		void runMagicTrainingFixture(Player& player, const Position& position);
 		void cancelHuntRegionPlanning();
-		void emitHuntRegionPlanning(const HuntRegionPlanning& planning, const Position& position, const char* phase) const;
+		void emitHuntRegionPlanning(const PlayerBotHuntPlanningSession& planning, const Position& position, const char* phase) const;
 
 		void finishHuntRegion(const Player& player, const Position& position, const char* reason);
 
@@ -984,7 +951,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		std::chrono::steady_clock::time_point huntDeadline;
 		PlayerBotNavigator navigator;
 		PlayerBotHuntRegionPlanner huntRegionPlanner;
-		std::optional<HuntRegionPlanning> huntRegionPlanning;
+		std::optional<PlayerBotHuntPlanningSession> huntRegionPlanning;
 		std::optional<PlayerBotHuntRegion> activeHuntRegion;
 		std::map<Position, std::chrono::steady_clock::time_point>& huntRegionCooldowns;
 		PlayerBotHuntPolicy huntPolicy;
@@ -997,6 +964,8 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		PlayerBotNavigationSession navigationSession;
 		bool huntPlanningFixtureCancelled = false;
 		bool huntPlanningFixtureStaleRevisionTriggered = false;
+		bool huntPlanningFixtureForcedUnreachable = false;
+		bool huntPlanningFixtureForcedNodeLimit = false;
 		bool fixtureInitializationPending = false;
 		Counters counters;
 		std::unordered_map<std::string, std::chrono::steady_clock::time_point> repeatedEventTimes;

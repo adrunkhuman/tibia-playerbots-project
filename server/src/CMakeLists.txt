@@ -50,6 +50,7 @@ set(tfs_SRC
 	${CMAKE_CURRENT_LIST_DIR}/playerbotdeparture.cpp
 	${CMAKE_CURRENT_LIST_DIR}/playerbotequipment.cpp
 	${CMAKE_CURRENT_LIST_DIR}/playerbothuntpolicy.cpp
+	${CMAKE_CURRENT_LIST_DIR}/playerbothuntplanningsession.cpp
 	${CMAKE_CURRENT_LIST_DIR}/playerbotinventorypolicy.cpp
 	${CMAKE_CURRENT_LIST_DIR}/playerbotloot.cpp
 	${CMAKE_CURRENT_LIST_DIR}/playerbotprogression.cpp
