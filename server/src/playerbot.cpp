@@ -198,7 +198,7 @@ bool PlayerBotManager::load(const std::string& name, bool recovered)
 		g_game.changeSpeed(player, speedBonus);
 	}
 
-	controller = std::make_shared<PlayerBotController>(*player, huntRegionCooldowns, testPolicyFromEnvironment());
+	controller = std::make_shared<PlayerBotController>(*player, huntRegionCooldowns);
 	lastSpawnedAt = std::chrono::steady_clock::now();
 	controller->start(player->getPosition(), recovered, consecutiveDeaths);
 	return true;
