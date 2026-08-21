@@ -102,9 +102,7 @@ bool PlayerBotController::forceOracleDeparture(Player& player, const Position& p
 	}
 	clearTraversalTarget(position, "level_eight_interrupt");
 	clearNavigation();
-	pendingLootItemId = 0;
-	pendingDiscardItemId = 0;
-	lootCorpseExpectation = {};
+	lootSession.reset();
 	player.closeContainer(corpseContainerId);
 	setStage(ScenarioStage::Traverse, position);
 	progressionSession.reset();

@@ -174,7 +174,7 @@ void PlayerBotController::logEatSuccess(uint16_t itemId, uint32_t inventoryCount
 
 bool PlayerBotController::handleFood(Player* player, const Position& currentPosition)
 {
-	if (pendingLootItemId != 0) {
+	if (lootSession.hasPendingLootMove()) {
 		return false;
 	}
 
@@ -1054,8 +1054,8 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 		}
 	}
 	if (targetingSession.defensiveTarget()) {
-		if (scenarioStage == ScenarioStage::LootCorpse && corpseNavigationSuspended &&
-		    std::chrono::steady_clock::now() - corpseLootStarted >= corpseLootTimeout) {
+		if (scenarioStage == ScenarioStage::LootCorpse && lootSession.navigationSuspended() &&
+		    lootSession.timedOut(std::chrono::steady_clock::now(), corpseLootTimeout)) {
 			finishLootFailure(player, currentPosition, "corpse_inaccessible");
 		}
 		processDefensiveCombat(player, currentPosition);
@@ -1084,8 +1084,8 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 		}
 		return;
 	}
-	if (scenarioStage == ScenarioStage::LootCorpse && corpseNavigationSuspended) {
-		if (std::chrono::steady_clock::now() - corpseLootStarted >= corpseLootTimeout) {
+	if (scenarioStage == ScenarioStage::LootCorpse && lootSession.navigationSuspended()) {
+		if (lootSession.timedOut(std::chrono::steady_clock::now(), corpseLootTimeout)) {
 			finishLootFailure(player, currentPosition, "corpse_inaccessible");
 			schedule(navigationInterval);
 			return;

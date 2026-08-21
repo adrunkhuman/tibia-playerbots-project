@@ -21,6 +21,7 @@
 #include "playerbothuntplanningsession.h"
 #include "playerbothuntpolicy.h"
 #include "playerbotinventorypolicy.h"
+#include "playerbotlootsession.h"
 #include "playerbotnavigation.h"
 #include "playerbotnavigationsession.h"
 #include "playerbotnpcsession.h"
@@ -289,15 +290,6 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 			TraversalCombat,
 			TargetPursuit,
 			Stopped,
-		};
-
-		struct CargoCandidate {
-			Item* item;
-			Container* source;
-			uint8_t index;
-			uint32_t unitValue;
-			uint32_t unitWeight;
-			uint32_t availableCount;
 		};
 
 		struct Counters {
@@ -635,9 +627,6 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 
 		bool isReplaceableCargo(const Item& item) const;
 
-		bool chooseCargoReplacement(const Container& backpack, const Item& incoming, uint8_t incomingCount, uint32_t freeCapacity,
-		                            CargoCandidate& replacement, uint8_t& replacementCount) const;
-
 		void discardCargoForLoot(Player* player, Container* backpack, Item* incoming, uint8_t incomingCount,
 		                         const Position& currentPosition);
 
@@ -650,8 +639,6 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		std::string playerName;
 		const playerbot::PlayerBotTestPolicy testPolicy;
 		Position lastPosition;
-		Position corpseDeathPosition;
-		Position lootPosition;
 		ScenarioStage scenarioStage = ScenarioStage::Traverse;
 		uint32_t fixedTargetRouteFailureCount = 0;
 		uint32_t patrolRouteFailureCount = 0;
@@ -661,28 +648,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		uint64_t lastNavigationExpandedNodes = 0;
 		uint32_t forcedNavigationStepFailuresRemaining = 0;
 		uint32_t forcedNavigationPlanFailuresRemaining = 0;
-		uint32_t corpseSearchAttempts = 0;
-		uint32_t corpseOpenAttempts = 0;
-		uint32_t corpseNavigationFailures = 0;
-		uint32_t consecutiveCorpseNavigationFailures = 0;
-		uint32_t corpseNavigationSuspensions = 0;
-		uint32_t lootTargetId = 0;
-		Position corpseNavigationFailurePosition;
-		std::chrono::steady_clock::time_point corpseLootStarted;
-		std::chrono::steady_clock::time_point corpseNavigationRetryAt;
-		uint16_t pendingLootItemId = 0;
-		uint16_t pendingDiscardItemId = 0;
-		PlayerBotExpectedCorpse lootCorpseExpectation;
-		bool lootedCurrentCorpse = false;
-		bool corpseObserved = false;
-		bool corpseNavigationSuspended = false;
 		bool lastNavigationRouteUnavailable = false;
-		uint32_t pendingLootInventoryCount = 0;
-		uint8_t pendingDiscardCount = 0;
-		uint32_t pendingDiscardInventoryCount = 0;
-		uint32_t pendingDiscardValue = 0;
-		uint16_t pendingDiscardIncomingItemId = 0;
-		std::set<uint16_t> unavailableLootItemIds;
 		std::map<uint16_t, uint32_t> itemSellValues;
 		PlayerBotEquipmentPolicy equipmentPolicy;
 		playerbot::PlayerBotInventoryPolicy inventoryPolicy;
@@ -691,6 +657,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		PlayerBotSpellRuntime spellRuntime;
 		PlayerBotSpellCalibration spellCalibration;
 		PlayerBotTargetingSession targetingSession;
+		PlayerBotLootSession lootSession;
 		CyclePhase cyclePhase = CyclePhase::ReturnToDepot;
 		ServiceStage serviceStage = ServiceStage::Discover;
 		PlayerBotProgressionSession progressionSession;
