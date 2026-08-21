@@ -70,7 +70,7 @@ void PlayerBotController::finishLoot(Player* player, const Position& currentPosi
 
 void PlayerBotController::finishLootFailure(Player* player, const Position& currentPosition, const char* reason)
 {
-	++counters.actionsFailed;
+	telemetry.recordActionFailure();
 	const auto elapsed = lootSession.elapsedMilliseconds(std::chrono::steady_clock::now());
 	std::ostringstream fields;
 	fields << "\"action\":\"loot\",\"result\":\"failed\",\"reason\":" << jsonString(reason)
@@ -231,7 +231,7 @@ void PlayerBotController::discardCargoForLoot(Player* player, Container* backpac
 	                              inventoryPolicy.inventoryItemCount(*player, replacement.item->getID()),
 	                              replacementCount * replacement.unitValue, incoming->getID()});
 	const Position fromPosition(0xFFFF, 0x40 | static_cast<uint8_t>(sourceContainerId), replacement.index);
-	++counters.actionsAttempted;
+	telemetry.recordActionAttempt();
 	g_game.playerMoveItem(player, fromPosition, replacement.item->getClientID(), replacement.index,
 	                      currentPosition, replacementCount, replacement.item, destination);
 }
@@ -300,10 +300,10 @@ void PlayerBotController::lootCorpse(Player* player, const Position& currentPosi
 				return;
 			}
 		}
-		const uint64_t pathfindingFailuresBefore = counters.pathfindingFailures;
+		const uint64_t pathfindingFailuresBefore = telemetry.pathfindingFailures();
 		const uint32_t blockedStepsBefore = navigationRuntime.stepFailureCount();
 		processNavigation(player, currentPosition, lootSession.corpsePosition());
-		if (counters.pathfindingFailures > pathfindingFailuresBefore ||
+		if (telemetry.pathfindingFailures() > pathfindingFailuresBefore ||
 		    navigationRuntime.stepFailureCount() > blockedStepsBefore) {
 			const PlayerBotLootNavigationTransition transition = lootSession.observeNavigationFailure(
 				currentPosition, now, maximumCorpseNavigationFailures, corpseNavigationSuspendThreshold,
@@ -346,7 +346,7 @@ void PlayerBotController::lootCorpse(Player* player, const Position& currentPosi
 		if (stackPosition < 0 || stackPosition > UINT8_MAX) {
 			return;
 		}
-		++counters.actionsAttempted;
+		telemetry.recordActionAttempt();
 		g_game.playerUseItem(playerId, lootSession.corpsePosition(), static_cast<uint8_t>(stackPosition), corpseContainerId, corpse->getClientID());
 		return;
 	}
@@ -382,7 +382,7 @@ void PlayerBotController::lootCorpse(Player* player, const Position& currentPosi
 			player->closeContainer(static_cast<uint8_t>(existingContainerId));
 		}
 		const Position backpackPosition(0xFFFF, CONST_SLOT_BACKPACK, 0);
-		++counters.actionsAttempted;
+		telemetry.recordActionAttempt();
 		g_game.playerUseItem(playerId, backpackPosition, 0, backpackContainerId, backpack->getClientID());
 		return;
 	}
@@ -451,6 +451,6 @@ void PlayerBotController::lootCorpse(Player* player, const Position& currentPosi
 		return;
 	}
 	lootSession.beginLootMove({lootItem->getID(), moveCount, inventoryCount, lootIndex});
-	++counters.actionsAttempted;
+	telemetry.recordActionAttempt();
 	g_game.playerMoveItem(player, fromPosition, lootItem->getClientID(), lootIndex, toPosition, moveCount, lootItem, backpack);
 }

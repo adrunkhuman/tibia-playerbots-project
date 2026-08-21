@@ -28,6 +28,7 @@
 #include "playerbotrecoverysession.h"
 #include "playerbotspellcalibration.h"
 #include "playerbotspellruntime.h"
+#include "playerbottelemetry.h"
 #include "playerbotservicesession.h"
 #include "playerbottargetingsession.h"
 
@@ -57,8 +58,6 @@ namespace playerbot {
 	inline constexpr uint32_t huntRegionPathfindingCallsPerTurn = 1;
 	inline constexpr uint32_t huntRegionScoringCandidatesPerTurn = 32;
 	inline constexpr uint32_t blockedRouteRetryInterval = 500;
-	inline constexpr std::chrono::seconds summaryInterval(60);
-	inline constexpr std::chrono::seconds repeatedEventInterval(60);
 	inline constexpr uint16_t ratCorpseItemId = 5964;
 	inline constexpr uint16_t meatItemId = 2666;
 	inline constexpr int32_t healingHealthPercent = 60;
@@ -291,54 +290,28 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 			Stopped,
 		};
 
-		struct Counters {
-			uint64_t decisions = 0;
-			uint64_t decisionTimeUs = 0;
-			uint64_t pathfindingCalls = 0;
-			uint64_t pathfindingFailures = 0;
-			uint64_t pathfindingTimeUs = 0;
-			uint64_t actionsAttempted = 0;
-			uint64_t actionsFailed = 0;
-			uint64_t stuckEvents = 0;
-			uint64_t suppressedEvents = 0;
-		};
-
-		class DecisionTimer
-		{
-			public:
-				explicit DecisionTimer(PlayerBotController& controller) : controller(controller)
-				{
-					controller.decisionStarted = std::chrono::steady_clock::now();
-					controller.decisionActive = true;
-					++controller.counters.decisions;
-				}
-				~DecisionTimer()
-				{
-					controller.counters.decisionTimeUs += std::chrono::duration_cast<std::chrono::microseconds>(
-						std::chrono::steady_clock::now() - controller.decisionStarted).count();
-					controller.decisionActive = false;
-				}
-
-			private:
-				PlayerBotController& controller;
-		};
-
 		void schedule(uint32_t interval);
 
 		static const char* stageName(ScenarioStage stage);
-
-		void emit(const char* event, const Position& position, const std::string& fields = {}) const;
+		void emit(const char* event, const Position& position, const std::string& fields = {}) const
+		{
+			telemetry.emit(event, position, fields);
+		}
 
 		void say(Player& player, const std::string& text) const;
-
-		bool shouldEmitRepeated(const std::string& key);
+		bool shouldEmitRepeated(const std::string& key)
+		{
+			return telemetry.shouldEmitRepeated(key);
+		}
 
 		void setStage(ScenarioStage stage, const Position& position);
 
 		PlayerBotExpectedCorpse expectedCorpseFor(const Creature& target) const;
 		std::optional<PlayerBotTraversalTarget> clearTraversalTarget(const Position& position, const char* reason);
-
-		void logActionFailure(const char* action, const char* reason, const Position& position);
+		void logActionFailure(const char* action, const char* reason, const Position& position)
+		{
+			telemetry.logActionFailure(action, reason, position);
+		}
 
 		void logLootSuccess(uint16_t itemId, uint32_t count, uint32_t inventoryCount, const Position& position);
 
@@ -375,9 +348,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 
 		bool handleFood(Player* player, const Position& currentPosition);
 
-		void logSummary(const Position& position, bool final);
-
-		void maybeLogSummary(const Position& position);
+		playerbot::PlayerBotTelemetrySummary telemetrySummary() const;
 
 		void stop(const char* reason, const Position& position);
 
@@ -637,6 +608,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		uint32_t playerGuid;
 		std::string playerName;
 		const playerbot::PlayerBotTestPolicy testPolicy;
+		playerbot::PlayerBotTelemetry telemetry;
 		Position lastPosition;
 		ScenarioStage scenarioStage = ScenarioStage::Traverse;
 		uint32_t fixedTargetRouteFailureCount = 0;
@@ -702,13 +674,6 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		bool huntPlanningFixtureForcedUnreachable = false;
 		bool huntPlanningFixtureForcedNodeLimit = false;
 		bool fixtureInitializationPending = false;
-		Counters counters;
-		std::unordered_map<std::string, std::chrono::steady_clock::time_point> repeatedEventTimes;
-		const std::chrono::steady_clock::time_point started = std::chrono::steady_clock::now();
-		std::chrono::steady_clock::time_point lastSummary = started;
-		std::chrono::steady_clock::time_point decisionStarted;
-		bool decisionActive = false;
-		bool terminalLogged = false;
 		bool deathObserved = false;
 };
 #endif

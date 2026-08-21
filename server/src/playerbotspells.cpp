@@ -252,7 +252,7 @@ bool PlayerBotController::startSpellCast(Player& player, const Position& positio
 	pending.otherRecovery = descriptor->role == PlayerBotSpellRole::Healing && player.hasCondition(CONDITION_REGENERATION);
 	pending.observedAt = std::chrono::steady_clock::now();
 	spellRuntime.begin(std::move(pending));
-	++counters.actionsAttempted;
+	telemetry.recordActionAttempt();
 	emitSpellCastEvent(position, descriptor->name, descriptor->words, playerBotSpellRoleName(descriptor->role), need, "requested", "unchecked",
 	                   nullptr, spellRuntime.pending(), &player, nullptr);
 	// Route through the normal player speech handler so the live spell engine owns legality and costs.
@@ -295,7 +295,7 @@ void PlayerBotController::verifySpellCast(Player& player, const Position& positi
 	                   verification.success ? "success" : "failed", verification.manaSpent ? "accepted" : "rejected", reason,
 	                   &verification.pending, &player, fallback);
 	if (!verification.success) {
-		++counters.actionsFailed;
+		telemetry.recordActionFailure();
 		spellRuntime.deferRetry(input.observedAt, healingRetryInterval);
 	} else if (verification.pending.role == PlayerBotSpellRole::Healing && verification.evidence == PlayerBotSpellEvidence::Accepted) {
 		recordHuntRecovery(false);
@@ -356,7 +356,7 @@ bool PlayerBotController::processMagicTraining(Player& player, const Position& p
 	const uint32_t magicLevelBefore = player.getBaseMagicLevel();
 	const uint64_t predictedMana = manaBefore + forecast->gain;
 	const uint64_t wastedMana = predictedMana - player.getMaxMana();
-	++counters.actionsAttempted;
+	telemetry.recordActionAttempt();
 	std::ostringstream request;
 	request << "\"action\":\"magic_training\",\"result\":\"requested\",\"source\":\"engine_path\""
 	        << ",\"spell\":" << jsonString(selected->descriptor->name) << ",\"audited_priority\":"
@@ -390,7 +390,7 @@ bool PlayerBotController::processMagicTraining(Player& player, const Position& p
 	       << ",\"mana_tick_interval\":" << forecast->interval << ",\"mana_tick_remaining\":" << forecast->remaining
 	       << ",\"predicted_mana\":" << predictedMana << ",\"wasted_mana\":" << wastedMana;
 	emit("action_result", position, result.str());
-	if (!verified) ++counters.actionsFailed;
+	if (!verified) telemetry.recordActionFailure();
 	finishMagicTraining(player, position, verified ? "success" : "failed", verified ? "cast_verified" : "cast_verification_failed");
 	return false;
 }
@@ -696,7 +696,6 @@ bool PlayerBotController::findSpellTraining(Player& player, const Position& posi
 				}
 				std::deque<PlayerBotNavigationStep> steps;
 				uint64_t expandedNodes = 0;
-				++counters.pathfindingCalls;
 				const auto startedAt = std::chrono::steady_clock::now();
 				const PlayerBotNavigationRoutePlan routePlan = approach == position ? PlayerBotNavigationRoutePlan{} :
 					navigationRuntime.plan(player, approach);
@@ -705,10 +704,9 @@ bool PlayerBotController::findSpellTraining(Player& player, const Position& posi
 					steps = routePlan.steps;
 					expandedNodes = routePlan.metrics.expandedNodes;
 				}
-				counters.pathfindingTimeUs += std::chrono::duration_cast<std::chrono::microseconds>(
-					std::chrono::steady_clock::now() - startedAt).count();
+				telemetry.recordPathfinding(std::chrono::duration_cast<std::chrono::microseconds>(
+					std::chrono::steady_clock::now() - startedAt), result == PlayerBotNavigationResult::Reached);
 				if (result != PlayerBotNavigationResult::Reached || (approach != position && steps.empty())) {
-					++counters.pathfindingFailures;
 					continue;
 				}
 				trainerApproach = approach;
@@ -838,7 +836,7 @@ void PlayerBotController::processSpellTraining(Player* player, const Position& c
 	}
 	if (spellTrainingSession.stage() == PlayerBotSpellTrainingStage::Greet) {
 		npcSession.resetGreetingAcknowledgement();
-		++counters.actionsAttempted;
+		telemetry.recordActionAttempt();
 		trainer->receiveSpeech(player, TALKTYPE_PRIVATE_PN, "hi");
 		spellTrainingSession.setStage(PlayerBotSpellTrainingStage::Request);
 		schedule(1000);
@@ -854,7 +852,7 @@ void PlayerBotController::processSpellTraining(Player* player, const Position& c
 			schedule(1000);
 			return;
 		}
-		++counters.actionsAttempted;
+		telemetry.recordActionAttempt();
 		trainer->receiveSpeech(player, TALKTYPE_PRIVATE_PN, training.keyword);
 		spellTrainingSession.setStage(PlayerBotSpellTrainingStage::Confirm);
 		schedule(1000);
@@ -862,7 +860,7 @@ void PlayerBotController::processSpellTraining(Player* player, const Position& c
 	}
 	if (spellTrainingSession.stage() == PlayerBotSpellTrainingStage::Confirm) {
 		spellTrainingSession.setMoneyBefore(player->getMoney() + player->getBankBalance());
-		++counters.actionsAttempted;
+		telemetry.recordActionAttempt();
 		trainer->receiveSpeech(player, TALKTYPE_PRIVATE_PN, "yes");
 		spellTrainingSession.setStage(PlayerBotSpellTrainingStage::Verify);
 		schedule(1000);
