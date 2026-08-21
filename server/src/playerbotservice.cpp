@@ -53,9 +53,10 @@ void PlayerBotController::setCyclePhase(CyclePhase phase, const Position& positi
 
 void PlayerBotController::beginReturn(Player* player, const Position& position, const char* reason)
 {
-	const uint32_t previousTarget = ratId;
+	const auto traversalTarget = targetingSession.traversalTarget();
+	const uint32_t previousTarget = traversalTarget ? traversalTarget->id : 0;
 	g_game.playerCancelAttackAndFollow(playerId);
-	clearRatTarget(position, reason);
+	clearTraversalTarget(position, reason);
 	clearNavigation();
 	pendingLootItemId = 0;
 	pendingDiscardItemId = 0;
@@ -104,7 +105,7 @@ void PlayerBotController::beginService(Player* player, const Position& position,
 	}
 	activeGoal = TopLevelGoal::Service;
 	g_game.playerCancelAttackAndFollow(playerId);
-	clearRatTarget(position, reason);
+	clearTraversalTarget(position, reason);
 	clearNavigation();
 	pendingLootItemId = 0;
 	pendingDiscardItemId = 0;
@@ -125,7 +126,7 @@ void PlayerBotController::finishHuntAndSelectGoal(Player* player, const Position
 {
 	finishHuntRegion(*player, position, reason);
 	g_game.playerCancelAttackAndFollow(playerId);
-	clearRatTarget(position, reason);
+	clearTraversalTarget(position, reason);
 	clearNavigation();
 	pendingLootItemId = 0;
 	pendingDiscardItemId = 0;

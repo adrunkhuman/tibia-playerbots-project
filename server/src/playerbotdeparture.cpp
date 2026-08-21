@@ -96,15 +96,14 @@ bool PlayerBotController::forceOracleDeparture(Player& player, const Position& p
 		         ",\"goal\":\"hunt\",\"result\":\"interrupted\",\"reason\":\"level_eight_interrupt\"");
 	}
 
-	if (defensiveTargetId == 0) {
+	if (!targetingSession.defensiveTarget()) {
 		g_game.playerCancelAttackAndFollow(playerId);
 	}
-	clearRatTarget(position, "level_eight_interrupt");
+	clearTraversalTarget(position, "level_eight_interrupt");
 	clearNavigation();
 	pendingLootItemId = 0;
 	pendingDiscardItemId = 0;
-	expectedCorpseItemId = 0;
-	expectedCorpseLootable = false;
+	lootCorpseExpectation = {};
 	player.closeContainer(corpseContainerId);
 	setStage(ScenarioStage::Traverse, position);
 	progressionObjective = ProgressionObjective::None;

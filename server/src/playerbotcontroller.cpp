@@ -258,19 +258,19 @@ void PlayerBotController::setStage(ScenarioStage stage, const Position& position
 	     ",\"to\":" + jsonString(stageName(stage)));
 }
 
-void PlayerBotController::clearRatTarget(const Position& position, const char* reason)
+std::optional<PlayerBotTraversalTarget> PlayerBotController::clearTraversalTarget(const Position& position, const char* reason)
 {
-	if (ratId == 0) {
-		return;
+	const auto target = targetingSession.clearTraversalTarget();
+	if (!target) {
+		return std::nullopt;
 	}
 
-	const uint32_t previousTargetId = ratId;
-	ratId = 0;
 	if (!shouldEmitRepeated(std::string("target:clear:") + reason)) {
-		return;
+		return target;
 	}
-	emit("target_changed", position, "\"previous_target_id\":" + std::to_string(previousTargetId) +
+	emit("target_changed", position, "\"previous_target_id\":" + std::to_string(target->id) +
 	     ",\"target_id\":null,\"reason\":" + jsonString(reason));
+	return target;
 }
 
 void PlayerBotController::logActionFailure(const char* action, const char* reason, const Position& position)
@@ -322,18 +322,17 @@ void PlayerBotController::logSummary(const Position& position, bool final)
 			std::chrono::steady_clock::now() - decisionStarted).count();
 	}
 	std::ostringstream fields;
-	const uint32_t activeTargetId = defensiveTargetId != 0 ? defensiveTargetId : ratId;
-	const Position& activeTargetPosition = defensiveTargetId != 0 ? defensiveTargetPosition : ratPosition;
+	const auto activeTarget = targetingSession.activeTarget();
 	fields << "\"final\":" << (final ? "true" : "false")
 	       << ",\"uptime_ms\":" << uptimeMs
 	       << ",\"state\":" << jsonString(stageName(scenarioStage))
 	       << ",\"target_id\":";
-	if (activeTargetId == 0) {
+	if (!activeTarget) {
 		fields << "null";
 	} else {
-		fields << activeTargetId
-		       << ",\"target_position\":{\"x\":" << activeTargetPosition.x << ",\"y\":" << activeTargetPosition.y
-		       << ",\"z\":" << static_cast<uint16_t>(activeTargetPosition.z) << '}';
+		fields << activeTarget->id
+		       << ",\"target_position\":{\"x\":" << activeTarget->position.x << ",\"y\":" << activeTarget->position.y
+		       << ",\"z\":" << static_cast<uint16_t>(activeTarget->position.z) << '}';
 	}
 	fields << ",\"decisions\":" << counters.decisions
 	       << ",\"decision_time_us\":" << decisionTimeUs
@@ -425,8 +424,8 @@ void PlayerBotController::onDeath(const Player& player, const Creature* killer, 
 	       << ",\"health\":" << player.getHealth() << ",\"objective\":" << jsonString(objectiveName())
 	       << ",\"state\":" << jsonString(stageName(scenarioStage))
 	       << ",\"target_id\":";
-	const uint32_t targetId = defensiveTargetId != 0 ? defensiveTargetId : ratId;
-	fields << (targetId == 0 ? "null" : std::to_string(targetId));
+	const auto activeTarget = targetingSession.activeTarget();
+	fields << (activeTarget ? std::to_string(activeTarget->id) : "null");
 	fields << ",\"killer_id\":" << (killer ? std::to_string(killer->getID()) : "null")
 	       << ",\"killer_name\":" << (killer ? jsonString(killer->getName()) : "null")
 	       << ",\"killer_type\":" << (killer ? jsonString(killer->getPlayer() ? "player" : killer->getMonster() ? "monster" : "other") : "null")
