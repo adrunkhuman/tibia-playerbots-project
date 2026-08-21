@@ -102,11 +102,6 @@ uint64_t PlayerBotTelemetry::actionsAttempted() const
 	return actionsAttemptedCount;
 }
 
-uint64_t& PlayerBotTelemetry::actionsAttemptedForSession()
-{
-	return actionsAttemptedCount;
-}
-
 uint64_t PlayerBotTelemetry::pathfindingFailures() const
 {
 	return pathfindingFailuresCount;

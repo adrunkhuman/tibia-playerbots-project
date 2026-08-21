@@ -22,6 +22,11 @@ enum class PlayerBotNpcSessionResult : uint8_t {
 	Failed,
 };
 
+struct PlayerBotNpcSessionOutcome {
+	PlayerBotNpcSessionResult result = PlayerBotNpcSessionResult::Pending;
+	uint8_t actionsIssued = 0;
+};
+
 enum class PlayerBotNpcConversationStep : uint8_t {
 	Greet,
 	Request,
@@ -47,10 +52,8 @@ class PlayerBotNpcSession
 		void resetRetries() { retries = 0; }
 		bool retryLimitReached(uint32_t maximumRetries);
 
-		PlayerBotNpcSessionResult establishFocus(Player& player, Npc& npc, uint64_t& actionsAttempted,
-		                                          uint32_t maximumRetries);
-		PlayerBotNpcSessionResult openShop(Player& player, Npc& npc, uint64_t& actionsAttempted,
-		                                   uint32_t maximumRetries);
+		PlayerBotNpcSessionOutcome establishFocus(Player& player, Npc& npc, uint32_t maximumRetries);
+		PlayerBotNpcSessionOutcome openShop(Player& player, Npc& npc, uint32_t maximumRetries);
 		uint32_t nextDelay() const { return pendingDelay; }
 
 	private:

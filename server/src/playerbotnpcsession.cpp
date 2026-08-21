@@ -42,29 +42,26 @@ bool PlayerBotNpcSession::retryLimitReached(uint32_t maximumRetries)
 	return ++retries >= maximumRetries;
 }
 
-PlayerBotNpcSessionResult PlayerBotNpcSession::establishFocus(Player& player, Npc& npc, uint64_t& actionsAttempted,
-                                                               uint32_t maximumRetries)
+PlayerBotNpcSessionOutcome PlayerBotNpcSession::establishFocus(Player& player, Npc& npc, uint32_t maximumRetries)
 {
 	if (conversationStep == PlayerBotNpcConversationStep::Greet) {
-		++actionsAttempted;
 		npc.receiveSpeech(&player, TALKTYPE_PRIVATE_PN, "hi");
 		conversationStep = PlayerBotNpcConversationStep::Request;
 		pendingDelay = npcReplyDelay;
-		return PlayerBotNpcSessionResult::Pending;
+		return {PlayerBotNpcSessionResult::Pending, 1};
 	}
 	if (conversationStep != PlayerBotNpcConversationStep::Request || greetingAcknowledged) {
-		return PlayerBotNpcSessionResult::Ready;
+		return {PlayerBotNpcSessionResult::Ready, 0};
 	}
 	if (retryLimitReached(maximumRetries)) {
-		return PlayerBotNpcSessionResult::Failed;
+		return {PlayerBotNpcSessionResult::Failed, 0};
 	}
 	conversationStep = PlayerBotNpcConversationStep::Greet;
 	pendingDelay = npcReplyDelay;
-	return PlayerBotNpcSessionResult::Pending;
+	return {PlayerBotNpcSessionResult::Pending, 0};
 }
 
-PlayerBotNpcSessionResult PlayerBotNpcSession::openShop(Player& player, Npc& npc, uint64_t& actionsAttempted,
-                                                         uint32_t maximumRetries)
+PlayerBotNpcSessionOutcome PlayerBotNpcSession::openShop(Player& player, Npc& npc, uint32_t maximumRetries)
 {
 	int32_t onBuy;
 	int32_t onSell;
@@ -74,7 +71,7 @@ PlayerBotNpcSessionResult PlayerBotNpcSession::openShop(Player& player, Npc& npc
 			conversationStep = PlayerBotNpcConversationStep::Ready;
 			retries = 0;
 		}
-		return PlayerBotNpcSessionResult::Ready;
+		return {PlayerBotNpcSessionResult::Ready, 0};
 	}
 	if (shopOwner && shopOwner != &npc && conversationStep == PlayerBotNpcConversationStep::Greet) {
 		player.closeShopWindow(false);
@@ -82,21 +79,20 @@ PlayerBotNpcSessionResult PlayerBotNpcSession::openShop(Player& player, Npc& npc
 
 	if (conversationStep == PlayerBotNpcConversationStep::Greet ||
 	    conversationStep == PlayerBotNpcConversationStep::Request) {
-		const PlayerBotNpcSessionResult focus = establishFocus(player, npc, actionsAttempted, maximumRetries);
-		if (focus != PlayerBotNpcSessionResult::Ready) {
+		const PlayerBotNpcSessionOutcome focus = establishFocus(player, npc, maximumRetries);
+		if (focus.result != PlayerBotNpcSessionResult::Ready) {
 			return focus;
 		}
-		++actionsAttempted;
 		npc.receiveSpeech(&player, TALKTYPE_PRIVATE_PN, "trade");
 		conversationStep = PlayerBotNpcConversationStep::Ready;
 		pendingDelay = npcReplyDelay;
-		return PlayerBotNpcSessionResult::Pending;
+		return {PlayerBotNpcSessionResult::Pending, 1};
 	}
 
 	if (retryLimitReached(maximumRetries)) {
-		return PlayerBotNpcSessionResult::Failed;
+		return {PlayerBotNpcSessionResult::Failed, 0};
 	}
 	conversationStep = PlayerBotNpcConversationStep::Greet;
 	pendingDelay = 0;
-	return PlayerBotNpcSessionResult::Pending;
+	return {PlayerBotNpcSessionResult::Pending, 0};
 }

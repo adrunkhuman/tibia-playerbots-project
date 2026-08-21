@@ -109,7 +109,7 @@ bool PlayerBotController::forceOracleDeparture(Player& player, const Position& p
 	player.closeContainer(corpseContainerId);
 	setStage(ScenarioStage::Traverse, position);
 	progressionSession.reset();
-	serviceStage = ServiceStage::Discover;
+	serviceWorkflow.setStage(PlayerBotServiceStage::Discover);
 
 	PlayerBotOracleDeparturePlan plan;
 	std::deque<PlayerBotNavigationStep> route;
@@ -153,7 +153,7 @@ void PlayerBotController::beginOracleDeparture(Player& player, const Position& p
 	departureSession.begin(std::move(plan));
 	progressionSession.begin(PlayerBotProgressionProcedure::OracleDeparture);
 	const auto& departure = departureSession.plan();
-	npcSession.reset(departure.npcId);
+	serviceWorkflow.resetNpc(departure.npcId);
 	navigationRuntime.adopt(departure.approachPosition, std::move(steps));
 	emit("strategy_selection", position,
 	     "\"goal\":\"oracle_departure\",\"npc_id\":" + std::to_string(departure.npcId) +
@@ -171,7 +171,7 @@ void PlayerBotController::finishOracleDeparture(Player* player, const Position& 
 	         ",\"reason\":" + jsonString(reason));
 	progressionSession.reset();
 	departureSession.reset();
-	npcSession.reset();
+	serviceWorkflow.resetNpc();
 	clearNavigation();
 	if (std::strcmp(result, "success") == 0) {
 		if (player) {
@@ -226,7 +226,7 @@ void PlayerBotController::processOracleDeparture(Player* player, const Position&
 	}
 
 	if (departureSession.stage() == PlayerBotOracleDepartureStage::Greet) {
-		npcSession.resetGreetingAcknowledgement();
+		serviceWorkflow.resetGreetingAcknowledgement();
 		telemetry.recordActionAttempt();
 		oracle->receiveSpeech(player, TALKTYPE_PRIVATE_PN, "hi");
 		departureSession.setStage(PlayerBotOracleDepartureStage::ConfirmReady);
@@ -234,7 +234,7 @@ void PlayerBotController::processOracleDeparture(Player* player, const Position&
 		return;
 	}
 	if (departureSession.stage() == PlayerBotOracleDepartureStage::ConfirmReady) {
-		if (!npcSession.isGreetingAcknowledged()) {
+		if (!serviceWorkflow.isGreetingAcknowledged()) {
 			if (departureSession.incrementRetries() >= maximumProgressionAttempts) {
 				finishOracleDeparture(player, currentPosition, "failed", "oracle_focus_unconfirmed");
 				return;
