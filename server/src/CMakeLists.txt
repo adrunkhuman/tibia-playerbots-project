@@ -46,6 +46,7 @@ set(tfs_SRC
 	${CMAKE_CURRENT_LIST_DIR}/player.cpp
 	${CMAKE_CURRENT_LIST_DIR}/playerbot.cpp
 	${CMAKE_CURRENT_LIST_DIR}/playerbotcombat.cpp
+	${CMAKE_CURRENT_LIST_DIR}/playerbotcombatruntime.cpp
 	${CMAKE_CURRENT_LIST_DIR}/playerbotcontroller.cpp
 	${CMAKE_CURRENT_LIST_DIR}/playerbotdepotsession.cpp
 	${CMAKE_CURRENT_LIST_DIR}/playerbotdeparture.cpp

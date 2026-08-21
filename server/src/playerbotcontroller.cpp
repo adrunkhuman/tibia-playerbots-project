@@ -121,7 +121,7 @@ void PlayerBotController::setStage(ScenarioStage stage, const Position& position
 
 std::optional<PlayerBotTraversalTarget> PlayerBotController::clearTraversalTarget(const Position& position, const char* reason)
 {
-	const auto target = targetingSession.clearTraversalTarget();
+	const auto target = combatRuntime.clearTraversalTarget();
 	if (!target) {
 		return std::nullopt;
 	}
@@ -166,7 +166,7 @@ uint32_t PlayerBotController::getSaleItemCount(const Player& player, uint16_t it
 playerbot::PlayerBotTelemetrySummary PlayerBotController::telemetrySummary() const
 {
 	playerbot::PlayerBotTelemetrySummary summary{stageName(scenarioStage), std::nullopt};
-	if (const auto activeTarget = targetingSession.activeTarget()) {
+	if (const auto activeTarget = combatRuntime.activeTarget()) {
 		summary.target = playerbot::PlayerBotTelemetryTarget{activeTarget->id, activeTarget->position};
 	}
 	return summary;
@@ -233,7 +233,7 @@ void PlayerBotController::onDeath(const Player& player, const Creature* killer, 
 	       << ",\"health\":" << player.getHealth() << ",\"objective\":" << jsonString(objectiveName())
 	       << ",\"state\":" << jsonString(stageName(scenarioStage))
 	       << ",\"target_id\":";
-	const auto activeTarget = targetingSession.activeTarget();
+	const auto activeTarget = combatRuntime.activeTarget();
 	fields << (activeTarget ? std::to_string(activeTarget->id) : "null");
 	fields << ",\"killer_id\":" << (killer ? std::to_string(killer->getID()) : "null")
 	       << ",\"killer_name\":" << (killer ? jsonString(killer->getName()) : "null")
@@ -322,7 +322,7 @@ void PlayerBotController::onHealthGain(Creature* healer, const Creature& target,
 
 bool PlayerBotController::processNavigation(Player* player, const Position& currentPosition, const Position& destination)
 {
-	lastNavigationRouteUnavailable = false;
+	lastNavigationPlanResult = PlayerBotNavigationResult::Reached;
 	lastNavigationExpandedNodes = 0;
 	const auto now = std::chrono::steady_clock::now();
 	const bool forcePlanFailure = fixtureRuntime.forceNavigationPlanFailure();
@@ -376,7 +376,7 @@ bool PlayerBotController::processNavigation(Player* player, const Position& curr
 	if (outcome.plan.attempted) {
 		telemetry.recordPathfinding(outcome.plan.elapsed, !outcome.routeUnavailable);
 		if (outcome.routeUnavailable) {
-			lastNavigationRouteUnavailable = true;
+			lastNavigationPlanResult = outcome.plan.result;
 			lastNavigationExpandedNodes = outcome.plan.expandedNodes;
 			telemetry.emit("navigation_progress", currentPosition,
 			     "\"result\":\"failed\",\"reason\":\"route_unavailable\",\"cycle_phase\":" +

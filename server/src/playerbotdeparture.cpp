@@ -100,7 +100,7 @@ bool PlayerBotController::forceOracleDeparture(Player& player, const Position& p
 		         ",\"goal\":\"hunt\",\"result\":\"interrupted\",\"reason\":\"level_eight_interrupt\"");
 	}
 
-	if (!targetingSession.defensiveTarget()) {
+	if (!combatRuntime.hasDefensiveCombat()) {
 		g_game.playerCancelAttackAndFollow(playerId);
 	}
 	clearTraversalTarget(position, "level_eight_interrupt");

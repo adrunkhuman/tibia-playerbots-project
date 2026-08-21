@@ -37,17 +37,20 @@ void PlayerBotController::logLootSuccess(uint16_t itemId, uint32_t count, uint32
 	emit("action_result", position, fields.str());
 }
 
-void PlayerBotController::beginLoot(Player* player, const Position& currentPosition)
+void PlayerBotController::beginLoot(Player* player, const Position& currentPosition, const PlayerBotCombatDecision& defeatedTarget)
 {
 	if (activeHuntRegion) {
 		huntPolicy.observeKill();
 	}
-	const auto defeatedTarget = clearTraversalTarget(currentPosition, "target_defeated");
-	if (!defeatedTarget) {
+	if (defeatedTarget.target.id == 0) {
 		setStage(ScenarioStage::Traverse, currentPosition);
 		return;
 	}
-	lootSession.begin(defeatedTarget->id, defeatedTarget->position, defeatedTarget->expectedCorpse, currentPosition,
+	if (shouldEmitRepeated("target:clear:target_defeated")) {
+		emit("target_changed", currentPosition, "\"previous_target_id\":" + std::to_string(defeatedTarget.target.id) +
+		     ",\"target_id\":null,\"reason\":\"target_defeated\"");
+	}
+	lootSession.begin(defeatedTarget.target.id, defeatedTarget.target.position, defeatedTarget.expectedCorpse, currentPosition,
 	                  std::chrono::steady_clock::now());
 	if (!lootSession.expectedCorpse().lootable) {
 		std::ostringstream fields;
