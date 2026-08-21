@@ -337,7 +337,7 @@ const char* PlayerBotController::magicTrainingSafetyReason(const Player& player)
 	if (progressionObjective != ProgressionObjective::None) return "progression_objective";
 	if (scenarioStage != ScenarioStage::Traverse || ratId != 0 || defensiveTargetId != 0 ||
 	    const_cast<Player&>(player).getAttackedCreature() != nullptr) return "combat_or_pursuit";
-	if (navigationPending || worldChangePending || !navigationSteps.empty()) return "pending_navigation";
+	if (navigationSession.hasPendingWork()) return "pending_navigation";
 	if (!pendingSpellCast.name.empty() || pendingHeal || pendingEat || needsHealing(player)) return "defensive_work";
 	if (!player.canDoAction() || player.hasCondition(CONDITION_EXHAUST_HEAL)) return "spell_cooldown";
 	return nullptr;
@@ -593,7 +593,7 @@ bool PlayerBotController::handleSpellHealing(Player* player, const Position& cur
 bool PlayerBotController::trySupportSpell(Player* player, const Position& currentPosition)
 {
 	if (!player || !pendingSpellCast.name.empty() || player->hasCondition(CONDITION_HASTE) ||
-		std::chrono::steady_clock::now() < spellRetryAfter || navigationSteps.size() < minimumHasteRouteSteps ||
+		std::chrono::steady_clock::now() < spellRetryAfter || navigationSession.routeSize() < minimumHasteRouteSteps ||
 		needsHealing(*player)) {
 		return false;
 	}
@@ -810,8 +810,7 @@ void PlayerBotController::beginSpellTraining(Player& player, const Position& pos
 	progressionAttempts = 0;
 	serviceTargetId = spellTrainingPlan.npcId;
 	serviceGreetingAcknowledged = false;
-	navigationTarget = spellTrainingPlan.approachPosition;
-	navigationSteps = std::move(steps);
+	navigationSession.adopt(spellTrainingPlan.approachPosition, std::move(steps));
 	emit("strategy_selection", position, "\"goal\":\"learn_spell\",\"npc_id\":" +
 	     std::to_string(spellTrainingPlan.npcId) + ",\"spell\":" + jsonString(spellTrainingPlan.spellName) +
 	     ",\"keyword\":" + jsonString(spellTrainingPlan.keyword) + ",\"price\":" +

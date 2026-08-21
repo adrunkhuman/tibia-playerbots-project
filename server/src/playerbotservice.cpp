@@ -232,10 +232,9 @@ bool PlayerBotController::approachServiceNpc(Player* player, ServiceNpc& service
 			return false;
 		}
 		serviceApproachTarget = candidate;
-		navigationTarget = candidate;
-		navigationSteps = std::move(candidateSteps);
+		navigationSession.adopt(candidate, std::move(candidateSteps));
 		std::ostringstream fields;
-		fields << "\"action\":\"plan\",\"result\":\"success\",\"steps\":" << navigationSteps.size()
+		fields << "\"action\":\"plan\",\"result\":\"success\",\"steps\":" << navigationSession.routeSize()
 		       << ",\"expanded_nodes\":" << expandedNodes << ",\"destination\":{\"x\":" << candidate.x
 		       << ",\"y\":" << candidate.y << ",\"z\":" << static_cast<uint16_t>(candidate.z) << '}';
 		emit("action_result", currentPosition, fields.str());

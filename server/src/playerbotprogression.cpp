@@ -1033,7 +1033,7 @@ bool PlayerBotController::findPickupReward(Player& player, const Position& posit
 		candidate.rootSignatures = inspection.rootSignatures;
 		candidate.nonStackableRootSignatures = inspection.nonStackableRootSignatures;
 		candidate.stackableRootCounts = inspection.stackableRootCounts;
-		candidate.estimatedDistance = navigationDistance(position, candidate.itemPosition);
+		candidate.estimatedDistance = playerBotNavigationDistance(position, candidate.itemPosition);
 		std::set<slots_t> displacedSlots;
 		if (inspection.bestEquipment) {
 			for (const auto& displaced : {std::pair<slots_t, uint16_t>{candidate.slot, candidate.replacedItemId},
@@ -1246,8 +1246,7 @@ void PlayerBotController::beginPickupReward(Player& player, const Position& posi
 		}
 	}
 	if (!pickupReward.resumeEquipment) {
-		navigationTarget = pickupReward.approachPosition;
-		navigationSteps = std::move(rewardSteps);
+		navigationSession.adopt(pickupReward.approachPosition, std::move(rewardSteps));
 	}
 	std::ostringstream fields;
 	fields << "\"goal\":\"pickup_reward\",\"acquisition_source\":\"map_reward\",\"candidate_id\":" << pickupReward.uniqueId

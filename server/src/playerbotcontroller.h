@@ -16,6 +16,7 @@
 #include "playerbot.h"
 #include "playerbothuntregions.h"
 #include "playerbotnavigation.h"
+#include "playerbotnavigationsession.h"
 #include "playerbotspellcalibration.h"
 
 #include "container.h"
@@ -891,10 +892,6 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		void onCombatDamage(Creature* attacker, const Creature& target, uint32_t damage);
 		void onHealthGain(Creature* healer, const Creature& target, uint32_t gain);
 
-		uint32_t navigationDistance(const Position& from, const Position& destination) const;
-
-		bool detectNavigationOscillation(const Position& currentPosition, const Position& destination);
-
 		bool processNavigation(Player* player, const Position& currentPosition, const Position& destination);
 		void adoptNavigationPlan(const Position& destination, std::deque<PlayerBotNavigationStep> steps);
 
@@ -979,7 +976,6 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		Position patrolRouteFailureTarget;
 		std::chrono::steady_clock::time_point patrolRouteFailureStarted;
 		uint64_t lastNavigationExpandedNodes = 0;
-		uint32_t blockedStepCount = 0;
 		uint32_t forcedNavigationStepFailuresRemaining = 0;
 		uint32_t forcedNavigationPlanFailuresRemaining = 0;
 		uint32_t corpseSearchAttempts = 0;
@@ -1117,25 +1113,9 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		uint32_t huntRegionKills = 0;
 		uint32_t huntRegionDamageTaken = 0;
 		bool adaptiveChallengeFixtureRun = false;
-		std::deque<PlayerBotNavigationStep> navigationSteps;
-		Position navigationTarget;
-		Position navigationExpectedPosition;
-		Position navigationStepTarget;
-		Position navigationProgressTarget;
-		Position navigationProgressPrevious;
-		Position navigationProgressTwoAgo;
-		uint32_t navigationBestDistance = std::numeric_limits<uint32_t>::max();
-		uint32_t navigationOscillationCount = 0;
-		bool navigationOscillationDetected = false;
+		PlayerBotNavigationSession navigationSession;
 		bool huntPlanningFixtureCancelled = false;
 		bool huntPlanningFixtureStaleRevisionTriggered = false;
-		Position blockedNavigationTarget;
-		std::chrono::steady_clock::time_point navigationStepStarted;
-		std::chrono::steady_clock::time_point blockedNavigationTargetExpires;
-		PlayerBotNavigationStep worldChangeStep;
-		std::map<Position, std::chrono::steady_clock::time_point> temporarilyBlockedPositions;
-		bool navigationPending = false;
-		bool worldChangePending = false;
 		bool fixtureInitializationPending = false;
 		Counters counters;
 		std::unordered_map<std::string, std::chrono::steady_clock::time_point> repeatedEventTimes;

@@ -645,7 +645,7 @@ void PlayerBotController::processEquipmentPurchase(Player* player, const Positio
 	if (equipmentPurchaseStage == EquipmentPurchaseStage::Travel) {
 		if (!processNavigation(player, position, equipmentPurchase.approachPosition)) {
 			if (fixedTargetRouteFailureCount >= maximumProgressionAttempts ||
-			    blockedStepCount >= maximumRepeatedNavigationStepFailures) {
+			    navigationSession.stepFailureCount() >= maximumRepeatedNavigationStepFailures) {
 				finishEquipmentPurchase(player, position, "failed", "route_unavailable");
 			}
 			return;
