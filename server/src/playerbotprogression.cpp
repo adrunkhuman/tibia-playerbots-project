@@ -1409,8 +1409,7 @@ void PlayerBotController::finishProgressionObjective(Player* player, const Posit
 	progressionAttempts = 0;
 	clearNavigation();
 	serviceStage = ServiceStage::Discover;
-	conversationStep = ConversationStep::Greet;
-	serviceTargetId = 0;
+	npcSession.reset();
 	cyclePhase = CyclePhase::Service;
 	pickupRewardCooldownUntil = std::chrono::steady_clock::now() +
 	                            (std::strcmp(result, "success") == 0 ? pickupRewardSuccessCooldown :

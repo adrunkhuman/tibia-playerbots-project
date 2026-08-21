@@ -78,10 +78,9 @@ void PlayerBotController::beginReturn(Player* player, const Position& position, 
 
 void PlayerBotController::onNpcReply(uint32_t replyingPlayerId, uint32_t npcId, uint8_t type, const std::string& text)
 {
-	if (replyingPlayerId != playerId || npcId != serviceTargetId || type != TALKTYPE_PRIVATE_NP) {
+	if (!npcSession.acceptReply(playerId, replyingPlayerId, npcId, type)) {
 		return;
 	}
-	serviceGreetingAcknowledged = true;
 	Npc* npc = g_game.getNpcByID(npcId);
 	emit("npc_reply", lastPosition, "\"npc_id\":" + std::to_string(npcId) +
 	     ",\"npc_name\":" + jsonString(npc ? npc->getName() : "") + ",\"text\":" + jsonString(text));
@@ -116,11 +115,9 @@ void PlayerBotController::beginService(Player* player, const Position& position,
 	setStage(ScenarioStage::Traverse, position);
 	serviceShops.clear();
 	serviceBankers.clear();
-	serviceTargetId = 0;
 	serviceApproachTarget = Position();
 	serviceStage = ServiceStage::Discover;
-	conversationStep = ConversationStep::Greet;
-	serviceAttempts = 0;
+	npcSession.reset();
 	setCyclePhase(CyclePhase::Service, position, reason);
 }
 
@@ -241,69 +238,6 @@ bool PlayerBotController::approachServiceNpc(Player* player, ServiceNpc& service
 		return processNavigation(player, currentPosition, candidate);
 	}
 	stop("service_approach_unavailable", currentPosition);
-	return false;
-}
-
-void PlayerBotController::resetConversation(uint32_t targetId)
-{
-	serviceTargetId = targetId;
-	serviceGreetingAcknowledged = false;
-	conversationStep = ConversationStep::Greet;
-	serviceAttempts = 0;
-	serviceApproachTarget = Position();
-	serviceRejectedApproaches.clear();
-	clearNavigation();
-}
-
-bool PlayerBotController::openServiceShop(Player* player, ServiceNpc& service, const Position& position)
-{
-	Npc* npc = g_game.getNpcByID(service.id);
-	if (!npc || npc->isRemoved()) {
-		stop("service_npc_unavailable", position);
-		return false;
-	}
-	int32_t onBuy;
-	int32_t onSell;
-	Npc* shopOwner = player->getShopOwner(onBuy, onSell);
-	if (shopOwner == npc && !player->getShopItemList().empty()) {
-		if (conversationStep != ConversationStep::Verify) {
-			conversationStep = ConversationStep::Ready;
-			serviceAttempts = 0;
-		}
-		return true;
-	}
-	if (shopOwner && shopOwner != npc && conversationStep == ConversationStep::Greet) {
-		player->closeShopWindow(false);
-	}
-	if (conversationStep == ConversationStep::Greet) {
-		++counters.actionsAttempted;
-		npc->receiveSpeech(player, TALKTYPE_PRIVATE_PN, "hi");
-		conversationStep = ConversationStep::Request;
-		schedule(1000);
-		return false;
-	}
-	if (conversationStep == ConversationStep::Request) {
-		if (!serviceGreetingAcknowledged) {
-			if (++serviceAttempts >= maximumServiceAttempts) {
-				logActionFailure("shop", "npc_focus_unconfirmed", position);
-				return false;
-			}
-			conversationStep = ConversationStep::Greet;
-			schedule(1000);
-			return false;
-		}
-		++counters.actionsAttempted;
-		npc->receiveSpeech(player, TALKTYPE_PRIVATE_PN, "trade");
-		conversationStep = ConversationStep::Ready;
-		schedule(1000);
-		return false;
-	}
-	if (++serviceAttempts >= maximumServiceAttempts) {
-		logActionFailure("shop", "shop_window_unavailable", position);
-		return false;
-	}
-	conversationStep = ConversationStep::Greet;
-	schedule(SCHEDULER_MINTICKS);
 	return false;
 }
 
@@ -486,8 +420,8 @@ void PlayerBotController::completeServiceAction(Player* player, const char* acti
 	say(*player, std::string(action) == "sell" ?
 	     "Sold " + std::to_string(amount) + " " + itemName + '.' :
 	     "Bought " + std::to_string(amount) + " " + itemName + '.');
-	conversationStep = ConversationStep::Ready;
-	serviceAttempts = 0;
+	npcSession.setStep(PlayerBotNpcConversationStep::Ready);
+	npcSession.resetRetries();
 	serviceItemId = 0;
 	serviceAmount = 0;
 	schedule(SCHEDULER_MINTICKS);
@@ -499,9 +433,20 @@ void PlayerBotController::processServiceShop(Player* player, const Position& cur
 	if (!approachServiceNpc(player, service, currentPosition)) {
 		return;
 	}
-	if (!openServiceShop(player, service, currentPosition)) {
-		if (serviceAttempts >= maximumServiceAttempts) {
+	Npc* npc = g_game.getNpcByID(service.id);
+	if (!npc || npc->isRemoved()) {
+		stop("service_npc_unavailable", currentPosition);
+		return;
+	}
+	const PlayerBotNpcSessionResult sessionResult = npcSession.openShop(*player, *npc, counters.actionsAttempted,
+	                                                                    maximumServiceAttempts);
+	if (sessionResult != PlayerBotNpcSessionResult::Ready) {
+		if (sessionResult == PlayerBotNpcSessionResult::Failed) {
+			logActionFailure("shop", npcSession.step() == PlayerBotNpcConversationStep::Request ?
+			                 "npc_focus_unconfirmed" : "shop_window_unavailable", currentPosition);
 			stop("shop_transaction_unavailable", currentPosition);
+		} else {
+			schedule(npcSession.nextDelay() == 0 ? SCHEDULER_MINTICKS : npcSession.nextDelay());
 		}
 		return;
 	}
@@ -510,13 +455,13 @@ void PlayerBotController::processServiceShop(Player* player, const Position& cur
 		stop("shop_offer_unavailable", currentPosition);
 		return;
 	}
-	if (conversationStep == ConversationStep::Ready) {
+	if (npcSession.step() == PlayerBotNpcConversationStep::Ready) {
 		serviceBeforeItemCount = inventoryPolicy.inventoryItemCount(*player, itemId);
 		serviceBeforeMoney = player->getMoney();
 		serviceBeforeBalance = player->getBankBalance();
 		serviceItemId = itemId;
 		serviceAmount = amount;
-		conversationStep = ConversationStep::Verify;
+		npcSession.setStep(PlayerBotNpcConversationStep::Verify);
 		++counters.actionsAttempted;
 		if (purchase) {
 			g_game.playerPurchaseItem(playerId, Item::items[itemId].clientId, static_cast<uint8_t>(offer->subType),
@@ -549,12 +494,12 @@ void PlayerBotController::processServiceShop(Player* player, const Position& cur
 		stop("shop_transaction_delta_mismatch", currentPosition);
 		return;
 	}
-	if (++serviceAttempts >= maximumServiceAttempts) {
+	if (npcSession.retryLimitReached(maximumServiceAttempts)) {
 		logActionFailure(action, "transaction_not_verified", currentPosition);
 		stop("shop_transaction_not_verified", currentPosition);
 		return;
 	}
-	conversationStep = ConversationStep::Ready;
+	npcSession.setStep(PlayerBotNpcConversationStep::Ready);
 	schedule(navigationDecisionDelay(*player));
 }
 
@@ -568,53 +513,50 @@ void PlayerBotController::processBank(Player* player, const Position& currentPos
 		stop("banker_unavailable", currentPosition);
 		return;
 	}
-	if (conversationStep == ConversationStep::Greet) {
-		++counters.actionsAttempted;
-		npc->receiveSpeech(player, TALKTYPE_PRIVATE_PN, "hi");
-		conversationStep = ConversationStep::Request;
-		schedule(1000);
-		return;
-	}
-	if (conversationStep == ConversationStep::Request) {
-		if (!serviceGreetingAcknowledged) {
-			if (++serviceAttempts >= maximumServiceAttempts) {
-				logActionFailure("bank", "npc_focus_unconfirmed", currentPosition);
-				stop("banker_focus_unconfirmed", currentPosition);
-				return;
-			}
-			conversationStep = ConversationStep::Greet;
-			schedule(1000);
+	if (npcSession.step() == PlayerBotNpcConversationStep::Greet ||
+	    npcSession.step() == PlayerBotNpcConversationStep::Request) {
+		const PlayerBotNpcSessionResult focus = npcSession.establishFocus(*player, *npc, counters.actionsAttempted,
+		                                                                   maximumServiceAttempts);
+		if (focus == PlayerBotNpcSessionResult::Failed) {
+			logActionFailure("bank", "npc_focus_unconfirmed", currentPosition);
+			stop("banker_focus_unconfirmed", currentPosition);
 			return;
 		}
+		if (focus == PlayerBotNpcSessionResult::Pending) {
+			schedule(npcSession.nextDelay());
+			return;
+		}
+	}
+	if (npcSession.step() == PlayerBotNpcConversationStep::Request) {
 		serviceBeforeMoney = player->getMoney();
 		serviceBeforeBalance = player->getBankBalance();
 		if (serviceBeforeMoney == 0) {
 			bankDepositComplete = true;
-			conversationStep = ConversationStep::Ready;
+			npcSession.setStep(PlayerBotNpcConversationStep::Ready);
 			schedule(SCHEDULER_MINTICKS);
 			return;
 		}
 		++counters.actionsAttempted;
 		npc->receiveSpeech(player, TALKTYPE_PRIVATE_PN, "deposit all");
-		conversationStep = ConversationStep::Confirm;
+		npcSession.setStep(PlayerBotNpcConversationStep::Confirm);
 		schedule(SCHEDULER_MINTICKS);
 		return;
 	}
-	if (conversationStep == ConversationStep::Confirm) {
+	if (npcSession.step() == PlayerBotNpcConversationStep::Confirm) {
 		++counters.actionsAttempted;
 		npc->receiveSpeech(player, TALKTYPE_PRIVATE_PN, "yes");
-		conversationStep = ConversationStep::Verify;
+		npcSession.setStep(PlayerBotNpcConversationStep::Verify);
 		schedule(SCHEDULER_MINTICKS);
 		return;
 	}
-	if (conversationStep == ConversationStep::Verify && !bankDepositComplete) {
+	if (npcSession.step() == PlayerBotNpcConversationStep::Verify && !bankDepositComplete) {
 		if (player->getMoney() != 0 || player->getBankBalance() < serviceBeforeBalance + serviceBeforeMoney) {
-			if (++serviceAttempts >= maximumServiceAttempts) {
+			if (npcSession.retryLimitReached(maximumServiceAttempts)) {
 				logActionFailure("bank_deposit", "transaction_not_verified", currentPosition);
 				stop("bank_deposit_not_verified", currentPosition);
 				return;
 			}
-			conversationStep = ConversationStep::Request;
+			npcSession.setStep(PlayerBotNpcConversationStep::Request);
 			schedule(SCHEDULER_MINTICKS);
 			return;
 		}
@@ -624,9 +566,9 @@ void PlayerBotController::processBank(Player* player, const Position& currentPos
 		say(*player, "Deposited " + std::to_string(serviceBeforeMoney) + " gold. Bank: " +
 		     std::to_string(player->getBankBalance()) + '.');
 		bankDepositComplete = true;
-		conversationStep = ConversationStep::Ready;
+		npcSession.setStep(PlayerBotNpcConversationStep::Ready);
 	}
-	if (conversationStep == ConversationStep::Ready) {
+	if (npcSession.step() == PlayerBotNpcConversationStep::Ready) {
 		serviceBeforeBalance = player->getBankBalance();
 		serviceAmount = static_cast<uint32_t>(std::min<uint64_t>(carriedGoldReserve, serviceBeforeBalance));
 		const uint32_t coinWeight = Item::items[ITEM_GOLD_COIN].weight;
@@ -640,14 +582,14 @@ void PlayerBotController::processBank(Player* player, const Position& currentPos
 		}
 		++counters.actionsAttempted;
 		npc->receiveSpeech(player, TALKTYPE_PRIVATE_PN, "withdraw " + std::to_string(serviceAmount));
-		conversationStep = ConversationStep::Confirm;
+		npcSession.setStep(PlayerBotNpcConversationStep::Confirm);
 		schedule(SCHEDULER_MINTICKS);
 		return;
 	}
-	if (conversationStep == ConversationStep::Confirm) {
+	if (npcSession.step() == PlayerBotNpcConversationStep::Confirm) {
 		++counters.actionsAttempted;
 		npc->receiveSpeech(player, TALKTYPE_PRIVATE_PN, "yes");
-		conversationStep = ConversationStep::Verify;
+		npcSession.setStep(PlayerBotNpcConversationStep::Verify);
 		schedule(SCHEDULER_MINTICKS);
 		return;
 	}
@@ -659,12 +601,12 @@ void PlayerBotController::processBank(Player* player, const Position& currentPos
 		schedule(SCHEDULER_MINTICKS);
 		return;
 	}
-	if (++serviceAttempts >= maximumServiceAttempts) {
+	if (npcSession.retryLimitReached(maximumServiceAttempts)) {
 		logActionFailure("bank_withdraw", "transaction_not_verified", currentPosition);
 		stop("bank_withdraw_not_verified", currentPosition);
 		return;
 	}
-	conversationStep = ConversationStep::Ready;
+	npcSession.setStep(PlayerBotNpcConversationStep::Ready);
 	schedule(SCHEDULER_MINTICKS);
 }
 
@@ -676,10 +618,10 @@ void PlayerBotController::processService(Player* player, const Position& current
 		schedule(SCHEDULER_MINTICKS);
 		return;
 	}
-	if (conversationStep == ConversationStep::Verify && serviceItemId != 0 && serviceAmount != 0 &&
+	if (npcSession.step() == PlayerBotNpcConversationStep::Verify && serviceItemId != 0 && serviceAmount != 0 &&
 	    (serviceStage == ServiceStage::SellLoot || serviceStage == ServiceStage::BuyPotions)) {
 		auto service = std::find_if(serviceShops.begin(), serviceShops.end(), [this](const ServiceNpc& candidate) {
-			return candidate.id == serviceTargetId;
+			return candidate.id == npcSession.targetId();
 		});
 		if (service == serviceShops.end()) {
 			stop("shop_transaction_service_unavailable", currentPosition);
@@ -702,8 +644,11 @@ void PlayerBotController::processService(Player* player, const Position& current
 			schedule(SCHEDULER_MINTICKS);
 			return;
 		}
-		if (serviceTargetId != seller->id) {
-			resetConversation(seller->id);
+		if (!npcSession.targets(seller->id)) {
+			npcSession.reset(seller->id);
+			serviceApproachTarget = Position();
+			serviceRejectedApproaches.clear();
+			clearNavigation();
 		}
 		const uint32_t backpackSaleCount = inventoryPolicy.backpackSaleItemCount(*player, itemId);
 		if (backpackSaleCount == 0 && prepareSlottedSaleItem(player, itemId, currentPosition)) {
@@ -755,8 +700,11 @@ void PlayerBotController::processService(Player* player, const Position& current
 			schedule(SCHEDULER_MINTICKS);
 			return;
 		}
-		if (serviceTargetId != seller->id) {
-			resetConversation(seller->id);
+		if (!npcSession.targets(seller->id)) {
+			npcSession.reset(seller->id);
+			serviceApproachTarget = Position();
+			serviceRejectedApproaches.clear();
+			clearNavigation();
 		}
 		processServiceShop(player, currentPosition, *seller, "buy_potions", itemId, amount, true);
 		return;
@@ -767,8 +715,11 @@ void PlayerBotController::processService(Player* player, const Position& current
 			stop("banker_unavailable", currentPosition);
 			return;
 		}
-		if (serviceTargetId != banker->id) {
-			resetConversation(banker->id);
+		if (!npcSession.targets(banker->id)) {
+			npcSession.reset(banker->id);
+			serviceApproachTarget = Position();
+			serviceRejectedApproaches.clear();
+			clearNavigation();
 		}
 		processBank(player, currentPosition, *banker);
 		return;
