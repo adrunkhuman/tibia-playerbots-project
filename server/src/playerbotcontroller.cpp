@@ -131,8 +131,9 @@ PlayerBotController::PlayerBotController(const Player& player,
                             std::map<Position, std::chrono::steady_clock::time_point>& sharedHuntRegionCooldowns,
                             const PlayerBotTestPolicy& testPolicy) :
 	playerId(player.getID()), playerGuid(player.getGUID()), playerName(player.getName()), testPolicy(testPolicy),
+	equipmentPolicy(oracleVocationId),
 	inventoryPolicy(itemSellValues, [this](const Player& candidatePlayer, const Item& item) {
-		return evaluateEquipmentUpgrade(candidatePlayer, item).has_value();
+		return equipmentPolicy.evaluateUpgrade(candidatePlayer, item).has_value();
 	}), huntRegionCooldowns(sharedHuntRegionCooldowns)
 {
 	if (testPolicy.forceRepeatedNavigationStepFailures) {

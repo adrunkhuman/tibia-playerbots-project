@@ -11,8 +11,6 @@
 #include "otpch.h"
 
 #include "playerbotcontroller.h"
-#include "weapons.h"
-
 using namespace playerbot;
 
 namespace {
@@ -22,196 +20,7 @@ namespace {
 	constexpr size_t maximumEquipmentProviderApproaches = 4;
 	constexpr uint64_t maximumEquipmentProviderPathNodes = 5000;
 	constexpr size_t maximumEquipmentCatalogOffers = 64;
-
-	skills_t skillForWeapon(WeaponType_t weaponType)
-	{
-		switch (weaponType) {
-			case WEAPON_SWORD: return SKILL_SWORD;
-			case WEAPON_CLUB: return SKILL_CLUB;
-			case WEAPON_AXE: return SKILL_AXE;
-			case WEAPON_DISTANCE: case WEAPON_AMMO: return SKILL_DISTANCE;
-			default: return SKILL_FIST;
-		}
-	}
 }
-
-PlayerBotController::EquipmentLoadout PlayerBotController::equipmentLoadout(const Player& player) const
-{
-	EquipmentLoadout loadout;
-	for (int32_t slot = CONST_SLOT_FIRST; slot <= CONST_SLOT_LAST; ++slot) {
-		if (const Item* item = player.getInventoryItem(static_cast<slots_t>(slot))) {
-			loadout.itemIds[slot] = item->getID();
-		}
-	}
-	return loadout;
-}
-
-bool PlayerBotController::applyEquipmentOffer(const Player& player, EquipmentLoadout& loadout, uint16_t itemId, slots_t& slot,
-                                              uint16_t& replacedItemId, uint16_t& displacedLeftItemId,
-                                              uint16_t& displacedRightItemId,
-                                              std::string& rejection) const
-{
-	const ItemType& type = Item::items[itemId];
-	if (!type.isPickupable()) {
-		rejection = "not_pickupable";
-		return false;
-	}
-	if (player.getLevel() < type.minReqLevel) {
-		rejection = "level_ineligible";
-		return false;
-	}
-	if (player.getMagicLevel() < type.minReqMagicLevel) {
-		rejection = "magic_level_ineligible";
-		return false;
-	}
-	if ((type.wieldInfo & WIELDINFO_PREMIUM) != 0 && !player.isPremium()) {
-		rejection = "premium_ineligible";
-		return false;
-	}
-	if (!type.vocationIds.empty() && type.vocationIds.find(player.getVocationId()) == type.vocationIds.end()) {
-		rejection = "vocation_ineligible";
-		return false;
-	}
-
-	auto itemTypeAt = [&loadout](slots_t slot) -> const ItemType* {
-		const uint16_t equippedItemId = loadout.itemIds[slot];
-		return equippedItemId == 0 ? nullptr : &Item::items[equippedItemId];
-	};
-	auto isTwoHanded = [&itemTypeAt](slots_t hand) {
-		const ItemType* equipped = itemTypeAt(hand);
-		return equipped && (equipped->slotPosition & SLOTP_TWO_HAND) != 0;
-	};
-	auto isWeapon = [&itemTypeAt](slots_t hand) {
-		const ItemType* equipped = itemTypeAt(hand);
-		return equipped && equipped->weaponType != WEAPON_NONE && equipped->weaponType != WEAPON_SHIELD;
-	};
-	auto isShield = [&itemTypeAt](slots_t hand) {
-		const ItemType* equipped = itemTypeAt(hand);
-		return equipped && equipped->weaponType == WEAPON_SHIELD;
-	};
-
-	slot = CONST_SLOT_WHEREEVER;
-	if (type.slotPosition & SLOTP_HEAD) {
-		slot = CONST_SLOT_HEAD;
-	} else if (type.slotPosition & SLOTP_ARMOR) {
-		slot = CONST_SLOT_ARMOR;
-	} else if (type.slotPosition & SLOTP_LEGS) {
-		slot = CONST_SLOT_LEGS;
-	} else if (type.slotPosition & SLOTP_FEET) {
-		slot = CONST_SLOT_FEET;
-	} else if (type.weaponType == WEAPON_SHIELD) {
-		slot = isWeapon(CONST_SLOT_LEFT) && !isTwoHanded(CONST_SLOT_LEFT) ? CONST_SLOT_RIGHT :
-		       isWeapon(CONST_SLOT_RIGHT) && !isTwoHanded(CONST_SLOT_RIGHT) ? CONST_SLOT_LEFT : CONST_SLOT_RIGHT;
-	} else if (type.weaponType != WEAPON_NONE && type.weaponType != WEAPON_AMMO &&
-	           (type.slotPosition & (SLOTP_LEFT | SLOTP_RIGHT)) != 0) {
-		if (requiresKnightCombatReadiness(player) &&
-		    type.weaponType != WEAPON_SWORD && type.weaponType != WEAPON_CLUB && type.weaponType != WEAPON_AXE) {
-			rejection = "unsupported_weapon_type";
-			return false;
-		}
-		slot = isShield(CONST_SLOT_LEFT) ? CONST_SLOT_RIGHT : isShield(CONST_SLOT_RIGHT) ? CONST_SLOT_LEFT :
-		       (type.slotPosition & SLOTP_LEFT) != 0 ? CONST_SLOT_LEFT : CONST_SLOT_RIGHT;
-	} else {
-		rejection = "unsupported_slot";
-		return false;
-	}
-
-	replacedItemId = (type.slotPosition & SLOTP_TWO_HAND) != 0 ? loadout.itemIds[CONST_SLOT_LEFT] : loadout.itemIds[slot];
-	displacedLeftItemId = 0;
-	displacedRightItemId = 0;
-	if ((type.slotPosition & SLOTP_TWO_HAND) != 0) {
-		displacedLeftItemId = loadout.itemIds[CONST_SLOT_LEFT];
-		displacedRightItemId = loadout.itemIds[CONST_SLOT_RIGHT];
-		loadout.itemIds[CONST_SLOT_LEFT] = itemId;
-		loadout.itemIds[CONST_SLOT_RIGHT] = 0;
-	} else if (isTwoHanded(CONST_SLOT_LEFT) || isTwoHanded(CONST_SLOT_RIGHT)) {
-		displacedLeftItemId = loadout.itemIds[CONST_SLOT_LEFT];
-		displacedRightItemId = loadout.itemIds[CONST_SLOT_RIGHT];
-		loadout.itemIds[CONST_SLOT_LEFT] = 0;
-		loadout.itemIds[CONST_SLOT_RIGHT] = 0;
-		loadout.itemIds[slot] = itemId;
-	} else {
-		if (slot == CONST_SLOT_LEFT) {
-			displacedLeftItemId = loadout.itemIds[slot];
-		} else if (slot == CONST_SLOT_RIGHT) {
-			displacedRightItemId = loadout.itemIds[slot];
-		}
-		loadout.itemIds[slot] = itemId;
-	}
-	return true;
-}
-
-PlayerBotCombatProfile PlayerBotController::equipmentCombatProfile(const Player& player, const EquipmentLoadout& loadout) const
-{
-	auto itemTypeAt = [&loadout](slots_t slot) -> const ItemType* {
-		const uint16_t itemId = loadout.itemIds[slot];
-		return itemId == 0 ? nullptr : &Item::items[itemId];
-	};
-
-	int32_t armor = 0;
-	for (slots_t slot : {CONST_SLOT_HEAD, CONST_SLOT_NECKLACE, CONST_SLOT_ARMOR, CONST_SLOT_LEGS, CONST_SLOT_FEET, CONST_SLOT_RING}) {
-		if (const ItemType* type = itemTypeAt(slot)) {
-			armor += type->armor;
-		}
-	}
-
-	const ItemType* weapon = nullptr;
-	const ItemType* shield = nullptr;
-	for (slots_t slot : {CONST_SLOT_RIGHT, CONST_SLOT_LEFT}) {
-		const ItemType* type = itemTypeAt(slot);
-		if (!type || type->weaponType == WEAPON_NONE) {
-			continue;
-		}
-		if (type->weaponType == WEAPON_SHIELD) {
-			if (!shield || type->defense > shield->defense) {
-				shield = type;
-			}
-		} else {
-			weapon = type;
-		}
-	}
-
-	int32_t defenseValue = 7;
-	int32_t defenseSkill = player.getSkillLevel(SKILL_FIST);
-	if (weapon) {
-		defenseValue = weapon->defense + weapon->extraDefense;
-		defenseSkill = player.getSkillLevel(skillForWeapon(weapon->weaponType));
-	}
-	if (shield) {
-		defenseValue = weapon ? shield->defense + weapon->extraDefense : shield->defense;
-		defenseSkill = player.getSkillLevel(SKILL_SHIELD);
-	}
-	const int32_t defense = defenseSkill == 0 ? 1 : static_cast<int32_t>(
-		(defenseSkill / 4.0 + 2.23) * defenseValue * 0.15 * player.getDefenseFactor() * player.getVocation()->defenseMultiplier);
-	return {player.getLevel(), player.getMaxHealth(), static_cast<int32_t>(armor * player.getVocation()->armorMultiplier), defense,
-	        weapon ? weapon->attack : 7, player.getSkillLevel(skillForWeapon(weapon ? weapon->weaponType : WEAPON_NONE)),
-	        player.getAttackFactor()};
-}
-
-bool PlayerBotController::equipmentLoadoutReady(const Player& player, const EquipmentLoadout& loadout,
-                                                uint32_t additionalWeight) const
-{
-	const auto isKnightWeapon = [this, &player](uint16_t itemId) {
-		if (itemId == 0) {
-			return false;
-		}
-		const ItemType& type = Item::items[itemId];
-		return isLegalEquipmentType(player, type) && type.attack > 0 &&
-		       (type.weaponType == WEAPON_SWORD || type.weaponType == WEAPON_CLUB ||
-		                           type.weaponType == WEAPON_AXE) &&
-		       (type.slotPosition & (SLOTP_LEFT | SLOTP_RIGHT)) != 0;
-	};
-	const uint16_t armorItemId = loadout.itemIds[CONST_SLOT_ARMOR];
-	const bool armorReady = armorItemId != 0 && isLegalEquipmentType(player, Item::items[armorItemId]) &&
-	                        (Item::items[armorItemId].slotPosition & SLOTP_ARMOR) != 0 && Item::items[armorItemId].armor > 0;
-	const Item* backpack = player.getInventoryItem(CONST_SLOT_BACKPACK);
-	const bool suppliesReady = inventoryPolicy.inventoryItemCount(player, smallHealthPotionItemId) > smallHealthPotionReturnThreshold;
-	const bool capacityReady = static_cast<uint64_t>(inventoryPolicy.effectiveFreeCapacity(player)) >=
-	                           static_cast<uint64_t>(returnCapacityThreshold) + additionalWeight;
-	return (isKnightWeapon(loadout.itemIds[CONST_SLOT_LEFT]) || isKnightWeapon(loadout.itemIds[CONST_SLOT_RIGHT])) && armorReady &&
-	       backpack && backpack->getContainer() && suppliesReady && capacityReady;
-}
-
 PlayerBotController::EquipmentHuntSummary PlayerBotController::equipmentHuntSummary(Player& player,
 	                                                                                   const PlayerBotCombatProfile& profile) const
 {
@@ -251,75 +60,6 @@ PlayerBotController::EquipmentHuntSummary PlayerBotController::equipmentHuntSumm
 	return summary;
 }
 
-PlayerBotController::EquipmentOfferEvaluation PlayerBotController::evaluateEquipmentCandidate(
-	Player& player, uint16_t itemId, const EquipmentLoadout& currentLoadout,
-	const PlayerBotCombatProfile& currentProfile, const EquipmentHuntSummary& currentHunts,
-	bool currentReady, uint32_t additionalWeight, bool allowSimulation) const
-{
-	EquipmentOfferEvaluation evaluation;
-	evaluation.itemId = itemId;
-	evaluation.currentReady = currentReady;
-	EquipmentLoadout candidateLoadout = currentLoadout;
-	if (!applyEquipmentOffer(player, candidateLoadout, itemId, evaluation.slot, evaluation.replacedItemId,
-	                         evaluation.displacedLeftItemId, evaluation.displacedRightItemId,
-	                         evaluation.rejection)) {
-		evaluation.profile = currentProfile;
-		evaluation.hunts = currentHunts;
-		return evaluation;
-	}
-	if (!allowSimulation) {
-		evaluation.profile = currentProfile;
-		evaluation.hunts = currentHunts;
-		evaluation.rejection = "unique_item_evaluation_budget_exhausted";
-		return evaluation;
-	}
-
-	evaluation.simulated = true;
-	evaluation.profile = equipmentCombatProfile(player, candidateLoadout);
-	evaluation.hunts = equipmentHuntSummary(player, evaluation.profile);
-	evaluation.candidateReady = equipmentLoadoutReady(player, candidateLoadout, additionalWeight);
-	const int32_t currentMaximumDamage = Weapons::getMaxWeaponDamage(
-		currentProfile.level, currentProfile.attackSkill, currentProfile.attack, currentProfile.attackFactor);
-	const int32_t candidateMaximumDamage = Weapons::getMaxWeaponDamage(
-		evaluation.profile.level, evaluation.profile.attackSkill, evaluation.profile.attack,
-		evaluation.profile.attackFactor);
-	const bool noWorse = evaluation.profile.armor >= currentProfile.armor &&
-	                     evaluation.profile.defense >= currentProfile.defense &&
-	                     candidateMaximumDamage >= currentMaximumDamage &&
-	                     evaluation.hunts.suitableRegions >= currentHunts.suitableRegions &&
-	                     evaluation.hunts.lowestThreatRatio <= currentHunts.lowestThreatRatio &&
-	                     evaluation.hunts.bestProjectedExperience >= currentHunts.bestProjectedExperience;
-	const bool better = evaluation.profile.armor > currentProfile.armor ||
-	                    evaluation.profile.defense > currentProfile.defense ||
-	                    candidateMaximumDamage > currentMaximumDamage ||
-	                    evaluation.hunts.suitableRegions > currentHunts.suitableRegions ||
-	                    evaluation.hunts.lowestThreatRatio < currentHunts.lowestThreatRatio ||
-	                    evaluation.hunts.bestProjectedExperience > currentHunts.bestProjectedExperience;
-	if (currentReady && !evaluation.candidateReady) {
-		evaluation.rejection = "regresses_readiness";
-	} else if (!noWorse) {
-		evaluation.rejection = better ? "ambiguous_tradeoff" : "non_improving";
-	} else if (!better) {
-		evaluation.rejection = "non_improving";
-	} else {
-		evaluation.rule = !currentReady && evaluation.candidateReady ? EquipmentDecisionRule::ReadinessRepair :
-		                  evaluation.hunts.suitableRegions > currentHunts.suitableRegions ? EquipmentDecisionRule::UnlocksHunt :
-		                  EquipmentDecisionRule::ParetoImprovement;
-	}
-	return evaluation;
-}
-
-const char* PlayerBotController::equipmentDecisionRuleName(EquipmentDecisionRule rule) const
-{
-	switch (rule) {
-		case EquipmentDecisionRule::ParetoImprovement: return "pareto_improvement";
-		case EquipmentDecisionRule::UnlocksHunt: return "unlocks_suitable_hunt";
-		case EquipmentDecisionRule::ReadinessRepair: return "fills_readiness_gap";
-		case EquipmentDecisionRule::None: return "none";
-	}
-	return "none";
-}
-
 void PlayerBotController::emitEquipmentOffer(const Player& player, const EquipmentOfferEvaluation& evaluation,
 	                                            const PlayerBotCombatProfile& currentProfile,
 	                                            const EquipmentHuntSummary& currentHunts, uint64_t reserve,
@@ -348,7 +88,7 @@ void PlayerBotController::emitEquipmentOffer(const Player& player, const Equipme
 	       << ",\"best_projected_experience\":" << evaluation.hunts.bestProjectedExperience
 	       << ",\"lowest_threat_ratio\":" << evaluation.hunts.lowestThreatRatio
 	       << ",\"combat_ready\":" << (evaluation.candidateReady ? "true" : "false") << '}'
-	       << ",\"rule\":" << jsonString(equipmentDecisionRuleName(evaluation.rule))
+	       << ",\"rule\":" << jsonString(PlayerBotEquipmentPolicy::decisionRuleName(evaluation.rule))
 	       << ",\"carried\":" << (evaluation.carried ? "true" : "false")
 	       << ",\"provider_position\":{\"x\":" << evaluation.npcPosition.x << ",\"y\":" << evaluation.npcPosition.y
 	       << ",\"z\":" << static_cast<uint16_t>(evaluation.npcPosition.z) << '}';
@@ -361,15 +101,22 @@ void PlayerBotController::emitEquipmentOffer(const Player& player, const Equipme
 std::optional<PlayerBotController::EquipmentOfferEvaluation> PlayerBotController::evaluateEquipmentOffers(
 	Player& player, const Position& position)
 {
-	if (!requiresKnightCombatReadiness(player)) {
+	if (!equipmentPolicy.requiresKnightCombatReadiness(player)) {
 		return std::nullopt;
 	}
 	const uint64_t reserve = spellTrainingReserve(player);
 	const uint64_t totalMoney = player.getMoney() + player.getBankBalance();
-	const EquipmentLoadout currentLoadout = equipmentLoadout(player);
-	const PlayerBotCombatProfile currentProfile = equipmentCombatProfile(player, currentLoadout);
+	const EquipmentLoadout currentLoadout = equipmentPolicy.loadout(player);
+	const PlayerBotCombatProfile currentProfile = equipmentPolicy.combatProfile(player, currentLoadout);
 	const EquipmentHuntSummary currentHunts = equipmentHuntSummary(player, currentProfile);
-	const bool currentReady = equipmentLoadoutReady(player, currentLoadout);
+	const Item* backpackItem = player.getInventoryItem(CONST_SLOT_BACKPACK);
+	const PlayerBotEquipmentReadinessInput readiness{
+		backpackItem && backpackItem->getContainer(),
+		inventoryPolicy.inventoryItemCount(player, smallHealthPotionItemId) > smallHealthPotionReturnThreshold,
+		inventoryPolicy.effectiveFreeCapacity(player),
+		returnCapacityThreshold,
+	};
+	const bool currentReady = equipmentPolicy.loadoutReady(player, currentLoadout, readiness);
 	std::map<uint16_t, EquipmentOfferEvaluation> evaluatedItems;
 	std::map<uint32_t, std::optional<std::pair<Position, uint32_t>>> providerRoutes;
 	std::set<uint32_t> providerRouteNodeLimits;
@@ -428,15 +175,6 @@ std::optional<PlayerBotController::EquipmentOfferEvaluation> PlayerBotController
 		}
 		return providerRoutes.emplace(npc.getID(), std::nullopt).first->second;
 	};
-	auto preferCandidate = [](const EquipmentOfferEvaluation& candidate, const EquipmentOfferEvaluation& current) {
-		return candidate.rule > current.rule ||
-		       (candidate.rule == current.rule && (candidate.carried != current.carried ? candidate.carried :
-		        candidate.price < current.price ||
-		        (candidate.price == current.price && (candidate.travelSteps < current.travelSteps ||
-		         (candidate.travelSteps == current.travelSteps && (candidate.itemId < current.itemId ||
-		          (candidate.itemId == current.itemId && candidate.npcId < current.npcId)))))));
-	};
-
 	for (const auto& entry : g_game.getNpcs()) {
 		if (catalogTruncated) {
 			break;
@@ -461,10 +199,13 @@ std::optional<PlayerBotController::EquipmentOfferEvaluation> PlayerBotController
 			if (auto item = evaluatedItems.find(offer.itemId); item != evaluatedItems.end()) {
 				evaluation = item->second;
 			} else {
-				evaluation = evaluateEquipmentCandidate(player, offer.itemId, currentLoadout, currentProfile,
-				                                        currentHunts, currentReady,
-				                                        carried ? 0 : Item::items[offer.itemId].weight,
-				                                        simulatedItems < maximumEquipmentCandidateSimulations);
+				evaluation = equipmentPolicy.evaluateCandidate(
+					player, offer.itemId, currentLoadout, currentProfile, currentHunts, currentReady, readiness,
+					carried ? 0 : Item::items[offer.itemId].weight,
+					simulatedItems < maximumEquipmentCandidateSimulations,
+					[this](Player& candidate, const PlayerBotCombatProfile& profile) {
+						return equipmentHuntSummary(candidate, profile);
+					});
 				if (evaluation.simulated) {
 					++simulatedItems;
 				}
@@ -507,7 +248,7 @@ std::optional<PlayerBotController::EquipmentOfferEvaluation> PlayerBotController
 				evaluation.travelSteps = 0;
 				emitEquipmentOffer(player, evaluation, currentProfile, currentHunts, reserve, position, "feasible", "carried_upgrade");
 				++feasibleCandidates;
-				if (!selected || preferCandidate(evaluation, *selected)) {
+				if (!selected || PlayerBotEquipmentPolicy::prefers(evaluation, *selected)) {
 					selected = evaluation;
 				}
 				continue;
@@ -532,7 +273,7 @@ std::optional<PlayerBotController::EquipmentOfferEvaluation> PlayerBotController
 			evaluation.travelSteps = route->second;
 			emitEquipmentOffer(player, evaluation, currentProfile, currentHunts, reserve, position, "feasible", nullptr);
 			++feasibleCandidates;
-			if (!selected || preferCandidate(evaluation, *selected)) {
+			if (!selected || PlayerBotEquipmentPolicy::prefers(evaluation, *selected)) {
 				selected = evaluation;
 			}
 		}
@@ -542,7 +283,7 @@ std::optional<PlayerBotController::EquipmentOfferEvaluation> PlayerBotController
 	       << ",\"feasible_candidates\":" << feasibleCandidates
 	       << ",\"catalog_offers_evaluated\":" << catalogOffers
 	       << ",\"catalog_truncated\":" << (catalogTruncated ? "true" : "false")
-	       << ",\"reason\":" << jsonString(selected ? equipmentDecisionRuleName(selected->rule) : "no_justified_offer");
+	       << ",\"reason\":" << jsonString(selected ? PlayerBotEquipmentPolicy::decisionRuleName(selected->rule) : "no_justified_offer");
 	if (selected) {
 		fields << ",\"npc_id\":" << selected->npcId << ",\"item_id\":" << selected->itemId
 		       << ",\"price\":" << selected->price << ",\"travel_steps\":" << selected->travelSteps;
@@ -567,7 +308,7 @@ void PlayerBotController::beginEquipmentPurchase(Player& player, const Position&
 	}
 	std::ostringstream fields;
 	fields << "\"goal\":\"buy_equipment\",\"reason\":"
-	       << jsonString(equipmentDecisionRuleName(equipmentPurchase.rule))
+	       << jsonString(PlayerBotEquipmentPolicy::decisionRuleName(equipmentPurchase.rule))
 	       << ",\"npc_id\":" << equipmentPurchase.npcId << ",\"item_id\":" << equipmentPurchase.itemId
 	       << ",\"price\":" << equipmentPurchase.price << ",\"travel_steps\":" << equipmentPurchase.travelSteps
 	       << ",\"acquisition\":" << jsonString(equipmentPurchase.carried ? "carried" : "purchase");
@@ -582,7 +323,7 @@ void PlayerBotController::finishEquipmentPurchase(Player* player, const Position
 	std::ostringstream fields;
 	fields << "\"goal\":\"buy_equipment\",\"npc_id\":" << equipmentPurchase.npcId
 	       << ",\"item_id\":" << equipmentPurchase.itemId << ",\"price\":" << equipmentPurchase.price
-	       << ",\"rule\":" << jsonString(equipmentDecisionRuleName(equipmentPurchase.rule))
+	       << ",\"rule\":" << jsonString(PlayerBotEquipmentPolicy::decisionRuleName(equipmentPurchase.rule))
 	       << ",\"result\":" << jsonString(result) << ",\"reason\":" << jsonString(reason);
 	emit("strategy_objective_result", position, fields.str());
 	emit("goal_result", position,
@@ -862,13 +603,16 @@ void PlayerBotController::processEquipmentPurchase(Player* player, const Positio
 		schedule(navigationDecisionDelay(*player));
 		return;
 	}
-	const EquipmentLoadout actualLoadout = equipmentLoadout(*player);
-	const PlayerBotCombatProfile actualProfile = equipmentCombatProfile(*player, actualLoadout);
+	const EquipmentLoadout actualLoadout = equipmentPolicy.loadout(*player);
+	const PlayerBotCombatProfile actualProfile = equipmentPolicy.combatProfile(*player, actualLoadout);
 	const EquipmentHuntSummary actualHunts = equipmentHuntSummary(*player, actualProfile);
 	emit("action_result", position,
 	     "\"action\":\"equip_equipment\",\"result\":\"success\",\"item_id\":" +
 	         std::to_string(equipmentPurchase.itemId) + ",\"slot\":" + std::to_string(equipmentPurchase.slot) +
-	         ",\"combat_ready\":" + (equipmentLoadoutReady(*player, actualLoadout) ? "true" : "false") +
+	         ",\"combat_ready\":" + (equipmentPolicy.loadoutReady(*player, actualLoadout,
+	             {player->getInventoryItem(CONST_SLOT_BACKPACK) && player->getInventoryItem(CONST_SLOT_BACKPACK)->getContainer(),
+	              inventoryPolicy.inventoryItemCount(*player, smallHealthPotionItemId) > smallHealthPotionReturnThreshold,
+	              inventoryPolicy.effectiveFreeCapacity(*player), returnCapacityThreshold}) ? "true" : "false") +
 	         ",\"suitable_regions\":" + std::to_string(actualHunts.suitableRegions) +
 	         ",\"displaced_items_preserved\":true");
 	finishEquipmentPurchase(player, position, "success", "upgrade_equipped");
