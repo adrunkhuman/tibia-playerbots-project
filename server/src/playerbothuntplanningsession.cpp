@@ -126,3 +126,13 @@ void PlayerBotHuntPlanningSession::refreshSuitableCandidates()
 	suitableCandidateCount = static_cast<uint32_t>(std::count_if(scoredRegions.begin(), scoredRegions.end(),
 		[](const PlayerBotHuntRegion& region) { return region.suitable; }));
 }
+
+void PlayerBotHuntPlanningSession::rejectSuitableCandidates(const std::string& reason)
+{
+	for (PlayerBotHuntRegion& region : scoredRegions) {
+		region.suitable = false;
+		region.inChallengeBand = false;
+		region.rejectionReason = reason;
+	}
+	refreshSuitableCandidates();
+}

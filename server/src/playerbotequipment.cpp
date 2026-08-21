@@ -28,13 +28,8 @@ PlayerBotController::EquipmentHuntSummary PlayerBotController::equipmentHuntSumm
 	summary.lowestThreatRatio = std::numeric_limits<double>::max();
 	std::set<Position> excludedRegions;
 	const auto now = std::chrono::steady_clock::now();
-	for (const auto& [center, cooldown] : huntRegionCooldowns) {
-		if (cooldown > now) {
-			excludedRegions.insert(center);
-		}
-	}
-	const PlayerBotHuntRegionScan scan = huntRegionPlanner.beginScan(player);
-	const PlayerBotHuntPlanningProfile planningProfile = playerBotHuntPlanningProfile(player, profile, huntPolicy.challengeFrontier());
+	const PlayerBotHuntRegionScan scan = huntRuntime.testPlanner().beginScan(player);
+	const PlayerBotHuntPlanningProfile planningProfile = playerBotHuntPlanningProfile(player, profile, huntRuntime.huntPolicy().challengeFrontier());
 	const uint32_t huntDurationSeconds = static_cast<uint32_t>(std::max<int32_t>(1,
 		g_config.getNumber(ConfigManager::PLAYERBOT_HUNT_DURATION_SECONDS)));
 	for (size_t candidateIndex : scan.candidateIndices) {
@@ -43,8 +38,8 @@ PlayerBotController::EquipmentHuntSummary PlayerBotController::equipmentHuntSumm
 			break;
 		}
 		PlayerBotHuntRegion region;
-		if (!huntRegionPlanner.score(player, planningProfile, scan.revision, candidateIndex, excludedRegions,
-		                            huntPolicy.regionPerformance(), huntDurationSeconds, region)) {
+		if (!huntRuntime.testPlanner().score(player, planningProfile, scan.revision, candidateIndex, excludedRegions,
+		                            huntRuntime.huntPolicy().regionPerformance(), huntDurationSeconds, region)) {
 			continue;
 		}
 		++summary.evaluatedRegions;
@@ -389,7 +384,7 @@ void PlayerBotController::processEquipmentPurchase(Player* player, const Positio
 
 	if (equipmentPurchaseSession.stage() == PlayerBotEquipmentPurchaseStage::Travel) {
 		if (!processNavigation(player, position, purchase.approachPosition)) {
-			if (fixedTargetRouteFailureCount >= maximumProgressionAttempts ||
+			if (navigationRuntime.fixedTargetRouteFailureCount() >= maximumProgressionAttempts ||
 			    navigationRuntime.stepFailureCount() >= maximumRepeatedNavigationStepFailures) {
 				finishEquipmentPurchase(player, position, "failed", "route_unavailable");
 			}

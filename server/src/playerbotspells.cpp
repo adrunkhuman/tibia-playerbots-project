@@ -633,7 +633,7 @@ void PlayerBotController::processSpellTraining(Player* player, const Position& c
 	const auto& training = spellTrainingSession.plan();
 	if (spellTrainingSession.stage() == PlayerBotSpellTrainingStage::Travel) {
 		if (!processNavigation(player, currentPosition, training.approachPosition)) {
-			if (fixedTargetRouteFailureCount >= maximumProgressionAttempts) {
+			if (navigationRuntime.fixedTargetRouteFailureCount() >= maximumProgressionAttempts) {
 				finishSpellTraining(player, currentPosition, "failed", "route_unavailable");
 			}
 			return;

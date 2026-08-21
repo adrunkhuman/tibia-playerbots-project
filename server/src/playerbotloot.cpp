@@ -77,7 +77,7 @@ void PlayerBotController::logLootSuccess(uint16_t itemId, uint32_t count, uint32
 
 void PlayerBotController::beginLoot(Player* player, const Position& currentPosition, const PlayerBotCombatDecision& defeatedTarget)
 {
-	if (activeHuntRegion) huntPolicy.observeKill();
+	if (huntRuntime.active()) huntRuntime.observeKill();
 	if (defeatedTarget.target.id == 0) {
 		setStage(ScenarioStage::Traverse, currentPosition);
 		return;

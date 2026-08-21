@@ -193,7 +193,7 @@ void PlayerBotController::processOracleDeparture(Player* player, const Position&
 	const auto& departure = departureSession.plan();
 	if (departureSession.stage() == PlayerBotOracleDepartureStage::Travel) {
 		if (!processNavigation(player, currentPosition, departure.approachPosition)) {
-			if (fixedTargetRouteFailureCount >= maximumProgressionAttempts) {
+			if (navigationRuntime.fixedTargetRouteFailureCount() >= maximumProgressionAttempts) {
 				finishOracleDeparture(player, currentPosition, "failed", "route_unavailable");
 			}
 			return;
