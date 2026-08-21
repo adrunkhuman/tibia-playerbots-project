@@ -164,7 +164,7 @@ void PlayerBotController::start(const Position& position, bool recovered, uint32
 	lifecycle << "\"status\":\"online\",\"message\":\"Playerbot online\""
 	          << ",\"recovered\":" << (recovered ? "true" : "false")
 	          << ",\"recovery_count\":" << recoveryCount
-	          << ",\"objective\":" << jsonString((testPolicy.magicTrainingFixture || testPolicy.deferProgressionFixtureInitialization) ? "fixture_pending" : useGoalSelector ? topLevelGoalName(activeGoal) :
+	          << ",\"objective\":" << jsonString((testPolicy.magicTrainingFixture || testPolicy.deferProgressionFixtureInitialization) ? "fixture_pending" : useGoalSelector ? PlayerBotGoalArbiter::goalName(goalArbiter.activeGoal()) :
 	                                                    (startInHunt ? "hunt" : "service"))
 	          << ",\"step_speed\":" << (g_game.getPlayerByID(playerId) ? g_game.getPlayerByID(playerId)->getSpeed() : 0)
 		          << ",\"spell_calibration_profiles\":" << spellCalibration.size();
@@ -177,13 +177,13 @@ void PlayerBotController::start(const Position& position, bool recovered, uint32
 	} else if (useGoalSelector) {
 		// The selected goal initialized its own executor state.
 	} else if (startInHunt) {
-		activeGoal = TopLevelGoal::Hunt;
+		goalArbiter.setActiveGoal(TopLevelGoal::Hunt);
 		startHunt(g_game.getPlayerByID(playerId), position, "focused_fixture");
 	} else if (testPolicy.depotFixture) {
-		activeGoal = TopLevelGoal::Service;
+		goalArbiter.setActiveGoal(TopLevelGoal::Service);
 		cyclePhase = CyclePhase::ReturnToDepot;
 	} else {
-		activeGoal = TopLevelGoal::Service;
+		goalArbiter.setActiveGoal(TopLevelGoal::Service);
 		cyclePhase = CyclePhase::Service;
 	}
 	setStage(ScenarioStage::Traverse, position);
@@ -687,10 +687,10 @@ void PlayerBotController::navigate()
 				return;
 			}
 		} else if (testPolicy.startInHunt) {
-			activeGoal = TopLevelGoal::Hunt;
+			goalArbiter.setActiveGoal(TopLevelGoal::Hunt);
 			startHunt(player, currentPosition, "focused_fixture");
 		} else {
-			activeGoal = TopLevelGoal::Service;
+			goalArbiter.setActiveGoal(TopLevelGoal::Service);
 			cyclePhase = CyclePhase::Service;
 		}
 		schedule(navigationInterval);

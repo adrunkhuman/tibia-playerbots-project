@@ -14,6 +14,7 @@
 // Internal controller contract shared by the responsibility-specific playerbot implementation units.
 
 #include "playerbot.h"
+#include "playerbotgoalarbiter.h"
 #include "playerbothuntregions.h"
 #include "playerbothuntplanningsession.h"
 #include "playerbothuntpolicy.h"
@@ -233,22 +234,8 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 			BuyEquipment,
 		};
 
-		enum class TopLevelGoal : uint8_t {
-			Departure,
-			Service,
-			PickupReward,
-			LearnSpell,
-			BuyEquipment,
-			MagicTraining,
-			Hunt,
-		};
-
-		struct GoalCandidate {
-			TopLevelGoal goal;
-			bool feasible;
-			int32_t utility;
-			std::string reason;
-		};
+		using TopLevelGoal = PlayerBotGoalArbiter::TopLevelGoal;
+		using GoalCandidate = PlayerBotGoalArbiter::GoalCandidate;
 
 		enum class ProgressionStage : uint8_t {
 			Travel,
@@ -696,13 +683,11 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		const char* magicTrainingSafetyReason(const Player& player) const;
 		void finishMagicTraining(Player& player, const Position& position, const char* result, const char* reason);
 
-		const char* topLevelGoalName(TopLevelGoal goal) const;
-
 		uint32_t saleableItemCount(const Player& player) const;
 
 		GoalCandidate serviceGoalCandidate(const Player& player) const;
 
-		void emitGoalCandidate(const Player& player, const GoalCandidate& candidate, const Position& position, const char* decisionReason,
+		void emitGoalCandidate(const Player& player, const GoalCandidate& candidate, uint64_t decisionId, const Position& position, const char* decisionReason,
 		                       const PickupReward* reward = nullptr, const DeparturePlan* departure = nullptr,
 		                       const EquipmentOfferEvaluation* equipment = nullptr) const;
 
@@ -910,12 +895,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		SpellTrainingPlan spellTrainingPlan;
 		EquipmentOfferEvaluation equipmentPurchase;
 		EquipmentPurchaseStage equipmentPurchaseStage = EquipmentPurchaseStage::Travel;
-		TopLevelGoal activeGoal = TopLevelGoal::Service;
-		uint64_t goalDecisionId = 0;
-		std::chrono::steady_clock::time_point pickupRewardCooldownUntil;
-		std::chrono::steady_clock::time_point spellTrainingCooldownUntil;
-		std::chrono::steady_clock::time_point equipmentPurchaseCooldownUntil;
-		std::chrono::steady_clock::time_point magicTrainingCooldownUntil;
+		PlayerBotGoalArbiter goalArbiter;
 		uint32_t progressionAttempts = 0;
 		uint32_t pendingRewardItemCount = 0;
 		uint32_t pendingRewardRootCount = 0;

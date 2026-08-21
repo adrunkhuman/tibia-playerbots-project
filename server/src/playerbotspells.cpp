@@ -332,9 +332,9 @@ bool PlayerBotController::magicTrainingSafe(const Player& player) const
 
 void PlayerBotController::finishMagicTraining(Player& player, const Position& position, const char* result, const char* reason)
 {
-	magicTrainingCooldownUntil = std::chrono::steady_clock::now() + magicTrainingRetryDelay;
-	if (activeGoal == TopLevelGoal::MagicTraining) {
-		emit("goal_result", position, "\"decision_id\":" + std::to_string(goalDecisionId) +
+	goalArbiter.setCooldown(TopLevelGoal::MagicTraining, magicTrainingRetryDelay);
+	if (goalArbiter.activeGoal() == TopLevelGoal::MagicTraining) {
+		emit("goal_result", position, "\"decision_id\":" + std::to_string(goalArbiter.decisionId()) +
 		     ",\"goal\":\"magic_training\",\"result\":" + jsonString(result) + ",\"reason\":" + jsonString(reason));
 		if (selectTopLevelGoal(player, position, "magic_training_complete")) {
 			schedule(SCHEDULER_MINTICKS);
@@ -795,7 +795,7 @@ void PlayerBotController::finishSpellTraining(Player* player, const Position& po
 	emit("strategy_objective_result", position, "\"goal\":\"learn_spell\",\"spell\":" +
 	     jsonString(spellTrainingPlan.spellName) + ",\"result\":" + jsonString(result) + ",\"reason\":" +
 	     jsonString(reason));
-	emit("goal_result", position, "\"decision_id\":" + std::to_string(goalDecisionId) +
+	emit("goal_result", position, "\"decision_id\":" + std::to_string(goalArbiter.decisionId()) +
 	     ",\"goal\":\"learn_spell\",\"result\":" + jsonString(result) + ",\"reason\":" + jsonString(reason));
 	if (player) {
 		say(*player, "Spell training " + std::string(result) + ": " + reason + '.');
@@ -805,8 +805,8 @@ void PlayerBotController::finishSpellTraining(Player* player, const Position& po
 	spellTrainingPlan = SpellTrainingPlan{};
 	npcSession.reset();
 	clearNavigation();
-	spellTrainingCooldownUntil = std::chrono::steady_clock::now() +
-	                                  (std::strcmp(result, "success") == 0 ? spellTrainingSuccessCooldown : spellTrainingFailureCooldown);
+	goalArbiter.setCooldown(TopLevelGoal::LearnSpell,
+	                       std::strcmp(result, "success") == 0 ? spellTrainingSuccessCooldown : spellTrainingFailureCooldown);
 	if (player && testPolicy.progressionEnabled) {
 		selectTopLevelGoal(*player, position, std::strcmp(result, "success") == 0 ? "spell_training_complete" : "spell_training_failed");
 	}

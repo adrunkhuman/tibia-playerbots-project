@@ -87,12 +87,13 @@ bool PlayerBotController::findOracleDeparture(Player& player, const Position& po
 
 bool PlayerBotController::forceOracleDeparture(Player& player, const Position& position, const char* decisionReason)
 {
-	const TopLevelGoal previousGoal = activeGoal;
+	const TopLevelGoal previousGoal = goalArbiter.activeGoal();
+	const uint64_t previousDecisionId = goalArbiter.decisionId();
 	const bool interruptedHunt = previousGoal == TopLevelGoal::Hunt && cyclePhase == CyclePhase::Hunt;
 	if (interruptedHunt) {
 		finishHuntRegion(player, position, "level_eight_interrupt");
 		emit("goal_result", position,
-		     "\"decision_id\":" + std::to_string(goalDecisionId - 1) +
+		     "\"decision_id\":" + std::to_string(previousDecisionId) +
 		         ",\"goal\":\"hunt\",\"result\":\"interrupted\",\"reason\":\"level_eight_interrupt\"");
 	}
 
@@ -116,11 +117,13 @@ bool PlayerBotController::forceOracleDeparture(Player& player, const Position& p
 	const GoalCandidate candidate{TopLevelGoal::Departure, found, found ? oracleDepartureUtility : 0,
 	                              !withinOracleLevelRange ? "above_maximum_level" :
 	                              found ? "oracle_reachable" : "oracle_unreachable"};
-	emitGoalCandidate(player, candidate, position, decisionReason, nullptr, found ? &plan : nullptr);
+	const PlayerBotGoalArbiter::GoalDecision decision = goalArbiter.force(candidate);
+	emitGoalCandidate(player, decision.candidate(TopLevelGoal::Departure), decision.id, position, decisionReason, nullptr,
+	                  found ? &plan : nullptr);
 	if (!found) {
 		emit("goal_selection", position,
-		     "\"decision_id\":" + std::to_string(goalDecisionId) + ",\"decision_reason\":" +
-		         jsonString(decisionReason) + ",\"from_goal\":" + jsonString(topLevelGoalName(previousGoal)) +
+		     "\"decision_id\":" + std::to_string(decision.id) + ",\"decision_reason\":" +
+		         jsonString(decisionReason) + ",\"from_goal\":" + jsonString(PlayerBotGoalArbiter::goalName(previousGoal)) +
 		         ",\"to_goal\":\"oracle_departure\",\"result\":\"failed\",\"reason\":" +
 		         jsonString(candidate.reason) + ",\"forced\":true,\"level\":" + std::to_string(player.getLevel()) +
 		         ",\"player_vocation_id\":" + std::to_string(player.getVocation()->getId()) +
@@ -129,10 +132,10 @@ bool PlayerBotController::forceOracleDeparture(Player& player, const Position& p
 		return false;
 	}
 
-	activeGoal = TopLevelGoal::Departure;
+	goalArbiter.apply(decision);
 	emit("goal_selection", position,
-	     "\"decision_id\":" + std::to_string(goalDecisionId) + ",\"decision_reason\":" +
-	         jsonString(decisionReason) + ",\"from_goal\":" + jsonString(topLevelGoalName(previousGoal)) +
+	     "\"decision_id\":" + std::to_string(decision.id) + ",\"decision_reason\":" +
+	         jsonString(decisionReason) + ",\"from_goal\":" + jsonString(PlayerBotGoalArbiter::goalName(previousGoal)) +
 	         ",\"to_goal\":\"oracle_departure\",\"utility\":" + std::to_string(oracleDepartureUtility) +
 	         ",\"reason\":\"forced_level_eight_departure\",\"forced\":true,\"level\":" +
 	         std::to_string(player.getLevel()) + ",\"player_vocation_id\":" +
@@ -163,7 +166,7 @@ void PlayerBotController::beginOracleDeparture(Player& player, const Position& p
 void PlayerBotController::finishOracleDeparture(Player* player, const Position& position, const char* result, const char* reason)
 {
 	emit("goal_result", position,
-	     "\"decision_id\":" + std::to_string(goalDecisionId) +
+	     "\"decision_id\":" + std::to_string(goalArbiter.decisionId()) +
 	         ",\"goal\":\"oracle_departure\",\"result\":" + jsonString(result) +
 	         ",\"reason\":" + jsonString(reason));
 	progressionObjective = ProgressionObjective::None;

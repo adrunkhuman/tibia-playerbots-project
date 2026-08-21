@@ -586,7 +586,7 @@ void PlayerBotController::finishEquipmentPurchase(Player* player, const Position
 	       << ",\"result\":" << jsonString(result) << ",\"reason\":" << jsonString(reason);
 	emit("strategy_objective_result", position, fields.str());
 	emit("goal_result", position,
-	     "\"decision_id\":" + std::to_string(goalDecisionId) +
+	     "\"decision_id\":" + std::to_string(goalArbiter.decisionId()) +
 	         ",\"goal\":\"buy_equipment\",\"result\":" + jsonString(result) +
 	         ",\"reason\":" + jsonString(reason));
 	const bool succeeded = std::strcmp(result, "success") == 0;
@@ -600,8 +600,8 @@ void PlayerBotController::finishEquipmentPurchase(Player* player, const Position
 		player->closeShopWindow();
 		say(*player, std::string("Equipment purchase ") + result + ": " + reason + '.');
 	}
-	equipmentPurchaseCooldownUntil = std::chrono::steady_clock::now() +
-	                                 (succeeded ? equipmentPurchaseSuccessCooldown : equipmentPurchaseFailureCooldown);
+	goalArbiter.setCooldown(TopLevelGoal::BuyEquipment,
+	                       succeeded ? equipmentPurchaseSuccessCooldown : equipmentPurchaseFailureCooldown);
 	progressionObjective = ProgressionObjective::None;
 	equipmentPurchaseStage = EquipmentPurchaseStage::Travel;
 	equipmentPurchase = EquipmentOfferEvaluation{};
@@ -619,7 +619,7 @@ void PlayerBotController::finishEquipmentPurchase(Player* player, const Position
 	if (testPolicy.progressionEnabled && player) {
 		selectTopLevelGoal(*player, position, succeeded ? "equipment_purchase_complete" : "equipment_purchase_failed");
 	} else {
-		activeGoal = TopLevelGoal::Service;
+		goalArbiter.setActiveGoal(TopLevelGoal::Service);
 	}
 	schedule(SCHEDULER_MINTICKS);
 }

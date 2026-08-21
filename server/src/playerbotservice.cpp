@@ -89,21 +89,23 @@ void PlayerBotController::onNpcReply(uint32_t replyingPlayerId, uint32_t npcId, 
 
 void PlayerBotController::beginService(Player* player, const Position& position, const char* reason)
 {
-	const bool interruptedHunt = testPolicy.progressionEnabled && activeGoal == TopLevelGoal::Hunt &&
+	const bool interruptedHunt = testPolicy.progressionEnabled && goalArbiter.activeGoal() == TopLevelGoal::Hunt &&
 	                             !hasCompletedRookgaardDeparture(*player);
 	finishHuntRegion(*player, position, reason);
 	if (interruptedHunt) {
 		emit("goal_result", position,
-		     "\"decision_id\":" + std::to_string(goalDecisionId) +
+		     "\"decision_id\":" + std::to_string(goalArbiter.decisionId()) +
 		         ",\"goal\":\"hunt\",\"result\":\"interrupted\",\"reason\":" + jsonString(reason));
-		++goalDecisionId;
+		const PlayerBotGoalArbiter::GoalDecision decision = goalArbiter.force(
+		    {TopLevelGoal::Service, true, criticalHealingServiceUtility, "forced_interrupt"});
+		goalArbiter.apply(decision);
 		emit("goal_selection", position,
-		     "\"decision_id\":" + std::to_string(goalDecisionId) + ",\"decision_reason\":" + jsonString(reason) +
+		     "\"decision_id\":" + std::to_string(decision.id) + ",\"decision_reason\":" + jsonString(reason) +
 		         ",\"from_goal\":\"hunt\",\"to_goal\":\"service\",\"utility\":" +
 		         std::to_string(criticalHealingServiceUtility) + ',' +
 		         "\"reason\":\"forced_interrupt\",\"forced\":true");
 	}
-	activeGoal = TopLevelGoal::Service;
+	goalArbiter.setActiveGoal(TopLevelGoal::Service);
 	g_game.playerCancelAttackAndFollow(playerId);
 	clearTraversalTarget(position, reason);
 	clearNavigation();
@@ -134,7 +136,7 @@ void PlayerBotController::finishHuntAndSelectGoal(Player* player, const Position
 	setStage(ScenarioStage::Traverse, position);
 	setCyclePhase(CyclePhase::Idle, position, reason);
 	emit("goal_result", position,
-	     "\"decision_id\":" + std::to_string(goalDecisionId) +
+	     "\"decision_id\":" + std::to_string(goalArbiter.decisionId()) +
 	         ",\"goal\":\"hunt\",\"result\":\"success\",\"reason\":" + jsonString(reason));
 	selectTopLevelGoal(*player, position, reason);
 	schedule(SCHEDULER_MINTICKS);
@@ -1201,7 +1203,7 @@ void PlayerBotController::processFixtureDeposit(Player* player, const Position& 
 		     std::to_string(completedCycles));
 		if (testPolicy.progressionEnabled) {
 			emit("goal_result", currentPosition,
-			     "\"decision_id\":" + std::to_string(goalDecisionId) +
+			     "\"decision_id\":" + std::to_string(goalArbiter.decisionId()) +
 			         ",\"goal\":\"service\",\"result\":\"success\",\"reason\":\"service_complete\"");
 			selectTopLevelGoal(*player, currentPosition, "service_complete");
 		} else {
@@ -1370,7 +1372,7 @@ void PlayerBotController::processDeposit(Player* player, const Position& current
 		}
 		if (testPolicy.progressionEnabled) {
 			emit("goal_result", currentPosition,
-			     "\"decision_id\":" + std::to_string(goalDecisionId) +
+			     "\"decision_id\":" + std::to_string(goalArbiter.decisionId()) +
 			         ",\"goal\":\"service\",\"result\":\"success\",\"reason\":\"service_complete\"");
 			selectTopLevelGoal(*player, currentPosition, "service_complete");
 		} else {
