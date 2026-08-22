@@ -80,7 +80,7 @@ class PlayerBotDepotSession
 	uint16_t lockerItemId() const { return selectedLockerItemId; }
 	const Position& lockerPosition() const { return selectedLockerPosition; }
 	const Position& approachPosition() const { return selectedApproachPosition; }
-	bool hasSelectedDepot() const { return selectedDepotId != 0; }
+	bool hasSelectedDepot() const { return depotSelected; }
 	void select(PlayerBotDepotCandidate candidate);
 
 	bool candidatesPrepared() const { return candidatesReady; }
@@ -112,6 +112,7 @@ class PlayerBotDepotSession
 	PlayerBotDepotStage depotStage = PlayerBotDepotStage::Discover;
 	uint32_t depotAttempts = 0;
 	uint16_t selectedDepotId = 0;
+	bool depotSelected = false;
 	uint16_t selectedLockerItemId = 0;
 	Position selectedLockerPosition;
 	Position selectedApproachPosition;

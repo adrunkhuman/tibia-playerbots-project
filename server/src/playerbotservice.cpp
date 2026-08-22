@@ -84,7 +84,7 @@ void PlayerBotController::onNpcReply(uint32_t replyingPlayerId, uint32_t npcId, 
 
 void PlayerBotController::beginService(Player* player, const Position& position, const char* reason)
 {
-	const bool interruptedHunt = fixtureDriver.goalLoop(true).selectGoal && progressionRuntime.activeGoal() == TopLevelGoal::Hunt &&
+	const bool interruptedHunt = fixtureDriver.progressionGoalLoop(true).selectGoal && progressionRuntime.activeGoal() == TopLevelGoal::Hunt &&
 	                             !departurePlanner.hasCompleted(departureSnapshot(*player));
 	finishHuntRegion(*player, position, reason);
 	if (interruptedHunt) {
@@ -139,10 +139,8 @@ void PlayerBotController::refreshItemValues()
 		for (const ShopInfo& offer : npc->getShopOffers()) {
 			const ItemType& type = Item::items[offer.itemId];
 			if (type.isFluidContainer() || type.isSplash()) continue;
-			const bool buyAvailable = offer.buyPrice != 0 && fixtureDriver.observeProvider(true, offer.itemId, true).available;
-			const bool sellAvailable = offer.sellPrice != 0 && fixtureDriver.observeProvider(true, offer.itemId, false).available;
-			if (buyAvailable || sellAvailable) provider.offers.push_back({offer.itemId, buyAvailable ? offer.buyPrice : 0,
-			                                                               sellAvailable ? offer.sellPrice : 0, static_cast<uint8_t>(offer.subType)});
+			if (offer.buyPrice != 0 || offer.sellPrice != 0) provider.offers.push_back(
+			    {offer.itemId, offer.buyPrice, offer.sellPrice, static_cast<uint8_t>(offer.subType)});
 		}
 		providers.push_back(std::move(provider));
 	}
@@ -180,6 +178,11 @@ void PlayerBotController::processService(Player* player, const Position& current
 	observation.bankBalance = player->getBankBalance();
 	observation.goldCoinWeight = Item::items[ITEM_GOLD_COIN].weight;
 	observation.smallHealthPotionWeight = Item::items[PlayerBotDispositionPolicy::smallHealthPotionItemId].weight;
+	Item* serviceBackpackItem = player->getInventoryItem(CONST_SLOT_BACKPACK);
+	Container* serviceBackpack = serviceBackpackItem ? serviceBackpackItem->getContainer() : nullptr;
+	observation.actionAvailable = player->canDoAction();
+	observation.backpackAvailable = serviceBackpack != nullptr;
+	observation.backpackOpen = serviceBackpack && player->getContainerID(serviceBackpack) >= 0;
 	observation.maximumAttempts = maximumServiceAttempts;
 	observation.slottedSaleCooldownMs = static_cast<uint32_t>(
 		std::chrono::duration_cast<std::chrono::milliseconds>(unavailableDispositionCooldown).count());
@@ -304,13 +307,22 @@ void PlayerBotController::processService(Player* player, const Position& current
 	Npc* provider = command.providerId == 0 ? nullptr : g_game.getNpcByID(command.providerId);
 	if (command.type == PlayerBotServiceCommandType::NavigateProvider && provider) {
 		if (!approachSteps.empty()) observeNavigationPlan(command.destination, std::move(approachSteps));
-		processNavigation(player, currentPosition, command.destination);
+		if (processNavigation(player, currentPosition, command.destination)) schedule(SCHEDULER_MINTICKS);
 		return;
 	}
 	if (command.type == PlayerBotServiceCommandType::Speak && provider) {
 		telemetry.recordActionAttempt();
 		provider->receiveSpeech(player, TALKTYPE_PRIVATE_PN, command.speech);
 		schedule(1000);
+		return;
+	}
+	if (command.type == PlayerBotServiceCommandType::OpenBackpack) {
+		if (!serviceBackpack) { stop("service_backpack_unavailable", currentPosition); return; }
+		if (!player->canDoAction()) { schedule(navigationDecisionDelay(*player)); return; }
+		telemetry.recordActionAttempt();
+		g_game.playerUseItem(playerId, Position(0xFFFF, CONST_SLOT_BACKPACK, 0), 0, depotSourceContainerId,
+		                     serviceBackpack->getClientID());
+		schedule(navigationDecisionDelay(*player));
 		return;
 	}
 	if (command.type == PlayerBotServiceCommandType::MoveSlottedSale) {
@@ -366,9 +378,16 @@ bool PlayerBotController::findDepositableItem(const Player& player, Container* c
                                               Item*& depositItem, uint8_t& count) const
 {
 	for (Item* item : container->getItemList()) {
-		if (Container* nested = item->getContainer(); nested &&
-		    findDepositableItem(player, nested, source, depositItem, count)) {
-			return true;
+		if (Container* nested = item->getContainer()) {
+			if (findDepositableItem(player, nested, source, depositItem, count)) {
+				return true;
+			}
+			if (nested->empty() && item->getID() == ITEM_BAG) {
+				source = container;
+				depositItem = item;
+				count = 1;
+				return true;
+			}
 		}
 		if (inventoryPolicy.isProtectedDepositItem(player, *item)) {
 			continue;
@@ -495,7 +514,9 @@ bool PlayerBotController::discoverDepot(Player& player, const Position& currentP
 		return false;
 	}
 	if (command.type == PlayerBotDepotCommandType::Navigate && command.snapshot.hasSelectedDepot) {
-		observeNavigationPlan(command.snapshot.selected.approachPosition, std::move(steps));
+		if (!steps.empty()) {
+			observeNavigationPlan(command.snapshot.selected.approachPosition, std::move(steps));
+		}
 		const PlayerBotDepotCandidate& depot = command.snapshot.selected;
 		std::ostringstream fields;
 		fields << "\"action\":\"depot_discover\",\"result\":\"success\",\"depot_id\":" << depot.depotId
@@ -806,7 +827,7 @@ void PlayerBotController::processDeposit(Player* player, const Position& current
 		player->closeContainer(depotChestContainerId);
 		player->closeContainer(depotLockerContainerId);
 		if (pauseDepotFixtureForRestart(*player, DepotRestartCheckpoint::Depart, currentPosition)) return;
-		if (fixtureDriver.goalLoop(true).selectGoal) {
+		if (fixtureDriver.progressionGoalLoop(true).selectGoal) {
 			emit("goal_result", currentPosition,
 			     "\"decision_id\":" + std::to_string(progressionRuntime.decisionId()) +
 			         ",\"goal\":\"service\",\"result\":\"success\",\"reason\":\"service_complete\"");
@@ -857,6 +878,10 @@ void PlayerBotController::processDeposit(Player* player, const Position& current
 		stop("depot_capacity_not_recovered", currentPosition);
 		return;
 	}
+	if (depositItem && count != 0 && source &&
+	    !openContainer(*player, *source, depotSourceContainerId, currentPosition)) {
+		return;
+	}
 	PlayerBotDepotObservation depositObservation;
 	depositObservation.atApproach = true;
 	depositObservation.lockerOpen = true;
@@ -885,9 +910,6 @@ void PlayerBotController::processDeposit(Player* player, const Position& current
 	}
 	if (command.type != PlayerBotDepotCommandType::MoveDeposit || !depositItem) return;
 
-	if (source && !openContainer(*player, *source, depotSourceContainerId, currentPosition)) {
-		return;
-	}
 	Position sourcePosition;
 	uint8_t sourceIndex = 0;
 	if (source) {

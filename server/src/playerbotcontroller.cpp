@@ -36,7 +36,7 @@ void PlayerBotController::start(const Position& position, bool recovered, uint32
 	const bool departureComplete = controlledPlayer && departurePlanner.hasCompleted(departureSnapshot(*controlledPlayer));
 	const bool departureRequired = controlledPlayer && departurePlanner.required(departureSnapshot(*controlledPlayer));
 	const bool useGoalSelector = controlledPlayer && !startInHunt &&
-	                             (departureRequired || (!recovered && fixtureDriver.goalLoop(true).selectGoal));
+	                             (departureRequired || (!recovered && fixtureDriver.startWithGoalSelection()));
 	if (!fixtureDriver.magicTrainingScenario() && !fixtureDriver.deferInitialization() && useGoalSelector &&
 	    !selectTopLevelGoal(*controlledPlayer, position, "startup")) {
 		return;
@@ -493,7 +493,7 @@ void PlayerBotController::navigate()
 		}
 		emitFixtureEvents(fixtureDriver.runMagicTraining(*player), currentPosition);
 		const bool useGoalSelector = !fixtureDriver.startInHunt() &&
-		                             (departurePlanner.required(departureSnapshot(*player)) || fixtureDriver.goalLoop(true).selectGoal);
+		                             (departurePlanner.required(departureSnapshot(*player)) || fixtureDriver.startWithGoalSelection());
 		if (useGoalSelector) {
 			if (!selectTopLevelGoal(*player, currentPosition, "startup")) {
 				return;

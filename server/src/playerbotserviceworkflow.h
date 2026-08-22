@@ -16,7 +16,7 @@
 
 enum class PlayerBotServiceStage : uint8_t { Discover, SellLoot, BuyPotions, Bank, Complete, Failed };
 enum class PlayerBotServiceCommandType : uint8_t {
-	None, ValidateProviderRoute, NavigateProvider, Speak, Sell, Buy, DepositAll, Withdraw, MoveSlottedSale, Complete, Fail, Wait,
+	None, ValidateProviderRoute, NavigateProvider, Speak, Sell, Buy, DepositAll, Withdraw, OpenBackpack, MoveSlottedSale, Complete, Fail, Wait,
 };
 enum class PlayerBotServiceOutcome : uint8_t { Pending, Success, Partial, Retry, Rejected, Unavailable, InsufficientFunds };
 enum class PlayerBotServiceRouteResult : uint8_t { NotObserved, Reached, Unreachable };
@@ -80,6 +80,9 @@ struct PlayerBotServiceObservation {
 	std::map<uint16_t, uint32_t> inventoryCounts;
 	std::map<uint16_t, uint32_t> backpackSaleCounts;
 	std::vector<PlayerBotServiceSlottedItem> slottedSaleItems;
+	bool actionAvailable = false;
+	bool backpackAvailable = false;
+	bool backpackOpen = false;
 	uint32_t freeCapacity = 0;
 	uint64_t money = 0;
 	uint64_t bankBalance = 0;

@@ -309,7 +309,7 @@ void PlayerBotController::finishEquipmentPurchase(Player* player, const Position
 	if (succeeded && player && fixtureDriver.equipmentPurchaseCompletion(*player).pause) {
 		return;
 	}
-	if (player && fixtureDriver.goalLoop(true).selectGoal) {
+	if (player && fixtureDriver.progressionGoalLoop(true).selectGoal) {
 		selectTopLevelGoal(*player, position, succeeded ? "equipment_purchase_complete" : "equipment_purchase_failed");
 	} else {
 		progressionRuntime.enterService();

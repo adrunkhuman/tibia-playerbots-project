@@ -331,7 +331,7 @@ PlayerBotProgressionOutcome PlayerBotProgressionRuntime::advanceReward(const Pla
 			rewardSession.resetRetries();
 			if (rewardSession.plan().slot == CONST_SLOT_WHEREEVER) return outcome(PlayerBotProgressionCommandType::Finish, PlayerBotProgressionOutcomeType::Succeeded, "reward_bundle_claimed");
 			rewardSession.setStage(PlayerBotRewardStage::EquipReward);
-			return outcome(PlayerBotProgressionCommandType::None, PlayerBotProgressionOutcomeType::Pending, nullptr);
+			return outcome(PlayerBotProgressionCommandType::None, PlayerBotProgressionOutcomeType::Pending, "reward_claimed");
 		case PlayerBotRewardStage::EquipReward:
 			if (observation.equipmentVerified) return outcome(PlayerBotProgressionCommandType::Finish, PlayerBotProgressionOutcomeType::Succeeded, "reward_equipped");
 			if (observation.rootRelocationRequired || observation.displacedMoveRequired) {

@@ -32,6 +32,7 @@ namespace playerbot {
 
 	struct PlayerBotTestPolicy {
 		bool progressionEnabled;
+		bool continuousGoalSelection;
 		bool startInHunt;
 		bool fixedFixtureRoute;
 		bool depotFixture;

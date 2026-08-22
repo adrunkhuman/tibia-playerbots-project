@@ -929,7 +929,7 @@ void PlayerBotController::finishProgressionObjective(Player* player, const Posit
 	cyclePhase = CyclePhase::Service;
 	progressionRuntime.completeReward(std::strcmp(result, "success") == 0,
 	    std::strcmp(result, "success") == 0 ? pickupRewardSuccessCooldown : pickupRewardFailureCooldown);
-	if (player && fixtureDriver.goalLoop(true).selectGoal) {
+	if (player && fixtureDriver.progressionGoalLoop(true).selectGoal) {
 		const char* decisionReason = std::strcmp(result, "success") == 0 ? "pickup_complete" :
 		                             std::strcmp(result, "interrupted") == 0 ? "pickup_interrupted" : "pickup_failed";
 		selectTopLevelGoal(*player, position, decisionReason);
@@ -992,6 +992,18 @@ void PlayerBotController::processPickupReward(Player* player, const Position& cu
 		}
 	}
 	const PlayerBotProgressionOutcome result = progressionRuntime.advanceReward(observation);
+	// Report claims verified by this controller; persisted claims resume without replaying prior telemetry.
+	if (result.reason && (std::strcmp(result.reason, "reward_claimed") == 0 ||
+	                      std::strcmp(result.reason, "reward_bundle_claimed") == 0)) {
+		emit("action_result", currentPosition, "\"action\":\"claim_reward\",\"result\":\"success\",\"candidate_id\":" +
+		     std::to_string(pickupReward.uniqueId) + ",\"item_id\":" + std::to_string(pickupReward.itemId) +
+		     ",\"root_item_id\":" + std::to_string(pickupReward.rootItemId) + ",\"inventory_before\":" +
+		     std::to_string(progressionRuntime.reward().claimSnapshot().itemCount) + ",\"inventory_after\":" +
+		     std::to_string(observation.currentClaim.itemCount) + ",\"root_count_before\":" +
+		     std::to_string(progressionRuntime.reward().claimSnapshot().rootCount) + ",\"root_count_after\":" +
+		     std::to_string(observation.currentClaim.rootCount) + ",\"top_level_root_count\":" +
+		     std::to_string(pickupReward.rootSignatures.size()) + ",\"all_roots_verified\":true");
+	}
 	if (result.type == PlayerBotProgressionOutcomeType::Succeeded || result.type == PlayerBotProgressionOutcomeType::Failed) {
 		if (result.type == PlayerBotProgressionOutcomeType::Succeeded && result.reason && std::strcmp(result.reason, "reward_equipped") == 0) {
 			std::ostringstream fields;
@@ -1000,16 +1012,6 @@ void PlayerBotController::processPickupReward(Player* player, const Position& cu
 			       << ",\"metric\":" << jsonString(pickupReward.metric) << ",\"value_before\":" << pickupReward.currentValue
 			       << ",\"value_after\":" << pickupReward.candidateValue;
 			emit("action_result", currentPosition, fields.str());
-		}
-		if (result.type == PlayerBotProgressionOutcomeType::Succeeded && result.reason && std::strcmp(result.reason, "reward_bundle_claimed") == 0) {
-			emit("action_result", currentPosition, "\"action\":\"claim_reward\",\"result\":\"success\",\"candidate_id\":" +
-			     std::to_string(pickupReward.uniqueId) + ",\"item_id\":" + std::to_string(pickupReward.itemId) +
-			     ",\"root_item_id\":" + std::to_string(pickupReward.rootItemId) + ",\"inventory_before\":" +
-			     std::to_string(progressionRuntime.reward().claimSnapshot().itemCount) + ",\"inventory_after\":" +
-			     std::to_string(observation.currentClaim.itemCount) + ",\"root_count_before\":" +
-			     std::to_string(progressionRuntime.reward().claimSnapshot().rootCount) + ",\"root_count_after\":" +
-			     std::to_string(observation.currentClaim.rootCount) + ",\"top_level_root_count\":" +
-			     std::to_string(pickupReward.rootSignatures.size()) + ",\"all_roots_verified\":true");
 		}
 		finishProgressionObjective(player, currentPosition, result.type == PlayerBotProgressionOutcomeType::Succeeded ? "success" : "failed", result.reason);
 		return;

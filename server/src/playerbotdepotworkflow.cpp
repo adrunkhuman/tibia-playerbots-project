@@ -64,7 +64,7 @@ PlayerBotDepotCommand PlayerBotDepotWorkflow::advance(const PlayerBotDepotObserv
 		               verification.result == PlayerBotDepotMoveResult::Moved ? PlayerBotDepotOutcome::Moved : PlayerBotDepotOutcome::Deferred,
 		               telemetry);
 	}
-	if (session.stage() == PlayerBotDepotStage::Discover) {
+	if (session.stage() == PlayerBotDepotStage::Discover && !routeCandidate && discoveryCandidates.empty()) {
 		if (!observation.scan.observed) return command(PlayerBotDepotCommandType::Scan, PlayerBotDepotOutcome::Pending);
 		clearDiscovery();
 		session.prepareCandidates(observation.currentPosition);

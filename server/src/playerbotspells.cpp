@@ -453,7 +453,7 @@ void PlayerBotController::finishSpellTraining(Player* player, const Position& po
 	clearNavigation();
 	progressionRuntime.completeSpellTraining(std::strcmp(result, "success") == 0,
 	    std::strcmp(result, "success") == 0 ? spellTrainingSuccessCooldown : spellTrainingFailureCooldown);
-	if (player && fixtureDriver.goalLoop(true).selectGoal) {
+	if (player && fixtureDriver.progressionGoalLoop(true).selectGoal) {
 		selectTopLevelGoal(*player, position, std::strcmp(result, "success") == 0 ? "spell_training_complete" : "spell_training_failed");
 	}
 	schedule(SCHEDULER_MINTICKS);

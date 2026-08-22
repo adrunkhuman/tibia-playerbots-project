@@ -32,6 +32,11 @@ playerbot::PlayerBotFixtureStorageObservation playerbot::PlayerBotFixtureDriver:
 	return {false, engineSelectGoal && policy.progressionEnabled};
 }
 
+playerbot::PlayerBotFixtureStorageObservation playerbot::PlayerBotFixtureDriver::progressionGoalLoop(bool engineSelectGoal) const
+{
+	return {false, engineSelectGoal && policy.continuousGoalSelection};
+}
+
 playerbot::PlayerBotFixtureHuntObservation playerbot::PlayerBotFixtureDriver::huntObservation() const
 {
 	return {!policy.fixedFixtureRoute};

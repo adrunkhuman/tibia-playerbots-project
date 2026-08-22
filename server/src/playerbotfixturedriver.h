@@ -52,6 +52,8 @@ namespace playerbot {
 		public:
 			explicit PlayerBotFixtureDriver(const PlayerBotTestPolicy& policy);
 			PlayerBotFixtureStorageObservation goalLoop(bool engineSelectGoal) const;
+			PlayerBotFixtureStorageObservation progressionGoalLoop(bool engineSelectGoal) const;
+			bool startWithGoalSelection() const { return policy.progressionEnabled; }
 			PlayerBotFixtureHuntObservation huntObservation() const;
 			bool startInHunt() const { return policy.startInHunt; }
 			bool depotScenario() const { return policy.depotFixture; }
