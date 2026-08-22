@@ -106,7 +106,7 @@ bool PlayerBotController::forceOracleDeparture(Player& player, const Position& p
 	player.closeContainer(corpseContainerId);
 	setStage(ScenarioStage::Traverse, position);
 	progressionRuntime.finish();
-	serviceWorkflow.setStage(PlayerBotServiceStage::Discover);
+	serviceWorkflow.reset();
 
 	PlayerBotOracleDeparturePlan plan;
 	std::deque<PlayerBotNavigationStep> route;

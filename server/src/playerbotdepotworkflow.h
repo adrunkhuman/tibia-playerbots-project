@@ -6,8 +6,40 @@
 
 #include <optional>
 
-enum class PlayerBotDepotCommandType : uint8_t { None, Approach, OpenLocker, OpenChest, Deposit, Depart };
-enum class PlayerBotDepotOutcome : uint8_t { Pending, Ready, Retry, Moved, Partial, Deferred, Rejected, Unavailable };
+enum class PlayerBotDepotCommandType : uint8_t {
+	None,
+	Scan,
+	ValidateRoute,
+	Navigate,
+	OpenLocker,
+	OpenChest,
+	SelectDeposit,
+	MoveDeposit,
+	Depart,
+	Fail,
+	Wait,
+};
+enum class PlayerBotDepotOutcome : uint8_t { Pending, Ready, Success, Retry, Moved, Partial, Deferred, Rejected, Unavailable };
+
+struct PlayerBotDepotObservation {
+	Position currentPosition;
+	std::chrono::steady_clock::time_point now;
+	bool discoveryObserved = false;
+	std::vector<PlayerBotDepotCandidate> candidates;
+	bool routeObserved = false;
+	bool routeReachable = false;
+	bool atApproach = false;
+	bool lockerOpen = false;
+	bool chestOpen = false;
+	bool canDoAction = false;
+	bool hasDepositableItem = false;
+};
+
+struct PlayerBotDepotCommand {
+	PlayerBotDepotCommandType type = PlayerBotDepotCommandType::None;
+	PlayerBotDepotOutcome outcome = PlayerBotDepotOutcome::Pending;
+	PlayerBotDepotCandidate candidate;
+};
 
 class PlayerBotDepotWorkflow
 {
@@ -15,7 +47,15 @@ class PlayerBotDepotWorkflow
 		void reset();
 		void clearDiscovery();
 		PlayerBotDepotStage stage() const { return session.stage(); }
-		void setStage(PlayerBotDepotStage stage) { session.setStage(stage); }
+		PlayerBotDepotCommand advance(const PlayerBotDepotObservation& observation, uint32_t routeBudget,
+		                              uint32_t maximumDiscoveryAttempts, std::chrono::steady_clock::duration suppression);
+		void approachComplete() { session.openLocker(); }
+		void lockerOpened() { session.resetAttempts(); session.openChest(); }
+		void chestOpened() { session.resetAttempts(); session.deposit(); }
+		void reopenLocker() { session.openLocker(); }
+		void reopenChest() { session.openChest(); }
+		void resumeDeposit() { session.deposit(); }
+		void depart() { session.depart(); }
 		uint32_t attempts() const { return session.attempts(); }
 		uint32_t incrementAttempts() { return session.incrementAttempts(); }
 		void resetAttempts() { session.resetAttempts(); }
@@ -60,6 +100,7 @@ class PlayerBotDepotWorkflow
 	private:
 		PlayerBotDepotSession session;
 		std::vector<PlayerBotDepotCandidate> discoveryCandidates;
+		std::optional<PlayerBotDepotCandidate> routeCandidate;
 		size_t nextCandidateOffset = 0;
 		uint32_t indexedCandidates = 0;
 		uint32_t inScopeCandidates = 0;
