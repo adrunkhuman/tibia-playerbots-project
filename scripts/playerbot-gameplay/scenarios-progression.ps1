@@ -333,7 +333,7 @@
 	}
 
 	if ($MainlandRewards) {
-		Invoke-Scenario -Name "mainland_equipment_reward" -DefaultTimeoutSeconds 240 -Body {
+		Invoke-Scenario -Name "mainland_equipment_reward" -DefaultTimeoutSeconds 300 -Body {
 			Invoke-Compose down --volumes --remove-orphans
 			$env:PLAYERBOT_GAMEPLAY_MODE = "mainland_reward"
 			$env:PLAYERBOT_HUNT_DURATION_SECONDS = "900"
