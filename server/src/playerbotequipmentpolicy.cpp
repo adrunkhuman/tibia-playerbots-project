@@ -1,332 +1,209 @@
-/**
- * The Forgotten Server - a free and open-source MMORPG server emulator
- * Copyright (C) 2019 Mark Samman
- */
-
 #include "otpch.h"
 
 #include "playerbotequipmentpolicy.h"
 
-#include "game.h"
-#include "item.h"
-#include "player.h"
-#include "weapons.h"
+#include <algorithm>
+#include <cmath>
+#include <cstring>
 
 namespace {
-	skills_t skillForWeapon(WeaponType_t weaponType)
+	constexpr slots_t slot(uint8_t value) { return static_cast<slots_t>(value); }
+	constexpr slots_t head = slot(1);
+	constexpr slots_t necklace = slot(2);
+	constexpr slots_t armor = slot(4);
+	constexpr slots_t right = slot(5);
+	constexpr slots_t left = slot(6);
+	constexpr slots_t legs = slot(7);
+	constexpr slots_t feet = slot(8);
+	constexpr slots_t ring = slot(9);
+
+	bool melee(PlayerBotEquipmentWeaponType type)
 	{
-		switch (weaponType) {
-			case WEAPON_SWORD: return SKILL_SWORD;
-			case WEAPON_CLUB: return SKILL_CLUB;
-			case WEAPON_AXE: return SKILL_AXE;
-			case WEAPON_DISTANCE: case WEAPON_AMMO: return SKILL_DISTANCE;
-			default: return SKILL_FIST;
+		return type == PlayerBotEquipmentWeaponType::Sword || type == PlayerBotEquipmentWeaponType::Club ||
+		       type == PlayerBotEquipmentWeaponType::Axe;
+	}
+
+	int32_t skill(const PlayerBotEquipmentPlayerSnapshot& player, PlayerBotEquipmentWeaponType type)
+	{
+		switch (type) {
+			case PlayerBotEquipmentWeaponType::Sword: return player.swordSkill;
+			case PlayerBotEquipmentWeaponType::Club: return player.clubSkill;
+			case PlayerBotEquipmentWeaponType::Axe: return player.axeSkill;
+			case PlayerBotEquipmentWeaponType::Distance: case PlayerBotEquipmentWeaponType::Ammo: return player.distanceSkill;
+			default: return player.fistSkill;
 		}
+	}
+
+	int32_t maximumDamage(uint32_t level, int32_t skillLevel, int32_t attack, float factor)
+	{
+		return static_cast<int32_t>(std::round((level / 5) + (((((skillLevel / 4.) + 1) * (attack / 3.)) * 1.03) / factor)));
 	}
 }
 
 PlayerBotEquipmentPolicy::PlayerBotEquipmentPolicy(uint16_t combatReadinessVocationId) :
 	combatReadinessVocationId(combatReadinessVocationId)
+{}
+
+bool PlayerBotEquipmentPolicy::requiresKnightCombatReadiness(const PlayerBotEquipmentPlayerSnapshot& player) const
 {
+	return player.vocationId == combatReadinessVocationId;
 }
 
-bool PlayerBotEquipmentPolicy::requiresKnightCombatReadiness(const Player& player) const
+bool PlayerBotEquipmentPolicy::isLegalEquipmentItem(const PlayerBotEquipmentPlayerSnapshot& player,
+	const PlayerBotEquipmentItemSnapshot& item) const
 {
-	return player.getVocationId() == combatReadinessVocationId;
+	return !item.removed && item.pickupable && player.level >= item.minimumLevel &&
+	       player.magicLevel >= item.minimumMagicLevel && (!item.premiumRequired || player.premium) &&
+	       (item.vocationIds.empty() || std::find(item.vocationIds.begin(), item.vocationIds.end(), player.vocationId) != item.vocationIds.end());
 }
 
-bool PlayerBotEquipmentPolicy::isLegalEquipmentType(const Player& player, const ItemType& type) const
+bool PlayerBotEquipmentPolicy::isKnightMeleeWeapon(const PlayerBotEquipmentPlayerSnapshot& player,
+	const PlayerBotEquipmentItemSnapshot& item) const
 {
-	if (!type.isPickupable() || player.getLevel() < type.minReqLevel ||
-	    player.getMagicLevel() < type.minReqMagicLevel ||
-	    ((type.wieldInfo & WIELDINFO_PREMIUM) != 0 && !player.isPremium())) {
-		return false;
-	}
-	return type.vocationIds.empty() || type.vocationIds.find(player.getVocationId()) != type.vocationIds.end();
+	return isLegalEquipmentItem(player, item) && item.attack > 0 && melee(item.weaponType) && (item.left || item.right);
 }
 
-bool PlayerBotEquipmentPolicy::isLegalEquipmentItem(const Player& player, const Item& item) const
+bool PlayerBotEquipmentPolicy::isCombatEquipment(const PlayerBotEquipmentItemSnapshot& item) const
 {
-	return !item.isRemoved() && isLegalEquipmentType(player, Item::items[item.getID()]);
+	return item.head || item.armorSlot || item.legs || item.feet || item.weaponType != PlayerBotEquipmentWeaponType::None ||
+	       item.armor > 0 || item.defense > 0;
 }
 
-bool PlayerBotEquipmentPolicy::isKnightMeleeWeapon(const Player& player, const Item& item) const
+std::optional<PlayerBotEquipmentUpgrade> PlayerBotEquipmentPolicy::evaluateUpgrade(const PlayerBotEquipmentPlayerSnapshot& player,
+	const PlayerBotEquipmentLoadout& loadout, const PlayerBotEquipmentItemSnapshot& candidate) const
 {
-	const WeaponType_t weaponType = item.getWeaponType();
-	return isLegalEquipmentItem(player, item) && item.getAttack() > 0 &&
-	       (weaponType == WEAPON_SWORD || weaponType == WEAPON_CLUB || weaponType == WEAPON_AXE) &&
-	       (item.getSlotPosition() & (SLOTP_LEFT | SLOTP_RIGHT)) != 0;
-}
-
-bool PlayerBotEquipmentPolicy::isCombatEquipment(const Item& item) const
-{
-	const ItemType& type = Item::items[item.getID()];
-	return (type.slotPosition & (SLOTP_HEAD | SLOTP_ARMOR | SLOTP_LEGS | SLOTP_FEET)) != 0 ||
-	       type.weaponType != WEAPON_NONE || item.getArmor() > 0 || item.getDefense() > 0;
-}
-
-std::optional<PlayerBotEquipmentUpgrade> PlayerBotEquipmentPolicy::evaluateUpgrade(const Player& player, const Item& candidate) const
-{
-	const ItemType& type = Item::items[candidate.getID()];
-	if (!isLegalEquipmentItem(player, candidate)) {
-		return std::nullopt;
-	}
-	slots_t slot = CONST_SLOT_WHEREEVER;
+	if (!isLegalEquipmentItem(player, candidate)) return std::nullopt;
+	slots_t target = slot(0);
 	const char* metric = nullptr;
 	int32_t candidateValue = 0;
-	if (type.slotPosition & SLOTP_HEAD) {
-		slot = CONST_SLOT_HEAD;
-		metric = "armor";
-		candidateValue = candidate.getArmor();
-	} else if (type.slotPosition & SLOTP_ARMOR) {
-		slot = CONST_SLOT_ARMOR;
-		metric = "armor";
-		candidateValue = candidate.getArmor();
-	} else if (type.slotPosition & SLOTP_LEGS) {
-		slot = CONST_SLOT_LEGS;
-		metric = "armor";
-		candidateValue = candidate.getArmor();
-	} else if (type.slotPosition & SLOTP_FEET) {
-		slot = CONST_SLOT_FEET;
-		metric = "armor";
-		candidateValue = candidate.getArmor();
-	} else if (candidate.getWeaponType() == WEAPON_SHIELD) {
-		slot = CONST_SLOT_RIGHT;
-		metric = "defense";
-		candidateValue = candidate.getDefense();
-	} else if (!(type.slotPosition & SLOTP_TWO_HAND) && candidate.getWeaponType() != WEAPON_NONE &&
-	           candidate.getWeaponType() != WEAPON_AMMO) {
-		slot = CONST_SLOT_LEFT;
-		metric = "attack";
-		candidateValue = candidate.getAttack();
+	if (candidate.head) { target = head; metric = "armor"; candidateValue = candidate.armor; }
+	else if (candidate.armorSlot) { target = armor; metric = "armor"; candidateValue = candidate.armor; }
+	else if (candidate.legs) { target = legs; metric = "armor"; candidateValue = candidate.armor; }
+	else if (candidate.feet) { target = feet; metric = "armor"; candidateValue = candidate.armor; }
+	else if (candidate.weaponType == PlayerBotEquipmentWeaponType::Shield) { target = right; metric = "defense"; candidateValue = candidate.defense; }
+	else if (!candidate.twoHanded && candidate.weaponType != PlayerBotEquipmentWeaponType::None && candidate.weaponType != PlayerBotEquipmentWeaponType::Ammo) {
+		target = left; metric = "attack"; candidateValue = candidate.attack;
 	}
-	if (slot == CONST_SLOT_WHEREEVER || candidateValue <= 0) {
-		return std::nullopt;
-	}
-
-	const Item* equipped = player.getInventoryItem(slot);
+	if (target == slot(0) || candidateValue <= 0) return std::nullopt;
+	const PlayerBotEquipmentItemSnapshot& equipped = loadout.items[static_cast<uint8_t>(target)];
 	int32_t currentValue = 0;
-	if (equipped) {
-		if (std::strcmp(metric, "armor") == 0) {
-			currentValue = equipped->getArmor();
-		} else if (std::strcmp(metric, "defense") == 0) {
-			currentValue = equipped->getDefense();
-		} else {
-			currentValue = equipped->getAttack();
-			const int32_t candidateMaximumDamage = Weapons::getMaxWeaponDamage(
-				player.getLevel(), player.getWeaponSkill(&candidate), candidate.getAttack(), player.getAttackFactor());
-			const int32_t currentMaximumDamage = Weapons::getMaxWeaponDamage(
-				player.getLevel(), player.getWeaponSkill(equipped), equipped->getAttack(), player.getAttackFactor());
-			if (candidateMaximumDamage <= currentMaximumDamage) {
-				return std::nullopt;
-			}
-		}
+	if (equipped.itemId != 0) {
+		currentValue = std::strcmp(metric, "armor") == 0 ? equipped.armor : std::strcmp(metric, "defense") == 0 ? equipped.defense : equipped.attack;
+		if (std::strcmp(metric, "attack") == 0 && maximumDamage(player.level, skill(player, candidate.weaponType), candidate.attack, player.attackFactor) <=
+		    maximumDamage(player.level, skill(player, equipped.weaponType), equipped.attack, player.attackFactor)) return std::nullopt;
 	}
-	if (candidateValue <= currentValue) {
-		return std::nullopt;
-	}
-	return PlayerBotEquipmentUpgrade{slot, candidateValue - currentValue, metric, currentValue, candidateValue};
+	if (candidateValue <= currentValue) return std::nullopt;
+	return PlayerBotEquipmentUpgrade{target, candidateValue - currentValue, metric, currentValue, candidateValue};
 }
 
-bool PlayerBotEquipmentPolicy::findCarriedUpgrade(Player& player, Item*& selectedItem,
-	                                                PlayerBotEquipmentUpgrade& selectedUpgrade) const
+std::optional<PlayerBotEquipmentCarriedUpgrade> PlayerBotEquipmentPolicy::findCarriedUpgrade(
+	const PlayerBotEquipmentPlayerSnapshot& player, const PlayerBotEquipmentLoadout& loadout,
+	const std::vector<PlayerBotEquipmentCarriedCandidate>& candidates) const
 {
-	selectedItem = nullptr;
-	for (int32_t slot = CONST_SLOT_FIRST; slot <= CONST_SLOT_LAST; ++slot) {
-		Item* root = player.getInventoryItem(static_cast<slots_t>(slot));
-		Container* container = root ? root->getContainer() : nullptr;
-		if (!container) {
-			continue;
-		}
-		for (ContainerIterator it = container->iterator(); it.hasNext(); it.advance()) {
-			Item* candidate = *it;
-			std::optional<PlayerBotEquipmentUpgrade> upgrade = evaluateUpgrade(player, *candidate);
-			if (!upgrade || (requiresKnightCombatReadiness(player) && candidate->getWeaponType() != WEAPON_NONE &&
-			                 !isKnightMeleeWeapon(player, *candidate))) {
-				continue;
-			}
-			Position source;
-			uint8_t index = 0;
-			g_game.internalGetPosition(candidate, source, index);
-			if (source.x != 0xFFFF || (source.y & 0x40) == 0 ||
-			    (selectedItem && upgrade->benefit <= selectedUpgrade.benefit)) {
-				continue;
-			}
-			selectedItem = candidate;
-			selectedUpgrade = *upgrade;
-		}
+	std::optional<PlayerBotEquipmentCarriedUpgrade> selected;
+	for (size_t index = 0; index < candidates.size(); ++index) {
+		const auto& candidate = candidates[index];
+		auto upgrade = evaluateUpgrade(player, loadout, candidate.item);
+		if (!candidate.actionable || !candidate.item.inContainer || !upgrade || (requiresKnightCombatReadiness(player) &&
+		    candidate.item.weaponType != PlayerBotEquipmentWeaponType::None && !isKnightMeleeWeapon(player, candidate.item)) ||
+		    (selected && upgrade->benefit <= selected->upgrade.benefit)) continue;
+		selected = PlayerBotEquipmentCarriedUpgrade{index, *upgrade};
 	}
-	return selectedItem != nullptr;
+	return selected;
 }
 
-PlayerBotEquipmentLoadout PlayerBotEquipmentPolicy::loadout(const Player& player) const
+bool PlayerBotEquipmentPolicy::applyOffer(const PlayerBotEquipmentPlayerSnapshot& player, PlayerBotEquipmentLoadout& loadout,
+	const PlayerBotEquipmentItemSnapshot& candidate, slots_t& target, uint16_t& replacedItemId,
+	uint16_t& displacedLeftItemId, uint16_t& displacedRightItemId, std::string& rejection) const
 {
-	PlayerBotEquipmentLoadout loadout;
-	for (int32_t slot = CONST_SLOT_FIRST; slot <= CONST_SLOT_LAST; ++slot) {
-		if (const Item* item = player.getInventoryItem(static_cast<slots_t>(slot))) {
-			loadout.itemIds[slot] = item->getID();
-		}
+	if (!candidate.pickupable) { rejection = "not_pickupable"; return false; }
+	if (player.level < candidate.minimumLevel) { rejection = "level_ineligible"; return false; }
+	if (player.magicLevel < candidate.minimumMagicLevel) { rejection = "magic_level_ineligible"; return false; }
+	if (candidate.premiumRequired && !player.premium) { rejection = "premium_ineligible"; return false; }
+	if (!candidate.vocationIds.empty() && std::find(candidate.vocationIds.begin(), candidate.vocationIds.end(), player.vocationId) == candidate.vocationIds.end()) {
+		rejection = "vocation_ineligible"; return false;
 	}
-	return loadout;
-}
-
-bool PlayerBotEquipmentPolicy::applyOffer(const Player& player, PlayerBotEquipmentLoadout& loadout, uint16_t itemId,
-	                                         slots_t& slot, uint16_t& replacedItemId, uint16_t& displacedLeftItemId,
-	                                         uint16_t& displacedRightItemId, std::string& rejection) const
-{
-	const ItemType& type = Item::items[itemId];
-	if (!type.isPickupable()) { rejection = "not_pickupable"; return false; }
-	if (player.getLevel() < type.minReqLevel) { rejection = "level_ineligible"; return false; }
-	if (player.getMagicLevel() < type.minReqMagicLevel) { rejection = "magic_level_ineligible"; return false; }
-	if ((type.wieldInfo & WIELDINFO_PREMIUM) != 0 && !player.isPremium()) { rejection = "premium_ineligible"; return false; }
-	if (!type.vocationIds.empty() && type.vocationIds.find(player.getVocationId()) == type.vocationIds.end()) {
-		rejection = "vocation_ineligible";
-		return false;
-	}
-
-	auto itemTypeAt = [&loadout](slots_t hand) -> const ItemType* {
-		const uint16_t equippedItemId = loadout.itemIds[hand];
-		return equippedItemId == 0 ? nullptr : &Item::items[equippedItemId];
-	};
-	auto isTwoHanded = [&itemTypeAt](slots_t hand) {
-		const ItemType* equipped = itemTypeAt(hand);
-		return equipped && (equipped->slotPosition & SLOTP_TWO_HAND) != 0;
-	};
-	auto isWeapon = [&itemTypeAt](slots_t hand) {
-		const ItemType* equipped = itemTypeAt(hand);
-		return equipped && equipped->weaponType != WEAPON_NONE && equipped->weaponType != WEAPON_SHIELD;
-	};
-	auto isShield = [&itemTypeAt](slots_t hand) {
-		const ItemType* equipped = itemTypeAt(hand);
-		return equipped && equipped->weaponType == WEAPON_SHIELD;
-	};
-
-	slot = CONST_SLOT_WHEREEVER;
-	if (type.slotPosition & SLOTP_HEAD) slot = CONST_SLOT_HEAD;
-	else if (type.slotPosition & SLOTP_ARMOR) slot = CONST_SLOT_ARMOR;
-	else if (type.slotPosition & SLOTP_LEGS) slot = CONST_SLOT_LEGS;
-	else if (type.slotPosition & SLOTP_FEET) slot = CONST_SLOT_FEET;
-	else if (type.weaponType == WEAPON_SHIELD) {
-		slot = isWeapon(CONST_SLOT_LEFT) && !isTwoHanded(CONST_SLOT_LEFT) ? CONST_SLOT_RIGHT :
-		       isWeapon(CONST_SLOT_RIGHT) && !isTwoHanded(CONST_SLOT_RIGHT) ? CONST_SLOT_LEFT : CONST_SLOT_RIGHT;
-	} else if (type.weaponType != WEAPON_NONE && type.weaponType != WEAPON_AMMO &&
-	           (type.slotPosition & (SLOTP_LEFT | SLOTP_RIGHT)) != 0) {
-		if (requiresKnightCombatReadiness(player) && type.weaponType != WEAPON_SWORD &&
-		    type.weaponType != WEAPON_CLUB && type.weaponType != WEAPON_AXE) {
-			rejection = "unsupported_weapon_type";
-			return false;
-		}
-		slot = isShield(CONST_SLOT_LEFT) ? CONST_SLOT_RIGHT : isShield(CONST_SLOT_RIGHT) ? CONST_SLOT_LEFT :
-		       (type.slotPosition & SLOTP_LEFT) != 0 ? CONST_SLOT_LEFT : CONST_SLOT_RIGHT;
-	} else {
-		rejection = "unsupported_slot";
-		return false;
-	}
-
-	replacedItemId = (type.slotPosition & SLOTP_TWO_HAND) != 0 ? loadout.itemIds[CONST_SLOT_LEFT] : loadout.itemIds[slot];
+	auto itemAt = [&loadout](slots_t value) -> const PlayerBotEquipmentItemSnapshot& { return loadout.items[static_cast<uint8_t>(value)]; };
+	auto twoHanded = [&itemAt](slots_t value) { return itemAt(value).itemId != 0 && itemAt(value).twoHanded; };
+	auto weapon = [&itemAt](slots_t value) { const auto type = itemAt(value).weaponType; return itemAt(value).itemId != 0 && type != PlayerBotEquipmentWeaponType::None && type != PlayerBotEquipmentWeaponType::Shield; };
+	auto shield = [&itemAt](slots_t value) { return itemAt(value).itemId != 0 && itemAt(value).weaponType == PlayerBotEquipmentWeaponType::Shield; };
+	target = slot(0);
+	if (candidate.head) target = head;
+	else if (candidate.armorSlot) target = armor;
+	else if (candidate.legs) target = legs;
+	else if (candidate.feet) target = feet;
+	else if (candidate.weaponType == PlayerBotEquipmentWeaponType::Shield) target = weapon(left) && !twoHanded(left) ? right : weapon(right) && !twoHanded(right) ? left : right;
+	else if (candidate.weaponType != PlayerBotEquipmentWeaponType::None && candidate.weaponType != PlayerBotEquipmentWeaponType::Ammo && (candidate.left || candidate.right)) {
+		if (requiresKnightCombatReadiness(player) && !melee(candidate.weaponType)) { rejection = "unsupported_weapon_type"; return false; }
+		target = shield(left) ? right : shield(right) ? left : candidate.left ? left : right;
+	} else { rejection = "unsupported_slot"; return false; }
+	replacedItemId = candidate.twoHanded ? loadout.itemIds[static_cast<uint8_t>(left)] : loadout.itemIds[static_cast<uint8_t>(target)];
 	displacedLeftItemId = 0;
 	displacedRightItemId = 0;
-	if ((type.slotPosition & SLOTP_TWO_HAND) != 0) {
-		displacedLeftItemId = loadout.itemIds[CONST_SLOT_LEFT];
-		displacedRightItemId = loadout.itemIds[CONST_SLOT_RIGHT];
-		loadout.itemIds[CONST_SLOT_LEFT] = itemId;
-		loadout.itemIds[CONST_SLOT_RIGHT] = 0;
-	} else if (isTwoHanded(CONST_SLOT_LEFT) || isTwoHanded(CONST_SLOT_RIGHT)) {
-		displacedLeftItemId = loadout.itemIds[CONST_SLOT_LEFT];
-		displacedRightItemId = loadout.itemIds[CONST_SLOT_RIGHT];
-		loadout.itemIds[CONST_SLOT_LEFT] = 0;
-		loadout.itemIds[CONST_SLOT_RIGHT] = 0;
-		loadout.itemIds[slot] = itemId;
+	if (candidate.twoHanded) {
+		displacedLeftItemId = loadout.itemIds[static_cast<uint8_t>(left)]; displacedRightItemId = loadout.itemIds[static_cast<uint8_t>(right)];
+		loadout.itemIds[static_cast<uint8_t>(left)] = candidate.itemId; loadout.items[static_cast<uint8_t>(left)] = candidate;
+		loadout.itemIds[static_cast<uint8_t>(right)] = 0; loadout.items[static_cast<uint8_t>(right)] = {};
+	} else if (twoHanded(left) || twoHanded(right)) {
+		displacedLeftItemId = loadout.itemIds[static_cast<uint8_t>(left)]; displacedRightItemId = loadout.itemIds[static_cast<uint8_t>(right)];
+		loadout.itemIds[static_cast<uint8_t>(left)] = 0; loadout.items[static_cast<uint8_t>(left)] = {};
+		loadout.itemIds[static_cast<uint8_t>(right)] = 0; loadout.items[static_cast<uint8_t>(right)] = {};
+		loadout.itemIds[static_cast<uint8_t>(target)] = candidate.itemId; loadout.items[static_cast<uint8_t>(target)] = candidate;
 	} else {
-		if (slot == CONST_SLOT_LEFT) displacedLeftItemId = loadout.itemIds[slot];
-		else if (slot == CONST_SLOT_RIGHT) displacedRightItemId = loadout.itemIds[slot];
-		loadout.itemIds[slot] = itemId;
+		if (target == left) displacedLeftItemId = loadout.itemIds[static_cast<uint8_t>(target)];
+		else if (target == right) displacedRightItemId = loadout.itemIds[static_cast<uint8_t>(target)];
+		loadout.itemIds[static_cast<uint8_t>(target)] = candidate.itemId; loadout.items[static_cast<uint8_t>(target)] = candidate;
 	}
 	return true;
 }
 
-PlayerBotCombatProfile PlayerBotEquipmentPolicy::combatProfile(const Player& player,
-	                                                              const PlayerBotEquipmentLoadout& loadout) const
+PlayerBotCombatProfile PlayerBotEquipmentPolicy::combatProfile(const PlayerBotEquipmentPlayerSnapshot& player,
+	const PlayerBotEquipmentLoadout& loadout) const
 {
-	auto itemTypeAt = [&loadout](slots_t slot) -> const ItemType* {
-		const uint16_t itemId = loadout.itemIds[slot];
-		return itemId == 0 ? nullptr : &Item::items[itemId];
-	};
-	int32_t armor = 0;
-	for (slots_t slot : {CONST_SLOT_HEAD, CONST_SLOT_NECKLACE, CONST_SLOT_ARMOR, CONST_SLOT_LEGS, CONST_SLOT_FEET, CONST_SLOT_RING}) {
-		if (const ItemType* type = itemTypeAt(slot)) armor += type->armor;
-	}
-	const ItemType* weapon = nullptr;
-	const ItemType* shield = nullptr;
-	for (slots_t slot : {CONST_SLOT_RIGHT, CONST_SLOT_LEFT}) {
-		const ItemType* type = itemTypeAt(slot);
-		if (!type || type->weaponType == WEAPON_NONE) continue;
-		if (type->weaponType == WEAPON_SHIELD) {
-			if (!shield || type->defense > shield->defense) shield = type;
-		} else {
-			weapon = type;
-		}
+	auto itemAt = [&loadout](slots_t value) -> const PlayerBotEquipmentItemSnapshot& { return loadout.items[static_cast<uint8_t>(value)]; };
+	int32_t armorValue = 0;
+	for (slots_t value : {head, necklace, armor, legs, feet, ring}) armorValue += itemAt(value).armor;
+	const PlayerBotEquipmentItemSnapshot* weapon = nullptr;
+	const PlayerBotEquipmentItemSnapshot* shield = nullptr;
+	for (slots_t value : {right, left}) {
+		const auto& item = itemAt(value);
+		if (item.itemId == 0 || item.weaponType == PlayerBotEquipmentWeaponType::None) continue;
+		if (item.weaponType == PlayerBotEquipmentWeaponType::Shield) { if (!shield || item.defense > shield->defense) shield = &item; }
+		else weapon = &item;
 	}
 	int32_t defenseValue = 7;
-	int32_t defenseSkill = player.getSkillLevel(SKILL_FIST);
-	if (weapon) {
-		defenseValue = weapon->defense + weapon->extraDefense;
-		defenseSkill = player.getSkillLevel(skillForWeapon(weapon->weaponType));
-	}
-	if (shield) {
-		defenseValue = weapon ? shield->defense + weapon->extraDefense : shield->defense;
-		defenseSkill = player.getSkillLevel(SKILL_SHIELD);
-	}
-	const int32_t defense = defenseSkill == 0 ? 1 : static_cast<int32_t>(
-		(defenseSkill / 4.0 + 2.23) * defenseValue * 0.15 * player.getDefenseFactor() * player.getVocation()->defenseMultiplier);
-	return {player.getLevel(), player.getMaxHealth(), static_cast<int32_t>(armor * player.getVocation()->armorMultiplier), defense,
-	        weapon ? weapon->attack : 7, player.getSkillLevel(skillForWeapon(weapon ? weapon->weaponType : WEAPON_NONE)),
-	        player.getAttackFactor()};
+	int32_t defenseSkill = player.fistSkill;
+	if (weapon) { defenseValue = weapon->defense + weapon->extraDefense; defenseSkill = skill(player, weapon->weaponType); }
+	if (shield) { defenseValue = weapon ? shield->defense + weapon->extraDefense : shield->defense; defenseSkill = player.shieldSkill; }
+	const int32_t defense = defenseSkill == 0 ? 1 : static_cast<int32_t>((defenseSkill / 4.0 + 2.23) * defenseValue * 0.15 * player.defenseFactor * player.defenseMultiplier);
+	return {player.level, player.maximumHealth, static_cast<int32_t>(armorValue * player.armorMultiplier), defense,
+	        weapon ? weapon->attack : 7, skill(player, weapon ? weapon->weaponType : PlayerBotEquipmentWeaponType::None), player.attackFactor};
 }
 
-bool PlayerBotEquipmentPolicy::loadoutReady(const Player& player, const PlayerBotEquipmentLoadout& loadout,
-	                                           const PlayerBotEquipmentReadinessInput& readiness,
-	                                           uint32_t additionalWeight) const
+bool PlayerBotEquipmentPolicy::loadoutReady(const PlayerBotEquipmentPlayerSnapshot& player, const PlayerBotEquipmentLoadout& loadout,
+	const PlayerBotEquipmentReadinessInput& readiness, uint32_t additionalWeight) const
 {
-	auto isKnightWeapon = [this, &player](uint16_t itemId) {
-		if (itemId == 0) return false;
-		const ItemType& type = Item::items[itemId];
-		return isLegalEquipmentType(player, type) && type.attack > 0 &&
-		       (type.weaponType == WEAPON_SWORD || type.weaponType == WEAPON_CLUB || type.weaponType == WEAPON_AXE) &&
-		       (type.slotPosition & (SLOTP_LEFT | SLOTP_RIGHT)) != 0;
-	};
-	const uint16_t armorItemId = loadout.itemIds[CONST_SLOT_ARMOR];
-	const bool armorReady = armorItemId != 0 && isLegalEquipmentType(player, Item::items[armorItemId]) &&
-	                        (Item::items[armorItemId].slotPosition & SLOTP_ARMOR) != 0 && Item::items[armorItemId].armor > 0;
-	return (isKnightWeapon(loadout.itemIds[CONST_SLOT_LEFT]) || isKnightWeapon(loadout.itemIds[CONST_SLOT_RIGHT])) && armorReady &&
-	       readiness.backpackReady && readiness.suppliesReady &&
-	       static_cast<uint64_t>(readiness.effectiveFreeCapacity) >=
-	           static_cast<uint64_t>(readiness.minimumFreeCapacity) + additionalWeight;
+	const auto& leftItem = loadout.items[static_cast<uint8_t>(left)];
+	const auto& rightItem = loadout.items[static_cast<uint8_t>(right)];
+	const auto& armorItem = loadout.items[static_cast<uint8_t>(armor)];
+	const bool weaponReady = isKnightMeleeWeapon(player, leftItem) || isKnightMeleeWeapon(player, rightItem);
+	const bool armorReady = armorItem.itemId != 0 && isLegalEquipmentItem(player, armorItem) && armorItem.armorSlot && armorItem.armor > 0;
+	return weaponReady && armorReady && readiness.backpackReady && readiness.suppliesReady &&
+	       static_cast<uint64_t>(readiness.effectiveFreeCapacity) >= static_cast<uint64_t>(readiness.minimumFreeCapacity) + additionalWeight;
 }
 
-PlayerBotEquipmentReadiness PlayerBotEquipmentPolicy::combatReadiness(
-	const Player& player, bool carriedUpgrade, const PlayerBotEquipmentReadinessInput& readiness) const
+PlayerBotEquipmentReadiness PlayerBotEquipmentPolicy::combatReadiness(const PlayerBotEquipmentPlayerSnapshot& player,
+	const PlayerBotEquipmentLoadout& loadout, bool carriedUpgrade, const PlayerBotEquipmentReadinessInput& readiness) const
 {
 	PlayerBotEquipmentReadiness result;
-	if (!requiresKnightCombatReadiness(player)) {
-		result.ready = true;
-		return result;
-	}
-	const Item* left = player.getInventoryItem(CONST_SLOT_LEFT);
-	const Item* right = player.getInventoryItem(CONST_SLOT_RIGHT);
-	const Item* armor = player.getInventoryItem(CONST_SLOT_ARMOR);
-	const bool weaponReady = (left && isKnightMeleeWeapon(player, *left)) || (right && isKnightMeleeWeapon(player, *right));
-	const bool armorReady = armor && isLegalEquipmentItem(player, *armor) &&
-	                        (armor->getSlotPosition() & SLOTP_ARMOR) != 0 && armor->getArmor() > 0;
-	if (carriedUpgrade) {
-		result.recovery = "equip_carried";
-		return result;
-	}
-	if (weaponReady && armorReady && readiness.backpackReady && readiness.suppliesReady &&
-	    readiness.effectiveFreeCapacity >= readiness.minimumFreeCapacity) {
-		result.ready = true;
-		return result;
-	}
+	if (!requiresKnightCombatReadiness(player)) { result.ready = true; return result; }
+	const auto& leftItem = loadout.items[static_cast<uint8_t>(left)];
+	const auto& rightItem = loadout.items[static_cast<uint8_t>(right)];
+	const auto& armorItem = loadout.items[static_cast<uint8_t>(armor)];
+	const bool weaponReady = isKnightMeleeWeapon(player, leftItem) || isKnightMeleeWeapon(player, rightItem);
+	const bool armorReady = armorItem.itemId != 0 && isLegalEquipmentItem(player, armorItem) && armorItem.armorSlot && armorItem.armor > 0;
+	if (carriedUpgrade) { result.recovery = "equip_carried"; return result; }
+	if (weaponReady && armorReady && readiness.backpackReady && readiness.suppliesReady && readiness.effectiveFreeCapacity >= readiness.minimumFreeCapacity) { result.ready = true; return result; }
 	if (!weaponReady) result.terminalReason = "missing_legal_melee_weapon";
 	else if (!armorReady) result.terminalReason = "missing_legal_armor";
 	else if (!readiness.backpackReady) result.terminalReason = "missing_backpack";
@@ -334,54 +211,32 @@ PlayerBotEquipmentReadiness PlayerBotEquipmentPolicy::combatReadiness(
 	return result;
 }
 
-PlayerBotEquipmentOfferEvaluation PlayerBotEquipmentPolicy::evaluateCandidate(
-	Player& player, uint16_t itemId, const PlayerBotEquipmentLoadout& currentLoadout,
-	const PlayerBotCombatProfile& currentProfile, const PlayerBotEquipmentHuntSummary& currentHunts,
-	bool currentReady, const PlayerBotEquipmentReadinessInput& readiness, uint32_t additionalWeight,
-	bool allowSimulation, const HuntSummaryEvaluator& huntSummary) const
+PlayerBotEquipmentOfferEvaluation PlayerBotEquipmentPolicy::evaluateCandidate(const PlayerBotEquipmentPlayerSnapshot& player,
+	const PlayerBotEquipmentItemSnapshot& candidate, const PlayerBotEquipmentLoadout& currentLoadout,
+	const PlayerBotCombatProfile& currentProfile, const PlayerBotEquipmentHuntSummary& currentHunts, bool currentReady,
+	const PlayerBotEquipmentReadinessInput& readiness, uint32_t additionalWeight, bool allowSimulation,
+	const HuntSummaryEvaluator& huntSummary) const
 {
 	PlayerBotEquipmentOfferEvaluation evaluation;
-	evaluation.itemId = itemId;
+	evaluation.itemId = candidate.itemId;
 	evaluation.currentReady = currentReady;
 	PlayerBotEquipmentLoadout candidateLoadout = currentLoadout;
-	if (!applyOffer(player, candidateLoadout, itemId, evaluation.slot, evaluation.replacedItemId,
-	                evaluation.displacedLeftItemId, evaluation.displacedRightItemId, evaluation.rejection)) {
-		evaluation.profile = currentProfile;
-		evaluation.hunts = currentHunts;
-		return evaluation;
+	if (!applyOffer(player, candidateLoadout, candidate, evaluation.slot, evaluation.replacedItemId, evaluation.displacedLeftItemId, evaluation.displacedRightItemId, evaluation.rejection)) {
+		evaluation.profile = currentProfile; evaluation.hunts = currentHunts; return evaluation;
 	}
-	if (!allowSimulation) {
-		evaluation.profile = currentProfile;
-		evaluation.hunts = currentHunts;
-		evaluation.rejection = "unique_item_evaluation_budget_exhausted";
-		return evaluation;
-	}
+	if (!allowSimulation) { evaluation.profile = currentProfile; evaluation.hunts = currentHunts; evaluation.rejection = "unique_item_evaluation_budget_exhausted"; return evaluation; }
 	evaluation.simulated = true;
 	evaluation.profile = combatProfile(player, candidateLoadout);
-	evaluation.hunts = huntSummary(player, evaluation.profile);
+	evaluation.hunts = huntSummary(evaluation.profile);
 	evaluation.candidateReady = loadoutReady(player, candidateLoadout, readiness, additionalWeight);
-	const int32_t currentMaximumDamage = Weapons::getMaxWeaponDamage(
-		currentProfile.level, currentProfile.attackSkill, currentProfile.attack, currentProfile.attackFactor);
-	const int32_t candidateMaximumDamage = Weapons::getMaxWeaponDamage(
-		evaluation.profile.level, evaluation.profile.attackSkill, evaluation.profile.attack, evaluation.profile.attackFactor);
-	const bool noWorse = evaluation.profile.armor >= currentProfile.armor &&
-	                     evaluation.profile.defense >= currentProfile.defense &&
-	                     candidateMaximumDamage >= currentMaximumDamage &&
-	                     evaluation.hunts.suitableRegions >= currentHunts.suitableRegions &&
-	                     evaluation.hunts.lowestThreatRatio <= currentHunts.lowestThreatRatio &&
-	                     evaluation.hunts.bestProjectedExperience >= currentHunts.bestProjectedExperience;
-	const bool better = evaluation.profile.armor > currentProfile.armor ||
-	                    evaluation.profile.defense > currentProfile.defense ||
-	                    candidateMaximumDamage > currentMaximumDamage ||
-	                    evaluation.hunts.suitableRegions > currentHunts.suitableRegions ||
-	                    evaluation.hunts.lowestThreatRatio < currentHunts.lowestThreatRatio ||
-	                    evaluation.hunts.bestProjectedExperience > currentHunts.bestProjectedExperience;
+	const int32_t currentMaximumDamage = maximumDamage(currentProfile.level, currentProfile.attackSkill, currentProfile.attack, currentProfile.attackFactor);
+	const int32_t candidateMaximumDamage = maximumDamage(evaluation.profile.level, evaluation.profile.attackSkill, evaluation.profile.attack, evaluation.profile.attackFactor);
+	const bool noWorse = evaluation.profile.armor >= currentProfile.armor && evaluation.profile.defense >= currentProfile.defense && candidateMaximumDamage >= currentMaximumDamage && evaluation.hunts.suitableRegions >= currentHunts.suitableRegions && evaluation.hunts.lowestThreatRatio <= currentHunts.lowestThreatRatio && evaluation.hunts.bestProjectedExperience >= currentHunts.bestProjectedExperience;
+	const bool better = evaluation.profile.armor > currentProfile.armor || evaluation.profile.defense > currentProfile.defense || candidateMaximumDamage > currentMaximumDamage || evaluation.hunts.suitableRegions > currentHunts.suitableRegions || evaluation.hunts.lowestThreatRatio < currentHunts.lowestThreatRatio || evaluation.hunts.bestProjectedExperience > currentHunts.bestProjectedExperience;
 	if (currentReady && !evaluation.candidateReady) evaluation.rejection = "regresses_readiness";
 	else if (!noWorse) evaluation.rejection = better ? "ambiguous_tradeoff" : "non_improving";
 	else if (!better) evaluation.rejection = "non_improving";
-	else evaluation.rule = !currentReady && evaluation.candidateReady ? PlayerBotEquipmentDecisionRule::ReadinessRepair :
-	                       evaluation.hunts.suitableRegions > currentHunts.suitableRegions ? PlayerBotEquipmentDecisionRule::UnlocksHunt :
-	                                                                                PlayerBotEquipmentDecisionRule::ParetoImprovement;
+	else evaluation.rule = !currentReady && evaluation.candidateReady ? PlayerBotEquipmentDecisionRule::ReadinessRepair : evaluation.hunts.suitableRegions > currentHunts.suitableRegions ? PlayerBotEquipmentDecisionRule::UnlocksHunt : PlayerBotEquipmentDecisionRule::ParetoImprovement;
 	return evaluation;
 }
 
@@ -397,12 +252,7 @@ const char* PlayerBotEquipmentPolicy::decisionRuleName(PlayerBotEquipmentDecisio
 }
 
 bool PlayerBotEquipmentPolicy::prefers(const PlayerBotEquipmentOfferEvaluation& candidate,
-	                                      const PlayerBotEquipmentOfferEvaluation& current)
+	const PlayerBotEquipmentOfferEvaluation& current)
 {
-	return candidate.rule > current.rule ||
-	       (candidate.rule == current.rule && (candidate.carried != current.carried ? candidate.carried :
-	        candidate.price < current.price ||
-	        (candidate.price == current.price && (candidate.travelSteps < current.travelSteps ||
-	         (candidate.travelSteps == current.travelSteps && (candidate.itemId < current.itemId ||
-	          (candidate.itemId == current.itemId && candidate.npcId < current.npcId)))))));
+	return candidate.rule > current.rule || (candidate.rule == current.rule && (candidate.carried != current.carried ? candidate.carried : candidate.price < current.price || (candidate.price == current.price && (candidate.travelSteps < current.travelSteps || (candidate.travelSteps == current.travelSteps && (candidate.itemId < current.itemId || (candidate.itemId == current.itemId && candidate.npcId < current.npcId)))))));
 }

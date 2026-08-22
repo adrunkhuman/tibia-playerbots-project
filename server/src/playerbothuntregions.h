@@ -11,6 +11,7 @@
 #ifndef FS_PLAYERBOTHUNTREGIONS_H
 #define FS_PLAYERBOTHUNTREGIONS_H
 
+#include "playerbotcombatprofile.h"
 #include "position.h"
 
 #include <cstdint>
@@ -20,16 +21,6 @@
 #include <vector>
 
 class Player;
-
-struct PlayerBotCombatProfile {
-	uint32_t level = 0;
-	int32_t maximumHealth = 0;
-	int32_t armor = 0;
-	int32_t defense = 0;
-	int32_t attack = 0;
-	int32_t attackSkill = 0;
-	float attackFactor = 1.0f;
-};
 
 struct PlayerBotRecoveryPrediction {
 	double spellMinimumHealing = 0;
@@ -114,6 +105,13 @@ struct PlayerBotHuntRegionScan {
 	std::vector<size_t> candidateIndices;
 };
 
+struct PlayerBotHuntRegionScore {
+	bool valid = false;
+	bool candidateFactsAvailable = false;
+	bool withinPlanningScope = false;
+	PlayerBotHuntRegion region;
+};
+
 PlayerBotHuntPlanningProfile playerBotHuntPlanningProfile(const Player& player, const PlayerBotCombatProfile& combat,
                                                            double challengeFrontier);
 PlayerBotRecoveryPrediction playerBotPredictRecovery(const PlayerBotHuntPlanningProfile& profile,
@@ -128,10 +126,10 @@ class PlayerBotHuntRegionPlanner
 		static void invalidateCache();
 		static uint64_t getCacheRevision();
 		PlayerBotHuntRegionScan beginScan(const Player& player) const;
-		bool score(Player& player, const PlayerBotHuntPlanningProfile& profile, uint64_t revision, size_t candidateIndex,
-		           const std::set<Position>& excludedRegions,
-		           const std::map<Position, PlayerBotHuntRegionPerformance>& performance,
-		           uint32_t huntDurationSeconds, PlayerBotHuntRegion& region) const;
+		PlayerBotHuntRegionScore score(Player& player, const PlayerBotHuntPlanningProfile& profile, uint64_t revision,
+		                               size_t candidateIndex, const std::set<Position>& excludedRegions,
+		                               const std::map<Position, PlayerBotHuntRegionPerformance>& performance,
+		                               uint32_t huntDurationSeconds) const;
 };
 
 #endif

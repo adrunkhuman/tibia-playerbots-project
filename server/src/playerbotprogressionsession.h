@@ -11,8 +11,11 @@
 #include <string>
 #include <vector>
 
+#include "creature.h"
 #include "playerbotequipmentpolicy.h"
 #include "position.h"
+
+class PlayerBotProgressionRuntime;
 
 enum class PlayerBotProgressionProcedure : uint8_t {
 	None,
@@ -79,9 +82,6 @@ struct PlayerBotNestedContainerAccessState {
 class PlayerBotRewardSession
 {
 	public:
-	void begin(PlayerBotRewardPlan reward);
-	void reset();
-
 	const PlayerBotRewardPlan& plan() const { return reward; }
 	PlayerBotRewardStage stage() const { return currentStage; }
 	uint32_t retries() const { return attempts; }
@@ -89,6 +89,8 @@ class PlayerBotRewardSession
 
 	private:
 	friend class PlayerBotProgressionRuntime;
+	void begin(PlayerBotRewardPlan reward);
+	void reset();
 	void setStage(PlayerBotRewardStage stage) { currentStage = stage; }
 	uint32_t incrementRetries() { return ++attempts; }
 	void resetRetries() { attempts = 0; }
@@ -126,15 +128,14 @@ enum class PlayerBotOracleDepartureStage : uint8_t {
 class PlayerBotOracleDepartureSession
 {
 	public:
-	void begin(PlayerBotOracleDeparturePlan departure);
-	void reset();
-
 	const PlayerBotOracleDeparturePlan& plan() const { return departure; }
 	PlayerBotOracleDepartureStage stage() const { return currentStage; }
 	uint32_t retries() const { return attempts; }
 
 	private:
 	friend class PlayerBotProgressionRuntime;
+	void begin(PlayerBotOracleDeparturePlan departure);
+	void reset();
 	void setStage(PlayerBotOracleDepartureStage stage) { currentStage = stage; }
 	uint32_t incrementRetries() { return ++attempts; }
 	void resetRetries() { attempts = 0; }
@@ -166,9 +167,6 @@ enum class PlayerBotSpellTrainingStage : uint8_t {
 class PlayerBotSpellTrainingSession
 {
 	public:
-	void begin(PlayerBotSpellTrainingPlan training);
-	void reset();
-
 	const PlayerBotSpellTrainingPlan& plan() const { return training; }
 	PlayerBotSpellTrainingStage stage() const { return currentStage; }
 	uint32_t retries() const { return attempts; }
@@ -176,6 +174,8 @@ class PlayerBotSpellTrainingSession
 
 	private:
 	friend class PlayerBotProgressionRuntime;
+	void begin(PlayerBotSpellTrainingPlan training);
+	void reset();
 	void setStage(PlayerBotSpellTrainingStage stage) { currentStage = stage; }
 	uint32_t incrementRetries() { return ++attempts; }
 	void resetRetries() { attempts = 0; }
@@ -197,15 +197,14 @@ enum class PlayerBotEquipmentPurchaseStage : uint8_t {
 class PlayerBotEquipmentPurchaseSession
 {
 	public:
-	void begin(PlayerBotEquipmentOfferEvaluation purchase);
-	void reset();
-
 	const PlayerBotEquipmentOfferEvaluation& plan() const { return purchase; }
 	PlayerBotEquipmentPurchaseStage stage() const { return currentStage; }
 	uint32_t retries() const { return attempts; }
 
 	private:
 	friend class PlayerBotProgressionRuntime;
+	void begin(PlayerBotEquipmentOfferEvaluation purchase);
+	void reset();
 	void setStage(PlayerBotEquipmentPurchaseStage stage) { currentStage = stage; }
 	uint32_t incrementRetries() { return ++attempts; }
 	void resetRetries() { attempts = 0; }
@@ -225,10 +224,11 @@ class PlayerBotProgressionSession
 	public:
 	PlayerBotProgressionProcedure active() const { return procedure; }
 	bool active(PlayerBotProgressionProcedure value) const { return procedure == value; }
-	void begin(PlayerBotProgressionProcedure value) { procedure = value; }
-	void reset() { procedure = PlayerBotProgressionProcedure::None; }
 
 	private:
+	friend class PlayerBotProgressionRuntime;
+	void begin(PlayerBotProgressionProcedure value) { procedure = value; }
+	void reset() { procedure = PlayerBotProgressionProcedure::None; }
 	PlayerBotProgressionProcedure procedure = PlayerBotProgressionProcedure::None;
 };
 

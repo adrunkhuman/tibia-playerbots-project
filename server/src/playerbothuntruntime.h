@@ -7,18 +7,24 @@
 
 #include "playerbothuntplanningsession.h"
 #include "playerbothuntpolicy.h"
-#include "playerbotequipmentpolicy.h"
 #include "playerbotnavigationruntime.h"
 
+#include <chrono>
+#include <cstdint>
 #include <map>
 #include <optional>
+#include <set>
+#include <string>
+#include <vector>
 
-class Player;
+struct PlayerBotEquipmentHuntSummary;
 
 enum class PlayerBotHuntRuntimeCommand : uint8_t {
 	None,
 	PlanningStarted,
 	PlanningYield,
+	PlanningScored,
+	PlanningCancelled,
 	RouteValidationRequested,
 	RegionSelected,
 	ScopeExhausted,
@@ -30,15 +36,80 @@ struct PlayerBotHuntRuntimeRouteWork {
 	Position destination;
 };
 
+struct PlayerBotHuntRuntimePlayerObservation {
+	Position position;
+	uint32_t level = 0;
+	int32_t health = 0;
+	int32_t maximumHealth = 0;
+	uint16_t staminaMinutes = 0;
+	uint64_t experience = 0;
+	std::set<Position> excludedRegions;
+};
+
+struct PlayerBotHuntRuntimeCooldownCommand {
+	Position region;
+	std::chrono::steady_clock::duration duration{};
+};
+
+struct PlayerBotHuntRuntimePlanningStartObservation {
+	PlayerBotHuntRegionScan scan;
+	PlayerBotHuntPlanningProfile profile;
+};
+
+struct PlayerBotHuntRuntimePlanningInput {
+	PlayerBotHuntRuntimePlayerObservation player;
+	uint64_t cacheRevision = 0;
+	uint32_t huntDurationSeconds = 0;
+	std::string reason;
+	std::optional<PlayerBotHuntRuntimePlanningStartObservation> start;
+};
+
+struct PlayerBotHuntRuntimeScoreWork {
+	size_t candidateIndex = 0;
+	PlayerBotHuntPlanningProfile profile;
+	uint64_t cacheRevision = 0;
+	std::set<Position> excludedRegions;
+	std::map<Position, PlayerBotHuntRegionPerformance> performance;
+	uint32_t huntDurationSeconds = 0;
+};
+
+struct PlayerBotHuntRuntimeScoreObservation {
+	size_t candidateIndex = 0;
+	bool valid = false;
+	bool candidateFactsAvailable = false;
+	bool withinPlanningScope = false;
+	PlayerBotHuntRegion region;
+};
+
+struct PlayerBotHuntRuntimeRouteObservation {
+	bool pathfindingCalled = false;
+	bool reachable = false;
+	bool nodeLimit = false;
+	uint64_t expandedNodes = 0;
+	uint32_t travelSteps = 0;
+	double estimatedTravelSeconds = 0;
+	double staminaExperienceMultiplier = 0;
+};
+
 struct PlayerBotHuntRuntimeOutcome {
 	PlayerBotHuntRuntimeCommand command = PlayerBotHuntRuntimeCommand::None;
 	std::optional<PlayerBotHuntRuntimeRouteWork> routeWork;
+	std::vector<PlayerBotHuntRuntimeScoreWork> scoreWork;
 	std::optional<PlayerBotHuntRegion> selectedRegion;
 	std::vector<PlayerBotHuntRegion> candidates;
 	bool staleRevision = false;
+	bool invalidateCache = false;
 	bool stopForScopeExhaustion = false;
 	std::chrono::steady_clock::duration retryAfter{};
 	uint32_t scopeExhaustionAttempt = 0;
+};
+
+// Callers supply fixture inputs as immutable planning observations. Runtime owns
+// the resulting session and cache state transitions.
+struct PlayerBotHuntPlanningObservation {
+	bool candidatesAvailable = true;
+	bool cancelAtScoreBarrier = false;
+	bool invalidateCacheRevision = false;
 };
 
 struct PlayerBotHuntRuntimeCompletion {
@@ -68,28 +139,37 @@ struct PlayerBotHuntPatrolOutcome {
 	uint32_t routeFailures = 0;
 	uint64_t elapsedMs = 0;
 	uint64_t expandedNodes = 0;
+	std::optional<PlayerBotHuntRuntimeCooldownCommand> cooldown;
 };
 
 class PlayerBotHuntRuntime
 {
 	public:
-		PlayerBotHuntRuntime(std::map<Position, std::chrono::steady_clock::time_point>& sharedCooldowns,
-		                     std::vector<Position> fallbackPatrol);
+		explicit PlayerBotHuntRuntime(std::vector<Position> fallbackPatrol);
 
-		PlayerBotHuntRuntimeOutcome advancePlanning(Player& player, const char* reason,
+		bool planningStartRequired(std::chrono::steady_clock::time_point now) const;
+		PlayerBotHuntRuntimeOutcome advancePlanning(const PlayerBotHuntRuntimePlanningInput& input,
 		                                            std::chrono::steady_clock::time_point now,
-		                                            uint32_t huntDurationSeconds);
-		void completeRouteWork(Player& player, const PlayerBotHuntRuntimeRouteWork& work,
-		                       const PlayerBotNavigationRoutePlan& routePlan, uint32_t huntDurationSeconds);
-		void cancelPlanning() { planning.reset(); }
+		                                            const PlayerBotHuntPlanningObservation& observation = {});
+		PlayerBotHuntRuntimeOutcome completeScoreWork(const std::vector<PlayerBotHuntRuntimeScoreObservation>& observations,
+		                                              uint64_t elapsedUs);
+		void completeRouteWork(const PlayerBotHuntRuntimeRouteWork& work,
+		                       const PlayerBotHuntRuntimeRouteObservation& route);
+		// Keep the completed session through final telemetry, then release it.
+		void completePlanningSelection() { planning.reset(); pendingScoreCandidates.clear(); }
+		void cancelPlanning() { planning.reset(); pendingScoreCandidates.clear(); }
 		bool planningActive() const { return planning.has_value(); }
-		const PlayerBotHuntPlanningSession* planningSession() const { return planning ? &*planning : nullptr; }
+		std::optional<PlayerBotHuntPlanningSession> planningSession() const
+		{
+			if (planning) return *planning;
+			return std::nullopt;
+		}
 
 		void beginCycle(std::chrono::steady_clock::time_point now, uint32_t durationSeconds);
 		bool deadlineReached(std::chrono::steady_clock::time_point now) const { return huntDeadline != std::chrono::steady_clock::time_point{} && now >= huntDeadline; }
 		uint32_t completedCycles() const { return cycles; }
 		bool active() const { return activeRegion.has_value(); }
-		const PlayerBotHuntRegion* region() const { return activeRegion ? &*activeRegion : nullptr; }
+		std::optional<PlayerBotHuntRegion> region() const { return activeRegion; }
 		bool matchesMonster(const std::string& name) const;
 
 		void sampleCombat(const PlayerBotHuntCombatSnapshot& snapshot) { policy.sampleCombat(snapshot); }
@@ -97,30 +177,17 @@ class PlayerBotHuntRuntime
 		void observeRecovery(bool potion) { policy.observeRecovery(potion); }
 		void observeKill() { policy.observeKill(); }
 		bool observeDanger(int32_t maximumHealth, std::chrono::steady_clock::duration age) { return policy.observeDanger(maximumHealth, age); }
-		bool dangerObserved(Player& player, std::chrono::steady_clock::time_point now, std::chrono::steady_clock::duration cooldown);
-		std::optional<PlayerBotHuntRuntimeCompletion> complete(Player& player, const char* reason,
+		std::optional<PlayerBotHuntRuntimeCooldownCommand> dangerObserved(int32_t maximumHealth,
+		                                                                  std::chrono::steady_clock::time_point now,
+		                                                                  std::chrono::steady_clock::duration cooldown);
+		std::optional<PlayerBotHuntRuntimeCompletion> complete(const PlayerBotHuntRuntimePlayerObservation& player,
 		                                                       std::chrono::steady_clock::time_point now,
 		                                                       uint32_t configuredDurationSeconds);
-		void observeDeath(bool activeCombat, std::chrono::steady_clock::time_point now, std::chrono::steady_clock::duration cooldown);
-		const PlayerBotHuntPolicy& huntPolicy() const { return policy; }
-		PlayerBotEquipmentHuntSummary scoreEquipmentHunts(Player& player, const PlayerBotCombatProfile& profile,
-		                                                  size_t maximumRegions) const;
-
-		// Explicit fixture hooks. Production code never obtains mutable policy or planner access.
-		void fixtureResetCombatEvidence() { policy.resetCombatEvidence(); }
-		void fixtureObserveCombat(const PlayerBotHuntCombatSample& sample) { policy.observeCombat(sample); }
-		void fixtureObserveKill() { policy.observeKill(); }
-		void fixtureObserveRecovery(bool potion) { policy.observeRecovery(potion); }
-		void fixtureObserveDeath() { policy.observeDeath(); }
-		PlayerBotHuntCombatSummary fixtureCombatSummary() const { return policy.combatSummary(); }
-		PlayerBotHuntChallengeUpdate fixtureUpdateChallenge(uint64_t seconds, int32_t maximumHealth)
-		{
-			return policy.updateChallengeFrontier({seconds, maximumHealth});
-		}
-		bool fixtureScoreRegion(Player& player, const PlayerBotCombatProfile& profile,
-		                        PlayerBotHuntRegion& current, PlayerBotHuntRegion& improved) const;
-		void fixtureCancelPlanning() { cancelPlanning(); }
-		void fixtureInvalidatePlanningRevision() { PlayerBotHuntRegionPlanner::invalidateCache(); }
+		std::optional<PlayerBotHuntRuntimeCooldownCommand> observeDeath(bool activeCombat,
+		                                                                std::chrono::steady_clock::duration cooldown);
+		PlayerBotHuntPlanningProfile planningProfile(PlayerBotHuntPlanningProfile profile) const;
+		std::map<Position, PlayerBotHuntRegionPerformance> regionPerformance() const { return policy.regionPerformance(); }
+		PlayerBotEquipmentHuntSummary summarizeEquipmentHunts(const std::vector<PlayerBotHuntRegion>& regions, bool truncated) const;
 
 		PlayerBotHuntPatrolOutcome patrolTarget() const;
 		PlayerBotHuntPatrolOutcome observePatrolNavigation(const PlayerBotNavigationRuntimeOutcome& navigation,
@@ -128,19 +195,17 @@ class PlayerBotHuntRuntime
 		                                                   uint32_t repeatedStepLimit, uint32_t routeFailureLimit);
 		void resetPatrolFailures();
 
-		// Fixture-only hooks keep test mutation at the runtime boundary.
-		void forceScopeExhaustionForTest() { forceScopeExhaustion = true; }
-
 	private:
-		PlayerBotHuntPlanningSnapshot snapshot(const Player& player, uint64_t revision,
-		                                      std::chrono::steady_clock::time_point now);
-		void activate(PlayerBotHuntRegion region, const Player& player, std::chrono::steady_clock::time_point now);
+		PlayerBotHuntPlanningSnapshot snapshot(const PlayerBotHuntRuntimePlayerObservation& player, uint64_t revision);
+		PlayerBotHuntRuntimeOutcome exhaustScope(std::chrono::steady_clock::time_point now,
+		                                        std::chrono::steady_clock::duration retryAfter);
+		void applyCandidateSuitability(PlayerBotHuntRegion& region, const PlayerBotHuntRuntimeScoreObservation& observation) const;
+		void activate(PlayerBotHuntRegion region, const PlayerBotHuntRuntimePlayerObservation& player,
+		              std::chrono::steady_clock::time_point now);
 
-		PlayerBotHuntRegionPlanner planner;
 		std::optional<PlayerBotHuntPlanningSession> planning;
 		PlayerBotHuntPolicy policy;
 		std::optional<PlayerBotHuntRegion> activeRegion;
-		std::map<Position, std::chrono::steady_clock::time_point>& cooldowns;
 		std::vector<Position> fallbackPatrol;
 		std::chrono::steady_clock::time_point scopeReevaluationAfter;
 		std::chrono::steady_clock::time_point huntStarted;
@@ -154,7 +219,8 @@ class PlayerBotHuntRuntime
 		uint32_t cycles = 0;
 		uint64_t huntStartExperience = 0;
 		uint32_t huntStartLevel = 0;
-		bool forceScopeExhaustion = false;
+		uint32_t plannedHuntDurationSeconds = 0;
+		std::vector<size_t> pendingScoreCandidates;
 };
 
 #endif

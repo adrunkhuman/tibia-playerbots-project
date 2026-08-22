@@ -10,8 +10,8 @@
 
 class Player;
 class DepotChest;
-class PlayerBotHuntRuntime;
-class PlayerBotSurvivalRuntime;
+struct PlayerBotHuntPlanningObservation;
+struct PlayerBotHuntRuntimeOutcome;
 
 namespace playerbot {
 	enum class PlayerBotFixtureInitialization : uint8_t { NotPending, Waiting, Cancelled, Ready };
@@ -68,7 +68,8 @@ namespace playerbot {
 			PlayerBotFixtureStorageObservation navigationRecovery(bool routeUnavailable) const;
 			void resetHuntPlanningRouteFailures();
 			PlayerBotFixtureRoutePlan huntRoutePlan(uint64_t engineMaximumExpandedNodes);
-			std::vector<PlayerBotFixtureEvent> applyHuntPlanningHooks(PlayerBotHuntRuntime& runtime);
+			PlayerBotHuntPlanningObservation huntPlanningObservation() const;
+			void observeHuntPlanning(const PlayerBotHuntRuntimeOutcome& outcome);
 			void beginDelayedInitialization();
 			PlayerBotFixtureInitialization delayedInitializationStatus(Player& player);
 			PlayerBotFixtureStorageObservation depotRestartObservation(Player& player, DepotRestartCheckpoint checkpoint);
@@ -78,8 +79,8 @@ namespace playerbot {
 			PlayerBotFixtureEngineCommand equipmentPurchaseCommand() const;
 			PlayerBotFixtureStorageObservation equipmentPurchaseCompletion(Player& player) const;
 			uint64_t observedMagicTrainingMana(uint64_t engineObservation) const;
-			std::vector<PlayerBotFixtureEvent> runAdaptiveChallenge(Player& player, PlayerBotHuntRuntime& runtime);
-			std::vector<PlayerBotFixtureEvent> runSpellCalibration(Player& player, PlayerBotSurvivalRuntime& runtime);
+			std::vector<PlayerBotFixtureEvent> runAdaptiveChallenge(Player& player);
+			std::vector<PlayerBotFixtureEvent> runSpellCalibration(Player& player);
 			std::vector<PlayerBotFixtureEvent> runMagicTraining(Player& player);
 
 		private:
@@ -87,6 +88,7 @@ namespace playerbot {
 			uint32_t forcedNavigationStepFailuresRemaining = 0;
 			uint32_t forcedNavigationPlanFailuresRemaining = 0;
 			bool adaptiveChallengeRun = false;
+			uint8_t huntPlanningStarts = 0;
 			bool planningCancelled = false;
 			bool planningRevisionInvalidated = false;
 			bool forcedUnreachable = false;

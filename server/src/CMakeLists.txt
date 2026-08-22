@@ -54,6 +54,7 @@ set(tfs_SRC
 	${CMAKE_CURRENT_LIST_DIR}/playerbotdeparture.cpp
 	${CMAKE_CURRENT_LIST_DIR}/playerbotequipment.cpp
 	${CMAKE_CURRENT_LIST_DIR}/playerbotequipmentpolicy.cpp
+	${CMAKE_CURRENT_LIST_DIR}/playerbotequipmentadapter.cpp
 	${CMAKE_CURRENT_LIST_DIR}/playerboteconomy.cpp
 	${CMAKE_CURRENT_LIST_DIR}/playerbotgoalarbiter.cpp
 	${CMAKE_CURRENT_LIST_DIR}/playerbotgoalplanner.cpp

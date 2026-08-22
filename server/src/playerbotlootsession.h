@@ -12,6 +12,8 @@
 
 #include "playerbottargetingsession.h"
 
+class PlayerBotLootWorkflow;
+
 enum class PlayerBotLootNavigationTransition : uint8_t {
 	None,
 	Resumed,
@@ -50,10 +52,6 @@ struct PlayerBotLootDiscardVerification {
 class PlayerBotLootSession
 {
 	public:
-		void begin(uint32_t targetId, const Position& deathPosition, PlayerBotExpectedCorpse expectedCorpse,
-		           const Position& currentPosition, std::chrono::steady_clock::time_point now);
-		void reset();
-
 		uint32_t targetId() const { return target; }
 		const PlayerBotExpectedCorpse& expectedCorpse() const { return expectation; }
 		const Position& deathPosition() const { return lastKnownDeathPosition; }
@@ -61,25 +59,40 @@ class PlayerBotLootSession
 		uint16_t observedCorpseItemId() const { return observedItemId; }
 		uint32_t observedCorpseOwnerId() const { return observedOwnerId; }
 		bool corpseObserved() const { return observed; }
-		void observeCorpse(uint16_t itemId, uint32_t ownerId, const Position& position);
 
 		bool corpseContainerOpen() const { return corpseOpen; }
-		void setCorpseContainerOpen(bool open) { corpseOpen = open; }
 		bool backpackContainerOpen() const { return backpackOpen; }
-		void setBackpackContainerOpen(bool open) { backpackOpen = open; }
 
-		uint32_t incrementSearchAttempts() { return ++searchAttemptCount; }
-		uint32_t incrementOpenAttempts() { return ++openAttemptCount; }
 		uint32_t searchAttempts() const { return searchAttemptCount; }
 		uint32_t openAttempts() const { return openAttemptCount; }
 		bool lootedCurrentCorpse() const { return looted; }
-		void markLooted() { looted = true; }
 
 		bool timedOut(std::chrono::steady_clock::time_point now, std::chrono::steady_clock::duration timeout) const;
 		int64_t elapsedMilliseconds(std::chrono::steady_clock::time_point now) const;
 		bool navigationSuspended() const { return navigationPaused; }
 		uint32_t navigationFailures() const { return navigationFailureCount; }
 		uint32_t navigationSuspensions() const { return navigationSuspensionCount; }
+		std::chrono::steady_clock::time_point navigationRetryAt() const { return retryAt; }
+
+		bool hasPendingLootMove() const { return pendingLoot.has_value(); }
+		const std::optional<PlayerBotLootMove>& pendingLootMove() const { return pendingLoot; }
+
+		bool hasPendingDiscardMove() const { return pendingDiscard.has_value(); }
+		const std::optional<PlayerBotLootDiscardMove>& pendingDiscardMove() const { return pendingDiscard; }
+
+		bool lootItemUnavailable(uint16_t itemId) const;
+		const std::set<uint16_t>& unavailableLootItems() const { return unavailableItems; }
+
+	private:
+		friend class PlayerBotLootWorkflow;
+
+		void begin(uint32_t targetId, const Position& deathPosition, PlayerBotExpectedCorpse expectedCorpse,
+		           const Position& currentPosition, std::chrono::steady_clock::time_point now);
+		void reset();
+		void observeCorpse(uint16_t itemId, uint32_t ownerId, const Position& position);
+		uint32_t incrementSearchAttempts() { return ++searchAttemptCount; }
+		uint32_t incrementOpenAttempts() { return ++openAttemptCount; }
+		void markLooted() { looted = true; }
 		PlayerBotLootNavigationTransition resumeNavigation(const Position& currentPosition,
 		                                                  std::chrono::steady_clock::time_point now);
 		PlayerBotLootNavigationTransition observeNavigationFailure(const Position& currentPosition,
@@ -87,25 +100,12 @@ class PlayerBotLootSession
 		                                                          uint32_t maximumFailures,
 		                                                          uint32_t suspendThreshold,
 		                                                          std::chrono::milliseconds retryInterval);
-		std::chrono::steady_clock::time_point navigationRetryAt() const { return retryAt; }
-
-		bool hasPendingLootMove() const { return pendingLoot.has_value(); }
-		const std::optional<PlayerBotLootMove>& pendingLootMove() const { return pendingLoot; }
-		const std::optional<PlayerBotLootMove>& selectedLootMove() const { return selectedLoot; }
-		void selectLootMove(PlayerBotLootMove move) { selectedLoot = move; }
 		void beginLootMove(PlayerBotLootMove move);
 		std::optional<PlayerBotLootMoveVerification> verifyLootMove(uint32_t inventoryCount);
-
-		bool hasPendingDiscardMove() const { return pendingDiscard.has_value(); }
-		const std::optional<PlayerBotLootDiscardMove>& pendingDiscardMove() const { return pendingDiscard; }
 		void beginDiscardMove(PlayerBotLootDiscardMove move);
 		std::optional<PlayerBotLootDiscardVerification> verifyDiscardMove(uint32_t inventoryCount);
-
-		bool lootItemUnavailable(uint16_t itemId) const;
-		const std::set<uint16_t>& unavailableLootItems() const { return unavailableItems; }
 		void suppressLootItem(uint16_t itemId);
 
-	private:
 		uint32_t target = 0;
 		PlayerBotExpectedCorpse expectation;
 		Position lastKnownDeathPosition;
@@ -120,7 +120,6 @@ class PlayerBotLootSession
 		uint32_t navigationSuspensionCount = 0;
 		std::chrono::steady_clock::time_point started;
 		std::chrono::steady_clock::time_point retryAt;
-		std::optional<PlayerBotLootMove> selectedLoot;
 		std::optional<PlayerBotLootMove> pendingLoot;
 		std::optional<PlayerBotLootDiscardMove> pendingDiscard;
 		std::set<uint16_t> unavailableItems;

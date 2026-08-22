@@ -33,8 +33,12 @@ class PlayerBotServiceSession
 	public:
 	void reset();
 
-	bool hasShopTransaction() const;
-	const PlayerBotServiceTransaction* shopTransaction() const;
+		bool hasShopTransaction() const;
+		const PlayerBotServiceTransaction* shopTransaction() const;
+
+	private:
+	friend class PlayerBotServiceWorkflow;
+	friend class PlayerBotProgressionRuntime;
 	void beginShopTransaction(PlayerBotServiceTransaction transaction);
 	PlayerBotServiceVerification verifyShopTransaction(uint32_t itemCount, uint64_t money, uint64_t balance,
 	                                                   bool purchase, uint32_t unitPrice, uint32_t maximumRetries);
@@ -49,7 +53,6 @@ class PlayerBotServiceSession
 	const PlayerBotServiceTransaction& bankTransaction() const { return bank; }
 	PlayerBotServiceVerification verifyBankWithdrawal(uint64_t money, uint64_t balance, uint32_t maximumRetries);
 
-	private:
 	PlayerBotServiceTransaction shop;
 	PlayerBotServiceTransaction bank;
 	uint32_t shopRetries = 0;

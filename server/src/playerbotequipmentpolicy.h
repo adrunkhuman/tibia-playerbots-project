@@ -1,25 +1,75 @@
-/**
- * Durable playerbot equipment decisions. World discovery, execution, and
- * telemetry are deliberately supplied by callers.
- */
+/** Durable equipment decisions over immutable caller-provided observations. */
 #ifndef FS_PLAYERBOTEQUIPMENTPOLICY_H
 #define FS_PLAYERBOTEQUIPMENTPOLICY_H
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
+#include <stdint.h>
 #include <functional>
 #include <optional>
 #include <string>
+#include <vector>
 
-#include "creature.h"
-#include "playerbothuntregions.h"
+#include "playerbotcombatprofile.h"
+#include "position.h"
 
-class Item;
-class ItemType;
-class Player;
+enum slots_t : uint8_t;
+
+// Standard 8.60 inventory slots are numbered 0 through 10.
+inline constexpr size_t playerBotEquipmentSlotCount = 11;
+
+enum class PlayerBotEquipmentWeaponType : uint8_t {
+	None, Shield, Sword, Club, Axe, Distance, Ammo, Other,
+};
+
+struct PlayerBotEquipmentItemSnapshot {
+	uint16_t itemId = 0;
+	uint16_t minimumLevel = 0;
+	uint16_t minimumMagicLevel = 0;
+	uint32_t weight = 0;
+	uint32_t count = 0;
+	int32_t armor = 0;
+	int32_t defense = 0;
+	int32_t extraDefense = 0;
+	int32_t attack = 0;
+	std::vector<uint16_t> vocationIds;
+	PlayerBotEquipmentWeaponType weaponType = PlayerBotEquipmentWeaponType::None;
+	bool pickupable = false;
+	bool removed = false;
+	bool premiumRequired = false;
+	bool head = false;
+	bool armorSlot = false;
+	bool legs = false;
+	bool feet = false;
+	bool left = false;
+	bool right = false;
+	bool twoHanded = false;
+	bool container = false;
+	bool inContainer = false;
+	bool equipped = false;
+};
+
+struct PlayerBotEquipmentPlayerSnapshot {
+	uint32_t level = 0;
+	uint32_t magicLevel = 0;
+	uint16_t vocationId = 0;
+	bool premium = false;
+	int32_t maximumHealth = 0;
+	int32_t fistSkill = 0;
+	int32_t swordSkill = 0;
+	int32_t clubSkill = 0;
+	int32_t axeSkill = 0;
+	int32_t distanceSkill = 0;
+	int32_t shieldSkill = 0;
+	float attackFactor = 1.0f;
+	float defenseFactor = 1.0f;
+	double armorMultiplier = 1.0;
+	double defenseMultiplier = 1.0;
+};
 
 struct PlayerBotEquipmentUpgrade {
-	slots_t slot = CONST_SLOT_WHEREEVER;
+	slots_t slot = static_cast<slots_t>(0);
 	int32_t benefit = 0;
 	const char* metric = nullptr;
 	int32_t currentValue = 0;
@@ -27,7 +77,18 @@ struct PlayerBotEquipmentUpgrade {
 };
 
 struct PlayerBotEquipmentLoadout {
-	std::array<uint16_t, CONST_SLOT_LAST + 1> itemIds{};
+	std::array<uint16_t, playerBotEquipmentSlotCount> itemIds{};
+	std::array<PlayerBotEquipmentItemSnapshot, playerBotEquipmentSlotCount> items{};
+};
+
+struct PlayerBotEquipmentCarriedCandidate {
+	PlayerBotEquipmentItemSnapshot item;
+	bool actionable = false;
+};
+
+struct PlayerBotEquipmentCarriedUpgrade {
+	size_t index = 0;
+	PlayerBotEquipmentUpgrade upgrade;
 };
 
 struct PlayerBotEquipmentHuntSummary {
@@ -39,10 +100,7 @@ struct PlayerBotEquipmentHuntSummary {
 };
 
 enum class PlayerBotEquipmentDecisionRule : uint8_t {
-	None,
-	ParetoImprovement,
-	UnlocksHunt,
-	ReadinessRepair,
+	None, ParetoImprovement, UnlocksHunt, ReadinessRepair,
 };
 
 struct PlayerBotEquipmentOfferEvaluation {
@@ -51,7 +109,7 @@ struct PlayerBotEquipmentOfferEvaluation {
 	Position approachPosition;
 	uint16_t itemId = 0;
 	uint32_t price = 0;
-	slots_t slot = CONST_SLOT_WHEREEVER;
+	slots_t slot = static_cast<slots_t>(0);
 	uint16_t replacedItemId = 0;
 	uint16_t displacedLeftItemId = 0;
 	uint16_t displacedRightItemId = 0;
@@ -82,27 +140,30 @@ struct PlayerBotEquipmentReadinessInput {
 class PlayerBotEquipmentPolicy
 {
 	public:
-		using HuntSummaryEvaluator = std::function<PlayerBotEquipmentHuntSummary(Player&, const PlayerBotCombatProfile&)>;
+		using HuntSummaryEvaluator = std::function<PlayerBotEquipmentHuntSummary(const PlayerBotCombatProfile&)>;
 
 		explicit PlayerBotEquipmentPolicy(uint16_t combatReadinessVocationId);
-		bool requiresKnightCombatReadiness(const Player& player) const;
-		bool isLegalEquipmentType(const Player& player, const ItemType& type) const;
-		bool isLegalEquipmentItem(const Player& player, const Item& item) const;
-		bool isKnightMeleeWeapon(const Player& player, const Item& item) const;
-		bool isCombatEquipment(const Item& item) const;
-
-		std::optional<PlayerBotEquipmentUpgrade> evaluateUpgrade(const Player& player, const Item& candidate) const;
-		bool findCarriedUpgrade(Player& player, Item*& selectedItem, PlayerBotEquipmentUpgrade& selectedUpgrade) const;
-		PlayerBotEquipmentLoadout loadout(const Player& player) const;
-		bool applyOffer(const Player& player, PlayerBotEquipmentLoadout& loadout, uint16_t itemId, slots_t& slot,
-		                uint16_t& replacedItemId, uint16_t& displacedLeftItemId, uint16_t& displacedRightItemId,
-		                std::string& rejection) const;
-		PlayerBotCombatProfile combatProfile(const Player& player, const PlayerBotEquipmentLoadout& loadout) const;
-		bool loadoutReady(const Player& player, const PlayerBotEquipmentLoadout& loadout,
+		bool requiresKnightCombatReadiness(const PlayerBotEquipmentPlayerSnapshot& player) const;
+		bool isLegalEquipmentItem(const PlayerBotEquipmentPlayerSnapshot& player,
+		                          const PlayerBotEquipmentItemSnapshot& item) const;
+		bool isKnightMeleeWeapon(const PlayerBotEquipmentPlayerSnapshot& player,
+		                         const PlayerBotEquipmentItemSnapshot& item) const;
+		bool isCombatEquipment(const PlayerBotEquipmentItemSnapshot& item) const;
+		std::optional<PlayerBotEquipmentUpgrade> evaluateUpgrade(const PlayerBotEquipmentPlayerSnapshot& player,
+		                                                         const PlayerBotEquipmentLoadout& loadout,
+		                                                         const PlayerBotEquipmentItemSnapshot& candidate) const;
+		std::optional<PlayerBotEquipmentCarriedUpgrade> findCarriedUpgrade(const PlayerBotEquipmentPlayerSnapshot& player,
+		                                                                   const PlayerBotEquipmentLoadout& loadout,
+		                                                                   const std::vector<PlayerBotEquipmentCarriedCandidate>& candidates) const;
+		PlayerBotCombatProfile combatProfile(const PlayerBotEquipmentPlayerSnapshot& player,
+		                                     const PlayerBotEquipmentLoadout& loadout) const;
+		bool loadoutReady(const PlayerBotEquipmentPlayerSnapshot& player, const PlayerBotEquipmentLoadout& loadout,
 		                  const PlayerBotEquipmentReadinessInput& readiness, uint32_t additionalWeight = 0) const;
-		PlayerBotEquipmentReadiness combatReadiness(const Player& player, bool carriedUpgrade,
+		PlayerBotEquipmentReadiness combatReadiness(const PlayerBotEquipmentPlayerSnapshot& player,
+		                                            const PlayerBotEquipmentLoadout& loadout, bool carriedUpgrade,
 		                                            const PlayerBotEquipmentReadinessInput& readiness) const;
-		PlayerBotEquipmentOfferEvaluation evaluateCandidate(Player& player, uint16_t itemId,
+		PlayerBotEquipmentOfferEvaluation evaluateCandidate(const PlayerBotEquipmentPlayerSnapshot& player,
+		                                                    const PlayerBotEquipmentItemSnapshot& candidate,
 		                                                    const PlayerBotEquipmentLoadout& currentLoadout,
 		                                                    const PlayerBotCombatProfile& currentProfile,
 		                                                    const PlayerBotEquipmentHuntSummary& currentHunts,
@@ -116,6 +177,9 @@ class PlayerBotEquipmentPolicy
 		                    const PlayerBotEquipmentOfferEvaluation& current);
 
 	private:
+		bool applyOffer(const PlayerBotEquipmentPlayerSnapshot& player, PlayerBotEquipmentLoadout& loadout,
+		                const PlayerBotEquipmentItemSnapshot& candidate, slots_t& slot, uint16_t& replacedItemId,
+		                uint16_t& displacedLeftItemId, uint16_t& displacedRightItemId, std::string& rejection) const;
 		const uint16_t combatReadinessVocationId;
 };
 

@@ -5,31 +5,64 @@
 
 #include "playerbotprogressionruntime.h"
 
-PlayerBotGoalArbiter::GoalDecision PlayerBotProgressionRuntime::decide(const PlayerBotGoalPlannerSnapshot& snapshot)
+PlayerBotGoalArbiter::GoalDecision PlayerBotProgressionRuntime::selectGoal(const PlayerBotGoalPlannerSnapshot& snapshot)
 {
-	return planner.decide(snapshot, arbiter);
-}
-
-PlayerBotGoalArbiter::GoalDecision PlayerBotProgressionRuntime::force(PlayerBotGoalArbiter::GoalCandidate candidate)
-{
-	return arbiter.force(std::move(candidate));
-}
-
-void PlayerBotProgressionRuntime::apply(const PlayerBotGoalArbiter::GoalDecision& decision)
-{
+	PlayerBotGoalArbiter::GoalDecision decision = arbiter.decide(planner.candidates(snapshot));
 	arbiter.apply(decision);
+	return decision;
+}
+
+PlayerBotGoalArbiter::GoalDecision PlayerBotProgressionRuntime::interruptForDeparture(bool feasible, int32_t utility, std::string reason)
+{
+	PlayerBotGoalArbiter::GoalDecision decision = arbiter.force({PlayerBotGoalArbiter::TopLevelGoal::Departure, feasible, utility, std::move(reason)});
+	arbiter.apply(decision);
+	return decision;
+}
+
+PlayerBotGoalArbiter::GoalDecision PlayerBotProgressionRuntime::interruptHuntForService(std::string reason)
+{
+	PlayerBotGoalArbiter::GoalDecision decision = arbiter.force(planner.forcedServiceCandidate(std::move(reason)));
+	arbiter.apply(decision);
+	return decision;
+}
+
+void PlayerBotProgressionRuntime::enterService()
+{
+	arbiter.setActiveGoal(PlayerBotGoalArbiter::TopLevelGoal::Service);
+}
+
+void PlayerBotProgressionRuntime::enterHunt()
+{
+	arbiter.setActiveGoal(PlayerBotGoalArbiter::TopLevelGoal::Hunt);
+}
+
+void PlayerBotProgressionRuntime::completeReward(bool succeeded, std::chrono::steady_clock::duration cooldown)
+{
+	arbiter.setCooldown(PlayerBotGoalArbiter::TopLevelGoal::PickupReward, cooldown);
+	if (!succeeded) enterService();
+}
+
+void PlayerBotProgressionRuntime::completeSpellTraining(bool succeeded, std::chrono::steady_clock::duration cooldown)
+{
+	arbiter.setCooldown(PlayerBotGoalArbiter::TopLevelGoal::LearnSpell, cooldown);
+	if (!succeeded) enterService();
+}
+
+void PlayerBotProgressionRuntime::completeEquipmentPurchase(bool succeeded, std::chrono::steady_clock::duration cooldown)
+{
+	arbiter.setCooldown(PlayerBotGoalArbiter::TopLevelGoal::BuyEquipment, cooldown);
+	if (!succeeded) enterService();
+}
+
+void PlayerBotProgressionRuntime::completeMagicTraining(std::chrono::steady_clock::duration cooldown)
+{
+	arbiter.setCooldown(PlayerBotGoalArbiter::TopLevelGoal::MagicTraining, cooldown);
 }
 
 bool PlayerBotProgressionRuntime::isCoolingDown(PlayerBotGoalArbiter::TopLevelGoal goal,
 	std::chrono::steady_clock::time_point now) const
 {
 	return arbiter.isCoolingDown(goal, now);
-}
-
-void PlayerBotProgressionRuntime::setCooldown(PlayerBotGoalArbiter::TopLevelGoal goal,
-	std::chrono::steady_clock::duration duration)
-{
-	arbiter.setCooldown(goal, duration);
 }
 
 void PlayerBotProgressionRuntime::beginReward(PlayerBotRewardPlan plan, std::map<uint16_t, uint32_t> displacedCounts)
@@ -43,6 +76,7 @@ void PlayerBotProgressionRuntime::beginReward(PlayerBotRewardPlan plan, std::map
 void PlayerBotProgressionRuntime::beginDeparture(PlayerBotOracleDeparturePlan plan)
 {
 	finish();
+	beginNpcConversation(plan.npcId);
 	departureSession.begin(std::move(plan));
 	progression.begin(PlayerBotProgressionProcedure::OracleDeparture);
 }
@@ -50,6 +84,7 @@ void PlayerBotProgressionRuntime::beginDeparture(PlayerBotOracleDeparturePlan pl
 void PlayerBotProgressionRuntime::beginSpellTraining(PlayerBotSpellTrainingPlan plan)
 {
 	finish();
+	beginNpcConversation(plan.npcId);
 	spellTrainingSession.begin(std::move(plan));
 	progression.begin(PlayerBotProgressionProcedure::LearnSpell);
 }
@@ -57,6 +92,7 @@ void PlayerBotProgressionRuntime::beginSpellTraining(PlayerBotSpellTrainingPlan 
 void PlayerBotProgressionRuntime::beginEquipmentPurchase(PlayerBotEquipmentOfferEvaluation plan)
 {
 	finish();
+	if (!plan.carried) beginNpcConversation(plan.npcId);
 	equipmentPurchaseSession.begin(std::move(plan));
 	progression.begin(PlayerBotProgressionProcedure::BuyEquipment);
 }
@@ -71,11 +107,92 @@ void PlayerBotProgressionRuntime::finish()
 		case PlayerBotProgressionProcedure::None: break;
 	}
 	progression.reset();
+	finishNpcConversation();
+}
+
+void PlayerBotProgressionRuntime::beginNpcConversation(uint32_t npcId)
+{
+	npcSession.reset(npcId);
+	equipmentTransaction.reset();
+}
+
+void PlayerBotProgressionRuntime::finishNpcConversation()
+{
+	npcSession.reset();
+	equipmentTransaction.reset();
+}
+
+bool PlayerBotProgressionRuntime::reportNpcReply(uint32_t playerId, uint32_t replyingPlayerId, uint32_t npcId, uint8_t type)
+{
+	return npcSession.acceptReply(playerId, replyingPlayerId, npcId, type);
+}
+
+PlayerBotEquipmentShopCommand PlayerBotProgressionRuntime::advanceEquipmentShop(const PlayerBotNpcShopObservation& observation,
+                                                                                  uint32_t maximumRetries)
+{
+	PlayerBotNpcShopObservation current = observation;
+	current.greetingAcknowledged = npcSession.isGreetingAcknowledged();
+	const PlayerBotNpcSessionOutcome outcome = npcSession.advanceShop(current, maximumRetries);
+	const char* speech = nullptr;
+	if (outcome.actionsIssued != 0) speech = npcSession.step() == PlayerBotNpcConversationStep::Request ? "hi" : "trade";
+	const char* failureReason = outcome.result == PlayerBotNpcSessionResult::Failed ?
+		npcSession.step() == PlayerBotNpcConversationStep::Request ? "npc_focus_unconfirmed" : "shop_window_unavailable" : nullptr;
+	return {outcome.result, speech, observation.otherShopOpen && speech && npcSession.step() == PlayerBotNpcConversationStep::Request,
+	        npcSession.nextDelay(), failureReason};
 }
 
 PlayerBotProgressionCommand PlayerBotProgressionRuntime::command(PlayerBotProgressionCommandType type, const char* reason) const
 {
 	return {type, progression.active(), 0, 0, reason};
+}
+
+PlayerBotReadinessEquipmentCommand PlayerBotProgressionRuntime::beginReadinessEquipment(
+	const PlayerBotReadinessEquipmentObservation& observation, bool resumeService, uint32_t maximumRetries)
+{
+	readinessEquipment.resumeService = readinessEquipment.resumeService || resumeService;
+	if (!observation.upgradeAvailable || !observation.actionAvailable) return {};
+	if (readinessEquipment.itemId != observation.itemId || readinessEquipment.slot != observation.slot) {
+		readinessEquipment = {};
+		readinessEquipment.itemId = observation.itemId;
+		readinessEquipment.slot = observation.slot;
+		readinessEquipment.resumeService = resumeService;
+	}
+	if (observation.openContainerRequired) {
+		if (!observation.containerAccessAvailable || ++readinessEquipment.attempts >= maximumRetries) {
+			const PlayerBotReadinessEquipmentCommand command{PlayerBotReadinessEquipmentCommandType::ServiceFallback, 0,
+				CONST_SLOT_WHEREEVER, readinessEquipment.attempts, "access_attempts_exhausted"};
+			readinessEquipment = {};
+			return command;
+		}
+		return {PlayerBotReadinessEquipmentCommandType::OpenContainer, observation.itemId, observation.slot,
+		        readinessEquipment.attempts, "open_readiness_container"};
+	}
+	readinessEquipment.pending = true;
+	return {PlayerBotReadinessEquipmentCommandType::Equip, observation.itemId, observation.slot,
+	        readinessEquipment.attempts, "equip_readiness"};
+}
+
+PlayerBotReadinessEquipmentCommand PlayerBotProgressionRuntime::advanceReadinessEquipment(
+	const PlayerBotReadinessEquipmentObservation& observation, uint32_t maximumRetries)
+{
+	if (!readinessEquipment.pending) return {};
+	if (observation.equipmentVerified) {
+		const PlayerBotReadinessEquipmentCommandType type = readinessEquipment.resumeService ?
+			PlayerBotReadinessEquipmentCommandType::ResumeService : observation.combatReady ?
+			PlayerBotReadinessEquipmentCommandType::StartHunt : PlayerBotReadinessEquipmentCommandType::Retry;
+		const PlayerBotReadinessEquipmentCommand command{type, readinessEquipment.itemId, readinessEquipment.slot,
+			readinessEquipment.attempts, type == PlayerBotReadinessEquipmentCommandType::Retry ? "readiness_upgrade_incomplete" : nullptr};
+		readinessEquipment = {};
+		return command;
+	}
+	if (++readinessEquipment.attempts >= maximumRetries) {
+		const PlayerBotReadinessEquipmentCommand command{PlayerBotReadinessEquipmentCommandType::ServiceFallback,
+			readinessEquipment.itemId, readinessEquipment.slot, readinessEquipment.attempts, "move_not_verified"};
+		readinessEquipment = {};
+		return command;
+	}
+	return {PlayerBotReadinessEquipmentCommandType::Retry, readinessEquipment.itemId, readinessEquipment.slot,
+	        readinessEquipment.attempts, "readiness_retry"};
 }
 
 PlayerBotProgressionOutcome PlayerBotProgressionRuntime::advanceDeparture(const PlayerBotDepartureObservation& observation)
@@ -268,7 +385,8 @@ PlayerBotProgressionOutcome PlayerBotProgressionRuntime::advanceReward(const Pla
 	return outcome(PlayerBotProgressionCommandType::Finish, PlayerBotProgressionOutcomeType::Failed, "invalid_reward_stage");
 }
 
-PlayerBotProgressionOutcome PlayerBotProgressionRuntime::advanceEquipmentPurchase(const PlayerBotEquipmentPurchaseObservation& observation)
+PlayerBotProgressionOutcome PlayerBotProgressionRuntime::advanceEquipmentPurchase(
+	const PlayerBotEquipmentPurchaseObservation& observation, uint32_t maximumRetries)
 {
 	const auto outcome = [this](PlayerBotProgressionCommandType type, PlayerBotProgressionOutcomeType result, const char* reason) {
 		return PlayerBotProgressionOutcome{{type, progression.active(), static_cast<uint8_t>(equipmentPurchaseSession.stage()), equipmentPurchaseSession.retries(), reason},
@@ -286,19 +404,31 @@ PlayerBotProgressionOutcome PlayerBotProgressionRuntime::advanceEquipmentPurchas
 			if (!observation.providerInRange) return outcome(PlayerBotProgressionCommandType::Finish, PlayerBotProgressionOutcomeType::Failed, "provider_moved");
 			if (!observation.shopReady) return outcome(PlayerBotProgressionCommandType::Shop, PlayerBotProgressionOutcomeType::Pending, "open_shop");
 			if (!observation.fundingAvailable) return outcome(PlayerBotProgressionCommandType::Finish, PlayerBotProgressionOutcomeType::Failed, "reserve_changed");
+			equipmentTransaction.beginShopTransaction({equipmentPurchaseSession.plan().itemId, 1, observation.itemCount,
+			observation.money, observation.bankBalance});
 			equipmentPurchaseSession.setStage(PlayerBotEquipmentPurchaseStage::VerifyPurchase);
 			return outcome(PlayerBotProgressionCommandType::Shop, PlayerBotProgressionOutcomeType::Pending, "purchase_equipment");
 		case PlayerBotEquipmentPurchaseStage::VerifyPurchase:
-			if (observation.transactionMismatch) return outcome(PlayerBotProgressionCommandType::Finish, PlayerBotProgressionOutcomeType::Failed, "transaction_delta_mismatch");
-			if (observation.transactionRejected) return outcome(PlayerBotProgressionCommandType::Finish, PlayerBotProgressionOutcomeType::Failed, "transaction_rejected");
-			if (!observation.transactionSucceeded) {
+			{
+				const PlayerBotServiceVerification verification = equipmentTransaction.verifyShopTransaction(observation.itemCount,
+					observation.money, observation.bankBalance, true, equipmentPurchaseSession.plan().price, maximumRetries);
+				if (verification.result == PlayerBotServiceVerificationResult::Mismatch) {
+					return outcome(PlayerBotProgressionCommandType::Finish, PlayerBotProgressionOutcomeType::Failed, "transaction_delta_mismatch");
+				}
+				if (verification.result == PlayerBotServiceVerificationResult::Rejected) {
+					return outcome(PlayerBotProgressionCommandType::Finish, PlayerBotProgressionOutcomeType::Failed, "transaction_rejected");
+				}
+				if (verification.result == PlayerBotServiceVerificationResult::Success) {
+					equipmentPurchaseSession.resetRetries();
+					equipmentPurchaseSession.setStage(PlayerBotEquipmentPurchaseStage::Equip);
+					return {command(PlayerBotProgressionCommandType::None), PlayerBotProgressionOutcomeType::Pending, 0, nullptr,
+					        verification.before};
+				}
 				equipmentPurchaseSession.incrementRetries();
 				equipmentPurchaseSession.setStage(PlayerBotEquipmentPurchaseStage::Purchase);
+				npcSession.setStep(PlayerBotNpcConversationStep::Ready);
 				return outcome(PlayerBotProgressionCommandType::None, PlayerBotProgressionOutcomeType::Retry, "purchase_equipment");
 			}
-			equipmentPurchaseSession.resetRetries();
-			equipmentPurchaseSession.setStage(PlayerBotEquipmentPurchaseStage::Equip);
-			return outcome(PlayerBotProgressionCommandType::None, PlayerBotProgressionOutcomeType::Pending, nullptr);
 		case PlayerBotEquipmentPurchaseStage::Equip:
 			if (observation.equipmentVerified) {
 				equipmentPurchaseSession.setStage(PlayerBotEquipmentPurchaseStage::VerifyEquipment);

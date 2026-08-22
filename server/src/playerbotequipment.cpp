@@ -24,7 +24,25 @@ namespace {
 PlayerBotController::EquipmentHuntSummary PlayerBotController::equipmentHuntSummary(Player& player,
 	                                                                                   const PlayerBotCombatProfile& profile) const
 {
-	return huntRuntime.scoreEquipmentHunts(player, profile, maximumEquipmentHuntRegions);
+	PlayerBotHuntRegionPlanner planner;
+	const PlayerBotHuntRegionScan scan = planner.beginScan(player);
+	const PlayerBotHuntPlanningProfile planning = huntRuntime.planningProfile(playerBotHuntPlanningProfile(player, profile, 0));
+	const auto performance = huntRuntime.regionPerformance();
+	const uint32_t duration = static_cast<uint32_t>(std::max<int32_t>(1, g_config.getNumber(ConfigManager::PLAYERBOT_HUNT_DURATION_SECONDS)));
+	std::vector<PlayerBotHuntRegion> regions;
+	regions.reserve(std::min(scan.candidateIndices.size(), maximumEquipmentHuntRegions));
+	bool truncated = false;
+	for (size_t candidateIndex : scan.candidateIndices) {
+		if (regions.size() >= maximumEquipmentHuntRegions) {
+			truncated = true;
+			break;
+		}
+		auto score = planner.score(player, planning, scan.revision, candidateIndex, {}, performance, duration);
+		if (score.valid) {
+			regions.push_back(std::move(score.region));
+		}
+	}
+	return huntRuntime.summarizeEquipmentHunts(regions, truncated);
 }
 
 void PlayerBotController::emitEquipmentOffer(const Player& player, const EquipmentOfferEvaluation& evaluation,
@@ -68,13 +86,11 @@ void PlayerBotController::emitEquipmentOffer(const Player& player, const Equipme
 std::optional<PlayerBotController::EquipmentOfferEvaluation> PlayerBotController::evaluateEquipmentOffers(
 	Player& player, const Position& position)
 {
-	if (!equipmentPolicy.requiresKnightCombatReadiness(player)) {
-		return std::nullopt;
-	}
 	const uint64_t reserve = spellTrainingReserve(player);
 	const uint64_t totalMoney = player.getMoney() + player.getBankBalance();
-	const EquipmentLoadout currentLoadout = equipmentPolicy.loadout(player);
-	const PlayerBotCombatProfile currentProfile = equipmentPolicy.combatProfile(player, currentLoadout);
+	const PlayerBotEquipmentPlayerSnapshot playerFacts = PlayerBotEquipmentAdapter::player(player);
+	const EquipmentLoadout currentLoadout = PlayerBotEquipmentAdapter::loadout(player);
+	const PlayerBotCombatProfile currentProfile = equipmentPolicy.combatProfile(playerFacts, currentLoadout);
 	const EquipmentHuntSummary currentHunts = equipmentHuntSummary(player, currentProfile);
 	const Item* backpackItem = player.getInventoryItem(CONST_SLOT_BACKPACK);
 	const PlayerBotEquipmentReadinessInput readiness{
@@ -83,13 +99,11 @@ std::optional<PlayerBotController::EquipmentOfferEvaluation> PlayerBotController
 		inventoryPolicy.effectiveFreeCapacity(player),
 		returnCapacityThreshold,
 	};
-	const bool currentReady = equipmentPolicy.loadoutReady(player, currentLoadout, readiness);
+	const bool currentReady = equipmentPolicy.loadoutReady(playerFacts, currentLoadout, readiness);
 	std::map<uint16_t, EquipmentOfferEvaluation> evaluatedItems;
 	std::map<uint32_t, std::optional<std::pair<Position, uint32_t>>> providerRoutes;
 	std::set<uint32_t> providerRouteNodeLimits;
-	std::optional<EquipmentOfferEvaluation> selected;
 	std::vector<PlayerBotEquipmentProviderOfferSnapshot> plannerOffers;
-	uint32_t feasibleCandidates = 0;
 	size_t simulatedItems = 0;
 	bool providerRouteBudgetExhausted = false;
 	size_t catalogOffers = 0;
@@ -130,7 +144,7 @@ std::optional<PlayerBotController::EquipmentOfferEvaluation> PlayerBotController
 			std::deque<PlayerBotNavigationStep> steps;
 			uint64_t expandedNodes = 0;
 			const PlayerBotNavigationRoutePlan routePlan = approach == position ? PlayerBotNavigationRoutePlan{} :
-				navigationRuntime.plan(player, approach, {}, maximumEquipmentProviderPathNodes);
+				planNavigationRoute(player, approach, {}, maximumEquipmentProviderPathNodes);
 			const PlayerBotNavigationResult result = approach == position ? PlayerBotNavigationResult::Reached : routePlan.metrics.result;
 			telemetry.recordPathfinding(std::chrono::microseconds::zero(), result == PlayerBotNavigationResult::Reached);
 			if (approach != position) {
@@ -157,9 +171,6 @@ std::optional<PlayerBotController::EquipmentOfferEvaluation> PlayerBotController
 			continue;
 		}
 		for (const ShopInfo& offer : npc->getShopOffers()) {
-			if (offer.buyPrice == 0) {
-				continue;
-			}
 			if (catalogOffers >= maximumEquipmentCatalogOffers) {
 				catalogTruncated = true;
 				break;
@@ -171,11 +182,11 @@ std::optional<PlayerBotController::EquipmentOfferEvaluation> PlayerBotController
 				evaluation = item->second;
 			} else {
 				evaluation = equipmentPolicy.evaluateCandidate(
-					player, offer.itemId, currentLoadout, currentProfile, currentHunts, currentReady, readiness,
+					playerFacts, PlayerBotEquipmentAdapter::item(offer.itemId), currentLoadout, currentProfile, currentHunts, currentReady, readiness,
 					carried ? 0 : Item::items[offer.itemId].weight,
 					simulatedItems < maximumEquipmentCandidateSimulations,
-					[this](Player& candidate, const PlayerBotCombatProfile& profile) {
-						return equipmentHuntSummary(candidate, profile);
+					[this, &player](const PlayerBotCombatProfile& profile) {
+						return equipmentHuntSummary(player, profile);
 					});
 				if (evaluation.simulated) {
 					++simulatedItems;
@@ -186,16 +197,6 @@ std::optional<PlayerBotController::EquipmentOfferEvaluation> PlayerBotController
 			evaluation.npcPosition = npc->getPosition();
 			evaluation.price = offer.buyPrice;
 			evaluation.carried = carried;
-			if (!evaluation.rejection.empty()) {
-				emitEquipmentOffer(player, evaluation, currentProfile, currentHunts, reserve, position, "rejected",
-				                   evaluation.rejection.c_str());
-				continue;
-			}
-			if (!evaluation.carried && Item::items[offer.itemId].weight > player.getFreeCapacity()) {
-				emitEquipmentOffer(player, evaluation, currentProfile, currentHunts, reserve, position, "rejected",
-				                   "insufficient_capacity");
-				continue;
-			}
 			Item* backpackItem = player.getInventoryItem(CONST_SLOT_BACKPACK);
 			Container* backpack = backpackItem ? backpackItem->getContainer() : nullptr;
 			const uint32_t freeBackpackSlots = backpack ? backpack->capacity() -
@@ -210,55 +211,41 @@ std::optional<PlayerBotController::EquipmentOfferEvaluation> PlayerBotController
 				}
 			}
 			const uint32_t requiredBackpackSlots = displacedSlots + (evaluation.carried ? 0 : 1);
-			if (!backpack || freeBackpackSlots < requiredBackpackSlots) {
-				emitEquipmentOffer(player, evaluation, currentProfile, currentHunts, reserve, position, "rejected",
-				                   "insufficient_displaced_item_space");
-				continue;
-			}
 			if (evaluation.carried) {
 				evaluation.travelSteps = 0;
-				emitEquipmentOffer(player, evaluation, currentProfile, currentHunts, reserve, position, "feasible", "carried_upgrade");
 				plannerOffers.push_back({evaluation, Item::items[offer.itemId].weight, freeBackpackSlots, backpack != nullptr,
-				                         false, {true, false, Position(), 0, 0}});
-				++feasibleCandidates;
-				if (!selected || PlayerBotEquipmentPolicy::prefers(evaluation, *selected)) {
-					selected = evaluation;
-				}
-				continue;
-			}
-			if (reserve == std::numeric_limits<uint64_t>::max()) {
-				emitEquipmentOffer(player, evaluation, currentProfile, currentHunts, reserve, position, "rejected", "recovery_reserve_unavailable");
-				continue;
-			}
-			if (totalMoney < reserve + evaluation.price) {
-				emitEquipmentOffer(player, evaluation, currentProfile, currentHunts, reserve, position, "rejected", "unaffordable_after_reserves");
+				                         true, false, {true, false, Position(), 0, 0}});
 				continue;
 			}
 			const std::optional<std::pair<Position, uint32_t>> route = providerRoute(*npc);
-			if (!route) {
-				const char* reason = providerRouteBudgetExhausted ? "provider_evaluation_budget_exhausted" :
-				                     providerRouteNodeLimits.find(npc->getID()) != providerRouteNodeLimits.end() ?
-				                     "provider_route_node_budget_exhausted" : "provider_unreachable";
-				emitEquipmentOffer(player, evaluation, currentProfile, currentHunts, reserve, position, "rejected", reason);
-				continue;
+			if (route) {
+				evaluation.approachPosition = route->first;
+				evaluation.travelSteps = route->second;
 			}
-			evaluation.approachPosition = route->first;
-			evaluation.travelSteps = route->second;
-			emitEquipmentOffer(player, evaluation, currentProfile, currentHunts, reserve, position, "feasible", nullptr);
 			plannerOffers.push_back({evaluation, Item::items[offer.itemId].weight, freeBackpackSlots, backpack != nullptr,
-			                         false, {true, false, route->first, route->second, 0}});
-			++feasibleCandidates;
-			if (!selected || PlayerBotEquipmentPolicy::prefers(evaluation, *selected)) {
-				selected = evaluation;
-			}
+			                         offer.buyPrice != 0, providerRouteBudgetExhausted,
+			                         {route.has_value(), providerRouteNodeLimits.find(npc->getID()) != providerRouteNodeLimits.end(),
+			                          route ? route->first : Position(), route ? route->second : 0, 0}});
 		}
 	}
-	const PlayerBotEquipmentProviderDecision plannerDecision = equipmentProviderPlanner.select({true, reserve, totalMoney,
-	    reserve != std::numeric_limits<uint64_t>::max(), player.getFreeCapacity(), std::move(plannerOffers)});
-	selected = plannerDecision.selected;
+	const PlayerBotEquipmentProviderPlannerSnapshot plannerSnapshot{equipmentPolicy.requiresKnightCombatReadiness(playerFacts), reserve,
+	    totalMoney, reserve != std::numeric_limits<uint64_t>::max(), player.getFreeCapacity(), plannerOffers};
+	const PlayerBotEquipmentProviderDecision plannerDecision = equipmentProviderPlanner.select(plannerSnapshot);
+	if (!plannerDecision.evaluated) return std::nullopt;
+	const std::optional<EquipmentOfferEvaluation>& selected = plannerDecision.selected;
+	for (size_t offerIndex = 0; offerIndex < plannerOffers.size(); ++offerIndex) {
+		const auto& candidate = plannerOffers[offerIndex];
+		const auto rejection = std::find_if(plannerDecision.rejections.begin(), plannerDecision.rejections.end(),
+		                                    [offerIndex](const PlayerBotPlannerOfferRejection& result) {
+			                                    return result.offerIndex == offerIndex;
+		                                    });
+		emitEquipmentOffer(player, candidate.evaluation, currentProfile, currentHunts, reserve, position,
+		                   rejection == plannerDecision.rejections.end() ? "feasible" : "rejected",
+		                   rejection == plannerDecision.rejections.end() ? nullptr : rejection->reason.c_str());
+	}
 	std::ostringstream fields;
 	fields << "\"result\":" << jsonString(selected ? (selected->carried ? "would_equip" : "would_buy") : "no_decision")
-	       << ",\"feasible_candidates\":" << feasibleCandidates
+	       << ",\"feasible_candidates\":" << (selected ? 1 : 0)
 	       << ",\"catalog_offers_evaluated\":" << catalogOffers
 	       << ",\"catalog_truncated\":" << (catalogTruncated ? "true" : "false")
 	       << ",\"reason\":" << jsonString(selected ? PlayerBotEquipmentPolicy::decisionRuleName(selected->rule) : "no_justified_offer");
@@ -274,12 +261,8 @@ void PlayerBotController::beginEquipmentPurchase(Player& player, const Position&
 	EquipmentOfferEvaluation evaluation)
 {
 	progressionRuntime.beginEquipmentPurchase(std::move(evaluation));
-	const auto& purchase = equipmentPurchaseSession.plan();
-	serviceWorkflow.resetTransactions();
+	const auto& purchase = progressionRuntime.equipmentPurchase().plan();
 	if (!purchase.carried) {
-		serviceWorkflow.resetNpc(purchase.npcId);
-		serviceWorkflow.clearApproach();
-		serviceWorkflow.clearRejectedApproaches();
 		clearNavigation();
 	}
 	std::ostringstream fields;
@@ -296,7 +279,7 @@ void PlayerBotController::beginEquipmentPurchase(Player& player, const Position&
 void PlayerBotController::finishEquipmentPurchase(Player* player, const Position& position, const char* result,
 	const char* reason)
 {
-	const auto& purchase = equipmentPurchaseSession.plan();
+	const auto& purchase = progressionRuntime.equipmentPurchase().plan();
 	std::ostringstream fields;
 	fields << "\"goal\":\"buy_equipment\",\"npc_id\":" << purchase.npcId
 	       << ",\"item_id\":" << purchase.itemId << ",\"price\":" << purchase.price
@@ -304,7 +287,7 @@ void PlayerBotController::finishEquipmentPurchase(Player* player, const Position
 	       << ",\"result\":" << jsonString(result) << ",\"reason\":" << jsonString(reason);
 	emit("strategy_objective_result", position, fields.str());
 	emit("goal_result", position,
-	     "\"decision_id\":" + std::to_string(goalArbiter.decisionId()) +
+	     "\"decision_id\":" + std::to_string(progressionRuntime.decisionId()) +
 	         ",\"goal\":\"buy_equipment\",\"result\":" + jsonString(result) +
 	         ",\"reason\":" + jsonString(reason));
 	const bool succeeded = std::strcmp(result, "success") == 0;
@@ -318,11 +301,9 @@ void PlayerBotController::finishEquipmentPurchase(Player* player, const Position
 		player->closeShopWindow();
 		say(*player, std::string("Equipment purchase ") + result + ": " + reason + '.');
 	}
-	progressionRuntime.setCooldown(TopLevelGoal::BuyEquipment,
-	                       succeeded ? equipmentPurchaseSuccessCooldown : equipmentPurchaseFailureCooldown);
+	progressionRuntime.completeEquipmentPurchase(succeeded,
+	    succeeded ? equipmentPurchaseSuccessCooldown : equipmentPurchaseFailureCooldown);
 	progressionRuntime.finish();
-	serviceWorkflow.resetNpc();
-	serviceWorkflow.resetTransactions();
 	clearNavigation();
 	cyclePhase = CyclePhase::Service;
 	if (succeeded && player && fixtureDriver.equipmentPurchaseCompletion(*player).pause) {
@@ -331,46 +312,39 @@ void PlayerBotController::finishEquipmentPurchase(Player* player, const Position
 	if (player && fixtureDriver.goalLoop(true).selectGoal) {
 		selectTopLevelGoal(*player, position, succeeded ? "equipment_purchase_complete" : "equipment_purchase_failed");
 	} else {
-		progressionRuntime.setActiveGoal(TopLevelGoal::Service);
+		progressionRuntime.enterService();
 	}
 	schedule(SCHEDULER_MINTICKS);
 }
 
 void PlayerBotController::processEquipmentPurchase(Player* player, const Position& position)
 {
-	const auto& purchase = equipmentPurchaseSession.plan();
+	const auto& purchase = progressionRuntime.equipmentPurchase().plan();
 	Npc* npc = purchase.carried ? nullptr : g_game.getNpcByID(purchase.npcId);
 	const std::string* capability = npc && !npc->isRemoved() ? npc->getParameter("playerbot_service") : nullptr;
 	const ServiceNpc provider{purchase.npcId, npc ? npc->getPosition() : Position()};
 	const ShopInfo* offer = purchase.carried || !npc ? nullptr : findOffer(provider, purchase.itemId, true);
+	int32_t onBuy = 0;
+	int32_t onSell = 0;
+	Npc* shopOwner = player->getShopOwner(onBuy, onSell);
 	PlayerBotEquipmentPurchaseObservation observation;
 	observation.actionAvailable = player->canDoAction();
 	if (!purchase.carried) {
 		observation.providerAvailable = capability && *capability == "shop";
 		observation.offerAvailable = offer && offer->buyPrice == purchase.price;
 		observation.providerInRange = npc && Position::areInRange<3, 3, 0>(position, npc->getPosition());
-		observation.shopReady = serviceWorkflow.npcStep() == PlayerBotNpcConversationStep::Ready;
+		observation.shopReady = shopOwner == npc && !player->getShopItemList().empty();
+		observation.otherShopOpen = shopOwner && shopOwner != npc;
 		const uint64_t reserve = spellTrainingReserve(*player);
 		const uint64_t money = player->getMoney() + player->getBankBalance();
 		observation.fundingAvailable = reserve != std::numeric_limits<uint64_t>::max() && money >= purchase.price && money - purchase.price >= reserve;
 	}
-	if (equipmentPurchaseSession.stage() == PlayerBotEquipmentPurchaseStage::Travel) {
+	if (progressionRuntime.equipmentPurchase().stage() == PlayerBotEquipmentPurchaseStage::Travel) {
 		observation.navigationReached = processNavigation(player, position, purchase.approachPosition);
 		observation.navigationFailed = navigationRuntime.fixedTargetRouteFailureCount() >= maximumProgressionAttempts ||
 		                              navigationRuntime.stepFailureCount() >= maximumRepeatedNavigationStepFailures;
-	} else if (equipmentPurchaseSession.stage() == PlayerBotEquipmentPurchaseStage::VerifyPurchase) {
-		const PlayerBotServiceVerification verification = serviceWorkflow.verifyShopTransaction(
-			inventoryPolicy.inventoryItemCount(*player, purchase.itemId), player->getMoney(), player->getBankBalance(), true, purchase.price,
-			maximumProgressionAttempts);
-		observation.transactionSucceeded = verification.result == PlayerBotServiceVerificationResult::Success;
-		observation.transactionRejected = verification.result == PlayerBotServiceVerificationResult::Rejected;
-		observation.transactionMismatch = verification.result == PlayerBotServiceVerificationResult::Mismatch;
-		if (observation.transactionSucceeded) emit("action_result", position, "\"action\":\"buy_equipment\",\"result\":\"success\",\"item_id\":" +
-			std::to_string(purchase.itemId) + ",\"price\":" + std::to_string(purchase.price) + ",\"carried_before\":" +
-			std::to_string(verification.before.money) + ",\"carried_after\":" + std::to_string(player->getMoney()) + ",\"bank_before\":" +
-			std::to_string(verification.before.balance) + ",\"bank_after\":" + std::to_string(player->getBankBalance()));
-	} else if (equipmentPurchaseSession.stage() == PlayerBotEquipmentPurchaseStage::Equip ||
-	           equipmentPurchaseSession.stage() == PlayerBotEquipmentPurchaseStage::VerifyEquipment) {
+	} else if (progressionRuntime.equipmentPurchase().stage() == PlayerBotEquipmentPurchaseStage::Equip ||
+	           progressionRuntime.equipmentPurchase().stage() == PlayerBotEquipmentPurchaseStage::VerifyEquipment) {
 		Item* purchased = g_game.findItemOfType(player, purchase.itemId, true);
 		Item* equipped = player->getInventoryItem(purchase.slot);
 		observation.equipmentVerified = equipped && equipped->getID() == purchase.itemId;
@@ -405,9 +379,15 @@ void PlayerBotController::processEquipmentPurchase(Player* player, const Positio
 			if (itemId != 0) observation.displacedCounts[itemId] = inventoryPolicy.inventoryItemCount(*player, itemId);
 		}
 	}
-	const PlayerBotProgressionOutcome result = progressionRuntime.advanceEquipmentPurchase(observation);
-	if (result.type == PlayerBotProgressionOutcomeType::Retry && result.reason && std::strcmp(result.reason, "purchase_equipment") == 0) {
-		serviceWorkflow.setNpcStep(PlayerBotNpcConversationStep::Ready);
+	observation.itemCount = inventoryPolicy.inventoryItemCount(*player, purchase.itemId);
+	observation.money = player->getMoney();
+	observation.bankBalance = player->getBankBalance();
+	const PlayerBotProgressionOutcome result = progressionRuntime.advanceEquipmentPurchase(observation, maximumProgressionAttempts);
+	if (result.transaction.amount != 0) {
+		emit("action_result", position, "\"action\":\"buy_equipment\",\"result\":\"success\",\"item_id\":" +
+			std::to_string(purchase.itemId) + ",\"price\":" + std::to_string(purchase.price) + ",\"carried_before\":" +
+			std::to_string(result.transaction.money) + ",\"carried_after\":" + std::to_string(player->getMoney()) + ",\"bank_before\":" +
+			std::to_string(result.transaction.balance) + ",\"bank_after\":" + std::to_string(player->getBankBalance()));
 	}
 	if (result.type == PlayerBotProgressionOutcomeType::Succeeded || result.type == PlayerBotProgressionOutcomeType::Failed) {
 		if (result.type == PlayerBotProgressionOutcomeType::Failed && std::strcmp(result.reason, "transaction_delta_mismatch") == 0) {
@@ -416,12 +396,16 @@ void PlayerBotController::processEquipmentPurchase(Player* player, const Positio
 			return;
 		}
 		if (result.type == PlayerBotProgressionOutcomeType::Failed && std::strcmp(result.reason, "transaction_rejected") == 0) logActionFailure("buy_equipment", result.reason, position);
+		if (result.type == PlayerBotProgressionOutcomeType::Failed && std::strcmp(result.reason, "shop_window_unavailable") == 0) {
+			logActionFailure("shop", result.command.reason, position);
+		}
 		if (result.type == PlayerBotProgressionOutcomeType::Succeeded) {
-			const EquipmentLoadout loadout = equipmentPolicy.loadout(*player);
-			const EquipmentHuntSummary hunts = equipmentHuntSummary(*player, equipmentPolicy.combatProfile(*player, loadout));
+			const PlayerBotEquipmentPlayerSnapshot playerFacts = PlayerBotEquipmentAdapter::player(*player);
+			const EquipmentLoadout loadout = PlayerBotEquipmentAdapter::loadout(*player);
+			const EquipmentHuntSummary hunts = equipmentHuntSummary(*player, equipmentPolicy.combatProfile(playerFacts, loadout));
 			emit("action_result", position, "\"action\":\"equip_equipment\",\"result\":\"success\",\"item_id\":" + std::to_string(purchase.itemId) +
 				",\"slot\":" + std::to_string(purchase.slot) + ",\"combat_ready\":" +
-				(equipmentPolicy.loadoutReady(*player, loadout,
+				(equipmentPolicy.loadoutReady(playerFacts, loadout,
 				    {player->getInventoryItem(CONST_SLOT_BACKPACK) && player->getInventoryItem(CONST_SLOT_BACKPACK)->getContainer(),
 				     inventoryPolicy.inventoryItemCount(*player, smallHealthPotionItemId) > smallHealthPotionReturnThreshold,
 				     inventoryPolicy.effectiveFreeCapacity(*player), returnCapacityThreshold}) ? "true" : "false") +
@@ -432,19 +416,22 @@ void PlayerBotController::processEquipmentPurchase(Player* player, const Positio
 		return;
 	}
 	if (result.command.type == PlayerBotProgressionCommandType::Shop && std::strcmp(result.command.reason, "open_shop") == 0) {
-		const PlayerBotNpcSessionOutcome opened = serviceWorkflow.openNpcShop(*player, *npc, maximumServiceAttempts);
-		for (uint8_t action = 0; action < opened.actionsIssued; ++action) telemetry.recordActionAttempt();
-		if (opened.result == PlayerBotNpcSessionResult::Failed) {
-			logActionFailure("shop", serviceWorkflow.npcStep() == PlayerBotNpcConversationStep::Request ? "npc_focus_unconfirmed" : "shop_window_unavailable", position);
+		const PlayerBotEquipmentShopCommand shop = progressionRuntime.advanceEquipmentShop(
+			{observation.shopReady, observation.otherShopOpen}, maximumServiceAttempts);
+		if (shop.result == PlayerBotNpcSessionResult::Failed) {
+			logActionFailure("shop", shop.failureReason, position);
 			finishEquipmentPurchase(player, position, "failed", "shop_window_unavailable");
 			return;
 		}
-		schedule(serviceWorkflow.npcNextDelay() == 0 ? SCHEDULER_MINTICKS : serviceWorkflow.npcNextDelay());
+		if (shop.closeOtherShop) player->closeShopWindow(false);
+		if (shop.speech && npc && !npc->isRemoved()) {
+			telemetry.recordActionAttempt();
+			npc->receiveSpeech(player, TALKTYPE_PRIVATE_PN, shop.speech);
+		}
+		schedule(shop.delay == 0 ? SCHEDULER_MINTICKS : shop.delay);
 		return;
 	}
 	if (result.command.type == PlayerBotProgressionCommandType::Shop) {
-		if (!serviceWorkflow.hasShopTransaction()) serviceWorkflow.beginShopTransaction({purchase.itemId, 1,
-			inventoryPolicy.inventoryItemCount(*player, purchase.itemId), player->getMoney(), player->getBankBalance()});
 		telemetry.recordActionAttempt();
 		const PlayerBotFixtureEngineCommand command = fixtureDriver.equipmentPurchaseCommand();
 		if (command.dispatch) g_game.playerPurchaseItem(playerId, Item::items[purchase.itemId].clientId,

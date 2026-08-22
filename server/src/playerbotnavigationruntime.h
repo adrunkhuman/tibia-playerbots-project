@@ -16,8 +16,6 @@
 #include <chrono>
 #include <optional>
 
-class Player;
-
 struct PlayerBotNavigationPlanMetrics {
 	PlayerBotNavigationResult result = PlayerBotNavigationResult::Unreachable;
 	uint64_t expandedNodes = 0;
@@ -38,13 +36,26 @@ struct PlayerBotNavigationRuntimeTiming {
 	std::chrono::steady_clock::duration oscillationSuppression;
 };
 
+enum class PlayerBotNavigationRuntimeCommand : uint8_t {
+	None,
+	Plan,
+	Move,
+	Use,
+	Retry,
+	Fail,
+};
+
+struct PlayerBotNavigationRouteRequest {
+	Position destination;
+	std::set<Position> blockedPositions;
+	uint64_t maximumExpandedNodes = playerBotNavigationMaximumExpandedNodes;
+};
+
 struct PlayerBotNavigationRuntimeInput {
-	Player& player;
 	Position currentPosition;
 	Position destination;
 	bool actionPending = false;
 	bool canDoAction = false;
-	bool forcePlanFailure = false;
 	PlayerBotNavigationRuntimeTiming timing;
 };
 
@@ -59,22 +70,49 @@ struct PlayerBotNavigationRuntimeOutcome {
 	bool routeUnavailable = false;
 	uint32_t fixedTargetRouteFailures = 0;
 	bool fixedTargetRouteExhausted = false;
+	PlayerBotNavigationRuntimeCommand command = PlayerBotNavigationRuntimeCommand::None;
+	std::optional<PlayerBotNavigationRouteRequest> routeRequest;
 	std::optional<PlayerBotNavigationStep> nextStep;
+};
+
+// Planner and dispatcher results are immutable observations. The runtime owns
+// all resulting route and pending-step state transitions.
+struct PlayerBotNavigationPlanObservation {
+	Position destination;
+	PlayerBotNavigationRoutePlan plan;
+	bool canDoAction = false;
+	bool startsNavigation = false;
+	std::chrono::steady_clock::time_point now;
+};
+
+enum class PlayerBotNavigationStepResult : uint8_t {
+	Dispatched,
+	Rejected,
+};
+
+struct PlayerBotNavigationStepObservation {
+	PlayerBotNavigationStep step;
+	PlayerBotNavigationStepResult result = PlayerBotNavigationStepResult::Rejected;
+	std::chrono::steady_clock::time_point now;
+};
+
+struct PlayerBotNavigationWorldChangeObservation {
+	PlayerBotNavigationStep step;
+	bool unchanged = false;
+	std::chrono::steady_clock::time_point now;
+	std::chrono::steady_clock::duration suppression;
 };
 
 class PlayerBotNavigationRuntime
 {
 	public:
-		PlayerBotNavigationRoutePlan plan(Player& player, const Position& destination,
-		                                  const std::set<Position>& blockedPositions = {},
-		                                  uint64_t maximumExpandedNodes = playerBotNavigationMaximumExpandedNodes) const;
 		PlayerBotNavigationRuntimeOutcome process(const PlayerBotNavigationRuntimeInput& input);
+		PlayerBotNavigationRuntimeOutcome observePlan(PlayerBotNavigationPlanObservation observation);
+		PlayerBotNavigationRuntimeOutcome observeStep(const PlayerBotNavigationStepObservation& observation);
+		PlayerBotNavigationRuntimeOutcome observeWorldChange(const PlayerBotNavigationWorldChangeObservation& observation);
 
-		void clear() { session.clear(); fixedTargetRouteFailures = 0; }
-		void adopt(const Position& destination, std::deque<PlayerBotNavigationStep> steps) { session.adopt(destination, std::move(steps)); }
-		void rejectNextStep() { session.clearRoute(); }
-		void completeStep(const PlayerBotNavigationStep& step, std::chrono::steady_clock::time_point now);
-		void suppress(const Position& position, std::chrono::steady_clock::time_point expires) { session.suppress(position, expires); }
+		void reset() { session.clear(); fixedTargetRouteFailures = 0; }
+		void resetPatrolRecovery() { session.clearBlockedPositions(); session.resetStepFailures(); }
 
 		size_t routeSize() const { return session.routeSize(); }
 		bool hasPendingWork() const { return session.hasPendingWork(); }
@@ -84,12 +122,8 @@ class PlayerBotNavigationRuntime
 		bool oscillationDetected() const { return session.oscillationDetected(); }
 		uint32_t stepFailureCount() const { return session.stepFailureCount(); }
 		uint32_t fixedTargetRouteFailureCount() const { return fixedTargetRouteFailures; }
-		void resetFixedTargetRouteFailures() { fixedTargetRouteFailures = 0; }
-		void clearBlockedPositions() { session.clearBlockedPositions(); }
-		void resetStepFailures() { session.resetStepFailures(); }
-
 	private:
-		PlayerBotNavigator navigator;
+		void dispatchNextStep(bool canDoAction, PlayerBotNavigationRuntimeOutcome& outcome) const;
 		PlayerBotNavigationSession session;
 		uint32_t fixedTargetRouteFailures = 0;
 };

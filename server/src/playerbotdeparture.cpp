@@ -62,7 +62,7 @@ bool PlayerBotController::findOracleDeparture(Player& player, const Position& po
 		uint64_t expandedNodes = 0;
 		const auto startedAt = std::chrono::steady_clock::now();
 		const PlayerBotNavigationRoutePlan routePlan = candidate == position ? PlayerBotNavigationRoutePlan{} :
-			navigationRuntime.plan(player, candidate);
+			planNavigationRoute(player, candidate);
 		const PlayerBotNavigationResult planResult = candidate == position ? PlayerBotNavigationResult::Reached : routePlan.metrics.result;
 		if (candidate != position) {
 			steps = routePlan.steps;
@@ -87,8 +87,8 @@ bool PlayerBotController::findOracleDeparture(Player& player, const Position& po
 
 bool PlayerBotController::forceOracleDeparture(Player& player, const Position& position, const char* decisionReason)
 {
-	const TopLevelGoal previousGoal = goalArbiter.activeGoal();
-	const uint64_t previousDecisionId = goalArbiter.decisionId();
+	const TopLevelGoal previousGoal = progressionRuntime.activeGoal();
+	const uint64_t previousDecisionId = progressionRuntime.decisionId();
 	const bool interruptedHunt = previousGoal == TopLevelGoal::Hunt && cyclePhase == CyclePhase::Hunt;
 	if (interruptedHunt) {
 		finishHuntRegion(player, position, "level_eight_interrupt");
@@ -106,16 +106,14 @@ bool PlayerBotController::forceOracleDeparture(Player& player, const Position& p
 	player.closeContainer(corpseContainerId);
 	setStage(ScenarioStage::Traverse, position);
 	progressionRuntime.finish();
-	serviceWorkflow.reset();
 
 	PlayerBotOracleDeparturePlan plan;
 	std::deque<PlayerBotNavigationStep> route;
 	const bool withinOracleLevelRange = player.getLevel() <= oracleMaximumLevel;
 	const bool found = withinOracleLevelRange && findOracleDeparture(player, position, plan, route);
-	const GoalCandidate candidate{TopLevelGoal::Departure, found, found ? oracleDepartureUtility : 0,
-	                              !withinOracleLevelRange ? "above_maximum_level" :
-	                              found ? "oracle_reachable" : "oracle_unreachable"};
-	const PlayerBotGoalArbiter::GoalDecision decision = progressionRuntime.force(candidate);
+	const char* candidateReason = !withinOracleLevelRange ? "above_maximum_level" : found ? "oracle_reachable" : "oracle_unreachable";
+	const PlayerBotGoalArbiter::GoalDecision decision = progressionRuntime.interruptForDeparture(
+		found, found ? oracleDepartureUtility : 0, candidateReason);
 	emitGoalCandidate(player, decision.candidate(TopLevelGoal::Departure), decision.id, position, decisionReason, nullptr,
 	                  found ? &plan : nullptr);
 	if (!found) {
@@ -123,14 +121,13 @@ bool PlayerBotController::forceOracleDeparture(Player& player, const Position& p
 		     "\"decision_id\":" + std::to_string(decision.id) + ",\"decision_reason\":" +
 		         jsonString(decisionReason) + ",\"from_goal\":" + jsonString(PlayerBotGoalArbiter::goalName(previousGoal)) +
 		         ",\"to_goal\":\"oracle_departure\",\"result\":\"failed\",\"reason\":" +
-		         jsonString(candidate.reason) + ",\"forced\":true,\"level\":" + std::to_string(player.getLevel()) +
+		         jsonString(candidateReason) + ",\"forced\":true,\"level\":" + std::to_string(player.getLevel()) +
 		         ",\"player_vocation_id\":" + std::to_string(player.getVocation()->getId()) +
 		         ",\"vocation_id\":" + std::to_string(oracleVocationId));
 		stop("oracle_departure_unavailable", position);
 		return false;
 	}
 
-	progressionRuntime.apply(decision);
 	emit("goal_selection", position,
 	     "\"decision_id\":" + std::to_string(decision.id) + ",\"decision_reason\":" +
 	         jsonString(decisionReason) + ",\"from_goal\":" + jsonString(PlayerBotGoalArbiter::goalName(previousGoal)) +
@@ -148,9 +145,8 @@ void PlayerBotController::beginOracleDeparture(Player& player, const Position& p
 	                                            std::deque<PlayerBotNavigationStep> steps)
 {
 	progressionRuntime.beginDeparture(std::move(plan));
-	const auto& departure = departureSession.plan();
-	serviceWorkflow.resetNpc(departure.npcId);
-	navigationRuntime.adopt(departure.approachPosition, std::move(steps));
+	const auto& departure = progressionRuntime.departure().plan();
+	observeNavigationPlan(departure.approachPosition, std::move(steps));
 	emit("strategy_selection", position,
 	     "\"goal\":\"oracle_departure\",\"npc_id\":" + std::to_string(departure.npcId) +
 	         ",\"town\":\"thais\",\"town_id\":" + std::to_string(oracleTownId) +
@@ -162,11 +158,10 @@ void PlayerBotController::beginOracleDeparture(Player& player, const Position& p
 void PlayerBotController::finishOracleDeparture(Player* player, const Position& position, const char* result, const char* reason)
 {
 	emit("goal_result", position,
-	     "\"decision_id\":" + std::to_string(goalArbiter.decisionId()) +
+	     "\"decision_id\":" + std::to_string(progressionRuntime.decisionId()) +
 	         ",\"goal\":\"oracle_departure\",\"result\":" + jsonString(result) +
 	         ",\"reason\":" + jsonString(reason));
 	progressionRuntime.finish();
-	serviceWorkflow.resetNpc();
 	clearNavigation();
 	if (std::strcmp(result, "success") == 0) {
 		if (player) {
@@ -185,15 +180,15 @@ void PlayerBotController::finishOracleDeparture(Player* player, const Position& 
 
 void PlayerBotController::processOracleDeparture(Player* player, const Position& currentPosition)
 {
-	const auto& departure = departureSession.plan();
+	const auto& departure = progressionRuntime.departure().plan();
 	PlayerBotDepartureObservation observation;
 	Npc* oracle = g_game.getNpcByID(departure.npcId);
-	if (departureSession.stage() == PlayerBotOracleDepartureStage::Travel) {
+	if (progressionRuntime.departure().stage() == PlayerBotOracleDepartureStage::Travel) {
 		observation.navigationReached = processNavigation(player, currentPosition, departure.approachPosition);
 		observation.navigationFailed = navigationRuntime.fixedTargetRouteFailureCount() >= maximumProgressionAttempts;
 	} else {
 		observation.npcAvailable = oracle && !oracle->isRemoved() && Position::areInRange<3, 3, 0>(currentPosition, oracle->getPosition());
-		observation.greetingAcknowledged = serviceWorkflow.isGreetingAcknowledged();
+		observation.greetingAcknowledged = progressionRuntime.greetingAcknowledged();
 		const bool correctVocation = player->getVocation()->getId() == oracleVocationId;
 		const bool correctTown = player->getTown() && player->getTown()->getID() == oracleTownId;
 		observation.departureVerified = correctVocation && correctTown && currentPosition == player->getTown()->getTemplePosition();
@@ -211,7 +206,7 @@ void PlayerBotController::processOracleDeparture(Player* player, const Position&
 	}
 	if (result.command.type == PlayerBotProgressionCommandType::Speak) {
 		if (!oracle || oracle->isRemoved()) return;
-		if (std::strcmp(result.command.reason, "hi") == 0) serviceWorkflow.resetGreetingAcknowledgement();
+		if (std::strcmp(result.command.reason, "hi") == 0) progressionRuntime.clearGreetingAcknowledgement();
 		telemetry.recordActionAttempt();
 		oracle->receiveSpeech(player, TALKTYPE_PRIVATE_PN, result.command.reason);
 	}

@@ -231,11 +231,11 @@ namespace {
 	PlayerBotHuntRegion scoreRegion(Player& player, const PlayerBotHuntPlanningProfile& planningProfile, size_t candidateIndex,
 	                                const std::set<Position>& excludedRegions,
 	                                const std::map<Position, PlayerBotHuntRegionPerformance>& performance,
-	                                uint32_t huntDurationSeconds)
+	                                uint32_t huntDurationSeconds, bool& withinPlanningScope)
 	{
 		const PlayerBotCombatProfile& profile = planningProfile.combat;
-	const uint16_t staminaMinutes = player.getStaminaMinutes();
-	const CachedRegion& cached = huntRegionCache.regions[candidateIndex];
+		const uint16_t staminaMinutes = player.getStaminaMinutes();
+		const CachedRegion& cached = huntRegionCache.regions[candidateIndex];
 		PlayerBotHuntRegion region;
 		region.floor = cached.floor;
 		region.center = cached.center;
@@ -329,13 +329,13 @@ namespace {
 		region.inChallengeBand = region.threatRatio >= region.challengeBandMinimum &&
 		                         region.threatRatio <= region.challengeBandMaximum;
 		region.predictedLethal = playerBotPredictedLethal(planningProfile.currentHealth, worstFightDamage);
-		region.suitable = !region.predictedLethal && region.threatRatio <= region.challengeBandMaximum &&
-		                  playerbot::isInsideLocalPlanningArea(templePosition, region.destination) &&
-		                  geometricDistance <= maximumHuntTravelDistance;
+		withinPlanningScope = playerbot::isInsideLocalPlanningArea(templePosition, region.destination) &&
+		                      geometricDistance <= maximumHuntTravelDistance;
+		region.suitable = !region.predictedLethal && region.threatRatio <= region.challengeBandMaximum && withinPlanningScope;
 		if (excludedRegions.find(region.center) != excludedRegions.end()) {
 			region.suitable = false;
 			region.rejectionReason = "observed_danger_cooldown";
-		} else if (!playerbot::isInsideLocalPlanningArea(templePosition, region.destination) || geometricDistance > maximumHuntTravelDistance) {
+		} else if (!withinPlanningScope) {
 			region.rejectionReason = "travel_distance";
 		} else if (region.predictedLethal) {
 			region.rejectionReason = "predicted_lethal";
@@ -465,14 +465,17 @@ PlayerBotHuntRegionScan PlayerBotHuntRegionPlanner::beginScan(const Player& play
 	return scan;
 }
 
-bool PlayerBotHuntRegionPlanner::score(Player& player, const PlayerBotHuntPlanningProfile& profile, uint64_t revision,
-	                                      size_t candidateIndex, const std::set<Position>& excludedRegions,
-	                                      const std::map<Position, PlayerBotHuntRegionPerformance>& performance,
-	                                      uint32_t huntDurationSeconds, PlayerBotHuntRegion& region) const
+PlayerBotHuntRegionScore PlayerBotHuntRegionPlanner::score(Player& player, const PlayerBotHuntPlanningProfile& profile,
+	uint64_t revision, size_t candidateIndex, const std::set<Position>& excludedRegions,
+	const std::map<Position, PlayerBotHuntRegionPerformance>& performance, uint32_t huntDurationSeconds) const
 {
+	PlayerBotHuntRegionScore observation;
 	if (revision != getCacheRevision() || candidateIndex >= huntRegionCache.regions.size()) {
-		return false;
+		return observation;
 	}
-	region = scoreRegion(player, profile, candidateIndex, excludedRegions, performance, huntDurationSeconds);
-	return true;
+	observation.region = scoreRegion(player, profile, candidateIndex, excludedRegions, performance,
+	                               huntDurationSeconds, observation.withinPlanningScope);
+	observation.valid = true;
+	observation.candidateFactsAvailable = !observation.region.monsters.empty();
+	return observation;
 }

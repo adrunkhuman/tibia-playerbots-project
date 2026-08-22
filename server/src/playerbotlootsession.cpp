@@ -40,7 +40,6 @@ void PlayerBotLootSession::reset()
 	navigationSuspensionCount = 0;
 	started = {};
 	retryAt = {};
-	selectedLoot.reset();
 	pendingLoot.reset();
 	pendingDiscard.reset();
 	unavailableItems.clear();
@@ -106,7 +105,6 @@ PlayerBotLootNavigationTransition PlayerBotLootSession::observeNavigationFailure
 
 void PlayerBotLootSession::beginLootMove(PlayerBotLootMove move)
 {
-	selectedLoot = move;
 	pendingLoot = move;
 }
 

@@ -20,84 +20,96 @@ enum class PlayerBotDepotCommandType : uint8_t {
 	Wait,
 };
 enum class PlayerBotDepotOutcome : uint8_t { Pending, Ready, Success, Retry, Moved, Partial, Deferred, Rejected, Unavailable };
+enum class PlayerBotDepotRouteResult : uint8_t { NotObserved, Reached, Unreachable };
+enum class PlayerBotDepotActionResult : uint8_t { None, SelectedLockerUnavailable, MoveDestinationUnavailable };
+
+struct PlayerBotDepotScan {
+	bool observed = false;
+	uint32_t indexedCandidates = 0;
+	uint32_t inScopeCandidates = 0;
+	uint32_t standableCandidates = 0;
+	std::vector<PlayerBotDepotCandidate> candidates;
+};
+
+struct PlayerBotDepotDepositSnapshot {
+	bool observed = false;
+	bool hasDepositableItem = false;
+	PlayerBotDepotMove move;
+};
+
+struct PlayerBotDepotMoveObservation {
+	bool observed = false;
+	uint32_t inventoryCount = 0;
+	uint32_t destinationCount = 0;
+};
 
 struct PlayerBotDepotObservation {
 	Position currentPosition;
 	std::chrono::steady_clock::time_point now;
-	bool discoveryObserved = false;
-	std::vector<PlayerBotDepotCandidate> candidates;
-	bool routeObserved = false;
-	bool routeReachable = false;
+	PlayerBotDepotScan scan;
+	PlayerBotDepotRouteResult routeResult = PlayerBotDepotRouteResult::NotObserved;
+	uint32_t routeSteps = 0;
+	uint64_t expandedNodes = 0;
 	bool atApproach = false;
 	bool lockerOpen = false;
 	bool chestOpen = false;
 	bool canDoAction = false;
-	bool hasDepositableItem = false;
+	bool fixtureSynthetic = false;
+	PlayerBotDepotActionResult actionResult = PlayerBotDepotActionResult::None;
+	PlayerBotDepotDepositSnapshot deposit;
+	PlayerBotDepotMoveObservation move;
+};
+
+struct PlayerBotDepotSnapshot {
+	PlayerBotDepotStage stage = PlayerBotDepotStage::Discover;
+	bool hasSelectedDepot = false;
+	PlayerBotDepotCandidate selected;
+	bool hasRouteCandidate = false;
+	PlayerBotDepotCandidate routeCandidate;
+	bool hasPendingMove = false;
+	PlayerBotDepotMove pendingMove;
+	uint32_t attempts = 0;
+	uint32_t indexedCandidates = 0;
+	uint32_t inScopeCandidates = 0;
+	uint32_t standableCandidates = 0;
+	uint32_t suppressedApproaches = 0;
+	std::optional<std::chrono::steady_clock::time_point> retryAt;
+	std::optional<std::chrono::steady_clock::time_point> deferredDepositRetryAt;
+};
+
+struct PlayerBotDepotTelemetry {
+	uint32_t routeSteps = 0;
+	uint64_t expandedNodes = 0;
+	std::optional<PlayerBotDepotMoveVerification> moveVerification;
 };
 
 struct PlayerBotDepotCommand {
 	PlayerBotDepotCommandType type = PlayerBotDepotCommandType::None;
 	PlayerBotDepotOutcome outcome = PlayerBotDepotOutcome::Pending;
-	PlayerBotDepotCandidate candidate;
+	PlayerBotDepotSnapshot snapshot;
+	PlayerBotDepotTelemetry telemetry;
 };
 
 class PlayerBotDepotWorkflow
 {
 	public:
 		void reset();
-		void clearDiscovery();
-		PlayerBotDepotStage stage() const { return session.stage(); }
+		PlayerBotDepotSnapshot snapshot() const;
 		PlayerBotDepotCommand advance(const PlayerBotDepotObservation& observation, uint32_t routeBudget,
 		                              uint32_t maximumDiscoveryAttempts, std::chrono::steady_clock::duration suppression);
-		void approachComplete() { session.openLocker(); }
-		void lockerOpened() { session.resetAttempts(); session.openChest(); }
-		void chestOpened() { session.resetAttempts(); session.deposit(); }
-		void reopenLocker() { session.openLocker(); }
-		void reopenChest() { session.openChest(); }
-		void resumeDeposit() { session.deposit(); }
-		void depart() { session.depart(); }
-		uint32_t attempts() const { return session.attempts(); }
-		uint32_t incrementAttempts() { return session.incrementAttempts(); }
-		void resetAttempts() { session.resetAttempts(); }
-		uint16_t depotId() const { return session.depotId(); }
-		uint16_t lockerItemId() const { return session.lockerItemId(); }
-		const Position& lockerPosition() const { return session.lockerPosition(); }
-		const Position& approachPosition() const { return session.approachPosition(); }
-		bool hasSelectedDepot() const { return session.hasSelectedDepot(); }
-		void select(PlayerBotDepotCandidate candidate) { session.select(candidate); }
 
-		bool candidatesPrepared() const { return session.candidatesPrepared(); }
-		void beginDiscovery(const Position& anchor) { session.prepareCandidates(anchor); }
-		const Position& discoveryAnchor() const { return session.discoveryAnchor(); }
-		void recordIndexedCandidate() { ++indexedCandidates; }
-		void recordInScopeCandidate() { ++inScopeCandidates; }
-		void recordStandableCandidate() { ++standableCandidates; }
-		void recordSuppressedApproach() { ++suppressedApproaches; }
+	private:
+		void clearDiscovery();
 		void recordCandidate(PlayerBotDepotCandidate candidate);
 		void sortCandidates();
 		bool hasCandidates() const { return !discoveryCandidates.empty(); }
 		bool hasNextCandidate() const;
 		std::optional<PlayerBotDepotCandidate> takeNextCandidate();
-		uint32_t indexedCandidateCount() const { return indexedCandidates; }
-		uint32_t inScopeCandidateCount() const { return inScopeCandidates; }
-		uint32_t standableCandidateCount() const { return standableCandidates; }
-		uint32_t suppressedApproachCount() const { return suppressedApproaches; }
-
-		void expireRejectedApproaches(std::chrono::steady_clock::time_point now) { session.expireRejectedApproaches(now); }
-		bool isApproachRejected(const Position& position) const { return session.isApproachRejected(position); }
-		void rejectApproach(const Position& position, std::chrono::steady_clock::time_point expires) { session.rejectApproach(position, expires); }
 		std::optional<std::chrono::steady_clock::time_point> earliestRejectedApproachExpiry() const;
+		std::optional<std::chrono::steady_clock::time_point> earliestDeferredDepositExpiry() const;
+		PlayerBotDepotCommand command(PlayerBotDepotCommandType type, PlayerBotDepotOutcome outcome,
+		                              PlayerBotDepotTelemetry telemetry = {}) const;
 
-		bool hasPendingMove() const { return session.hasPendingMove(); }
-		const PlayerBotDepotMove& move() const { return session.move(); }
-		void beginMove(PlayerBotDepotMove move) { session.beginMove(move); }
-		void clearMove() { session.clearMove(); }
-		PlayerBotDepotMoveVerification verifyMove(uint32_t inventory, uint32_t destination, uint32_t maximumAttempts)
-		{
-			return session.verifyMove(inventory, destination, maximumAttempts);
-		}
-
-	private:
 		PlayerBotDepotSession session;
 		std::vector<PlayerBotDepotCandidate> discoveryCandidates;
 		std::optional<PlayerBotDepotCandidate> routeCandidate;
@@ -106,6 +118,7 @@ class PlayerBotDepotWorkflow
 		uint32_t inScopeCandidates = 0;
 		uint32_t standableCandidates = 0;
 		uint32_t suppressedApproaches = 0;
+		std::map<std::pair<uint16_t, slots_t>, std::chrono::steady_clock::time_point> deferredSlottedDeposits;
 };
 
 #endif

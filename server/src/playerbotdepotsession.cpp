@@ -119,6 +119,7 @@ PlayerBotDepotMoveVerification PlayerBotDepotSession::verifyMove(uint32_t invent
 	verification.attempts = ++depotAttempts;
 	if (depotAttempts < maximumAttempts) {
 		clearMove();
+		depotStage = PlayerBotDepotStage::Deposit;
 		verification.result = PlayerBotDepotMoveResult::Retry;
 		return verification;
 	}

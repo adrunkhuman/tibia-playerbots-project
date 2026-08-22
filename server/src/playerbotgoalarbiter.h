@@ -46,19 +46,20 @@ class PlayerBotGoalArbiter {
 			const GoalCandidate& candidate(TopLevelGoal goal) const;
 		};
 
-		GoalDecision decide(std::vector<GoalCandidate> candidates);
-		GoalDecision force(GoalCandidate candidate);
-		void apply(const GoalDecision& decision);
-
 		TopLevelGoal activeGoal() const;
-		void setActiveGoal(TopLevelGoal goal);
 		uint64_t decisionId() const;
 		bool isCoolingDown(TopLevelGoal goal, std::chrono::steady_clock::time_point now) const;
-		void setCooldown(TopLevelGoal goal, std::chrono::steady_clock::duration duration);
 
 		static const char* goalName(TopLevelGoal goal);
 
 	private:
+		friend class PlayerBotProgressionRuntime;
+
+		GoalDecision decide(std::vector<GoalCandidate> candidates);
+		GoalDecision force(GoalCandidate candidate);
+		void apply(const GoalDecision& decision);
+		void setActiveGoal(TopLevelGoal goal);
+		void setCooldown(TopLevelGoal goal, std::chrono::steady_clock::duration duration);
 		std::chrono::steady_clock::time_point& cooldownUntil(TopLevelGoal goal);
 		const std::chrono::steady_clock::time_point& cooldownUntil(TopLevelGoal goal) const;
 

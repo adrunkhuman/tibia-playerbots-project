@@ -9,15 +9,10 @@
 #include "playerbotinventorypolicy.h"
 #include "playerbotprogressionsession.h"
 
-#include <functional>
 #include <map>
 #include <optional>
 #include <string>
 #include <vector>
-
-class Container;
-class Item;
-class Player;
 
 struct PlayerBotRouteEstimate {
 	bool reachable = false;
@@ -69,17 +64,11 @@ struct PlayerBotRewardInspection {
 };
 
 struct PlayerBotRewardInspectionContext {
-	Player& player;
-	const PlayerBotEquipmentPolicy& equipmentPolicy;
-	const playerbot::PlayerBotInventoryPolicy& inventoryPolicy;
-	const PlayerBotEconomyCatalog& economyCatalog;
 	const PlayerBotEquipmentLoadout& currentLoadout;
-	const PlayerBotCombatProfile& currentProfile;
-	const PlayerBotEquipmentHuntSummary& currentHunts;
-	const PlayerBotEquipmentReadinessInput& readiness;
-	bool currentReady;
-	uint32_t additionalWeight;
-	uint32_t maximumEquipmentCandidateSimulations;
+	uint32_t heldPotions = 0;
+	uint32_t heldFood = 0;
+	bool ownsRope = false;
+	bool ownsShovel = false;
 	uint16_t potionItemId;
 	uint32_t potionRestockTarget;
 	uint32_t preferredFoodCount;
@@ -87,10 +76,35 @@ struct PlayerBotRewardInspectionContext {
 	uint16_t shovelItemId;
 	int32_t missingPotionUtility;
 	int32_t foodPreferenceUtility;
-	PlayerBotEquipmentPolicy::HuntSummaryEvaluator huntSummary;
-	std::function<bool(uint16_t)> ownsItem;
-	std::map<std::pair<uint16_t, uint32_t>, PlayerBotEquipmentOfferEvaluation>& equipmentEvaluations;
-	size_t& simulatedItems;
+};
+
+struct PlayerBotRewardItemObservation {
+	uint16_t itemId = 0;
+	uint32_t count = 0;
+	uint32_t depth = 0;
+	uint16_t rootOrdinal = 0;
+	std::vector<uint16_t> path;
+	std::string rootSignature;
+	uint32_t worth = 0;
+	uint32_t sellValue = 0;
+	bool container = false;
+	bool equipmentCandidate = false;
+	std::optional<PlayerBotEquipmentOfferEvaluation> equipment;
+	int32_t currentValue = 0;
+	int32_t candidateValue = 0;
+	const char* metric = nullptr;
+	bool potion = false;
+	bool food = false;
+	bool rope = false;
+	bool shovel = false;
+};
+
+struct PlayerBotRewardInspectionSnapshot {
+	std::vector<uint16_t> rootItemIds;
+	std::vector<std::string> rootSignatures;
+	std::vector<std::string> nonStackableRootSignatures;
+	std::map<uint16_t, uint32_t> stackableRootCounts;
+	std::vector<PlayerBotRewardItemObservation> items;
 };
 
 struct PlayerBotDepartureProviderSnapshot {
@@ -143,9 +157,15 @@ struct PlayerBotSpellTrainingPlannerSnapshot {
 	std::vector<PlayerBotSpellOfferSnapshot> offers;
 };
 
+struct PlayerBotPlannerOfferRejection {
+	size_t offerIndex = 0;
+	std::string reason;
+};
+
 struct PlayerBotSpellTrainingDecision {
 	std::optional<PlayerBotSpellTrainingPlan> selected;
-	std::vector<const char*> rejections;
+	std::optional<size_t> selectedOfferIndex;
+	std::vector<PlayerBotPlannerOfferRejection> rejections;
 };
 
 class PlayerBotSpellTrainingPlanner
@@ -159,6 +179,7 @@ struct PlayerBotEquipmentProviderOfferSnapshot {
 	uint32_t itemWeight = 0;
 	uint32_t freeBackpackSlots = 0;
 	bool backpackAvailable = false;
+	bool purchaseAvailable = false;
 	bool routeBudgetExhausted = false;
 	PlayerBotRouteEstimate route;
 };
@@ -173,8 +194,10 @@ struct PlayerBotEquipmentProviderPlannerSnapshot {
 };
 
 struct PlayerBotEquipmentProviderDecision {
+	bool evaluated = false;
 	std::optional<PlayerBotEquipmentOfferEvaluation> selected;
-	std::vector<const char*> rejections;
+	std::optional<size_t> selectedOfferIndex;
+	std::vector<PlayerBotPlannerOfferRejection> rejections;
 };
 
 class PlayerBotEquipmentProviderPlanner
@@ -214,20 +237,15 @@ struct PlayerBotRewardDecision {
 class PlayerBotRewardPlanner
 {
 	public:
-		using RouteEstimator = std::function<PlayerBotRouteEstimate(const PlayerBotRewardPlan&)>;
-
-		static std::string itemSignature(const Item& item);
-		PlayerBotRewardInspection inspectBundle(const Container& contents, const PlayerBotRewardInspectionContext& context) const;
-		PlayerBotRewardInspection inspectKnownReward(const Item& item, const PlayerBotRewardInspectionContext& context) const;
+		PlayerBotRewardInspection inspect(const PlayerBotRewardInspectionSnapshot& snapshot,
+		                                  const PlayerBotRewardInspectionContext& context) const;
 		std::optional<PlayerBotRewardPlan> plan(uint16_t uniqueId, const Position& itemPosition,
 		                                        uint32_t estimatedDistance, const PlayerBotRewardInspection& inspection) const;
 		int32_t utility(const PlayerBotRewardPlan& plan, const PlayerBotRewardPlannerSnapshot& snapshot) const;
-		PlayerBotRewardDecision select(const PlayerBotRewardPlannerSnapshot& snapshot, const RouteEstimator& route) const;
+		std::vector<size_t> routeCandidates(const PlayerBotRewardPlannerSnapshot& snapshot) const;
+		PlayerBotRewardDecision select(const PlayerBotRewardPlannerSnapshot& snapshot) const;
 
 	private:
-		void inspectItem(const Item& item, uint16_t rootOrdinal, std::vector<uint16_t>& path,
-		                 const std::string& rootSignature, const PlayerBotRewardInspectionContext& context,
-		                 PlayerBotRewardInspection& inspection) const;
 		void finalizeInspection(const PlayerBotRewardInspectionContext& context,
 		                       PlayerBotRewardInspection& inspection) const;
 		int32_t estimatedUtility(const PlayerBotRewardPlan& plan,
