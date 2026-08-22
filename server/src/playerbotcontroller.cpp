@@ -34,7 +34,7 @@ void PlayerBotController::start(const Position& position, bool recovered, uint32
 	const bool departureComplete = controlledPlayer && departurePlanner.hasCompleted(departureSnapshot(*controlledPlayer));
 	const bool departureRequired = controlledPlayer && departurePlanner.required(departureSnapshot(*controlledPlayer));
 	const bool useGoalSelector = controlledPlayer && !startInHunt &&
-	                             (departureRequired || (!recovered && fixtureDriver.progressionEnabled()));
+	                             (departureRequired || (!recovered && fixtureDriver.goalLoop(true).selectGoal));
 	if (!fixtureDriver.magicTrainingScenario() && !fixtureDriver.deferInitialization() && useGoalSelector &&
 	    !selectTopLevelGoal(*controlledPlayer, position, "startup")) {
 		return;
@@ -261,7 +261,7 @@ bool PlayerBotController::executeNavigationStep(Player* player, const PlayerBotN
 {
 	telemetry.recordActionAttempt();
 	if (step.action == PlayerBotNavigationAction::Move) {
-		if (fixtureDriver.consumeNavigationStepFailure()) {
+		if (!fixtureDriver.navigationStepCommand().dispatch) {
 			return true;
 		}
 		g_game.playerMove(playerId, step.direction);
@@ -319,10 +319,10 @@ bool PlayerBotController::processNavigation(Player* player, const Position& curr
                                             PlayerBotNavigationRuntimeOutcome* navigationOutcome)
 {
 	const auto now = std::chrono::steady_clock::now();
-	const bool forcePlanFailure = fixtureDriver.forceNavigationPlanFailure();
+	const PlayerBotFixtureRoutePlan fixturePlan = fixtureDriver.navigationPlan(playerBotNavigationMaximumExpandedNodes);
 	const PlayerBotNavigationRuntimeOutcome outcome = navigationRuntime.process({
 		*player, currentPosition, destination, player->getWalkDelay() > 0 || !player->canDoAction(), player->canDoAction(),
-		forcePlanFailure,
+		fixturePlan.forceFailure,
 		{now, navigationStepTimeout, navigationBlockSuppression, navigationOscillationSuppression},
 	});
 	if (navigationOutcome) *navigationOutcome = outcome;
@@ -453,7 +453,7 @@ void PlayerBotController::navigate()
 		}
 		emitFixtureEvents(fixtureDriver.runMagicTraining(*player), currentPosition);
 		const bool useGoalSelector = !fixtureDriver.startInHunt() &&
-		                             (departurePlanner.required(departureSnapshot(*player)) || fixtureDriver.progressionEnabled());
+		                             (departurePlanner.required(departureSnapshot(*player)) || fixtureDriver.goalLoop(true).selectGoal);
 		if (useGoalSelector) {
 			if (!selectTopLevelGoal(*player, currentPosition, "startup")) {
 				return;

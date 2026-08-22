@@ -3,6 +3,7 @@
 #include "playerbotfixturedriver.h"
 
 #include "condition.h"
+#include "depotchest.h"
 #include "player.h"
 #include "playerbot.h"
 #include "playerbothuntruntime.h"
@@ -15,6 +16,8 @@ namespace {
 	constexpr uint32_t maximumPatrolRouteFailures = 3;
 	constexpr uint32_t depotRestartCheckpointStorage = 50096;
 	constexpr uint32_t gameplayFixtureReadyStorage = 50099;
+	constexpr Position fixtureDepotPosition(32105, 32195, 8);
+	constexpr Position fixtureDepotTilePosition(32105, 32196, 8);
 }
 
 playerbot::PlayerBotFixtureDriver::PlayerBotFixtureDriver(const PlayerBotTestPolicy& policy) : policy(policy)
@@ -24,29 +27,66 @@ playerbot::PlayerBotFixtureDriver::PlayerBotFixtureDriver(const PlayerBotTestPol
 	if (policy.forcePatrolRouteFailures) forcedNavigationPlanFailuresRemaining = maximumPatrolRouteFailures;
 }
 
-bool playerbot::PlayerBotFixtureDriver::consumeNavigationStepFailure()
+playerbot::PlayerBotFixtureStorageObservation playerbot::PlayerBotFixtureDriver::goalLoop(bool engineSelectGoal) const
 {
-	if (forcedNavigationStepFailuresRemaining == 0) return false;
-	--forcedNavigationStepFailuresRemaining;
-	return true;
+	return {false, engineSelectGoal && policy.progressionEnabled};
 }
 
-bool playerbot::PlayerBotFixtureDriver::forceNavigationPlanFailure() const { return forcedNavigationPlanFailuresRemaining != 0; }
+playerbot::PlayerBotFixtureHuntObservation playerbot::PlayerBotFixtureDriver::huntObservation() const
+{
+	return {!policy.fixedFixtureRoute};
+}
+
+playerbot::PlayerBotFixtureProviderObservation playerbot::PlayerBotFixtureDriver::observeProvider(
+	bool engineAvailable, uint16_t itemId, bool buying, uint32_t engineInventoryCount) const
+{
+	const bool suppressed = !buying && policy.suppressSlottedLootSeller && itemId == 2398;
+	return {!suppressed && engineAvailable, suppressed ? 0 : engineInventoryCount};
+}
+
+playerbot::PlayerBotFixtureProviderObservation playerbot::PlayerBotFixtureDriver::observeEquipmentOffer(bool engineAvailable) const
+{
+	return {engineAvailable && policy.equipmentPurchasesEnabled, 0};
+}
+
+playerbot::PlayerBotFixtureStorageObservation playerbot::PlayerBotFixtureDriver::equipmentStorageObservation() const
+{
+	return {policy.pauseAfterEquipmentStorageRejection, false};
+}
+
+playerbot::PlayerBotFixtureRoutePlan playerbot::PlayerBotFixtureDriver::navigationPlan(uint64_t engineMaximumExpandedNodes) const
+{
+	return {forcedNavigationPlanFailuresRemaining != 0, engineMaximumExpandedNodes};
+}
+
+playerbot::PlayerBotFixtureEngineCommand playerbot::PlayerBotFixtureDriver::navigationStepCommand()
+{
+	if (forcedNavigationStepFailuresRemaining == 0) return {};
+	--forcedNavigationStepFailuresRemaining;
+	return {false, 0};
+}
+
 void playerbot::PlayerBotFixtureDriver::observeNavigationPlan(bool attempted)
 {
 	if (attempted && forcedNavigationPlanFailuresRemaining != 0) --forcedNavigationPlanFailuresRemaining;
 }
-bool playerbot::PlayerBotFixtureDriver::forcedStepRecoveryPending() const
+playerbot::PlayerBotFixtureStorageObservation playerbot::PlayerBotFixtureDriver::navigationRecovery(bool routeUnavailable) const
 {
-	return policy.forceRepeatedNavigationStepFailures && forcedNavigationStepFailuresRemaining != 0;
+	return {routeUnavailable && policy.forceRepeatedNavigationStepFailures && forcedNavigationStepFailuresRemaining != 0, false};
 }
 void playerbot::PlayerBotFixtureDriver::resetHuntPlanningRouteFailures() { forcedUnreachable = false; forcedNodeLimit = false; }
 
-playerbot::PlayerBotFixtureRouteFailure playerbot::PlayerBotFixtureDriver::nextHuntPlanningRouteFailure()
+playerbot::PlayerBotFixtureRoutePlan playerbot::PlayerBotFixtureDriver::huntRoutePlan(uint64_t engineMaximumExpandedNodes)
 {
-	if (policy.forceFirstHuntCandidateUnreachable && !forcedUnreachable) { forcedUnreachable = true; return PlayerBotFixtureRouteFailure::Unreachable; }
-	if (policy.forceSecondHuntCandidateNodeLimit && !forcedNodeLimit && forcedUnreachable) { forcedNodeLimit = true; return PlayerBotFixtureRouteFailure::NodeLimit; }
-	return PlayerBotFixtureRouteFailure::None;
+	if (policy.forceFirstHuntCandidateUnreachable && !forcedUnreachable) {
+		forcedUnreachable = true;
+		return {true, engineMaximumExpandedNodes};
+	}
+	if (policy.forceSecondHuntCandidateNodeLimit && !forcedNodeLimit && forcedUnreachable) {
+		forcedNodeLimit = true;
+		return {false, 0};
+	}
+	return {false, engineMaximumExpandedNodes};
 }
 
 std::vector<playerbot::PlayerBotFixtureEvent> playerbot::PlayerBotFixtureDriver::applyHuntPlanningHooks(PlayerBotHuntRuntime& runtime)
@@ -84,19 +124,40 @@ playerbot::PlayerBotFixtureInitialization playerbot::PlayerBotFixtureDriver::del
 	delayedInitializationPending = false;
 	return PlayerBotFixtureInitialization::Ready;
 }
-bool playerbot::PlayerBotFixtureDriver::consumeDepotRestartCheckpoint(Player& player, DepotRestartCheckpoint checkpoint)
+playerbot::PlayerBotFixtureStorageObservation playerbot::PlayerBotFixtureDriver::depotRestartObservation(Player& player,
+	DepotRestartCheckpoint checkpoint)
 {
-	if (policy.depotRestartCheckpoint != checkpoint) return false;
+	if (policy.depotRestartCheckpoint != checkpoint) return {};
 	int32_t consumed = -1;
-	if (player.getStorageValue(depotRestartCheckpointStorage, consumed) && consumed == 1) return false;
+	if (player.getStorageValue(depotRestartCheckpointStorage, consumed) && consumed == 1) return {};
 	player.addStorageValue(depotRestartCheckpointStorage, 1);
-	return true;
+	return {true, false};
 }
-bool playerbot::PlayerBotFixtureDriver::completeEquipmentPurchase(Player& player) const
+
+playerbot::PlayerBotFixtureDepotEndpoint playerbot::PlayerBotFixtureDriver::depotEndpoint() const
 {
-	if (!policy.equipmentPurchaseFixture) return false;
+	return {policy.fixedFixtureRoute, fixtureDepotPosition, fixtureDepotPosition, fixtureDepotTilePosition, 0, 0};
+}
+playerbot::PlayerBotFixtureEngineCommand playerbot::PlayerBotFixtureDriver::depotMoveCommand(uint8_t requestedCount) const
+{
+	return {true, static_cast<uint8_t>(policy.depotMoveFixture == DepotMoveFixture::Partial && requestedCount > 1 ? requestedCount - 1 : requestedCount)};
+}
+
+void playerbot::PlayerBotFixtureDriver::prepareDepotMoveDestination(DepotChest& chest) const
+{
+	if (policy.depotMoveFixture == DepotMoveFixture::Rejected) chest.setMaxDepotItems(chest.getItemHoldingCount());
+}
+
+playerbot::PlayerBotFixtureEngineCommand playerbot::PlayerBotFixtureDriver::equipmentPurchaseCommand() const
+{
+	return {!policy.forceEquipmentPurchaseRejected, 1};
+}
+
+playerbot::PlayerBotFixtureStorageObservation playerbot::PlayerBotFixtureDriver::equipmentPurchaseCompletion(Player& player) const
+{
+	if (!policy.equipmentPurchaseFixture) return {};
 	player.addStorageValue(gameplayFixtureReadyStorage, -1);
-	return true;
+	return {true, false};
 }
 uint64_t playerbot::PlayerBotFixtureDriver::observedMagicTrainingMana(uint64_t engineObservation) const
 {

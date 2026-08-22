@@ -782,7 +782,7 @@ bool PlayerBotController::selectTopLevelGoal(Player& player, const Position& pos
 	const bool equipmentPurchaseCoolingDown = goalArbiter.isCoolingDown(TopLevelGoal::BuyEquipment, now);
 	const std::optional<EquipmentOfferEvaluation> equipment = equipmentPurchaseCoolingDown ? std::nullopt :
 	                                                        evaluateEquipmentOffers(player, position);
-	const bool equipmentFound = fixtureDriver.equipmentPurchasesEnabled() && equipment.has_value();
+	const bool equipmentFound = fixtureDriver.observeEquipmentOffer(equipment.has_value()).available;
 	const bool magicTrainingCoolingDown = goalArbiter.isCoolingDown(TopLevelGoal::MagicTraining, now);
 	const char* magicTrainingReason = magicTrainingCoolingDown ? "cooldown" :
 	                                  survivalRuntime.magicTrainingReason(player, survivalSnapshot(player));
@@ -800,7 +800,7 @@ bool PlayerBotController::selectTopLevelGoal(Player& player, const Position& pos
 		player.getMoney() != inventoryPolicy.desiredCarriedGold(player),
 		pickupCoolingDown, pickupFound, pickupUtility,
 		spellTrainingCoolingDown, spellTrainingFound,
-		equipmentPurchaseCoolingDown, fixtureDriver.equipmentPurchasesEnabled(), equipmentFound,
+		equipmentPurchaseCoolingDown, fixtureDriver.observeEquipmentOffer(true).available, equipmentFound,
 		equipmentFound ? PlayerBotEquipmentPolicy::decisionRuleName(equipment->rule) : "",
 		magicTrainingCoolingDown, magicTrainingReason ? magicTrainingReason : "",
 	};
@@ -814,7 +814,7 @@ bool PlayerBotController::selectTopLevelGoal(Player& player, const Position& pos
 	                  equipmentFound ? &*equipment : nullptr);
 	emitGoalCandidate(player, decision.candidate(TopLevelGoal::MagicTraining), decision.id, position, decisionReason);
 	emitGoalCandidate(player, decision.candidate(TopLevelGoal::Hunt), decision.id, position, decisionReason);
-	if (fixtureDriver.pauseAfterEquipmentStorageRejection()) {
+	if (fixtureDriver.equipmentStorageObservation().pause) {
 		return false;
 	}
 
@@ -895,7 +895,7 @@ void PlayerBotController::finishProgressionObjective(Player* player, const Posit
 	cyclePhase = CyclePhase::Service;
 	progressionRuntime.setCooldown(TopLevelGoal::PickupReward, std::strcmp(result, "success") == 0 ? pickupRewardSuccessCooldown :
 	                                                                                              pickupRewardFailureCooldown);
-	if (fixtureDriver.progressionEnabled() && player) {
+	if (player && fixtureDriver.goalLoop(true).selectGoal) {
 		const char* decisionReason = std::strcmp(result, "success") == 0 ? "pickup_complete" :
 		                             std::strcmp(result, "interrupted") == 0 ? "pickup_interrupted" : "pickup_failed";
 		selectTopLevelGoal(*player, position, decisionReason);
