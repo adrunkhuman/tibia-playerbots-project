@@ -3,3 +3,5 @@ build
 vc14
 vc16
 db-volume
+data/logs/*.log
+data/logs/stats/*.log
