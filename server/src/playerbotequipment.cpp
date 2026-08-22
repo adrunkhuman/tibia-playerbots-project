@@ -24,35 +24,7 @@ namespace {
 PlayerBotController::EquipmentHuntSummary PlayerBotController::equipmentHuntSummary(Player& player,
 	                                                                                   const PlayerBotCombatProfile& profile) const
 {
-	EquipmentHuntSummary summary;
-	summary.lowestThreatRatio = std::numeric_limits<double>::max();
-	std::set<Position> excludedRegions;
-	const auto now = std::chrono::steady_clock::now();
-	const PlayerBotHuntRegionScan scan = huntRuntime.testPlanner().beginScan(player);
-	const PlayerBotHuntPlanningProfile planningProfile = playerBotHuntPlanningProfile(player, profile, huntRuntime.huntPolicy().challengeFrontier());
-	const uint32_t huntDurationSeconds = static_cast<uint32_t>(std::max<int32_t>(1,
-		g_config.getNumber(ConfigManager::PLAYERBOT_HUNT_DURATION_SECONDS)));
-	for (size_t candidateIndex : scan.candidateIndices) {
-		if (summary.evaluatedRegions >= maximumEquipmentHuntRegions) {
-			summary.truncated = true;
-			break;
-		}
-		PlayerBotHuntRegion region;
-		if (!huntRuntime.testPlanner().score(player, planningProfile, scan.revision, candidateIndex, excludedRegions,
-		                            huntRuntime.huntPolicy().regionPerformance(), huntDurationSeconds, region)) {
-			continue;
-		}
-		++summary.evaluatedRegions;
-		summary.lowestThreatRatio = std::min(summary.lowestThreatRatio, region.threatRatio);
-		if (region.suitable) {
-			++summary.suitableRegions;
-			summary.bestProjectedExperience = std::max(summary.bestProjectedExperience, region.projectedExperience);
-		}
-	}
-	if (summary.lowestThreatRatio == std::numeric_limits<double>::max()) {
-		summary.lowestThreatRatio = 0;
-	}
-	return summary;
+	return huntRuntime.scoreEquipmentHunts(player, profile, maximumEquipmentHuntRegions);
 }
 
 void PlayerBotController::emitEquipmentOffer(const Player& player, const EquipmentOfferEvaluation& evaluation,
@@ -345,13 +317,10 @@ void PlayerBotController::finishEquipmentPurchase(Player* player, const Position
 	serviceWorkflow.resetTransactions();
 	clearNavigation();
 	cyclePhase = CyclePhase::Service;
-	if (succeeded && fixtureRuntime.equipmentPurchaseFixture()) {
-		if (player) {
-			fixtureRuntime.completeEquipmentPurchaseFixture(*player);
-		}
+	if (succeeded && player && fixtureDriver.completeEquipmentPurchase(*player)) {
 		return;
 	}
-	if (fixtureRuntime.progressionEnabled() && player) {
+	if (fixtureDriver.progressionEnabled() && player) {
 		selectTopLevelGoal(*player, position, succeeded ? "equipment_purchase_complete" : "equipment_purchase_failed");
 	} else {
 		progressionRuntime.setActiveGoal(TopLevelGoal::Service);
@@ -469,7 +438,7 @@ void PlayerBotController::processEquipmentPurchase(Player* player, const Positio
 		if (!serviceWorkflow.hasShopTransaction()) serviceWorkflow.beginShopTransaction({purchase.itemId, 1,
 			inventoryPolicy.inventoryItemCount(*player, purchase.itemId), player->getMoney(), player->getBankBalance()});
 		telemetry.recordActionAttempt();
-		if (!fixtureRuntime.forceEquipmentPurchaseRejected()) g_game.playerPurchaseItem(playerId, Item::items[purchase.itemId].clientId,
+		if (!fixtureDriver.forceEquipmentPurchaseRejected()) g_game.playerPurchaseItem(playerId, Item::items[purchase.itemId].clientId,
 			static_cast<uint8_t>(offer->subType), 1, false, false);
 	}
 	if (result.command.type == PlayerBotProgressionCommandType::Open) {

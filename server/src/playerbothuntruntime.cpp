@@ -161,6 +161,43 @@ bool PlayerBotHuntRuntime::matchesMonster(const std::string& name) const
 	});
 }
 
+PlayerBotEquipmentHuntSummary PlayerBotHuntRuntime::scoreEquipmentHunts(Player& player,
+	const PlayerBotCombatProfile& profile, size_t maximumRegions) const
+{
+	PlayerBotEquipmentHuntSummary summary;
+	summary.lowestThreatRatio = std::numeric_limits<double>::max();
+	const PlayerBotHuntRegionScan scan = planner.beginScan(player);
+	const PlayerBotHuntPlanningProfile planningProfile = playerBotHuntPlanningProfile(player, profile, policy.challengeFrontier());
+	const uint32_t duration = static_cast<uint32_t>(std::max<int32_t>(1, g_config.getNumber(ConfigManager::PLAYERBOT_HUNT_DURATION_SECONDS)));
+	for (size_t candidateIndex : scan.candidateIndices) {
+		if (summary.evaluatedRegions >= maximumRegions) { summary.truncated = true; break; }
+		PlayerBotHuntRegion region;
+		if (!planner.score(player, planningProfile, scan.revision, candidateIndex, {}, policy.regionPerformance(), duration, region)) continue;
+		++summary.evaluatedRegions;
+		summary.lowestThreatRatio = std::min(summary.lowestThreatRatio, region.threatRatio);
+		if (region.suitable) {
+			++summary.suitableRegions;
+			summary.bestProjectedExperience = std::max(summary.bestProjectedExperience, region.projectedExperience);
+		}
+	}
+	if (summary.lowestThreatRatio == std::numeric_limits<double>::max()) summary.lowestThreatRatio = 0;
+	return summary;
+}
+
+bool PlayerBotHuntRuntime::fixtureScoreRegion(Player& player, const PlayerBotCombatProfile& profile,
+	PlayerBotHuntRegion& current, PlayerBotHuntRegion& improved) const
+{
+	const PlayerBotHuntRegionScan scan = planner.beginScan(player);
+	if (scan.candidateIndices.empty()) return false;
+	const uint32_t duration = static_cast<uint32_t>(std::max<int32_t>(1, g_config.getNumber(ConfigManager::PLAYERBOT_HUNT_DURATION_SECONDS)));
+	const PlayerBotHuntPlanningProfile before = playerBotHuntPlanningProfile(player, profile, policy.challengeFrontier());
+	PlayerBotCombatProfile upgraded = profile;
+	upgraded.armor += 20;
+	const PlayerBotHuntPlanningProfile after = playerBotHuntPlanningProfile(player, upgraded, policy.challengeFrontier());
+	return planner.score(player, before, scan.revision, scan.candidateIndices.front(), {}, policy.regionPerformance(), duration, current) &&
+	       planner.score(player, after, scan.revision, scan.candidateIndices.front(), {}, policy.regionPerformance(), duration, improved);
+}
+
 bool PlayerBotHuntRuntime::dangerObserved(Player& player, std::chrono::steady_clock::time_point now, std::chrono::steady_clock::duration cooldown)
 {
 	if (!activeRegion || !policy.observeDanger(player.getMaxHealth(), now - huntStarted)) return false;

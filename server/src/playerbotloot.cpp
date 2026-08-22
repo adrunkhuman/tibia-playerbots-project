@@ -219,10 +219,10 @@ void PlayerBotController::lootCorpse(Player* player, const Position& currentPosi
 
 	const PlayerBotLootCommand& command = decision.command;
 	if (command.type == PlayerBotLootCommandType::Navigate) {
-		const uint64_t pathfindingFailuresBefore = telemetry.pathfindingFailures();
 		const uint32_t blockedStepsBefore = navigationRuntime.stepFailureCount();
-		processNavigation(player, currentPosition, command.destination);
-		if (telemetry.pathfindingFailures() > pathfindingFailuresBefore || navigationRuntime.stepFailureCount() > blockedStepsBefore) {
+		PlayerBotNavigationRuntimeOutcome navigation;
+		processNavigation(player, currentPosition, command.destination, &navigation);
+		if (navigation.routeUnavailable || navigation.stepFailureCount > blockedStepsBefore) {
 			const auto transition = lootWorkflow.observeNavigationFailure(currentPosition, now);
 			if (transition == PlayerBotLootNavigationTransition::Failed) {
 				finishLootFailure(player, currentPosition, "corpse_inaccessible");

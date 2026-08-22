@@ -58,8 +58,6 @@ namespace playerbot {
 			void recordStuckEvent();
 			void recordPathfindingAttempt(std::chrono::microseconds elapsed);
 			void recordPathfinding(std::chrono::microseconds elapsed, bool found);
-			uint64_t actionsAttempted() const;
-			uint64_t pathfindingFailures() const;
 			void maybeEmitSummary(const Position& position, const PlayerBotTelemetrySummary& summary);
 			bool terminalLogged() const;
 			void emitTerminal(const char* reason, const Position& position, const PlayerBotTelemetrySummary& summary);

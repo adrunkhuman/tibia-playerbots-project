@@ -528,87 +528,6 @@ void PlayerBotController::emitChallengeFrontier(const PlayerBotHuntChallengeUpda
 	emit("hunt_challenge_frontier", position, fields.str());
 }
 
-void PlayerBotController::runAdaptiveChallengeFixture(Player& player, const Position& position)
-{
-	auto applyEvidence = [this, &player, &position](double activeSeconds, uint32_t kills,
-	                                             uint32_t potionRecoveries, bool death = false) {
-		huntRuntime.testPolicy().resetCombatEvidence();
-		huntRuntime.testPolicy().observeCombat({activeSeconds != 0, activeSeconds, player.getMaxHealth(), player.getMaxHealth(), 1});
-		for (uint32_t kill = 0; kill < kills; ++kill) {
-			huntRuntime.testPolicy().observeKill();
-		}
-		for (uint32_t recovery = 0; recovery < potionRecoveries; ++recovery) {
-			huntRuntime.testPolicy().observeRecovery(true);
-		}
-		if (death) {
-			huntRuntime.testPolicy().observeDeath();
-		}
-		emitChallengeFrontier(huntRuntime.testPolicy().updateChallengeFrontier({300, player.getMaxHealth()}), position,
-		                      "adaptive_challenge_fixture");
-	};
-	huntRuntime.testPolicy().resetCombatEvidence();
-	huntRuntime.testPolicy().observeCombat({false, 30, player.getMaxHealth(), player.getMaxHealth(), 1});
-	const double idleObservedSeconds = huntRuntime.testPolicy().combatSummary().activeSeconds;
-	huntRuntime.testPolicy().observeCombat({true, 30, player.getMaxHealth(), player.getMaxHealth(), 1});
-	const double activeObservedSeconds = huntRuntime.testPolicy().combatSummary().activeSeconds;
-	applyEvidence(0, 0, 0); // Travel and idle health must not advance the frontier.
-	applyEvidence(30, 0, 0); // Target engagement without a kill is not qualifying evidence.
-	applyEvidence(30, 1, 0);
-	applyEvidence(30, 1, 0);
-	applyEvidence(30, 1, 1);
-	applyEvidence(30, 1, 0);
-	applyEvidence(30, 1, 0);
-	applyEvidence(30, 1, 0);
-	applyEvidence(0, 0, 0, true);
-
-	const PlayerBotHuntRegionScan scan = huntRuntime.testPlanner().beginScan(player);
-	PlayerBotHuntRegion current;
-	PlayerBotHuntRegion equipped;
-	PlayerBotHuntPlanningProfile planningProfile;
-	if (!scan.candidateIndices.empty()) {
-		const Item* weapon = player.getWeapon(true);
-		const PlayerBotCombatProfile profile{
-			player.getLevel(), player.getMaxHealth(), player.getArmor(), player.getDefense(), weapon ? weapon->getAttack() : 7,
-			weapon ? player.getWeaponSkill(weapon) : player.getSkillLevel(SKILL_FIST), player.getAttackFactor(),
-		};
-		planningProfile = playerBotHuntPlanningProfile(player, profile, huntRuntime.huntPolicy().challengeFrontier());
-		PlayerBotCombatProfile improved = profile;
-		improved.armor += 20;
-		huntRuntime.testPlanner().score(player, planningProfile, scan.revision, scan.candidateIndices.front(), {}, huntRuntime.huntPolicy().regionPerformance(),
-		                       60, current);
-		const PlayerBotHuntPlanningProfile improvedProfile = playerBotHuntPlanningProfile(player, improved, huntRuntime.huntPolicy().challengeFrontier());
-		huntRuntime.testPlanner().score(player, improvedProfile, scan.revision, scan.candidateIndices.front(), {}, huntRuntime.huntPolicy().regionPerformance(),
-		                       60, equipped);
-	}
-	const PlayerBotRecoveryPrediction recovery = playerBotPredictRecovery(planningProfile, 30);
-	PlayerBotHuntRegion inBand;
-	inBand.score = 10;
-	inBand.suitable = true;
-	inBand.reachable = true;
-	inBand.inChallengeBand = true;
-	PlayerBotHuntRegion easier;
-	easier.score = 1000;
-	easier.suitable = true;
-	easier.reachable = true;
-	std::vector<PlayerBotHuntRegion> exhausted(1);
-	exhausted.front().suitable = true;
-	std::ostringstream fields;
-	fields << std::fixed << std::setprecision(2)
-	       << "\"recovery_total\":" << recovery.totalMinimumHealing
-	       << ",\"recovery_spell_legal\":" << (recovery.lightHealingLegal ? "true" : "false")
-	       << ",\"recovery_spell_casts\":" << recovery.spellCasts
-	       << ",\"equipment_pressure_before\":" << current.threatRatio
-	       << ",\"equipment_pressure_after\":" << equipped.threatRatio
-	       << ",\"idle_observed_seconds\":" << idleObservedSeconds
-	       << ",\"active_observed_seconds\":" << activeObservedSeconds
-	       << ",\"in_band_outranks_easier\":" << (playerBotPreferHuntRegion(inBand, easier) ? "true" : "false")
-	       << ",\"wounded_lethal\":" << (playerBotPredictedLethal(40, 40) ? "true" : "false")
-	       << ",\"zero_health_lethal\":" << (playerBotPredictedLethal(0, 0) ? "true" : "false")
-	       << ",\"helper_scope_exhausted\":" << (playerBotHuntScopeExhausted(exhausted) ? "true" : "false");
-	emit("adaptive_challenge_fixture", position, fields.str());
-	huntRuntime.testPolicy().resetCombatEvidence();
-}
-
 void PlayerBotController::emitHuntRegionCandidate(const PlayerBotHuntRegion& region, const Position& position) const
 {
 	std::ostringstream fields;
@@ -722,11 +641,11 @@ void PlayerBotController::finishHuntRegion(const Player& player, const Position&
 bool PlayerBotController::selectHuntRegion(Player& player, const Position& position, const char* reason)
 {
 	const auto now = std::chrono::steady_clock::now();
-	if (fixtureRuntime.forceHuntScopeExhaustion()) huntRuntime.forceScopeExhaustionForTest();
+	emitFixtureEvents(fixtureDriver.applyHuntPlanningHooks(huntRuntime), position);
 	const uint32_t duration = static_cast<uint32_t>(std::max<int32_t>(1, g_config.getNumber(ConfigManager::PLAYERBOT_HUNT_DURATION_SECONDS)));
 	PlayerBotHuntRuntimeOutcome outcome = huntRuntime.advancePlanning(player, reason, now, duration);
 	if (outcome.routeWork) {
-		const PlayerBotFixtureRouteFailure fixtureFailure = fixtureRuntime.consumeHuntPlanningRouteFailure();
+		const PlayerBotFixtureRouteFailure fixtureFailure = fixtureDriver.nextHuntPlanningRouteFailure();
 		PlayerBotNavigationRoutePlan plan;
 		if (fixtureFailure == PlayerBotFixtureRouteFailure::Unreachable) {
 			plan.metrics.attempted = false;
@@ -777,7 +696,7 @@ void PlayerBotController::startHunt(Player* player, const Position& position, co
 	}
 	progressionRuntime.setActiveGoal(TopLevelGoal::Hunt);
 	setCyclePhase(CyclePhase::Hunt, position, reason);
-	if (!fixtureRuntime.fixedFixtureRoute() && !huntRuntime.active()) {
+	if (!fixtureDriver.fixedRoute() && !huntRuntime.active()) {
 		if (!selectHuntRegion(*player, position, "hunt_started")) {
 			schedule(SCHEDULER_MINTICKS);
 			return;
@@ -821,7 +740,7 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 	if (cyclePhase == CyclePhase::Hunt && !ensureCombatReady(player, currentPosition, "readiness_continuous_check")) {
 		return;
 	}
-	if (cyclePhase == CyclePhase::Hunt && !fixtureRuntime.fixedFixtureRoute() && !huntRuntime.active() && !huntRuntime.planningActive()) {
+	if (cyclePhase == CyclePhase::Hunt && !fixtureDriver.fixedRoute() && !huntRuntime.active() && !huntRuntime.planningActive()) {
 		startHunt(player, currentPosition, "hunt_region_restart");
 		return;
 	}
@@ -852,7 +771,7 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 		const uint32_t usableCapacity = inventoryPolicy.effectiveFreeCapacity(*player);
 		if (huntRuntime.deadlineReached(std::chrono::steady_clock::now()) || usableCapacity < returnCapacityThreshold) {
 			const char* reason = usableCapacity < returnCapacityThreshold ? "capacity" : "hunt_deadline";
-			if (fixtureRuntime.progressionEnabled()) {
+			if (fixtureDriver.progressionEnabled()) {
 				finishHuntAndSelectGoal(player, currentPosition, reason);
 			} else {
 				beginService(player, currentPosition, reason);
@@ -868,7 +787,7 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 	}
 
 	if (cyclePhase == CyclePhase::ReturnToDepot) {
-		if (fixtureRuntime.fixedFixtureRoute()) {
+		if (fixtureDriver.fixedRoute()) {
 			if (!processNavigation(player, currentPosition, fakeDepotPosition)) {
 				return;
 			}
@@ -896,7 +815,7 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 	}
 
 	if (cyclePhase == CyclePhase::DepositLoot) {
-		if (fixtureRuntime.fixedFixtureRoute()) {
+		if (fixtureDriver.fixedRoute()) {
 			if (currentPosition != fakeDepotPosition) {
 				setCyclePhase(CyclePhase::ReturnToDepot, currentPosition, "fixture_displaced_during_deposit");
 				clearNavigation();
@@ -937,7 +856,7 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 	const auto now = std::chrono::steady_clock::now();
 	PlayerBotNavigationRuntimeOutcome navigation;
 	if (!processNavigation(player, currentPosition, patrol.destination, &navigation)) {
-		if (fixtureRuntime.forcedStepRecoveryPending() && navigation.routeUnavailable) navigationRuntime.clearBlockedPositions();
+		if (fixtureDriver.forcedStepRecoveryPending() && navigation.routeUnavailable) navigationRuntime.clearBlockedPositions();
 		const PlayerBotHuntPatrolOutcome recovery = huntRuntime.observePatrolNavigation(navigation, now,
 			maximumRepeatedNavigationStepFailures, maximumPatrolRouteFailures);
 		if (recovery.command == PlayerBotHuntPatrolCommand::SkipWaypoint || recovery.command == PlayerBotHuntPatrolCommand::RegionExhausted) {

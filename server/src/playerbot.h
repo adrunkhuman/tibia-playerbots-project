@@ -23,6 +23,11 @@ class PlayerBotController;
 class Creature;
 class Player;
 
+namespace playerbot {
+	std::string jsonString(const std::string& value);
+	std::string utcTimestamp();
+}
+
 class PlayerBotManager
 {
 	public:

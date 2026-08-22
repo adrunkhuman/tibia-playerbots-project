@@ -49,6 +49,7 @@ set(tfs_SRC
 	${CMAKE_CURRENT_LIST_DIR}/playerbotcombatruntime.cpp
 	${CMAKE_CURRENT_LIST_DIR}/playerbotcontroller.cpp
 	${CMAKE_CURRENT_LIST_DIR}/playerbotdepotworkflow.cpp
+	${CMAKE_CURRENT_LIST_DIR}/playerbotfixturedriver.cpp
 	${CMAKE_CURRENT_LIST_DIR}/playerbotdepotsession.cpp
 	${CMAKE_CURRENT_LIST_DIR}/playerbotdeparture.cpp
 	${CMAKE_CURRENT_LIST_DIR}/playerbotequipment.cpp

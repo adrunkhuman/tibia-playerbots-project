@@ -215,10 +215,7 @@ bool PlayerBotController::processMagicTraining(Player& player, const Position& p
 	uint64_t manaAfter = player.getMana();
 	const uint64_t manaSpentAfter = player.getSpentMana();
 	const uint32_t magicLevelAfter = player.getBaseMagicLevel();
-	if (fixtureRuntime.forceMagicTrainingVerificationFailure()) {
-		// The engine cast remains real; this fixture corrupts only the post-cast observation snapshot.
-		++manaAfter;
-	}
+	manaAfter = fixtureDriver.observedMagicTrainingMana(manaAfter);
 	const uint64_t manaDelta = manaBefore >= manaAfter ? manaBefore - manaAfter : UINT64_MAX;
 	const bool progressed = magicLevelAfter > magicLevelBefore ||
 	                        (magicLevelAfter == magicLevelBefore && manaSpentAfter > manaSpentBefore);
@@ -237,160 +234,6 @@ bool PlayerBotController::processMagicTraining(Player& player, const Position& p
 	if (!verified) telemetry.recordActionFailure();
 	finishMagicTraining(player, position, verified ? "success" : "failed", verified ? "cast_verified" : "cast_verification_failed");
 	return false;
-}
-
-void PlayerBotController::runSpellCalibrationFixture(Player& player, const Position& position)
-{
-	auto emitFixture = [this, &position](const char* spell, const char* targetClass, const PlayerBotSpellEnvelope& envelope,
-	                                     PlayerBotSpellEvidence evidence, int32_t value, const char* phase) {
-		const PlayerBotSpellProfile& profile = survivalRuntime.observeCalibrationFixture(spell, targetClass, envelope, evidence, value);
-		std::ostringstream fields;
-		const bool profileMath = std::strcmp(phase, "low_confidence") == 0 || std::strcmp(phase, "gradual_ranking") == 0 ||
-		                         std::strcmp(phase, "bounded_range") == 0;
-		fields << "\"source\":" << jsonString(profileMath ? "profile_math" : "classifier_helper")
-		       << ",\"phase\":" << jsonString(phase) << ",\"spell\":" << jsonString(spell)
-		       << ",\"target_class\":" << jsonString(targetClass) << ",\"evidence\":" << jsonString(playerBotSpellEvidenceName(evidence))
-		       << ",\"engine_bounds\":{\"minimum\":" << envelope.minimum << ",\"maximum\":" << envelope.maximum
-		       << ",\"duration_ms\":" << envelope.durationMs << "},\"calibration\":{\"accepted\":" << profile.accepted
-		       << ",\"rejected\":" << profile.rejected << ",\"ambiguous\":" << profile.ambiguous
-		       << ",\"minimum\":" << profile.minimum << ",\"maximum\":" << profile.maximum
-		       << ",\"conservative\":" << profile.conservative << ",\"ranking\":" << profile.ranking
-		       << ",\"confidence\":" << profile.confidence << '}';
-		if (std::strcmp(phase, "low_confidence") == 0) {
-			fields << ",\"policy_unchanged\":true";
-		}
-		emit("spell_calibration", position, fields.str());
-	};
-	const PlayerBotSpellDescriptor* healing = playerBotSpellDescriptor("Light Healing");
-	const PlayerBotSpellDescriptor* ranged = playerBotSpellDescriptor("Whirlwind Throw");
-	const PlayerBotSpellDescriptor* melee = playerBotSpellDescriptor("Berserk");
-	const PlayerBotSpellDescriptor* support = playerBotSpellDescriptor("Haste");
-	if (!healing || !ranged || !melee || !support) return;
-	const PlayerBotSpellEnvelope healingEnvelope = playerBotSpellEnvelope(player, *healing);
-	const PlayerBotSpellEnvelope rangedEnvelope = playerBotSpellEnvelope(player, *ranged);
-	const PlayerBotSpellEnvelope meleeEnvelope = playerBotSpellEnvelope(player, *melee);
-	const PlayerBotSpellEnvelope supportEnvelope = playerBotSpellEnvelope(player, *support);
-	PlayerBotSpellObservation acceptedHeal{true, false, false, true, false, false, false,
-	                                      std::max(1, healingEnvelope.minimum)};
-	emitFixture(healing->name, "self", healingEnvelope,
-	            playerBotClassifySpellObservation(healing->role, acceptedHeal, healingEnvelope.maximum + 1, healingEnvelope),
-	            acceptedHeal.value, "isolated_healing");
-	emitFixture(healing->name, "self", healingEnvelope,
-	            playerBotClassifySpellObservation(healing->role, acceptedHeal, healingEnvelope.maximum, healingEnvelope),
-	            acceptedHeal.value, "healing_equality_exact");
-	emitFixture(healing->name, "self", healingEnvelope, PlayerBotSpellEvidence::CensoredOverheal, 0, "overheal_censored");
-	emitFixture(healing->name, "self", healingEnvelope, PlayerBotSpellEvidence::ConcurrentDamage, 0, "concurrent_damage");
-	emitFixture(healing->name, "self", healingEnvelope, PlayerBotSpellEvidence::CastNotVerified, 0, "rejected_cast");
-	PlayerBotSpellObservation acceptedDamage{true, false, false, true, false, false, false,
-	                                        std::max(1, rangedEnvelope.minimum)};
-	emitFixture(ranged->name, "monster:fixture", rangedEnvelope,
-	            playerBotClassifySpellObservation(ranged->role, acceptedDamage, 0, rangedEnvelope), acceptedDamage.value,
-	            "single_target_damage");
-	emitFixture(ranged->name, "monster:fixture", rangedEnvelope, PlayerBotSpellEvidence::MeleeOrOtherBotDamage, 0, "melee_ambiguous");
-	emitFixture(ranged->name, "monster:fixture", rangedEnvelope, PlayerBotSpellEvidence::OtherAttacker, 0, "other_attacker_ambiguous");
-	emitFixture(ranged->name, "monster:fixture", rangedEnvelope, PlayerBotSpellEvidence::TargetLost, 0, "target_loss_ambiguous");
-	emitFixture(melee->name, "monster:fixture", meleeEnvelope, PlayerBotSpellEvidence::MultiTarget, 0, "multi_target_ambiguous");
-	emitFixture(support->name, "self", supportEnvelope, PlayerBotSpellEvidence::Accepted, supportEnvelope.durationMs,
-	            "support_duration");
-	emitFixture(support->name, "self", supportEnvelope, PlayerBotSpellEvidence::PreexistingOrReplacedCondition, 0,
-	            "support_preexisting_or_replaced");
-	for (uint16_t sample = 0; sample < 9; ++sample) {
-		emitFixture(ranged->name, "monster:fixture", rangedEnvelope, PlayerBotSpellEvidence::Accepted,
-			sample == 8 ? 70000 : rangedEnvelope.maximum + sample,
-			sample == 0 ? "low_confidence" : sample == 8 ? "bounded_range" : "gradual_ranking");
-	}
-	for (uint8_t profile = 0; profile <= 12; ++profile) {
-		survivalRuntime.observeCalibrationFixture(ranged->name, "monster:eviction-" + std::to_string(profile), rangedEnvelope,
-		                         PlayerBotSpellEvidence::Accepted, rangedEnvelope.minimum);
-		if (std::optional<std::string> evicted = survivalRuntime.takeCalibrationEviction()) {
-			emit("spell_calibration_eviction", position, "\"source\":\"profile_math\",\"evicted_profile\":" +
-		     jsonString(*evicted) + ",\"profile_count\":" + std::to_string(survivalRuntime.calibrationSize()));
-		}
-	}
-	const size_t profilesBeforeReset = survivalRuntime.calibrationSize();
-	survivalRuntime.clearCalibration();
-	emit("spell_calibration", position, "\"source\":\"profile_math\",\"phase\":\"fixture_profile_clear\",\"profiles_before\":" +
-	     std::to_string(profilesBeforeReset) + ",\"profiles_after\":" + std::to_string(survivalRuntime.calibrationSize()) +
-	     ",\"persistent\":false");
-}
-
-void PlayerBotController::runMagicTrainingFixture(Player& player, const Position& position)
-{
-	const std::optional<ManaRegenerationForecast> defaultForecast = player.getManaRegenerationForecast();
-	std::ostringstream defaultFields;
-	defaultFields << "\"source\":\"authoritative_forecast\",\"case\":\"active_default\",\"active\":"
-	              << (defaultForecast ? "true" : "false");
-	if (defaultForecast) {
-		defaultFields << ",\"gain\":" << defaultForecast->gain << ",\"interval\":" << defaultForecast->interval
-		              << ",\"remaining\":" << defaultForecast->remaining;
-	}
-	emit("magic_training_fixture", position, defaultFields.str());
-
-	ConditionRegeneration active(CONDITIONID_DEFAULT, CONDITION_REGENERATION, 10000);
-	active.setParam(CONDITION_PARAM_MANAGAIN, 10);
-	active.setParam(CONDITION_PARAM_MANATICKS, 1000);
-	active.executeCondition(&player, 250);
-	const std::optional<ManaRegenerationForecast> forecast = active.getManaForecast(player, EVENT_CREATURE_THINK_INTERVAL);
-	if (forecast) {
-		const uint64_t exactFull = 990 + forecast->gain;
-		const uint64_t overflow = 995 + forecast->gain;
-		std::ostringstream fields;
-		fields << "\"source\":\"authoritative_forecast\",\"case\":\"active\",\"gain\":" << forecast->gain
-		       << ",\"interval\":" << forecast->interval << ",\"remaining\":" << forecast->remaining
-		       << ",\"exact_full_predicted\":" << exactFull << ",\"exact_full_overflow\":false"
-		       << ",\"overflow_predicted\":" << overflow << ",\"overflow_wasted\":" << overflow - 1000;
-		emit("magic_training_fixture", position, fields.str());
-	}
-	ConditionRegeneration finite(CONDITIONID_DEFAULT, CONDITION_REGENERATION, 500);
-	finite.setParam(CONDITION_PARAM_MANAGAIN, 10);
-	finite.setParam(CONDITION_PARAM_MANATICKS, 1000);
-	finite.executeCondition(&player, 250);
-	emit("magic_training_fixture", position,
-	     std::string("\"source\":\"authoritative_forecast\",\"case\":\"finite_final_tick\",\"active\":") +
-	         (finite.getManaForecast(player, EVENT_CREATURE_THINK_INTERVAL) ? "true" : "false"));
-	finite.setParam(CONDITION_PARAM_MANATICKS, 3000);
-	emit("magic_training_fixture", position,
-	     std::string("\"source\":\"authoritative_forecast\",\"case\":\"finite_expires_before_tick\",\"active\":") +
-	         (finite.getManaForecast(player, EVENT_CREATURE_THINK_INTERVAL) ? "true" : "false"));
-	ConditionRegeneration nonDefault(CONDITIONID_COMBAT, CONDITION_REGENERATION, 10000);
-	nonDefault.setParam(CONDITION_PARAM_MANAGAIN, 4);
-	nonDefault.setParam(CONDITION_PARAM_MANATICKS, 1000);
-	nonDefault.executeCondition(&player, 500);
-	const std::optional<ManaRegenerationForecast> nonDefaultForecast =
-		nonDefault.getManaForecast(player, EVENT_CREATURE_THINK_INTERVAL);
-	emit("magic_training_fixture", position,
-	     "\"source\":\"authoritative_forecast\",\"case\":\"non_default\",\"active\":" +
-	         std::string(nonDefaultForecast ? "true" : "false") + ",\"gain\":" +
-	         std::to_string(nonDefaultForecast ? nonDefaultForecast->gain : 0) + ",\"remaining\":" +
-	         std::to_string(nonDefaultForecast ? nonDefaultForecast->remaining : 0));
-	if (player.getZone() != ZONE_PROTECTION) {
-		auto addForecastCondition = [&player](ConditionId_t id, uint32_t gain, uint32_t interval) {
-			auto* condition = new ConditionRegeneration(id, CONDITION_REGENERATION, 10000);
-			condition->setParam(CONDITION_PARAM_MANAGAIN, gain);
-			condition->setParam(CONDITION_PARAM_MANATICKS, interval);
-			condition->executeCondition(&player, 500);
-			player.addCondition(condition);
-		};
-		addForecastCondition(CONDITIONID_COMBAT, 3, 1000);
-		addForecastCondition(CONDITIONID_HEAD, 7, 2000);
-		const std::optional<ManaRegenerationForecast> aggregated = player.getManaRegenerationForecast();
-		emit("magic_training_fixture", position,
-		     "\"source\":\"authoritative_forecast\",\"case\":\"earliest_same_engine_cycle\",\"active\":" +
-		         std::string(aggregated ? "true" : "false") + ",\"gain\":" +
-		         std::to_string(aggregated ? aggregated->gain : 0) + ",\"remaining\":" +
-		         std::to_string(aggregated ? aggregated->remaining : 0));
-		player.removeCondition(CONDITION_REGENERATION, CONDITIONID_COMBAT);
-		player.removeCondition(CONDITION_REGENERATION, CONDITIONID_HEAD);
-	}
-	ConditionRegeneration expired(CONDITIONID_DEFAULT, CONDITION_REGENERATION, 0);
-	expired.setParam(CONDITION_PARAM_MANAGAIN, 10);
-	expired.setParam(CONDITION_PARAM_MANATICKS, 1000);
-	emit("magic_training_fixture", position, std::string("\"source\":\"authoritative_forecast\",\"case\":\"expired\",\"active\":") +
-	     (expired.getManaForecast(player, EVENT_CREATURE_THINK_INTERVAL) ? "true" : "false"));
-	if (player.getZone() == ZONE_PROTECTION) {
-		emit("magic_training_fixture", position, std::string("\"source\":\"authoritative_forecast\",\"case\":\"protection_zone\",\"active\":") +
-		     (active.getManaForecast(player, EVENT_CREATURE_THINK_INTERVAL) ? "true" : "false"));
-	}
 }
 
 bool PlayerBotController::trySupportSpell(Player* player, const Position& currentPosition)
@@ -620,7 +463,7 @@ void PlayerBotController::finishSpellTraining(Player* player, const Position& po
 	clearNavigation();
 	progressionRuntime.setCooldown(TopLevelGoal::LearnSpell,
 	                       std::strcmp(result, "success") == 0 ? spellTrainingSuccessCooldown : spellTrainingFailureCooldown);
-	if (player && fixtureRuntime.progressionEnabled()) {
+	if (player && fixtureDriver.progressionEnabled()) {
 		selectTopLevelGoal(*player, position, std::strcmp(result, "success") == 0 ? "spell_training_complete" : "spell_training_failed");
 	}
 	schedule(SCHEDULER_MINTICKS);
