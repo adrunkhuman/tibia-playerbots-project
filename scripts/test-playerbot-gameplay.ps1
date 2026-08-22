@@ -9,6 +9,12 @@ fixtures, and removes the scenario stack unless -KeepStack is set.
 .PARAMETER SlottedLoot
 Runs seller, no-eligible-seller depot fallback, and interrupted-deposit restart
 fixtures for policy-approved loot carried in an invalid equipment slot.
+
+.PARAMETER Scenario
+Runs only the named scenarios. Names must match the gameplay scenario catalog.
+
+.PARAMETER ContinueOnFailure
+Captures diagnostics and continues with the next selected scenario after a failure.
 #>
 param(
 	[ValidateRange(30, 3600)]
@@ -43,6 +49,9 @@ param(
 		"magic_training_post_hunt", "magic_training_post_hunt_no_overflow", "magic_training_restart", "magic_training_hunt"
 	)]
 	[string]$MagicTrainingCase,
+	[string[]]$Scenario,
+	[switch]$ContinueOnFailure,
+	[string]$FailureArtifactsPath,
 	[switch]$Focused,
 	[switch]$SkipBuild,
 	[switch]$KeepStack
@@ -54,6 +63,54 @@ $projectRoot = Split-Path -Parent $PSScriptRoot
 $composeFile = Join-Path $projectRoot "server\compose.yaml"
 $gameplayComposeFile = Join-Path $projectRoot "server\compose.playerbot-gameplay.yaml"
 $composeArguments = @("compose", "-f", $composeFile, "-f", $gameplayComposeFile)
+$scenarioCatalog = @(
+	"cycle",
+	"mainland_loop", "slotted_loot_seller", "slotted_loot_no_seller", "slotted_loot_deposit_restart",
+	"real_depot", "real_depot_restart_approach", "real_depot_restart_locker", "real_depot_restart_chest",
+	"real_depot_restart_deposit", "real_depot_restart_depart", "real_depot_partial_move", "real_depot_rejected_move",
+	"pickup_progression", "pickup_progression_bundle", "pickup_progression_nested", "pickup_progression_resume",
+	"pickup_progression_nested_resume", "pickup_progression_space", "goal_arbitration", "goal_arbitration_interrupt",
+	"stamina_bonus_projection", "stamina_boundary_projection", "stamina_normal_projection", "hunt_region_planning",
+	"combat_readiness_ready", "combat_readiness_upgrade", "combat_readiness_missing_weapon", "combat_readiness_supplies",
+	"combat_readiness_no_food", "combat_readiness_low_wealth", "combat_readiness_food_capacity",
+	"combat_readiness_retention", "equipment_offer_shadow_upgrade", "equipment_offer_shadow_unaffordable",
+	"equipment_offer_shadow_no_upgrade", "equipment_purchase", "equipment_purchase_resume", "equipment_purchase_space",
+	"equipment_purchase_rejected", "adaptive_challenge", "mainland_equipment_reward", "oracle_departure",
+	"oracle_level_eight_interrupt", "oracle_level_eight_recovery",
+	"navigation", "navigation_recovery", "patrol_recovery", "target_pursuit", "target_pursuit_abandon",
+	"spell_training", "spell_use", "spell_calibration", "magic_training_haste", "magic_training_great_light",
+	"magic_training_light", "magic_training_refresh", "magic_training_reserve", "magic_training_exact_full",
+	"magic_training_pz", "magic_training_absent", "magic_training_expired", "magic_training_failed",
+	"magic_training_service", "magic_training_progression", "magic_training_post_hunt",
+	"magic_training_post_hunt_no_overflow", "magic_training_restart", "magic_training_hunt",
+	"corpse", "corpse_inaccessible", "death", "healing", "healing_resupply", "value"
+)
+$scenarioCatalogSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+foreach ($scenarioName in $scenarioCatalog) {
+	if (-not $scenarioCatalogSet.Add($scenarioName)) {
+		throw "Duplicate gameplay scenario name: $scenarioName"
+	}
+}
+if ($scenarioCatalog.Count -ne 75) {
+	throw "The gameplay scenario catalog must contain 75 scenarios; found $($scenarioCatalog.Count)."
+}
+$requestedScenarioNames = @($Scenario | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
+$exactScenarioSelection = $requestedScenarioNames.Count -gt 0
+$selectedScenarios = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+foreach ($scenarioName in $requestedScenarioNames) {
+	if (-not $scenarioCatalogSet.Contains($scenarioName)) {
+		throw "Unknown gameplay scenario '$scenarioName'."
+	}
+	[void]$selectedScenarios.Add($scenarioName)
+}
+if ($exactScenarioSelection -and ($Focused -or $MagicTrainingCase)) {
+	throw "-Scenario cannot be combined with -Focused or -MagicTrainingCase."
+}
+if (-not $FailureArtifactsPath) {
+	$FailureArtifactsPath = Join-Path $projectRoot "artifacts\playerbot-gameplay"
+}
+$scenarioResults = [System.Collections.Generic.List[object]]::new()
+$scenarioRunId = [DateTime]::UtcNow.ToString("yyyyMMddTHHmmssZ")
 $previousDuration = $env:PLAYERBOT_HUNT_DURATION_SECONDS
 $previousMode = $env:PLAYERBOT_GAMEPLAY_MODE
 $previousRelogDelay = $env:PLAYERBOT_RELOG_DELAY_SECONDS
@@ -137,7 +194,19 @@ try {
 	. $PSScriptRoot/playerbot-gameplay/scenarios-spells.ps1
 
 	. $PSScriptRoot/playerbot-gameplay/scenarios-combat-loot.ps1
-	"PLAYERBOT_GAMEPLAY_TEST PASS"
+	if (-not $Focused) {
+		$resultNames = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+		foreach ($result in $scenarioResults) {
+			[void]$resultNames.Add($result.Name)
+		}
+		if ($scenarioResults.Count -ne $scenarioCatalog.Count -or -not $resultNames.SetEquals($scenarioCatalogSet)) {
+			throw "The gameplay scenario catalog does not match the scenarios enumerated by the suite."
+		}
+	}
+	$failedScenarios = @($scenarioResults | Where-Object { $_.Status -in @("fail", "timeout") })
+	if ($failedScenarios.Count -gt 0) {
+		throw "$($failedScenarios.Count) gameplay scenario(s) failed."
+	}
 }
 finally {
 	try {
@@ -159,5 +228,6 @@ finally {
 		foreach ($timing in $timings.GetEnumerator()) {
 			"PLAYERBOT_GAMEPLAY_TIMING $($timing.Key)=$([Math]::Round($timing.Value.TotalSeconds, 2))s"
 		}
+		Write-ScenarioSummary
 	}
 }
