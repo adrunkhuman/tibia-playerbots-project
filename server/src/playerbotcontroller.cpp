@@ -31,8 +31,8 @@ void PlayerBotController::start(const Position& position, bool recovered, uint32
 	refreshItemValues();
 	const bool startInHunt = !recovered && fixtureDriver.startInHunt();
 	Player* controlledPlayer = g_game.getPlayerByID(playerId);
-	const bool departureComplete = controlledPlayer && hasCompletedRookgaardDeparture(*controlledPlayer);
-	const bool departureRequired = controlledPlayer && requiresRookgaardDeparture(*controlledPlayer);
+	const bool departureComplete = controlledPlayer && departurePlanner.hasCompleted(departureSnapshot(*controlledPlayer));
+	const bool departureRequired = controlledPlayer && departurePlanner.required(departureSnapshot(*controlledPlayer));
 	const bool useGoalSelector = controlledPlayer && !startInHunt &&
 	                             (departureRequired || (!recovered && fixtureDriver.progressionEnabled()));
 	if (!fixtureDriver.magicTrainingScenario() && !fixtureDriver.deferInitialization() && useGoalSelector &&
@@ -453,7 +453,7 @@ void PlayerBotController::navigate()
 		}
 		emitFixtureEvents(fixtureDriver.runMagicTraining(*player), currentPosition);
 		const bool useGoalSelector = !fixtureDriver.startInHunt() &&
-		                             (requiresRookgaardDeparture(*player) || fixtureDriver.progressionEnabled());
+		                             (departurePlanner.required(departureSnapshot(*player)) || fixtureDriver.progressionEnabled());
 		if (useGoalSelector) {
 			if (!selectTopLevelGoal(*player, currentPosition, "startup")) {
 				return;
@@ -490,7 +490,7 @@ void PlayerBotController::navigate()
 	}
 	const bool waitingForRecovery = cyclePhase == CyclePhase::Service && survivalRuntime.needsHealing(survivalSnapshot(*player));
 	if (!accessingReward && !progressionSession.active(PlayerBotProgressionProcedure::OracleDeparture) &&
-	    requiresRookgaardDeparture(*player) && !waitingForRecovery) {
+	    departurePlanner.required(departureSnapshot(*player)) && !waitingForRecovery) {
 		if (selectTopLevelGoal(*player, currentPosition, "level_eight_interrupt")) {
 			schedule(SCHEDULER_MINTICKS);
 		}

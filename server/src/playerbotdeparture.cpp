@@ -15,19 +15,16 @@
 // Rookgaard Oracle discovery, dialogue, and departure verification.
 using namespace playerbot;
 
-bool PlayerBotController::hasCompletedRookgaardDeparture(const Player& player) const
+PlayerBotDeparturePlannerSnapshot PlayerBotController::departureSnapshot(const Player& player) const
 {
-	return player.getVocation()->getId() != 0 && player.getTown() && player.getTown()->getID() != rookgaardTownId;
-}
-
-bool PlayerBotController::requiresRookgaardDeparture(const Player& player) const
-{
-	return player.getVocation()->getId() == 0 && player.getLevel() >= oracleMinimumLevel;
+	return {player.getLevel(), player.getVocation()->getId(), player.getTown() ? player.getTown()->getID() : 0,
+	        oracleMinimumLevel, oracleMaximumLevel, rookgaardTownId, {}};
 }
 
 bool PlayerBotController::findOracleDeparture(Player& player, const Position& position, PlayerBotOracleDeparturePlan& plan,
 	                                           std::deque<PlayerBotNavigationStep>& departureSteps)
 {
+	PlayerBotDeparturePlannerSnapshot snapshot = departureSnapshot(player);
 	Npc* oracle = nullptr;
 	for (const auto& entry : g_game.getNpcs()) {
 		Npc* npc = entry.second;
@@ -77,11 +74,11 @@ bool PlayerBotController::findOracleDeparture(Player& player, const Position& po
 		if (!planned) {
 			continue;
 		}
-		plan.npcId = oracle->getID();
-		plan.npcPosition = oracle->getPosition();
-		plan.approachPosition = candidate;
-		plan.travelSteps = static_cast<uint32_t>(steps.size());
-		plan.expandedNodes = expandedNodes;
+		snapshot.providers.push_back({oracle->getID(), oracle->getPosition(),
+		                              {true, false, candidate, static_cast<uint32_t>(steps.size()), expandedNodes}});
+		const std::optional<PlayerBotOracleDeparturePlan> selected = departurePlanner.select(snapshot);
+		if (!selected) return false;
+		plan = *selected;
 		departureSteps = std::move(steps);
 		return true;
 	}

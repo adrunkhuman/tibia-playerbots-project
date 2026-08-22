@@ -23,6 +23,7 @@
 #include "playerbotlootworkflow.h"
 #include "playerbotnavigationruntime.h"
 #include "playerbotprogressionruntime.h"
+#include "playerbotprogressionplanners.h"
 #include "playerbotsurvivalruntime.h"
 #include "playerbottestpolicy.h"
 #include "playerbotfixturedriver.h"
@@ -181,45 +182,8 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		using EquipmentHuntSummary = PlayerBotEquipmentHuntSummary;
 		using EquipmentOfferEvaluation = PlayerBotEquipmentOfferEvaluation;
 
-		struct RewardItemInspection {
-			uint16_t itemId;
-			uint32_t count;
-			uint32_t depth;
-			uint16_t rootOrdinal;
-			std::vector<uint16_t> path;
-			std::vector<std::string> classes;
-			uint32_t worth = 0;
-			uint32_t sellValue = 0;
-		};
-
-		struct RewardInspection {
-			std::vector<RewardItemInspection> items;
-			std::vector<std::string> rootSignatures;
-			std::vector<std::string> nonStackableRootSignatures;
-			std::map<uint16_t, uint32_t> stackableRootCounts;
-			std::optional<EquipmentUpgrade> bestUpgrade;
-			std::optional<EquipmentOfferEvaluation> bestEquipment;
-			std::string equipmentRejection;
-			uint16_t bestItemId = 0;
-			uint16_t bestRootOrdinal = 0;
-			std::vector<uint16_t> bestItemPath;
-			std::string bestRootSignature;
-			uint16_t primaryKnownItemId = 0;
-			uint16_t primaryKnownRootOrdinal = 0;
-			std::string primaryKnownRootSignature;
-			uint32_t primaryKnownItemUtility = 0;
-			uint32_t itemCount = 0;
-			uint32_t containerCount = 0;
-			uint32_t unknownCount = 0;
-			uint32_t equipmentUpgradeCount = 0;
-			uint32_t currencyValue = 0;
-			uint32_t sellValue = 0;
-			uint32_t potionCount = 0;
-			uint32_t foodCount = 0;
-			uint32_t ropeCount = 0;
-			uint32_t shovelCount = 0;
-			int32_t knownUtility = 0;
-		};
+		using RewardItemInspection = PlayerBotRewardItemInspection;
+		using RewardInspection = PlayerBotRewardInspection;
 
 		using ServiceNpc = PlayerBotEconomyProvider;
 
@@ -313,36 +277,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		void processEquipmentPurchase(Player* player, const Position& position);
 		void finishEquipmentPurchase(Player* player, const Position& position, const char* result, const char* reason);
 
-		std::string rewardItemSignature(const Item& item) const;
-
-		void inspectRewardItem(Player& player, const Item& item, uint16_t rootOrdinal,
-		                       std::vector<uint16_t>& path, const std::string& rootSignature,
-		                       const EquipmentLoadout& currentLoadout,
-		                       const PlayerBotCombatProfile& currentProfile,
-		                       const EquipmentHuntSummary& currentHunts, bool currentReady,
-		                       uint32_t additionalWeight,
-		                       std::map<std::pair<uint16_t, uint32_t>, EquipmentOfferEvaluation>& equipmentEvaluations,
-		                       size_t& simulatedItems, RewardInspection& inspection) const;
-
-		RewardInspection inspectRewardBundle(Player& player, const Container& contents,
-		                                        const EquipmentLoadout& currentLoadout,
-		                                        const PlayerBotCombatProfile& currentProfile,
-		                                        const EquipmentHuntSummary& currentHunts, bool currentReady,
-		                                        uint32_t additionalWeight,
-		                                        std::map<std::pair<uint16_t, uint32_t>, EquipmentOfferEvaluation>& equipmentEvaluations,
-		                                        size_t& simulatedItems) const;
-		RewardInspection inspectKnownReward(Player& player, const Item& item,
-		                                       const EquipmentLoadout& currentLoadout,
-		                                       const PlayerBotCombatProfile& currentProfile,
-		                                       const EquipmentHuntSummary& currentHunts, bool currentReady,
-		                                       uint32_t additionalWeight,
-		                                       std::map<std::pair<uint16_t, uint32_t>, EquipmentOfferEvaluation>& equipmentEvaluations,
-		                                       size_t& simulatedItems) const;
-		void finalizeRewardInspection(Player& player, RewardInspection& inspection) const;
-
 		std::string rewardInspectionItemsJson(const RewardInspection& inspection) const;
-
-		int32_t estimatedPickupUtility(const PlayerBotRewardPlan& reward) const;
 
 		Container* playerBackpack(Player& player) const;
 
@@ -373,8 +308,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		bool findPickupReward(Player& player, const Position& position, PlayerBotRewardPlan& reward,
 		                      std::deque<PlayerBotNavigationStep>& rewardSteps);
 
-		bool hasCompletedRookgaardDeparture(const Player& player) const;
-		bool requiresRookgaardDeparture(const Player& player) const;
+		PlayerBotDeparturePlannerSnapshot departureSnapshot(const Player& player) const;
 
 		bool findOracleDeparture(Player& player, const Position& position, PlayerBotOracleDeparturePlan& plan,
 		                         std::deque<PlayerBotNavigationStep>& departureSteps);
@@ -548,6 +482,10 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		}};
 		CyclePhase cyclePhase = CyclePhase::ReturnToDepot;
 		PlayerBotProgressionRuntime progressionRuntime;
+		PlayerBotRewardPlanner rewardPlanner;
+		PlayerBotEquipmentProviderPlanner equipmentProviderPlanner;
+		PlayerBotSpellTrainingPlanner spellTrainingPlanner;
+		PlayerBotDeparturePlanner departurePlanner;
 		// These references keep the game-adapter code narrow while the runtime owns
 		// all progression state. New procedure logic must use progressionRuntime.
 		const PlayerBotProgressionSession& progressionSession = progressionRuntime.session();
