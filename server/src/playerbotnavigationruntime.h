@@ -103,6 +103,13 @@ struct PlayerBotNavigationWorldChangeObservation {
 	std::chrono::steady_clock::duration suppression;
 };
 
+// process() owns route and pending-step transitions and returns at most one
+// command. Supply a completed Plan through observePlan(), and report the exact
+// nextStep from a Move or Use through observeStep(). A dispatched move remains
+// pending until a later process() observes its result. A dispatched Use becomes
+// pendingWorldChange; inspect that change and pass it to observeWorldChange().
+// Rejected steps drop the route, while unchanged world changes suppress their
+// target before the runtime replans.
 class PlayerBotNavigationRuntime
 {
 	public:
