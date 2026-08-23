@@ -413,7 +413,7 @@ void PlayerBotController::onDeath(const Player& player, const Creature* killer, 
 	lastPosition = player.getPosition();
 	if (activeHuntRegion && cyclePhase == CyclePhase::Hunt &&
 	    (scenarioStage == ScenarioStage::TraversalCombat || scenarioStage == ScenarioStage::TargetPursuit)) {
-		huntCombatEvidence.deathObserved = true;
+		huntPolicy.observeDeath();
 	}
 	if (activeHuntRegion) {
 		huntRegionCooldowns[activeHuntRegion->center] = std::chrono::steady_clock::now() + huntRegionCooldown;
@@ -498,8 +498,7 @@ void PlayerBotController::onHealthDrain(const Player& player, uint32_t damage)
 {
 	spellRuntime.observeHealthDrain(player.getID() == playerId);
 	if (player.getID() == playerId && isActiveHuntCombat(player)) {
-		huntRegionDamageTaken += damage;
-		huntCombatEvidence.damageTaken += damage;
+		huntPolicy.observeDamage(damage);
 	}
 }
 
@@ -701,9 +700,7 @@ void PlayerBotController::navigate()
 	recordActiveHuntCombat(*player);
 	verifySpellCast(*player, currentPosition);
 	if (activeHuntRegion && cyclePhase == CyclePhase::Hunt) {
-		if (huntRegionDamageTaken >= static_cast<uint32_t>(player->getMaxHealth()) &&
-		    std::chrono::steady_clock::now() - huntRegionStarted < std::chrono::minutes(2)) {
-			huntCombatEvidence.dangerObserved = true;
+		if (huntPolicy.observeDanger(player->getMaxHealth(), std::chrono::steady_clock::now() - huntRegionStarted)) {
 			huntRegionCooldowns[activeHuntRegion->center] = std::chrono::steady_clock::now() + huntRegionCooldown;
 			beginService(player, currentPosition, "hunt_region_observed_danger");
 			schedule(navigationInterval);

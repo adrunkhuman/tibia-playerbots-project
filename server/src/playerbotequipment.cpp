@@ -225,7 +225,7 @@ PlayerBotController::EquipmentHuntSummary PlayerBotController::equipmentHuntSumm
 		}
 	}
 	const PlayerBotHuntRegionScan scan = huntRegionPlanner.beginScan(player);
-	const PlayerBotHuntPlanningProfile planningProfile = playerBotHuntPlanningProfile(player, profile, challengeFrontier.target);
+	const PlayerBotHuntPlanningProfile planningProfile = playerBotHuntPlanningProfile(player, profile, huntPolicy.challengeFrontier());
 	const uint32_t huntDurationSeconds = static_cast<uint32_t>(std::max<int32_t>(1,
 		g_config.getNumber(ConfigManager::PLAYERBOT_HUNT_DURATION_SECONDS)));
 	for (size_t candidateIndex : scan.candidateIndices) {
@@ -235,7 +235,7 @@ PlayerBotController::EquipmentHuntSummary PlayerBotController::equipmentHuntSumm
 		}
 		PlayerBotHuntRegion region;
 		if (!huntRegionPlanner.score(player, planningProfile, scan.revision, candidateIndex, excludedRegions,
-		                            huntRegionPerformance, huntDurationSeconds, region)) {
+		                            huntPolicy.regionPerformance(), huntDurationSeconds, region)) {
 			continue;
 		}
 		++summary.evaluatedRegions;

@@ -29,7 +29,7 @@ void PlayerBotController::logLootSuccess(uint16_t itemId, uint32_t count, uint32
 void PlayerBotController::beginLoot(Player* player, const Position& currentPosition)
 {
 	if (activeHuntRegion) {
-		++huntRegionKills;
+		huntPolicy.observeKill();
 	}
 	const auto defeatedTarget = clearTraversalTarget(currentPosition, "target_defeated");
 	if (!defeatedTarget) {
