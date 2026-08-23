@@ -139,7 +139,7 @@ void PlayerBotController::processReadinessEquipment(Player* player, const Positi
 			return;
 		}
 		if (ready) {
-			if (activeHuntRegion) {
+			if (huntRuntime.active()) {
 				schedule(SCHEDULER_MINTICKS);
 				return;
 			}
@@ -1251,7 +1251,7 @@ void PlayerBotController::processPickupReward(Player* player, const Position& cu
 	const auto& pickupReward = rewardSession.plan();
 	if (rewardSession.stage() == PlayerBotRewardStage::Travel) {
 		if (!processNavigation(player, currentPosition, pickupReward.approachPosition)) {
-			if (fixedTargetRouteFailureCount >= maximumProgressionAttempts) {
+			if (navigationRuntime.fixedTargetRouteFailureCount() >= maximumProgressionAttempts) {
 				finishProgressionObjective(player, currentPosition, "failed", "route_unavailable");
 			}
 			return;

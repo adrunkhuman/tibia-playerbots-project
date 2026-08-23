@@ -19,9 +19,7 @@
 #include "playerboteconomy.h"
 #include "playerbotequipmentpolicy.h"
 #include "playerbotgoalarbiter.h"
-#include "playerbothuntregions.h"
-#include "playerbothuntplanningsession.h"
-#include "playerbothuntpolicy.h"
+#include "playerbothuntruntime.h"
 #include "playerbotinventorypolicy.h"
 #include "playerbotlootworkflow.h"
 #include "playerbotnavigationruntime.h"
@@ -430,7 +428,6 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		void setCyclePhase(CyclePhase phase, const Position& position, const char* reason);
 
 		void clearNavigation();
-		void resetPatrolRouteFailures();
 
 		void beginReturn(Player* player, const Position& position, const char* reason);
 
@@ -479,7 +476,8 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		void onCombatDamage(Creature* attacker, const Creature& target, uint32_t damage);
 		void onHealthGain(Creature* healer, const Creature& target, uint32_t gain);
 
-		bool processNavigation(Player* player, const Position& currentPosition, const Position& destination);
+		bool processNavigation(Player* player, const Position& currentPosition, const Position& destination,
+		                       PlayerBotNavigationRuntimeOutcome* navigationOutcome = nullptr);
 		void adoptNavigationPlan(const Position& destination, std::deque<PlayerBotNavigationStep> steps);
 
 		bool findDepositableItem(const Player& player, Container* container, Container*& source,
@@ -504,7 +502,6 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		void runAdaptiveChallengeFixture(Player& player, const Position& position);
 		void runSpellCalibrationFixture(Player& player, const Position& position);
 		void runMagicTrainingFixture(Player& player, const Position& position);
-		void cancelHuntRegionPlanning();
 		void emitHuntRegionPlanning(const PlayerBotHuntPlanningSession& planning, const Position& position, const char* phase) const;
 
 		void finishHuntRegion(const Player& player, const Position& position, const char* reason);
@@ -536,13 +533,6 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		playerbot::PlayerBotTelemetry telemetry;
 		Position lastPosition;
 		ScenarioStage scenarioStage = ScenarioStage::Traverse;
-		uint32_t fixedTargetRouteFailureCount = 0;
-		uint32_t patrolRouteFailureCount = 0;
-		uint64_t patrolRouteFailureExpandedNodes = 0;
-		Position patrolRouteFailureTarget;
-		std::chrono::steady_clock::time_point patrolRouteFailureStarted;
-		uint64_t lastNavigationExpandedNodes = 0;
-		PlayerBotNavigationResult lastNavigationPlanResult = PlayerBotNavigationResult::Reached;
 		PlayerBotEconomyCatalog economyCatalog;
 		PlayerBotDispositionPolicy dispositionPolicy;
 		PlayerBotEquipmentPolicy equipmentPolicy;
@@ -573,20 +563,8 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		bool readinessEquipmentPending = false;
 		bool readinessResumeService = false;
 		PlayerBotServiceWorkflow serviceWorkflow;
-		size_t huntRouteIndex = 0;
-		uint32_t completedCycles = 0;
-		std::chrono::steady_clock::time_point huntDeadline;
 		PlayerBotNavigationRuntime navigationRuntime;
-		PlayerBotHuntRegionPlanner huntRegionPlanner;
-		std::optional<PlayerBotHuntPlanningSession> huntRegionPlanning;
-		std::optional<PlayerBotHuntRegion> activeHuntRegion;
-		std::map<Position, std::chrono::steady_clock::time_point>& huntRegionCooldowns;
-		PlayerBotHuntPolicy huntPolicy;
-		std::chrono::steady_clock::time_point huntScopeReevaluationAfter;
-		uint32_t consecutiveHuntScopeExhaustions = 0;
-		std::chrono::steady_clock::time_point huntRegionStarted;
-		uint64_t huntRegionStartExperience = 0;
-		uint32_t huntRegionStartLevel = 0;
+		PlayerBotHuntRuntime huntRuntime;
 		bool deathObserved = false;
 };
 

@@ -94,8 +94,9 @@ class PlayerBotHuntPlanningSession
 		                              double staminaExperienceMultiplier, uint32_t huntDurationSeconds);
 		PlayerBotHuntPlanningProgress completeRouteValidation();
 
-		std::vector<PlayerBotHuntRegion>& regions() { return scoredRegions; }
 		const std::vector<PlayerBotHuntRegion>& regions() const { return scoredRegions; }
+		const PlayerBotHuntRegion& region(size_t index) const { return scoredRegions.at(index); }
+		void rejectSuitableCandidates(const std::string& reason);
 		void refreshSuitableCandidates();
 
 	private:

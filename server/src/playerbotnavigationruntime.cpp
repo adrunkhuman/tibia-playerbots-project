@@ -68,9 +68,13 @@ PlayerBotNavigationRuntimeOutcome PlayerBotNavigationRuntime::process(const Play
 		outcome.plan = routePlan.metrics;
 		if (routePlan.metrics.result != PlayerBotNavigationResult::Reached || routePlan.steps.empty()) {
 			outcome.routeUnavailable = true;
+			if (outcome.blockedPositions.empty()) ++fixedTargetRouteFailures;
+			outcome.fixedTargetRouteFailures = fixedTargetRouteFailures;
+			outcome.fixedTargetRouteExhausted = fixedTargetRouteFailures >= 20;
 			outcome.stepFailureCount = session.stepFailureCount();
 			return outcome;
 		}
+		fixedTargetRouteFailures = 0;
 		// Keep the old route active until the complete replacement route has been planned.
 		session.installRoute(input.destination, std::move(routePlan.steps));
 	}

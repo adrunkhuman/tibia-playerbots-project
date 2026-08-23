@@ -57,6 +57,8 @@ struct PlayerBotNavigationRuntimeOutcome {
 	std::set<Position> blockedPositions;
 	PlayerBotNavigationPlanMetrics plan;
 	bool routeUnavailable = false;
+	uint32_t fixedTargetRouteFailures = 0;
+	bool fixedTargetRouteExhausted = false;
 	std::optional<PlayerBotNavigationStep> nextStep;
 };
 
@@ -68,7 +70,7 @@ class PlayerBotNavigationRuntime
 		                                  uint64_t maximumExpandedNodes = playerBotNavigationMaximumExpandedNodes) const;
 		PlayerBotNavigationRuntimeOutcome process(const PlayerBotNavigationRuntimeInput& input);
 
-		void clear() { session.clear(); }
+		void clear() { session.clear(); fixedTargetRouteFailures = 0; }
 		void adopt(const Position& destination, std::deque<PlayerBotNavigationStep> steps) { session.adopt(destination, std::move(steps)); }
 		void rejectNextStep() { session.clearRoute(); }
 		void completeStep(const PlayerBotNavigationStep& step, std::chrono::steady_clock::time_point now);
@@ -81,12 +83,15 @@ class PlayerBotNavigationRuntime
 		bool hasActiveRouteBlock(std::chrono::steady_clock::time_point now) const { return session.hasActiveRouteBlock(now); }
 		bool oscillationDetected() const { return session.oscillationDetected(); }
 		uint32_t stepFailureCount() const { return session.stepFailureCount(); }
+		uint32_t fixedTargetRouteFailureCount() const { return fixedTargetRouteFailures; }
+		void resetFixedTargetRouteFailures() { fixedTargetRouteFailures = 0; }
 		void clearBlockedPositions() { session.clearBlockedPositions(); }
 		void resetStepFailures() { session.resetStepFailures(); }
 
 	private:
 		PlayerBotNavigator navigator;
 		PlayerBotNavigationSession session;
+		uint32_t fixedTargetRouteFailures = 0;
 };
 
 #endif

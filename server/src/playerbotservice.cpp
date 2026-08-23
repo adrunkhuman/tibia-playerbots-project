@@ -60,7 +60,7 @@ void PlayerBotController::beginReturn(Player* player, const Position& position, 
 	clearNavigation();
 	lootWorkflow.reset();
 	depotWorkflow.reset();
-	fixedTargetRouteFailureCount = 0;
+	navigationRuntime.resetFixedTargetRouteFailures();
 	player->closeContainer(corpseContainerId);
 	setStage(ScenarioStage::Traverse, position);
 	setCyclePhase(CyclePhase::ReturnToDepot, position, reason);
@@ -882,7 +882,7 @@ bool PlayerBotController::discoverDepot(Player& player, const Position& currentP
 			continue;
 		}
 		depotWorkflow.select(candidate);
-		fixedTargetRouteFailureCount = 0;
+		navigationRuntime.resetFixedTargetRouteFailures();
 		const size_t routeSteps = steps.size();
 		adoptNavigationPlan(depotWorkflow.approachPosition(), std::move(steps));
 		std::ostringstream fields;
@@ -1148,7 +1148,7 @@ void PlayerBotController::processFixtureDeposit(Player* player, const Position& 
 			return;
 		}
 		emit("action_result", currentPosition, "\"action\":\"deposit\",\"result\":\"complete\",\"fixture\":true,\"cycle\":" +
-		     std::to_string(completedCycles));
+	                     std::to_string(huntRuntime.completedCycles()));
 		if (fixtureRuntime.progressionEnabled()) {
 			emit("goal_result", currentPosition,
 			     "\"decision_id\":" + std::to_string(goalArbiter.decisionId()) +
@@ -1300,7 +1300,7 @@ void PlayerBotController::processDeposit(Player* player, const Position& current
 		}
 		std::ostringstream fields;
 		fields << "\"action\":\"deposit\",\"result\":\"complete\",\"depot_id\":" << depotWorkflow.depotId()
-		       << ",\"container_id\":" << static_cast<uint32_t>(depotChestContainerId) << ",\"cycle\":" << completedCycles;
+	                       << ",\"container_id\":" << static_cast<uint32_t>(depotChestContainerId) << ",\"cycle\":" << huntRuntime.completedCycles();
 		emit("action_result", currentPosition, fields.str());
 		player->closeContainer(depotChestContainerId);
 		player->closeContainer(depotLockerContainerId);

@@ -22,7 +22,7 @@ PlayerBotController::PlayerBotController(const Player& player,
 	equipmentPolicy(oracleVocationId),
 	inventoryPolicy(economyCatalog.sellValues(), [this](const Player& candidatePlayer, const Item& item) {
 		return equipmentPolicy.evaluateUpgrade(candidatePlayer, item).has_value();
-	}), huntRegionCooldowns(sharedHuntRegionCooldowns)
+	}), huntRuntime(sharedHuntRegionCooldowns, {huntingLoop.begin(), huntingLoop.end()})
 {}
 
 void PlayerBotController::start(const Position& position, bool recovered, uint32_t recoveryCount)
@@ -177,7 +177,7 @@ void PlayerBotController::stop(const char* reason, const Position& position)
 		return;
 	}
 
-	cancelHuntRegionPlanning();
+	huntRuntime.cancelPlanning();
 	setStage(ScenarioStage::Stopped, position);
 	telemetry.emitTerminal(reason, position, telemetrySummary());
 }
@@ -193,17 +193,8 @@ bool PlayerBotController::findPath(Player* player, const Position& target, std::
 
 void PlayerBotController::clearNavigation()
 {
-	cancelHuntRegionPlanning();
+	huntRuntime.cancelPlanning();
 	navigationRuntime.clear();
-	fixedTargetRouteFailureCount = 0;
-}
-
-void PlayerBotController::resetPatrolRouteFailures()
-{
-	patrolRouteFailureCount = 0;
-	patrolRouteFailureExpandedNodes = 0;
-	patrolRouteFailureTarget = Position();
-	patrolRouteFailureStarted = {};
 }
 
 void PlayerBotController::adoptNavigationPlan(const Position& destination, std::deque<PlayerBotNavigationStep> steps)
@@ -219,12 +210,11 @@ void PlayerBotController::onDeath(const Player& player, const Creature* killer, 
 	}
 	deathObserved = true;
 	lastPosition = player.getPosition();
-	if (activeHuntRegion && cyclePhase == CyclePhase::Hunt &&
+	if (huntRuntime.active() && cyclePhase == CyclePhase::Hunt &&
 	    (scenarioStage == ScenarioStage::TraversalCombat || scenarioStage == ScenarioStage::TargetPursuit)) {
-		huntPolicy.observeDeath();
-	}
-	if (activeHuntRegion) {
-		huntRegionCooldowns[activeHuntRegion->center] = std::chrono::steady_clock::now() + huntRegionCooldown;
+		huntRuntime.observeDeath(true, std::chrono::steady_clock::now(), huntRegionCooldown);
+	} else {
+		huntRuntime.observeDeath(false, std::chrono::steady_clock::now(), huntRegionCooldown);
 	}
 	finishHuntRegion(player, lastPosition, "death");
 	std::ostringstream fields;
@@ -305,7 +295,7 @@ void PlayerBotController::onHealthDrain(const Player& player, uint32_t damage)
 {
 	survivalRuntime.observeHealthDrain(player.getID() == playerId);
 	if (player.getID() == playerId && isActiveHuntCombat(player)) {
-		huntPolicy.observeDamage(damage);
+		huntRuntime.observeDamage(damage);
 	}
 }
 
@@ -319,10 +309,9 @@ void PlayerBotController::onHealthGain(Creature* healer, const Creature& target,
 	survivalRuntime.observeHealthGain(healer && healer->getID() == playerId, target.getID() == playerId, gain);
 }
 
-bool PlayerBotController::processNavigation(Player* player, const Position& currentPosition, const Position& destination)
+bool PlayerBotController::processNavigation(Player* player, const Position& currentPosition, const Position& destination,
+                                            PlayerBotNavigationRuntimeOutcome* navigationOutcome)
 {
-	lastNavigationPlanResult = PlayerBotNavigationResult::Reached;
-	lastNavigationExpandedNodes = 0;
 	const auto now = std::chrono::steady_clock::now();
 	const bool forcePlanFailure = fixtureRuntime.forceNavigationPlanFailure();
 	const PlayerBotNavigationRuntimeOutcome outcome = navigationRuntime.process({
@@ -330,6 +319,7 @@ bool PlayerBotController::processNavigation(Player* player, const Position& curr
 		forcePlanFailure,
 		{now, navigationStepTimeout, navigationBlockSuppression, navigationOscillationSuppression},
 	});
+	if (navigationOutcome) *navigationOutcome = outcome;
 	fixtureRuntime.consumeNavigationPlanFailure(outcome.plan.attempted);
 	if (outcome.destinationReached) {
 		clearNavigation();
@@ -375,8 +365,6 @@ bool PlayerBotController::processNavigation(Player* player, const Position& curr
 	if (outcome.plan.attempted) {
 		telemetry.recordPathfinding(outcome.plan.elapsed, !outcome.routeUnavailable);
 		if (outcome.routeUnavailable) {
-			lastNavigationPlanResult = outcome.plan.result;
-			lastNavigationExpandedNodes = outcome.plan.expandedNodes;
 			telemetry.emit("navigation_progress", currentPosition,
 			     "\"result\":\"failed\",\"reason\":\"route_unavailable\",\"cycle_phase\":" +
 			         jsonString(cyclePhaseName()) + ",\"destination\":{\"x\":" + std::to_string(destination.x) +
@@ -385,13 +373,12 @@ bool PlayerBotController::processNavigation(Player* player, const Position& curr
 			         std::to_string(static_cast<uint16_t>(outcome.plan.result)) + ",\"expanded_nodes\":" +
 			         std::to_string(outcome.plan.expandedNodes));
 			telemetry.logActionFailure("navigate", "route_unavailable", currentPosition);
-			if (outcome.blockedPositions.empty() && ++fixedTargetRouteFailureCount >= 20) {
+			if (outcome.fixedTargetRouteExhausted) {
 				stop("navigation_route_unavailable", currentPosition);
 			}
 			schedule(blockedRouteRetryInterval);
 			return false;
 		}
-		fixedTargetRouteFailureCount = 0;
 		std::ostringstream fields;
 		fields << "\"action\":\"plan\",\"result\":\"success\",\"steps\":" << outcome.plan.steps
 		       << ",\"expanded_nodes\":" << outcome.plan.expandedNodes << ",\"destination\":{\"x\":" << destination.x
@@ -480,9 +467,8 @@ void PlayerBotController::navigate()
 	telemetry.maybeEmitSummary(currentPosition, telemetrySummary());
 	recordActiveHuntCombat(*player);
 	verifySpellCast(*player, currentPosition);
-	if (activeHuntRegion && cyclePhase == CyclePhase::Hunt) {
-		if (huntPolicy.observeDanger(player->getMaxHealth(), std::chrono::steady_clock::now() - huntRegionStarted)) {
-			huntRegionCooldowns[activeHuntRegion->center] = std::chrono::steady_clock::now() + huntRegionCooldown;
+	if (huntRuntime.active() && cyclePhase == CyclePhase::Hunt) {
+		if (huntRuntime.dangerObserved(*player, std::chrono::steady_clock::now(), huntRegionCooldown)) {
 			beginService(player, currentPosition, "hunt_region_observed_danger");
 			schedule(navigationInterval);
 			return;
