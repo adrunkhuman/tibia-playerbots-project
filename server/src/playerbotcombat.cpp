@@ -1022,7 +1022,7 @@ void PlayerBotController::startHunt(Player* player, const Position& position, co
 	if (!ensureCombatReady(player, position, reason)) {
 		return;
 	}
-	activeGoal = TopLevelGoal::Hunt;
+	goalArbiter.setActiveGoal(TopLevelGoal::Hunt);
 	setCyclePhase(CyclePhase::Hunt, position, reason);
 	huntRouteIndex = 0;
 	if (!testPolicy.fixedFixtureRoute && !activeHuntRegion) {
@@ -1065,7 +1065,7 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 		processProgression(player, currentPosition);
 		return;
 	}
-	if (activeGoal == TopLevelGoal::MagicTraining) {
+	if (goalArbiter.activeGoal() == TopLevelGoal::MagicTraining) {
 		processMagicTraining(*player, currentPosition);
 		return;
 	}
