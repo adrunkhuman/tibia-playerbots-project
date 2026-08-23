@@ -137,8 +137,8 @@ PlayerBotSurvivalSnapshot PlayerBotController::survivalSnapshot(const Player& pl
 	snapshot.lootMovePending = lootWorkflow.hasPendingLootMove();
 	snapshot.progressionActive = progressionRuntime.session().active() != PlayerBotProgressionProcedure::None;
 	snapshot.progressionDeparture = progressionRuntime.session().active(PlayerBotProgressionProcedure::OracleDeparture);
-	snapshot.hunting = cyclePhase == CyclePhase::Hunt;
-	snapshot.combatOrPursuit = scenarioStage != ScenarioStage::Traverse || combatRuntime.hasActiveCombat() ||
+	snapshot.hunting = turnRouter.cyclePhase() == CyclePhase::Hunt;
+	snapshot.combatOrPursuit = turnRouter.scenarioStage() != ScenarioStage::Traverse || combatRuntime.hasActiveCombat() ||
 	                          const_cast<Player&>(player).getAttackedCreature() != nullptr;
 	snapshot.navigationPending = navigationRuntime.hasPendingWork();
 	snapshot.healingExhausted = player.hasCondition(CONDITION_EXHAUST_HEAL);
@@ -198,7 +198,7 @@ void PlayerBotController::logHealResult(const char* result, const char* reason, 
 	fields << "\"action\":\"heal\",\"result\":" << jsonString(result)
 	       << ",\"method\":\"small_health_potion\",\"item_id\":" << smallHealthPotionItemId
 	       << ",\"trigger\":\"health_threshold\",\"objective\":" << jsonString(objectiveName())
-	       << ",\"state\":" << jsonString(stageName(scenarioStage))
+	       << ",\"state\":" << jsonString(turnRouter.stateName())
 	       << ",\"health_before\":" << before.health
 	       << ",\"health_after\":" << after.health
 	       << ",\"health_max\":" << before.healthMaximum
@@ -237,7 +237,7 @@ bool PlayerBotController::handleHealing(Player* player, const Position& currentP
 			fields << "\"action\":\"heal\",\"result\":\"skipped\",\"reason\":\"missing_supply\""
 			       << ",\"method\":\"small_health_potion\",\"item_id\":" << smallHealthPotionItemId
 			       << ",\"trigger\":\"health_threshold\",\"objective\":" << jsonString(objectiveName())
-			       << ",\"state\":" << jsonString(stageName(scenarioStage))
+			       << ",\"state\":" << jsonString(turnRouter.stateName())
 			       << ",\"health_before\":" << player->getHealth()
 			       << ",\"health_after\":" << player->getHealth()
 			       << ",\"health_max\":" << player->getMaxHealth()
@@ -252,7 +252,7 @@ bool PlayerBotController::handleHealing(Player* player, const Position& currentP
 			}
 			return true;
 		}
-		if (cyclePhase != CyclePhase::Service) {
+		if (turnRouter.cyclePhase() != CyclePhase::Service) {
 			beginService(player, currentPosition, "healing_supply_missing");
 		}
 		return false;
@@ -346,7 +346,7 @@ bool PlayerBotController::attackVisibleMonster(Player* player, const Position& c
 		if (!started.result || std::strcmp(started.result, "started") != 0) {
 			continue;
 		}
-		clearNavigation();
+		resetNavigation();
 		setStage(ScenarioStage::TraversalCombat, currentPosition);
 		std::ostringstream fields;
 		fields << "\"previous_target_id\":null,\"target_id\":" << started.target.id
@@ -400,7 +400,7 @@ bool PlayerBotController::attackDefensiveThreat(Player* player, const Position& 
 		logActionFailure("defensive_combat", "target_rejected", currentPosition);
 		return false;
 	}
-	clearNavigation();
+	resetNavigation();
 	std::ostringstream targetFields;
 	targetFields << "\"previous_target_id\":null,\"target_id\":" << started.target.id
 	             << ",\"target_type\":\"monster\",\"target_name\":" << jsonString(started.target.name)
@@ -424,7 +424,7 @@ void PlayerBotController::finishDefensiveCombat(Player* player, const Position& 
 	if (player->getAttackedCreature() && player->getAttackedCreature()->getID() == previousTarget) {
 		g_game.playerSetAttackedCreature(playerId, 0);
 	}
-	clearNavigation();
+	resetNavigation();
 	emit("target_changed", currentPosition, "\"previous_target_id\":" + std::to_string(previousTarget) +
 	     ",\"target_id\":null,\"reason\":" + jsonString(reason));
 	emit("action_result", currentPosition, "\"action\":\"defensive_combat\",\"result\":" +
@@ -455,7 +455,7 @@ void PlayerBotController::finishTraversalCombat(Player* player, const Position& 
 void PlayerBotController::beginTargetPursuit(Player* player, const Position& currentPosition)
 {
 	g_game.playerSetAttackedCreature(playerId, 0);
-	clearNavigation();
+	resetNavigation();
 	const auto target = combatRuntime.traversalTarget();
 	if (!target) {
 		return;
@@ -474,7 +474,7 @@ void PlayerBotController::finishTargetPursuit(const Position& currentPosition, c
 {
 	const PlayerBotCombatDecision decision = combatRuntime.abandonPursuit(std::chrono::steady_clock::now());
 	const uint32_t previousTargetId = decision.target.id;
-	clearNavigation();
+	resetNavigation();
 	if (previousTargetId != 0 && shouldEmitRepeated(std::string("target:clear:") + reason)) {
 		emit("target_changed", currentPosition, "\"previous_target_id\":" + std::to_string(previousTargetId) +
 		     ",\"target_id\":null,\"reason\":" + jsonString(reason));
@@ -509,7 +509,7 @@ void PlayerBotController::processTargetPursuit(Player* player, const Position& c
 		const PlayerBotCombatDecision started = combatRuntime.confirmAttack(decision, player->getAttackedCreature() == target,
 		                                                                  std::chrono::steady_clock::now());
 		if (started.result && std::strcmp(started.result, "started") == 0) {
-			clearNavigation();
+			resetNavigation();
 			setStage(ScenarioStage::TraversalCombat, currentPosition);
 			emit("action_result", currentPosition,
 			     "\"action\":\"target_pursuit\",\"result\":\"reacquired\",\"target_id\":" +
@@ -556,7 +556,8 @@ void PlayerBotController::processTraversalCombat(Player* player, const Position&
 
 bool PlayerBotController::isActiveHuntCombat(const Player& player) const
 {
-	return huntRuntime.active() && cyclePhase == CyclePhase::Hunt && scenarioStage == ScenarioStage::TraversalCombat &&
+	return huntRuntime.active() && turnRouter.cyclePhase() == CyclePhase::Hunt &&
+	       turnRouter.scenarioStage() == ScenarioStage::TraversalCombat &&
 	       const_cast<Player&>(player).getAttackedCreature() != nullptr;
 }
 
@@ -828,7 +829,7 @@ void PlayerBotController::beginHuntCycle(Player* player, const Position& positio
 {
 	const uint32_t duration = static_cast<uint32_t>(std::max<int32_t>(1, g_config.getNumber(ConfigManager::PLAYERBOT_HUNT_DURATION_SECONDS)));
 	huntRuntime.beginCycle(std::chrono::steady_clock::now(), duration);
-	clearNavigation();
+	resetNavigation();
 	emit("action_result", position, "\"action\":\"hunt_cycle\",\"result\":\"started\",\"cycle\":" + std::to_string(huntRuntime.completedCycles()) + ",\"duration_seconds\":" + std::to_string(duration));
 }
 
@@ -860,7 +861,8 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 		processReadinessEquipment(player, currentPosition);
 		return;
 	}
-	if (cyclePhase != CyclePhase::Hunt || progressionRuntime.session().active() != PlayerBotProgressionProcedure::None) {
+	if (turnRouter.cyclePhase() != CyclePhase::Hunt ||
+	    progressionRuntime.session().active() != PlayerBotProgressionProcedure::None) {
 		if (combatRuntime.hasDefensiveCombat()) {
 			processDefensiveCombat(player, currentPosition);
 			return;
@@ -871,29 +873,48 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 		}
 	}
 	if (combatRuntime.hasDefensiveCombat()) {
-		if (scenarioStage == ScenarioStage::LootCorpse && lootWorkflow.navigationSuspended() &&
+		if (turnRouter.scenarioStage() == ScenarioStage::LootCorpse && lootWorkflow.navigationSuspended() &&
 		    lootWorkflow.timedOut(std::chrono::steady_clock::now())) {
 			finishLootFailure(player, currentPosition, "corpse_inaccessible");
 		}
 		processDefensiveCombat(player, currentPosition);
 		return;
 	}
-	if (progressionRuntime.session().active() != PlayerBotProgressionProcedure::None) {
+	PlayerBotTurnObservation turn;
+	turn.progressionActive = progressionRuntime.session().active() != PlayerBotProgressionProcedure::None;
+	turn.magicTrainingActive = progressionRuntime.activeGoal() == TopLevelGoal::MagicTraining;
+	uint32_t usableCapacity = 0;
+	if (!turn.progressionActive && !turn.magicTrainingActive) {
+		turn.huntRegionSelectionRequired = turnRouter.cyclePhase() == CyclePhase::Hunt &&
+		                                   fixtureDriver.huntObservation().selectRegion && !huntRuntime.active() &&
+		                                   !huntRuntime.planningActive();
+		turn.huntPlanningActive = huntRuntime.planningActive();
+		turn.lootNavigationSuspended = lootWorkflow.navigationSuspended();
+		if (turnRouter.cyclePhase() == CyclePhase::Hunt) {
+			usableCapacity = inventoryPolicy.effectiveFreeCapacity(*player);
+			turn.huntCycleFinished = huntRuntime.deadlineReached(std::chrono::steady_clock::now()) ||
+			                         usableCapacity < returnCapacityThreshold;
+		}
+	}
+	const PlayerBotTurnCommand turnCommand = turnRouter.route(turn);
+
+	if (turnCommand == PlayerBotTurnCommand::Progression) {
 		processProgression(player, currentPosition);
 		return;
 	}
-	if (progressionRuntime.activeGoal() == TopLevelGoal::MagicTraining) {
+	if (turnCommand == PlayerBotTurnCommand::MagicTraining) {
 		processMagicTraining(*player, currentPosition);
 		return;
 	}
-	if (cyclePhase == CyclePhase::Hunt && !ensureCombatReady(player, currentPosition, "readiness_continuous_check")) {
+	if (turnRouter.cyclePhase() == CyclePhase::Hunt &&
+	    !ensureCombatReady(player, currentPosition, "readiness_continuous_check")) {
 		return;
 	}
-	if (cyclePhase == CyclePhase::Hunt && fixtureDriver.huntObservation().selectRegion && !huntRuntime.active() && !huntRuntime.planningActive()) {
+	if (turnCommand == PlayerBotTurnCommand::StartHunt) {
 		startHunt(player, currentPosition, "hunt_region_restart");
 		return;
 	}
-	if (huntRuntime.planningActive()) {
+	if (turnCommand == PlayerBotTurnCommand::PlanHunt) {
 		std::chrono::steady_clock::duration retryAfter{};
 		if (selectHuntRegion(*player, currentPosition, "hunt_planning", &retryAfter)) {
 			beginHuntCycle(player, currentPosition, "hunt_region_selected");
@@ -903,7 +924,7 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 		}
 		return;
 	}
-	if (scenarioStage == ScenarioStage::LootCorpse && lootWorkflow.navigationSuspended()) {
+	if (turnCommand == PlayerBotTurnCommand::SuspendedLoot) {
 		if (lootWorkflow.timedOut(std::chrono::steady_clock::now())) {
 			finishLootFailure(player, currentPosition, "corpse_inaccessible");
 			schedule(navigationInterval);
@@ -913,26 +934,25 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 			schedule(navigationInterval);
 			return;
 		}
-	}
-	if (scenarioStage == ScenarioStage::LootCorpse) {
 		lootCorpse(player, currentPosition);
 		return;
 	}
-	if (cyclePhase == CyclePhase::Hunt) {
-		const uint32_t usableCapacity = inventoryPolicy.effectiveFreeCapacity(*player);
-		if (huntRuntime.deadlineReached(std::chrono::steady_clock::now()) || usableCapacity < returnCapacityThreshold) {
-			const char* reason = usableCapacity < returnCapacityThreshold ? "capacity" : "hunt_deadline";
-			finishHuntAndSelectGoal(player, currentPosition, reason);
-			return;
-		}
+	if (turnCommand == PlayerBotTurnCommand::Loot) {
+		lootCorpse(player, currentPosition);
+		return;
+	}
+	if (turnCommand == PlayerBotTurnCommand::FinishHunt) {
+		const char* reason = usableCapacity < returnCapacityThreshold ? "capacity" : "hunt_deadline";
+		finishHuntAndSelectGoal(player, currentPosition, reason);
+		return;
 	}
 
-	if (cyclePhase == CyclePhase::Service) {
+	if (turnCommand == PlayerBotTurnCommand::Service) {
 		processService(player, currentPosition);
 		return;
 	}
 
-	if (cyclePhase == CyclePhase::ReturnToDepot) {
+	if (turnCommand == PlayerBotTurnCommand::ReturnToDepot) {
 		if (!discoverDepot(*player, currentPosition)) {
 			return;
 		}
@@ -952,7 +972,7 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 				observation.routeResult = PlayerBotDepotRouteResult::Unreachable;
 				depotWorkflow.advance(observation, depotRouteValidationsPerDecision, maximumDepotDiscoveryAttempts,
 				                      depotApproachSuppression);
-				clearNavigation();
+				resetNavigation();
 			}
 			return;
 		}
@@ -961,7 +981,7 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 		return;
 	}
 
-	if (cyclePhase == CyclePhase::DepositLoot) {
+	if (turnCommand == PlayerBotTurnCommand::DepositLoot) {
 		if (!discoverDepot(*player, currentPosition)) {
 			return;
 		}
@@ -972,7 +992,7 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 		}
 		if (!Position::areInRange<1, 1, 0>(currentPosition, depot.selected.approachPosition)) {
 			setCyclePhase(CyclePhase::ReturnToDepot, currentPosition, "displaced_during_deposit");
-			clearNavigation();
+			resetNavigation();
 			if (!processNavigation(player, currentPosition, depot.selected.approachPosition)) {
 				if (navigationRuntime.fixedTargetRouteFailureCount() != 0) {
 					PlayerBotDepotObservation observation;
@@ -981,7 +1001,7 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 					observation.routeResult = PlayerBotDepotRouteResult::Unreachable;
 					depotWorkflow.advance(observation, depotRouteValidationsPerDecision, maximumDepotDiscoveryAttempts,
 					                      depotApproachSuppression);
-					clearNavigation();
+					resetNavigation();
 				}
 				return;
 			}
@@ -991,12 +1011,16 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 		return;
 	}
 
-	if (scenarioStage == ScenarioStage::TraversalCombat) {
+	if (turnCommand == PlayerBotTurnCommand::TraversalCombat) {
 		processTraversalCombat(player, currentPosition);
 		return;
 	}
-	if (scenarioStage == ScenarioStage::TargetPursuit) {
+	if (turnCommand == PlayerBotTurnCommand::TargetPursuit) {
 		processTargetPursuit(player, currentPosition);
+		return;
+	}
+	if (turnCommand != PlayerBotTurnCommand::Hunt) {
+		schedule(navigationInterval);
 		return;
 	}
 	if (attackVisibleMonster(player, currentPosition)) {
@@ -1024,7 +1048,7 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 				std::to_string(recovery.destination.y) + ",\"z\":" + std::to_string(recovery.destination.z) + "}");
 			if (recovery.stepFailures != 0 || recovery.routeFailures != 0) telemetry.recordStuckEvent();
 			navigationRuntime.resetPatrolRecovery();
-			clearNavigation();
+			resetNavigation();
 			if (recovery.command == PlayerBotHuntPatrolCommand::RegionExhausted) beginService(player, currentPosition, "hunt_region_patrol_unreachable");
 		}
 		return;

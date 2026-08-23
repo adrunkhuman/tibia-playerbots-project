@@ -88,8 +88,11 @@
 					$_.event -eq "action_result" -and $_.action -eq "depot_restart_checkpoint" -and
 					$_.result -eq "paused" -and $_.phase -eq $phase
 				})
-				if ($checkpointEvents.Count -ne 1) {
-					throw "Depot $phase restart checkpoint was not reached exactly once."
+				$pausedTransitions = @(ConvertFrom-PlayerbotLogs -Logs $checkpointLogs | Where-Object {
+					$_.event -eq "state_transition" -and $_.to -eq "paused"
+				})
+				if ($checkpointEvents.Count -ne 1 -or $pausedTransitions.Count -ne 1) {
+					throw "Depot $phase restart checkpoint did not pause exactly once. checkpoint=$($checkpointEvents.Count), transition=$($pausedTransitions.Count)."
 				}
 				Invoke-Compose stop server
 				Invoke-Compose up --detach server

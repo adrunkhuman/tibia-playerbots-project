@@ -263,7 +263,7 @@ void PlayerBotController::beginEquipmentPurchase(Player& player, const Position&
 	progressionRuntime.beginEquipmentPurchase(std::move(evaluation));
 	const auto& purchase = progressionRuntime.equipmentPurchase().plan();
 	if (!purchase.carried) {
-		clearNavigation();
+		resetNavigation();
 	}
 	std::ostringstream fields;
 	fields << "\"goal\":\"buy_equipment\",\"reason\":"
@@ -304,8 +304,8 @@ void PlayerBotController::finishEquipmentPurchase(Player* player, const Position
 	progressionRuntime.completeEquipmentPurchase(succeeded,
 	    succeeded ? equipmentPurchaseSuccessCooldown : equipmentPurchaseFailureCooldown);
 	progressionRuntime.finish();
-	clearNavigation();
-	cyclePhase = CyclePhase::Service;
+	resetNavigation();
+	turnRouter.setCyclePhase(CyclePhase::Service);
 	if (succeeded && player && fixtureDriver.equipmentPurchaseCompletion(*player).pause) {
 		return;
 	}

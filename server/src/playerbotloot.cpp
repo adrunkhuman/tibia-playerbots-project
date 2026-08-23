@@ -103,7 +103,7 @@ void PlayerBotController::beginLoot(Player* player, const Position& currentPosit
 void PlayerBotController::finishLoot(Player* player, const Position& currentPosition)
 {
 	player->closeContainer(corpseContainerId);
-	clearNavigation();
+	resetNavigation();
 	lootWorkflow.reset();
 	setStage(ScenarioStage::Traverse, currentPosition);
 }
@@ -140,7 +140,7 @@ void PlayerBotController::lootCorpse(Player* player, const Position& currentPosi
 			return;
 		}
 		if (lootWorkflow.resumeNavigation(currentPosition, now) == PlayerBotLootNavigationTransition::Resumed) {
-			clearNavigation();
+			resetNavigation();
 			emit("navigation_progress", currentPosition, "\"result\":\"resumed\",\"reason\":\"corpse_retry\",\"navigation_failures\":" +
 			     std::to_string(lootWorkflow.navigationFailures()));
 		} else {
@@ -230,7 +230,7 @@ void PlayerBotController::lootCorpse(Player* player, const Position& currentPosi
 			if (transition == PlayerBotLootNavigationTransition::Failed) {
 				finishLootFailure(player, currentPosition, "corpse_inaccessible");
 			} else if (transition == PlayerBotLootNavigationTransition::Suspended) {
-				clearNavigation();
+				resetNavigation();
 				emit("navigation_progress", currentPosition, "\"result\":\"suspended\",\"reason\":\"corpse_route_unchanged\",\"navigation_failures\":" +
 				     std::to_string(lootWorkflow.navigationFailures()));
 			}

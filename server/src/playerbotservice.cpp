@@ -25,23 +25,19 @@ namespace {
 
 const char* PlayerBotController::cyclePhaseName() const
 {
-	switch (cyclePhase) {
-		case CyclePhase::Idle: return "idle";
-		case CyclePhase::Service: return "service";
-		case CyclePhase::ReturnToDepot: return "return_to_depot";
-		case CyclePhase::DepositLoot: return "deposit_loot";
-		case CyclePhase::Hunt: return "hunt";
-	}
-	return "unknown";
+	return PlayerBotTurnRouter::cyclePhaseName(turnRouter.cyclePhase());
 }
 
 void PlayerBotController::setCyclePhase(CyclePhase phase, const Position& position, const char* reason)
 {
-	if (cyclePhase == phase) {
+	if (turnRouter.cyclePhase() == phase) {
 		return;
 	}
 	const char* previous = cyclePhaseName();
-	cyclePhase = phase;
+	if (turnRouter.cyclePhase() == CyclePhase::Hunt && phase != CyclePhase::Hunt) {
+		huntRuntime.cancelPlanning();
+	}
+	turnRouter.setCyclePhase(phase);
 	std::ostringstream fields;
 	fields << "\"from\":" << jsonString(previous) << ",\"to\":" << jsonString(cyclePhaseName())
 	       << ",\"reason\":" << jsonString(reason);
@@ -57,7 +53,7 @@ void PlayerBotController::beginReturn(Player* player, const Position& position, 
 	const uint32_t previousTarget = traversalTarget ? traversalTarget->id : 0;
 	g_game.playerCancelAttackAndFollow(playerId);
 	clearTraversalTarget(position, reason);
-	clearNavigation();
+	resetNavigation();
 	lootWorkflow.reset();
 	depotWorkflow.reset();
 	player->closeContainer(corpseContainerId);
@@ -101,7 +97,7 @@ void PlayerBotController::beginService(Player* player, const Position& position,
 	progressionRuntime.enterService();
 	g_game.playerCancelAttackAndFollow(playerId);
 	clearTraversalTarget(position, reason);
-	clearNavigation();
+	resetNavigation();
 	lootWorkflow.reset();
 	player->closeContainer(corpseContainerId);
 	setStage(ScenarioStage::Traverse, position);
@@ -114,7 +110,7 @@ void PlayerBotController::finishHuntAndSelectGoal(Player* player, const Position
 	finishHuntRegion(*player, position, reason);
 	g_game.playerCancelAttackAndFollow(playerId);
 	clearTraversalTarget(position, reason);
-	clearNavigation();
+	resetNavigation();
 	lootWorkflow.reset();
 	player->closeContainer(corpseContainerId);
 	setStage(ScenarioStage::Traverse, position);
@@ -628,7 +624,7 @@ bool PlayerBotController::openDepotLocker(Player& player, const PlayerBotDepotSn
 		return false;
 	}
 	logActionFailure("depot_open_locker", "locker_identity_changed", currentPosition);
-	clearNavigation();
+	resetNavigation();
 	setCyclePhase(CyclePhase::ReturnToDepot, currentPosition, "depot_locker_identity_changed");
 	schedule(blockedRouteRetryInterval);
 	return false;
@@ -690,7 +686,7 @@ bool PlayerBotController::pauseDepotFixtureForRestart(Player& player, DepotResta
 	                    checkpoint == DepotRestartCheckpoint::Deposit ? "deposit" : "depart";
 	emit("action_result", currentPosition,
 	     "\"action\":\"depot_restart_checkpoint\",\"result\":\"paused\",\"phase\":" + jsonString(phase));
-	setStage(ScenarioStage::Stopped, currentPosition);
+	pause(currentPosition);
 	return true;
 }
 

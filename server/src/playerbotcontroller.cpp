@@ -29,6 +29,7 @@ PlayerBotController::PlayerBotController(const Player& player,
 
 void PlayerBotController::start(const Position& position, bool recovered, uint32_t recoveryCount)
 {
+	turnRouter.start();
 	lastPosition = position;
 	refreshItemValues();
 	const bool startInHunt = !recovered && fixtureDriver.startInHunt();
@@ -63,10 +64,10 @@ void PlayerBotController::start(const Position& position, bool recovered, uint32
 		startHunt(g_game.getPlayerByID(playerId), position, "focused_fixture");
 	} else if (fixtureDriver.depotScenario()) {
 		progressionRuntime.enterService();
-		cyclePhase = CyclePhase::ReturnToDepot;
+		turnRouter.setCyclePhase(CyclePhase::ReturnToDepot);
 	} else {
 		progressionRuntime.enterService();
-		cyclePhase = CyclePhase::Service;
+		turnRouter.setCyclePhase(CyclePhase::Service);
 	}
 	setStage(ScenarioStage::Traverse, position);
 	// Login fixtures run through Lua after controller creation. Let the real-map
@@ -76,6 +77,7 @@ void PlayerBotController::start(const Position& position, bool recovered, uint32
 
 void PlayerBotController::schedule(uint32_t interval)
 {
+	if (!turnRouter.running()) return;
 	std::weak_ptr<PlayerBotController> weakController = shared_from_this();
 	g_scheduler.addEvent(createSchedulerTask(interval, [weakController]() {
 		if (std::shared_ptr<PlayerBotController> controller = weakController.lock()) {
@@ -86,14 +88,7 @@ void PlayerBotController::schedule(uint32_t interval)
 
 const char* PlayerBotController::stageName(ScenarioStage stage)
 {
-	switch (stage) {
-		case ScenarioStage::LootCorpse: return "loot_corpse";
-		case ScenarioStage::Traverse: return "traverse";
-		case ScenarioStage::TraversalCombat: return "traversal_combat";
-		case ScenarioStage::TargetPursuit: return "target_pursuit";
-		case ScenarioStage::Stopped: return "stopped";
-	}
-	return "unknown";
+	return PlayerBotTurnRouter::scenarioStageName(stage);
 }
 
 void PlayerBotController::say(Player& player, const std::string& text) const
@@ -108,12 +103,12 @@ void PlayerBotController::say(Player& player, const std::string& text) const
 
 void PlayerBotController::setStage(ScenarioStage stage, const Position& position)
 {
-	if (scenarioStage == stage) {
+	if (turnRouter.scenarioStage() == stage) {
 		return;
 	}
 
-	const ScenarioStage previousStage = scenarioStage;
-	scenarioStage = stage;
+	const ScenarioStage previousStage = turnRouter.scenarioStage();
+	turnRouter.setScenarioStage(stage);
 	const std::string repeatKey = std::string("state:") + stageName(previousStage) + ':' + stageName(stage);
 	if (!telemetry.shouldEmitRepeated(repeatKey)) {
 		return;
@@ -163,7 +158,7 @@ uint32_t PlayerBotController::getSaleItemCount(const Player& player, uint16_t it
 
 playerbot::PlayerBotTelemetrySummary PlayerBotController::telemetrySummary() const
 {
-	playerbot::PlayerBotTelemetrySummary summary{stageName(scenarioStage), std::nullopt};
+	playerbot::PlayerBotTelemetrySummary summary{turnRouter.stateName(), std::nullopt};
 	if (const auto activeTarget = combatRuntime.activeTarget()) {
 		summary.target = playerbot::PlayerBotTelemetryTarget{activeTarget->id, activeTarget->position};
 	}
@@ -181,9 +176,31 @@ void PlayerBotController::stop(const char* reason, const Position& position)
 		return;
 	}
 
+	const bool wasRunning = turnRouter.running();
+	const char* previous = turnRouter.stateName();
+	turnRouter.stop();
 	huntRuntime.cancelPlanning();
-	setStage(ScenarioStage::Stopped, position);
+	resetNavigation();
+	if (wasRunning) {
+		const std::string repeatKey = std::string("state:") + previous + ':' + turnRouter.stateName();
+		if (telemetry.shouldEmitRepeated(repeatKey)) {
+			telemetry.emit("state_transition", position, std::string("\"from\":") + jsonString(previous) +
+			     ",\"to\":" + jsonString(turnRouter.stateName()));
+		}
+	}
 	telemetry.emitTerminal(reason, position, telemetrySummary());
+}
+
+void PlayerBotController::pause(const Position& position)
+{
+	if (!turnRouter.running()) return;
+	const char* previous = turnRouter.stateName();
+	turnRouter.pause();
+	const std::string repeatKey = std::string("state:") + previous + ':' + turnRouter.stateName();
+	if (telemetry.shouldEmitRepeated(repeatKey)) {
+		telemetry.emit("state_transition", position, std::string("\"from\":") + jsonString(previous) +
+		     ",\"to\":" + jsonString(turnRouter.stateName()));
+	}
 }
 
 bool PlayerBotController::findPath(Player* player, const Position& target, std::vector<Direction>& result, const FindPathParams& pathParams)
@@ -195,9 +212,8 @@ bool PlayerBotController::findPath(Player* player, const Position& target, std::
 	return found;
 }
 
-void PlayerBotController::clearNavigation()
+void PlayerBotController::resetNavigation()
 {
-	huntRuntime.cancelPlanning();
 	navigationRuntime.reset();
 }
 
@@ -217,8 +233,9 @@ void PlayerBotController::onDeath(const Player& player, const Creature* killer, 
 	}
 	deathObserved = true;
 	lastPosition = player.getPosition();
-	if (huntRuntime.active() && cyclePhase == CyclePhase::Hunt &&
-	    (scenarioStage == ScenarioStage::TraversalCombat || scenarioStage == ScenarioStage::TargetPursuit)) {
+	if (huntRuntime.active() && turnRouter.cyclePhase() == CyclePhase::Hunt &&
+	    (turnRouter.scenarioStage() == ScenarioStage::TraversalCombat ||
+	     turnRouter.scenarioStage() == ScenarioStage::TargetPursuit)) {
 		const auto now = std::chrono::steady_clock::now();
 		applyHuntCooldown(huntRuntime.observeDeath(true, huntRegionCooldown), now);
 	} else {
@@ -229,7 +246,7 @@ void PlayerBotController::onDeath(const Player& player, const Creature* killer, 
 	std::ostringstream fields;
 	fields << "\"status\":\"dead\",\"level\":" << player.getLevel()
 	       << ",\"health\":" << player.getHealth() << ",\"objective\":" << jsonString(objectiveName())
-	       << ",\"state\":" << jsonString(stageName(scenarioStage))
+	       << ",\"state\":" << jsonString(turnRouter.stateName())
 	       << ",\"target_id\":";
 	const auto activeTarget = combatRuntime.activeTarget();
 	fields << (activeTarget ? std::to_string(activeTarget->id) : "null");
@@ -362,7 +379,7 @@ bool PlayerBotController::processNavigation(Player* player, const Position& curr
 	if (navigationOutcome) *navigationOutcome = outcome;
 	fixtureDriver.observeNavigationPlan(outcome.plan.attempted);
 	if (outcome.destinationReached) {
-		clearNavigation();
+		resetNavigation();
 		return true;
 	}
 	if (outcome.oscillation) {
@@ -456,6 +473,7 @@ void PlayerBotController::navigate()
 	if (g_game.getGameState() == GAME_STATE_SHUTDOWN) {
 		return;
 	}
+	if (!turnRouter.running()) return;
 	if (deathObserved) {
 		stop("controlled_player_dead", lastPosition);
 		return;
@@ -503,7 +521,7 @@ void PlayerBotController::navigate()
 			startHunt(player, currentPosition, "focused_fixture");
 		} else {
 			progressionRuntime.enterService();
-			cyclePhase = CyclePhase::Service;
+			turnRouter.setCyclePhase(CyclePhase::Service);
 		}
 		schedule(navigationInterval);
 		return;
@@ -511,7 +529,7 @@ void PlayerBotController::navigate()
 	telemetry.maybeEmitSummary(currentPosition, telemetrySummary());
 	recordActiveHuntCombat(*player);
 	verifySpellCast(*player, currentPosition);
-	if (huntRuntime.active() && cyclePhase == CyclePhase::Hunt) {
+	if (huntRuntime.active() && turnRouter.cyclePhase() == CyclePhase::Hunt) {
 		const auto now = std::chrono::steady_clock::now();
 		if (const auto cooldown = huntRuntime.dangerObserved(player->getMaxHealth(), now, huntRegionCooldown)) {
 			applyHuntCooldown(cooldown, now);
@@ -530,7 +548,8 @@ void PlayerBotController::navigate()
 		schedule(blockedRouteRetryInterval);
 		return;
 	}
-	const bool waitingForRecovery = cyclePhase == CyclePhase::Service && survivalRuntime.needsHealing(survivalSnapshot(*player));
+	const bool waitingForRecovery = turnRouter.cyclePhase() == CyclePhase::Service &&
+	                                survivalRuntime.needsHealing(survivalSnapshot(*player));
 	if (!accessingReward && !progressionRuntime.session().active(PlayerBotProgressionProcedure::OracleDeparture) &&
 	    departurePlanner.required(departureSnapshot(*player)) && !waitingForRecovery) {
 		if (selectTopLevelGoal(*player, currentPosition, "level_eight_interrupt")) {
@@ -540,9 +559,6 @@ void PlayerBotController::navigate()
 	}
 	if (!accessingReward && !verifyingDeparture && handleFood(player, currentPosition)) {
 		schedule(blockedRouteRetryInterval);
-		return;
-	}
-	if (scenarioStage == ScenarioStage::Stopped) {
 		return;
 	}
 	processTraversal(player, currentPosition);

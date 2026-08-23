@@ -30,6 +30,7 @@
 #include "playerbotfixturedriver.h"
 #include "playerbottelemetry.h"
 #include "playerbotserviceworkflow.h"
+#include "playerbotturnrouter.h"
 
 #include "container.h"
 #include "condition.h"
@@ -160,13 +161,8 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		void start(const Position& position, bool recovered, uint32_t recoveryCount);
 
 	private:
-		enum class CyclePhase : uint8_t {
-			Idle,
-			Service,
-			ReturnToDepot,
-			DepositLoot,
-			Hunt,
-		};
+		using CyclePhase = PlayerBotCyclePhase;
+		using ScenarioStage = PlayerBotScenarioStage;
 
 		using TopLevelGoal = PlayerBotGoalArbiter::TopLevelGoal;
 		using GoalCandidate = PlayerBotGoalArbiter::GoalCandidate;
@@ -180,14 +176,6 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		using RewardInspection = PlayerBotRewardInspection;
 
 		using ServiceNpc = PlayerBotEconomyProvider;
-
-		enum class ScenarioStage : uint8_t {
-			LootCorpse,
-			Traverse,
-			TraversalCombat,
-			TargetPursuit,
-			Stopped,
-		};
 
 		void schedule(uint32_t interval);
 
@@ -244,6 +232,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		playerbot::PlayerBotTelemetrySummary telemetrySummary() const;
 
 		void stop(const char* reason, const Position& position);
+		void pause(const Position& position);
 
 		bool findPath(Player* player, const Position& target, std::vector<Direction>& result, const FindPathParams& pathParams);
 
@@ -352,7 +341,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 
 		void setCyclePhase(CyclePhase phase, const Position& position, const char* reason);
 
-		void clearNavigation();
+		void resetNavigation();
 
 		void beginReturn(Player* player, const Position& position, const char* reason);
 
@@ -440,10 +429,10 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		uint32_t playerId;
 		uint32_t playerGuid;
 		std::string playerName;
+		PlayerBotTurnRouter turnRouter;
 		playerbot::PlayerBotFixtureDriver fixtureDriver;
 		playerbot::PlayerBotTelemetry telemetry;
 		Position lastPosition;
-		ScenarioStage scenarioStage = ScenarioStage::Traverse;
 		PlayerBotEconomyCatalog economyCatalog;
 		PlayerBotDispositionPolicy dispositionPolicy;
 		PlayerBotEquipmentPolicy equipmentPolicy;
@@ -460,7 +449,6 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 			playerbot::corpseNavigationSuspendThreshold, std::chrono::milliseconds(playerbot::corpseNavigationRetryInterval),
 			playerbot::corpseLootTimeout, playerbot::preferredFoodCount,
 		}};
-		CyclePhase cyclePhase = CyclePhase::ReturnToDepot;
 		PlayerBotProgressionRuntime progressionRuntime;
 		PlayerBotRewardPlanner rewardPlanner;
 		PlayerBotEquipmentProviderPlanner equipmentProviderPlanner;

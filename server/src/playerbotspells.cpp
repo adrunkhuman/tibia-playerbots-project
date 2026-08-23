@@ -450,7 +450,7 @@ void PlayerBotController::finishSpellTraining(Player* player, const Position& po
 		say(*player, "Spell training " + std::string(result) + ": " + reason + '.');
 	}
 	progressionRuntime.finish();
-	clearNavigation();
+	resetNavigation();
 	progressionRuntime.completeSpellTraining(std::strcmp(result, "success") == 0,
 	    std::strcmp(result, "success") == 0 ? spellTrainingSuccessCooldown : spellTrainingFailureCooldown);
 	if (player && fixtureDriver.progressionGoalLoop(true).selectGoal) {

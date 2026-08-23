@@ -905,7 +905,8 @@ const char* PlayerBotController::objectiveName() const
 	return progressionRuntime.session().active(PlayerBotProgressionProcedure::OracleDeparture) ? "oracle_departure" :
 	       progressionRuntime.session().active(PlayerBotProgressionProcedure::PickupReward) ? "pickup_reward" :
 	       progressionRuntime.session().active(PlayerBotProgressionProcedure::LearnSpell) ? "learn_spell" :
-	       progressionRuntime.session().active(PlayerBotProgressionProcedure::BuyEquipment) ? "buy_equipment" : cyclePhaseName();
+	       progressionRuntime.session().active(PlayerBotProgressionProcedure::BuyEquipment) ? "buy_equipment" :
+	       progressionRuntime.activeGoal() == TopLevelGoal::MagicTraining ? "magic_training" : cyclePhaseName();
 }
 
 void PlayerBotController::finishProgressionObjective(Player* player, const Position& position, const char* result, const char* reason,
@@ -925,8 +926,8 @@ void PlayerBotController::finishProgressionObjective(Player* player, const Posit
 		say(*player, std::string("Equipment reward objective ") + result + ": " + reason + '.');
 	}
 	progressionRuntime.finish();
-	clearNavigation();
-	cyclePhase = CyclePhase::Service;
+	resetNavigation();
+	turnRouter.setCyclePhase(CyclePhase::Service);
 	progressionRuntime.completeReward(std::strcmp(result, "success") == 0,
 	    std::strcmp(result, "success") == 0 ? pickupRewardSuccessCooldown : pickupRewardFailureCooldown);
 	if (player && fixtureDriver.progressionGoalLoop(true).selectGoal) {

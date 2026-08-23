@@ -362,6 +362,13 @@ function Assert-AdaptiveChallengeEvents {
 		$_.retry_delay_ms -eq 1000 -and $_.maximum_attempts -eq 3
 	})
 	$terminal = @($events | Where-Object { $_.event -eq "terminal" -and $_.reason -eq "hunt_scope_exhausted" })
+	$postTerminalEvents = @()
+	if ($terminal.Count -eq 1) {
+		$terminalIndex = [Array]::IndexOf($events, $terminal[0])
+		if ($terminalIndex -lt $events.Count - 1) {
+			$postTerminalEvents = @($events[($terminalIndex + 1)..($events.Count - 1)])
+		}
+	}
 	if ($idle.Count -ne 1 -or $noKill.Count -ne 1 -or $invalidEscalation.Count -ne 0 -or
 		$escalated.Count -ne 3 -or $backoff.Count -ne 2 -or $deathBackoff.Count -ne 1 -or $hold.Count -ne 2 -or
         [Math]::Abs($escalated[0].frontier_before - 0.20) -gt 0.001 -or
@@ -376,7 +383,8 @@ function Assert-AdaptiveChallengeEvents {
 		-not $fixture[0].in_band_outranks_easier -or -not $fixture[0].wounded_lethal -or
 		-not $fixture[0].zero_health_lethal -or -not $fixture[0].helper_scope_exhausted -or
 		$candidates.Count -lt 1 -or $unsafeLethalRecovery.Count -ne 0 -or $exhausted.Count -ne 3 -or
-		@($exhausted | Where-Object { $_.attempt -notin @(1, 2, 3) }).Count -ne 0 -or $terminal.Count -ne 1) {
-		throw "Adaptive challenge evidence was incomplete. idle=$($idle.Count), noKill=$($noKill.Count), invalidEscalation=$($invalidEscalation.Count), escalated=$($escalated.Count), backoff=$($backoff.Count), hold=$($hold.Count), fixture=$($fixture.Count), candidates=$($candidates.Count), exhausted=$($exhausted.Count), terminal=$($terminal.Count)."
-    }
+		@($exhausted | Where-Object { $_.attempt -notin @(1, 2, 3) }).Count -ne 0 -or
+		$terminal.Count -ne 1 -or $postTerminalEvents.Count -ne 0) {
+		throw "Adaptive challenge evidence was incomplete. idle=$($idle.Count), noKill=$($noKill.Count), invalidEscalation=$($invalidEscalation.Count), escalated=$($escalated.Count), backoff=$($backoff.Count), hold=$($hold.Count), fixture=$($fixture.Count), candidates=$($candidates.Count), exhausted=$($exhausted.Count), terminal=$($terminal.Count), post_terminal=$($postTerminalEvents.Count)."
+	}
 }

@@ -159,6 +159,13 @@ pwsh -File scripts/bootstrap-client.ps1
 - Schedule bot decisions through the server dispatcher/scheduler, stagger work,
   and use normal movement, combat, spell, and item APIs instead of directly
   mutating world or inventory state.
+- Route each scheduler turn through the pure turn-command priority. Keep
+  `Running`, `Paused`, and `Stopped` distinct; `Stopped` is terminal and must not
+  schedule or execute another turn.
+- Resetting navigation must not implicitly cancel hunt planning. Cancel hunt
+  planning when leaving the hunt phase or handling an explicit interruption.
+- Suspended corpse navigation must retry through the loot workflow and remain
+  bounded. A playerbot controller must emit no events after its terminal event.
 
 ## Continuous Integration
 
