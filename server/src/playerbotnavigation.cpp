@@ -188,10 +188,18 @@ namespace {
 PlayerBotNavigationResult PlayerBotNavigator::plan(Player& player, const Position& destination, const std::set<Position>& blockedPositions,
                                                    std::deque<PlayerBotNavigationStep>& steps, uint64_t& expandedNodes,
                                                    uint64_t maximumExpandedNodes) const
+
+{
+	return planFrom(player, player.getPosition(), destination, blockedPositions, steps, expandedNodes, maximumExpandedNodes);
+}
+
+PlayerBotNavigationResult PlayerBotNavigator::planFrom(Player& player, const Position& start, const Position& destination,
+	                                                    const std::set<Position>& blockedPositions,
+	                                                    std::deque<PlayerBotNavigationStep>& steps, uint64_t& expandedNodes,
+	                                                    uint64_t maximumExpandedNodes) const
 {
 	steps.clear();
 	expandedNodes = 0;
-	const Position start = player.getPosition();
 	if (start == destination) {
 		return PlayerBotNavigationResult::Reached;
 	}

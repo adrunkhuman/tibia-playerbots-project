@@ -126,8 +126,6 @@ namespace playerbot {
 	inline constexpr uint16_t oracleVocationId = 4;
 	inline constexpr uint32_t oracleTownId = 2;
 	inline constexpr uint32_t rookgaardTownId = 6;
-	inline constexpr Position rookgaardTemplePosition(32097, 32219, 7);
-	inline constexpr int32_t rookgaardRewardRadius = 180;
 	inline constexpr uint32_t maximumDepotAttempts = 3;
 	inline constexpr uint32_t maximumDepotDiscoveryAttempts = 4;
 	// A depot scan can see several lockers with eight adjacent approach tiles each.
@@ -278,7 +276,8 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		bool isRewardClaimed(const Player& player, uint16_t uniqueId) const;
 
 		bool planSimpleRewardApproach(Player& player, const Position& rewardPosition, Position& approachPosition,
-		                              std::deque<PlayerBotNavigationStep>& approachSteps, uint64_t& expandedNodes);
+		                              std::deque<PlayerBotNavigationStep>& approachSteps, uint64_t& expandedNodes,
+		                              uint64_t maximumExpandedNodes);
 
 		void emitRewardCandidate(const PlayerBotRewardPlan& candidate, const Position& position, const char* result,
 		                         const char* reason = nullptr) const;
@@ -367,6 +366,9 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		PlayerBotNavigationRoutePlan planNavigationRoute(Player& player, const Position& destination,
 		                                                const std::set<Position>& blockedPositions = {},
 		                                                uint64_t maximumExpandedNodes = playerBotNavigationMaximumExpandedNodes) const;
+		std::optional<PlayerBotNavigationRoutePlan> planNpcTravelRoute(Player& player, const Position& destination,
+		                                                               const std::set<Position>& blockedPositions,
+		                                                               uint64_t maximumExpandedNodes) const;
 
 		uint32_t navigationDecisionDelay(const Player& player) const;
 
@@ -442,6 +444,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		std::map<uint16_t, std::string> rewardInspectionFingerprints;
 		PlayerBotServiceWorkflow serviceWorkflow;
 		PlayerBotNavigationRuntime navigationRuntime;
+		mutable std::map<std::pair<uint32_t, Position>, std::chrono::steady_clock::time_point> unavailableTravelOffers;
 		bool deathObserved = false;
 };
 

@@ -11,17 +11,12 @@
 #include "otpch.h"
 
 #include "playerbotcontroller.h"
-#include "playerbotarea.h"
 
 #include "depotchest.h"
 #include "depotlocker.h"
 
 // NPC service discovery, shopping, banking, and depot handling.
 using namespace playerbot;
-
-namespace {
-	constexpr uint32_t maximumServiceDistanceFromTemple = 200;
-}
 
 const char* PlayerBotController::cyclePhaseName() const
 {
@@ -185,7 +180,7 @@ void PlayerBotController::processService(Player* player, const Position& current
 	for (const auto& entry : g_game.getNpcs()) {
 		Npc* npc = entry.second;
 		const std::string* capability = npc && !npc->isRemoved() ? npc->getParameter("playerbot_service") : nullptr;
-		if (!capability || serviceDistance(player->getTemplePosition(), {npc->getID(), npc->getPosition()}) > maximumServiceDistanceFromTemple) continue;
+		if (!capability) continue;
 		if (*capability != "shop" && *capability != "banker") continue;
 		PlayerBotEconomyProvider provider{npc->getID(), npc->getPosition()};
 		for (const ShopInfo& offer : npc->getShopOffers()) {
@@ -235,7 +230,9 @@ void PlayerBotController::processService(Player* player, const Position& current
 	PlayerBotServiceCommand command = serviceWorkflow.advance(observation, economyCatalog, dispositionPolicy);
 	const std::vector<PlayerBotServiceDiscovery> discoveries = command.discoveries;
 	std::deque<PlayerBotNavigationStep> approachSteps;
-	while (command.type == PlayerBotServiceCommandType::ValidateProviderRoute) {
+	uint32_t routeValidations = 0;
+	while (command.type == PlayerBotServiceCommandType::ValidateProviderRoute && routeValidations < 1) {
+		++routeValidations;
 		PlayerBotServiceObservation routeObservation = observation;
 		routeObservation.approachRoute.providerId = command.providerId;
 		routeObservation.approachRoute.destination = command.destination;
@@ -250,6 +247,12 @@ void PlayerBotController::processService(Player* player, const Position& current
 		routeObservation.approachRoute.expandedNodes = routePlan.metrics.expandedNodes;
 		if (reached) approachSteps = std::move(routePlan.steps);
 		command = serviceWorkflow.advance(routeObservation, economyCatalog, dispositionPolicy);
+	}
+	if (command.type == PlayerBotServiceCommandType::ValidateProviderRoute) {
+		emit("action_result", currentPosition,
+		     "\"action\":\"service_discover\",\"result\":\"continuing\",\"reason\":\"route_validation_budget_exhausted\"");
+		schedule(blockedRouteRetryInterval);
+		return;
 	}
 	for (const PlayerBotServiceDiscovery& discovery : discoveries) {
 		emit("service_discovered", currentPosition, "\"capability\":" + jsonString(discovery.capability) +
@@ -442,7 +445,6 @@ bool PlayerBotController::discoverDepot(Player& player, const Position& currentP
 		}
 		for (const auto& entry : g_game.map.getDepotLockerPositions()) for (const Position& lockerPosition : entry.second) {
 			++result.indexedCandidates;
-			if (!playerbot::isInsideLocalPlanningArea(currentPosition, lockerPosition)) continue;
 			uint16_t lockerItemId = 0;
 			if (!findDepotLocker(lockerPosition, entry.first, lockerItemId)) continue;
 			++result.inScopeCandidates;
@@ -453,7 +455,9 @@ bool PlayerBotController::discoverDepot(Player& player, const Position& currentP
 				if (!tile || tile->queryAdd(0, player, 1, FLAG_IGNOREBLOCKCREATURE) != RETURNVALUE_NOERROR) continue;
 				++result.standableCandidates;
 				result.candidates.push_back({entry.first, lockerItemId, lockerPosition, approach,
-				                             playerbot::localPlanningDistance(currentPosition, approach)});
+				                             static_cast<uint32_t>(Position::getDistanceX(currentPosition, approach) +
+				                                                   Position::getDistanceY(currentPosition, approach) +
+				                                                   Position::getDistanceZ(currentPosition, approach) * 20)});
 			}
 		}
 		return result;
@@ -485,8 +489,7 @@ bool PlayerBotController::discoverDepot(Player& player, const Position& currentP
 		uint16_t lockerItemId = 0;
 		Tile* tile = g_game.map.getTile(candidate.approachPosition);
 		const bool valid = fixtureDepot.synthetic ||
-			(playerbot::isInsideLocalPlanningArea(currentPosition, candidate.lockerPosition) &&
-			 findDepotLocker(candidate.lockerPosition, candidate.depotId, lockerItemId) && lockerItemId == candidate.lockerItemId &&
+			(findDepotLocker(candidate.lockerPosition, candidate.depotId, lockerItemId) && lockerItemId == candidate.lockerItemId &&
 			 tile && tile->queryAdd(0, player, 1, FLAG_IGNOREBLOCKCREATURE) == RETURNVALUE_NOERROR);
 		const auto startedAt = std::chrono::steady_clock::now();
 		PlayerBotNavigationRoutePlan routePlan;

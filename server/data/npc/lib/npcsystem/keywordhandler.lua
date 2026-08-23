@@ -118,6 +118,37 @@ if not KeywordHandler then
     function KeywordNode:addChildKeywordNode(childNode)
         self.children[#self.children + 1] = childNode
         childNode.parent = self
+
+        if StdModule and childNode.callback == StdModule.travel and childNode.parameters and
+                type(childNode.parameters.destination) ~= 'function' then
+            local dialogue = {}
+            local hasCondition = false
+            local hasAction = false
+            local node = childNode
+            while node and node.parent do
+                local phrase = {}
+                for _, keyword in ipairs(node.keywords or {}) do
+                    if type(keyword) == 'string' then
+                        phrase[#phrase + 1] = keyword
+                    end
+                end
+                if #phrase > 0 then
+                    table.insert(dialogue, 1, table.concat(phrase, ' '))
+                end
+                hasCondition = hasCondition or node.condition ~= nil
+                hasAction = hasAction or node.action ~= nil
+                for _, sibling in ipairs(node.parent.children or {}) do
+                    if sibling ~= node and sibling.condition and sibling.keywords and node.keywords and
+                            sibling.keywords[1] == node.keywords[1] then
+                        hasCondition = true
+                    end
+                end
+                node = node.parent
+            end
+            Npc():addTravelOffer(dialogue, childNode.parameters.destination,
+                childNode.parameters.cost or 0, childNode.parameters.premium or false,
+                childNode.parameters.level or 0, hasCondition, hasAction)
+        end
         return childNode
     end
 

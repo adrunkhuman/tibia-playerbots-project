@@ -72,6 +72,7 @@ struct PlayerBotHuntRegion {
 	uint16_t staminaMinutes = 0;
 	double staminaExperienceMultiplier = 1;
 	double projectedExperience = 0;
+	double optimisticProjectedExperience = 0;
 	double threatRatio = 0;
 	double rawThreatRatio = 0;
 	int32_t currentHealth = 0;
@@ -85,6 +86,8 @@ struct PlayerBotHuntRegion {
 	uint64_t expandedNodes = 0;
 	bool suitable = false;
 	bool reachable = false;
+	bool routeValidationAttempted = false;
+	bool routeValidationDeferredByBound = false;
 	bool inChallengeBand = false;
 	bool predictedLethal = false;
 	std::string rejectionReason;

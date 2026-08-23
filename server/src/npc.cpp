@@ -113,6 +113,7 @@ void Npc::reset()
 	parameters.clear();
 	shopOffers.clear();
 	spellOffers.clear();
+	travelOffers.clear();
 	shopPlayerSet.clear();
 	spectators.clear();
 }
@@ -411,6 +412,12 @@ void Npc::addSpellOffer(std::string spellName, std::string keyword, uint32_t pri
 	}
 }
 
+void Npc::addTravelOffer(NpcTravelOffer offer)
+{
+	if (offer.dialogue.empty() || offer.destination == Position()) return;
+	travelOffers.push_back(std::move(offer));
+}
+
 void Npc::onPlayerTrade(Player* player, int32_t callback, uint16_t itemId, uint8_t count,
                         uint8_t amount, bool ignore/* = false*/, bool inBackpacks/* = false*/)
 {
@@ -676,6 +683,7 @@ void NpcScriptInterface::registerFunctions()
 	registerMethod("Npc", "setFocus", NpcScriptInterface::luaNpcSetFocus);
 	registerMethod("Npc", "addShopOffer", NpcScriptInterface::luaNpcAddShopOffer);
 	registerMethod("Npc", "addSpellOffer", NpcScriptInterface::luaNpcAddSpellOffer);
+	registerMethod("Npc", "addTravelOffer", NpcScriptInterface::luaNpcAddTravelOffer);
 
 	registerMethod("Npc", "openShopWindow", NpcScriptInterface::luaNpcOpenShopWindow);
 	registerMethod("Npc", "closeShopWindow", NpcScriptInterface::luaNpcCloseShopWindow);
@@ -1070,6 +1078,29 @@ int NpcScriptInterface::luaNpcAddSpellOffer(lua_State* L)
 		npc->addSpellOffer(getString(L, 2), getString(L, 3), getNumber<uint32_t>(L, 4), getNumber<uint32_t>(L, 5),
 		                   getBoolean(L, 6), getNumber<uint16_t>(L, 7));
 	}
+	return 0;
+}
+
+int NpcScriptInterface::luaNpcAddTravelOffer(lua_State* L)
+{
+	// npc:addTravelOffer(dialogue, destination, price, premium, level, hasOpaqueCondition, hasOpaqueAction)
+	Npc* npc = getUserdata<Npc>(L, 1);
+	if (!npc || !isTable(L, 2)) return 0;
+
+	NpcTravelOffer offer;
+	const size_t dialogueLength = lua_objlen(L, 2);
+	for (size_t index = 1; index <= dialogueLength; ++index) {
+		lua_rawgeti(L, 2, index);
+		if (lua_isstring(L, -1)) offer.dialogue.push_back(getString(L, -1));
+		lua_pop(L, 1);
+	}
+	offer.destination = getPosition(L, 3);
+	offer.price = getNumber<uint32_t>(L, 4, 0);
+	offer.premium = getBoolean(L, 5, false);
+	offer.level = getNumber<uint32_t>(L, 6, 0);
+	offer.hasOpaqueCondition = getBoolean(L, 7, false);
+	offer.hasOpaqueAction = getBoolean(L, 8, false);
+	npc->addTravelOffer(std::move(offer));
 	return 0;
 }
 
