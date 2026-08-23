@@ -14,6 +14,7 @@
 // Internal controller contract shared by the responsibility-specific playerbot implementation units.
 
 #include "playerbot.h"
+#include "playerbotdepotsession.h"
 #include "playerbotequipmentpolicy.h"
 #include "playerbotgoalarbiter.h"
 #include "playerbothuntregions.h"
@@ -26,6 +27,7 @@
 #include "playerbotrecoverysession.h"
 #include "playerbotspellcalibration.h"
 #include "playerbotspellruntime.h"
+#include "playerbotservicesession.h"
 #include "playerbottargetingsession.h"
 
 #include "container.h"
@@ -406,24 +408,6 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 			uint64_t suppressedEvents = 0;
 		};
 
-		enum class DepotStage : uint8_t {
-			Discover,
-			Approach,
-			OpenLocker,
-			OpenChest,
-			Deposit,
-			VerifyMove,
-			Depart,
-		};
-
-		struct DepotCandidate {
-			uint16_t depotId = 0;
-			uint16_t lockerItemId = 0;
-			Position lockerPosition;
-			Position approachPosition;
-			uint32_t distance = 0;
-		};
-
 		class DecisionTimer
 		{
 			public:
@@ -675,7 +659,8 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		ServiceNpc* findLootSeller(Player* player, const Position& position, uint16_t& itemId);
 		bool prepareSlottedSaleItem(Player* player, uint16_t itemId, const Position& position);
 
-		void completeServiceAction(Player* player, const char* action, uint16_t itemId, uint32_t amount, const Position& position);
+		void completeServiceAction(Player* player, const char* action, const PlayerBotServiceTransaction& transaction,
+		                           const Position& position);
 
 		void processServiceShop(Player* player, const Position& currentPosition, ServiceNpc& service, const char* action,
 		                        uint16_t itemId, uint32_t amount, bool purchase);
@@ -788,36 +773,17 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		bool corpseObserved = false;
 		bool corpseNavigationSuspended = false;
 		bool lastNavigationRouteUnavailable = false;
-		uint16_t pendingDepositItemId = 0;
 		uint32_t pendingLootInventoryCount = 0;
 		uint8_t pendingDiscardCount = 0;
 		uint32_t pendingDiscardInventoryCount = 0;
 		uint32_t pendingDiscardValue = 0;
 		uint16_t pendingDiscardIncomingItemId = 0;
-		uint32_t pendingDepositDestinationCount = 0;
-		uint32_t pendingDepositInventoryCount = 0;
-		uint8_t pendingDepositRequestedCount = 0;
-		slots_t pendingDepositSourceSlot = CONST_SLOT_WHEREEVER;
-		uint32_t depotAttempts = 0;
-		uint16_t depotId = 0;
-		uint16_t depotLockerItemId = 0;
-		Position depotLockerPosition;
-		Position depotApproachPosition;
-		std::vector<DepotCandidate> depotCandidates;
-		std::map<Position, std::chrono::steady_clock::time_point> rejectedDepotApproaches;
-		size_t nextDepotCandidate = 0;
-		uint32_t depotIndexedCandidateCount = 0;
-		uint32_t depotInScopeCandidateCount = 0;
-		uint32_t depotStandableCandidateCount = 0;
-		uint32_t depotSuppressedApproachCount = 0;
-		Position depotDiscoveryAnchor;
-		bool depotCandidatesPrepared = false;
-		DepotStage depotStage = DepotStage::Discover;
 		std::set<uint16_t> unavailableLootItemIds;
 		std::map<uint16_t, uint32_t> itemSellValues;
 		PlayerBotEquipmentPolicy equipmentPolicy;
 		playerbot::PlayerBotInventoryPolicy inventoryPolicy;
 		PlayerBotRecoverySession recoverySession;
+		PlayerBotDepotSession depotSession;
 		PlayerBotSpellRuntime spellRuntime;
 		PlayerBotSpellCalibration spellCalibration;
 		PlayerBotTargetingSession targetingSession;
@@ -851,18 +817,13 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		std::vector<ServiceNpc> serviceBankers;
 		Position serviceApproachTarget;
 		std::set<Position> serviceRejectedApproaches;
-		uint16_t serviceItemId = 0;
-		uint32_t serviceAmount = 0;
-		uint32_t serviceBeforeItemCount = 0;
 		uint16_t pendingSlottedSaleItemId = 0;
 		slots_t pendingSlottedSaleSourceSlot = CONST_SLOT_WHEREEVER;
 		uint32_t pendingSlottedSaleBackpackCount = 0;
 		uint32_t slottedSaleMoveAttempts = 0;
 		std::map<std::pair<uint16_t, slots_t>, std::chrono::steady_clock::time_point> unavailableSlottedSales;
-		uint64_t serviceBeforeMoney = 0;
-		uint64_t serviceBeforeBalance = 0;
-		bool bankDepositComplete = false;
 		PlayerBotNpcSession npcSession;
+		PlayerBotServiceSession serviceSession;
 		size_t huntRouteIndex = 0;
 		uint32_t completedCycles = 0;
 		std::chrono::steady_clock::time_point huntDeadline;
