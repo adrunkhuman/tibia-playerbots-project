@@ -385,13 +385,16 @@
 			Invoke-Compose stop server
 			Invoke-Compose up --detach server
 			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST MAINLAND_REWARD_RESTART_PASS' | Out-Null
-			$restartLogs = Wait-ForLatestServerGenerationLog -Pattern '"event":"goal_selection".*"to_goal":"hunt"'
+			$restartLogs = Wait-ForLatestServerGenerationLog -Pattern '"event":"goal_selection"'
 			$restartEvents = @(ConvertFrom-PlayerbotLogs -Logs $restartLogs)
-			$duplicateActions = @($restartEvents | Where-Object {
-				$_.event -eq "action_result" -and $_.action -in @("claim_reward", "equip") -and $_.item_id -eq 2483
+			$restartSelection = @($restartEvents | Where-Object { $_.event -eq "goal_selection" } | Select-Object -First 1)
+			$rewardCandidate = @($restartEvents | Where-Object {
+				$_.event -eq "goal_candidate" -and $_.goal -eq "pickup_reward" -and
+				-not $_.feasible -and $_.reason -eq "no_useful_reward"
 			})
-			if ($duplicateActions.Count -ne 0) {
-				throw "Mainland reward restart repeated a completed claim or equip action."
+			if ($restartSelection.Count -ne 1 -or $restartSelection[0].to_goal -eq "pickup_reward" -or
+				$rewardCandidate.Count -ne 1) {
+				throw "Mainland reward restart did not advance beyond the persisted reward objective."
 			}
 		}
 	}

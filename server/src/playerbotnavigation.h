@@ -22,6 +22,12 @@ class Player;
 
 inline constexpr uint64_t playerBotNavigationMaximumExpandedNodes = 100000;
 
+inline uint32_t playerBotNavigationDistance(const Position& from, const Position& destination)
+{
+	return Position::getDistanceX(from, destination) + Position::getDistanceY(from, destination) +
+	       Position::getDistanceZ(from, destination) * 20;
+}
+
 enum class PlayerBotNavigationAction : uint8_t {
 	Move,
 	Use,

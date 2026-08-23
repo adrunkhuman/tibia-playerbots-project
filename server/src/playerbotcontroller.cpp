@@ -544,11 +544,7 @@ bool PlayerBotController::findPath(Player* player, const Position& target, std::
 void PlayerBotController::clearNavigation()
 {
 	cancelHuntRegionPlanning();
-	navigationSteps.clear();
-	navigationPending = false;
-	worldChangePending = false;
-	navigationTarget = Position();
-	blockedStepCount = 0;
+	navigationSession.clear();
 	fixedTargetRouteFailureCount = 0;
 }
 
@@ -563,8 +559,7 @@ void PlayerBotController::resetPatrolRouteFailures()
 void PlayerBotController::adoptNavigationPlan(const Position& destination, std::deque<PlayerBotNavigationStep> steps)
 {
 	clearNavigation();
-	navigationTarget = destination;
-	navigationSteps = std::move(steps);
+	navigationSession.adopt(destination, std::move(steps));
 }
 
 void PlayerBotController::onDeath(const Player& player, const Creature* killer, const Creature* mostDamageKiller)
@@ -711,80 +706,6 @@ void PlayerBotController::onHealthGain(Creature* healer, const Creature& target,
 	}
 }
 
-uint32_t PlayerBotController::navigationDistance(const Position& from, const Position& destination) const
-{
-	return Position::getDistanceX(from, destination) + Position::getDistanceY(from, destination) +
-	       Position::getDistanceZ(from, destination) * 20;
-}
-
-bool PlayerBotController::detectNavigationOscillation(const Position& currentPosition, const Position& destination)
-{
-	navigationOscillationDetected = false;
-	if (navigationProgressTarget != destination) {
-		navigationProgressTarget = destination;
-		navigationProgressPrevious = currentPosition;
-		navigationProgressTwoAgo = Position();
-		navigationBestDistance = navigationDistance(currentPosition, destination);
-		navigationOscillationCount = 0;
-		return false;
-	}
-
-	const uint32_t distance = navigationDistance(currentPosition, destination);
-	if (currentPosition == navigationProgressPrevious) {
-		return false;
-	}
-	const Position previousPosition = navigationProgressPrevious;
-	const bool oscillating = navigationProgressTwoAgo != Position() && currentPosition == navigationProgressTwoAgo &&
-	                         distance >= navigationBestDistance;
-	if (distance < navigationBestDistance) {
-		navigationBestDistance = distance;
-		if (!oscillating) {
-			navigationOscillationCount = 0;
-		}
-	}
-	if (oscillating) {
-		++navigationOscillationCount;
-	}
-	navigationProgressTwoAgo = previousPosition;
-	navigationProgressPrevious = currentPosition;
-	if (navigationOscillationCount < 3) {
-		return false;
-	}
-
-	Position blockedTarget = currentPosition;
-	Position blockedExpected = currentPosition;
-	for (const PlayerBotNavigationStep& step : navigationSteps) {
-		if (step.action != PlayerBotNavigationAction::Move || step.expectedPosition.z != currentPosition.z) {
-			blockedTarget = step.target;
-			blockedExpected = step.expectedPosition;
-			break;
-		}
-	}
-	const auto expires = std::chrono::steady_clock::now() + navigationOscillationSuppression;
-	temporarilyBlockedPositions[blockedTarget] = expires;
-	temporarilyBlockedPositions[blockedExpected] = expires;
-	std::ostringstream fields;
-	fields << "\"result\":\"suppressed\",\"reason\":\"position_oscillation\""
-	       << ",\"destination\":{\"x\":" << destination.x << ",\"y\":" << destination.y
-	       << ",\"z\":" << static_cast<uint16_t>(destination.z) << '}'
-	       << ",\"blocked_target\":{\"x\":" << blockedTarget.x << ",\"y\":" << blockedTarget.y
-	       << ",\"z\":" << static_cast<uint16_t>(blockedTarget.z) << '}'
-	       << ",\"position_a\":{\"x\":" << currentPosition.x << ",\"y\":" << currentPosition.y
-	       << ",\"z\":" << static_cast<uint16_t>(currentPosition.z) << '}'
-	       << ",\"position_b\":{\"x\":" << previousPosition.x
-	       << ",\"y\":" << previousPosition.y
-	       << ",\"z\":" << static_cast<uint16_t>(previousPosition.z) << '}';
-	emit("navigation_progress", currentPosition, fields.str());
-	++counters.stuckEvents;
-	navigationSteps.clear();
-	navigationPending = false;
-	worldChangePending = false;
-	navigationOscillationCount = 0;
-	navigationOscillationDetected = true;
-	schedule(blockedRouteRetryInterval);
-	return true;
-}
-
 bool PlayerBotController::processNavigation(Player* player, const Position& currentPosition, const Position& destination)
 {
 	lastNavigationRouteUnavailable = false;
@@ -793,64 +714,52 @@ bool PlayerBotController::processNavigation(Player* player, const Position& curr
 		clearNavigation();
 		return true;
 	}
-	if (detectNavigationOscillation(currentPosition, destination)) {
+	const auto now = std::chrono::steady_clock::now();
+	if (const auto oscillation = navigationSession.observeProgress(
+			currentPosition, destination, now, navigationOscillationSuppression)) {
+		std::ostringstream fields;
+		fields << "\"result\":\"suppressed\",\"reason\":\"position_oscillation\""
+		       << ",\"destination\":{\"x\":" << destination.x << ",\"y\":" << destination.y
+		       << ",\"z\":" << static_cast<uint16_t>(destination.z) << '}'
+		       << ",\"blocked_target\":{\"x\":" << oscillation->blockedTarget.x
+		       << ",\"y\":" << oscillation->blockedTarget.y
+		       << ",\"z\":" << static_cast<uint16_t>(oscillation->blockedTarget.z) << '}'
+		       << ",\"position_a\":{\"x\":" << currentPosition.x << ",\"y\":" << currentPosition.y
+		       << ",\"z\":" << static_cast<uint16_t>(currentPosition.z) << '}'
+		       << ",\"position_b\":{\"x\":" << oscillation->previousPosition.x
+		       << ",\"y\":" << oscillation->previousPosition.y
+		       << ",\"z\":" << static_cast<uint16_t>(oscillation->previousPosition.z) << '}';
+		emit("navigation_progress", currentPosition, fields.str());
+		++counters.stuckEvents;
+		schedule(blockedRouteRetryInterval);
 		return false;
 	}
 
-	if (navigationPending) {
-		if (currentPosition == navigationExpectedPosition) {
-			navigationPending = false;
-			blockedStepCount = 0;
-			if (!navigationSteps.empty()) {
-				navigationSteps.pop_front();
-			}
-		} else if ((player->getWalkDelay() > 0 || !player->canDoAction()) &&
-		           std::chrono::steady_clock::now() - navigationStepStarted < navigationStepTimeout) {
-			schedule(navigationDecisionDelay(*player));
+	const PlayerBotPendingMovementResult movementResult = navigationSession.observeMovement(
+		currentPosition, player->getWalkDelay() > 0 || !player->canDoAction(), now,
+		navigationStepTimeout, navigationBlockSuppression);
+	if (movementResult == PlayerBotPendingMovementResult::Waiting) {
+		schedule(navigationDecisionDelay(*player));
+		return false;
+	}
+	if (movementResult == PlayerBotPendingMovementResult::Mismatch) {
+		logActionFailure("navigate", "step_result_mismatch", currentPosition);
+		if (navigationSession.stepFailureCount() >= maximumRepeatedNavigationStepFailures) {
+			schedule(blockedRouteRetryInterval);
 			return false;
-		} else {
-			navigationPending = false;
-			navigationSteps.clear();
-			blockedNavigationTarget = navigationStepTarget;
-			blockedNavigationTargetExpires = std::chrono::steady_clock::now() + navigationBlockSuppression;
-			temporarilyBlockedPositions[navigationStepTarget] =
-				std::chrono::steady_clock::now() + navigationBlockSuppression;
-			logActionFailure("navigate", "step_result_mismatch", currentPosition);
-			++blockedStepCount;
-			if (blockedStepCount >= maximumRepeatedNavigationStepFailures) {
-				schedule(blockedRouteRetryInterval);
-				return false;
-			}
 		}
 	}
-	if (worldChangePending) {
-		const PlayerBotNavigationStep pendingStep = worldChangeStep;
-		worldChangePending = false;
-		if (Item* unchanged = findNavigationItem(pendingStep)) {
-			temporarilyBlockedPositions[pendingStep.target] =
-				std::chrono::steady_clock::now() + navigationBlockSuppression;
+	if (const auto pendingStep = navigationSession.takeWorldChange()) {
+		if (Item* unchanged = findNavigationItem(*pendingStep)) {
+			navigationSession.suppress(pendingStep->target, now + navigationBlockSuppression);
 			logActionFailure("navigate", "transition_state_unchanged", currentPosition);
 		}
 	}
 
-	if (navigationTarget != destination) {
-		navigationSteps.clear();
-		navigationTarget = destination;
-		blockedStepCount = 0;
-	}
-	if (navigationSteps.empty()) {
-		const auto now = std::chrono::steady_clock::now();
-		for (auto it = temporarilyBlockedPositions.begin(); it != temporarilyBlockedPositions.end();) {
-			if (it->second <= now) {
-				it = temporarilyBlockedPositions.erase(it);
-			} else {
-				++it;
-			}
-		}
-		std::set<Position> blockedPositions;
-		for (const auto& blocked : temporarilyBlockedPositions) {
-			blockedPositions.insert(blocked.first);
-		}
+	navigationSession.prepareDestination(destination);
+	if (navigationSession.routeEmpty()) {
+		const std::set<Position> blockedPositions = navigationSession.activeBlockedPositions(now);
+		std::deque<PlayerBotNavigationStep> plannedSteps;
 		uint64_t expandedNodes = 0;
 		++counters.pathfindingCalls;
 		const auto startedAt = std::chrono::steady_clock::now();
@@ -860,12 +769,12 @@ bool PlayerBotController::processNavigation(Player* player, const Position& curr
 			expandedNodes = playerBotNavigationMaximumExpandedNodes;
 			planResult = PlayerBotNavigationResult::Unreachable;
 		} else {
-			planResult = navigator.plan(*player, destination, blockedPositions, navigationSteps, expandedNodes);
+			planResult = navigator.plan(*player, destination, blockedPositions, plannedSteps, expandedNodes);
 		}
 		const bool planned = planResult == PlayerBotNavigationResult::Reached;
 		counters.pathfindingTimeUs += std::chrono::duration_cast<std::chrono::microseconds>(
 			std::chrono::steady_clock::now() - startedAt).count();
-		if (!planned || navigationSteps.empty()) {
+		if (!planned || plannedSteps.empty()) {
 			lastNavigationRouteUnavailable = true;
 			lastNavigationExpandedNodes = expandedNodes;
 			++counters.pathfindingFailures;
@@ -885,20 +794,21 @@ bool PlayerBotController::processNavigation(Player* player, const Position& curr
 		}
 		fixedTargetRouteFailureCount = 0;
 		std::ostringstream fields;
-		fields << "\"action\":\"plan\",\"result\":\"success\",\"steps\":" << navigationSteps.size()
+		fields << "\"action\":\"plan\",\"result\":\"success\",\"steps\":" << plannedSteps.size()
 		       << ",\"expanded_nodes\":" << expandedNodes << ",\"destination\":{\"x\":" << destination.x
 		       << ",\"y\":" << destination.y << ",\"z\":" << static_cast<uint16_t>(destination.z) << '}';
 		emit("action_result", currentPosition, fields.str());
+		navigationSession.installRoute(destination, std::move(plannedSteps));
 	}
 
-	if (!player->canDoAction() || navigationSteps.empty()) {
+	if (!player->canDoAction() || navigationSession.routeEmpty()) {
 		schedule(navigationDecisionDelay(*player));
 		return false;
 	}
 
-	const PlayerBotNavigationStep& step = navigationSteps.front();
+	const PlayerBotNavigationStep& step = navigationSession.nextStep();
 	if (!executeNavigationStep(player, step)) {
-		navigationSteps.clear();
+		navigationSession.clearRoute();
 		logActionFailure("navigate", "transition_unavailable", currentPosition);
 		schedule(blockedRouteRetryInterval);
 		return false;
@@ -906,16 +816,11 @@ bool PlayerBotController::processNavigation(Player* player, const Position& curr
 
 	if (step.action == PlayerBotNavigationAction::UseDoor ||
 	    step.action == PlayerBotNavigationAction::UseShovel) {
-		worldChangeStep = step;
-		worldChangePending = true;
-		navigationSteps.clear();
+		navigationSession.beginWorldChange(step);
 		schedule(navigationDecisionDelay(*player));
 		return false;
 	}
-	navigationExpectedPosition = step.expectedPosition;
-	navigationStepTarget = step.target;
-	navigationStepStarted = std::chrono::steady_clock::now();
-	navigationPending = true;
+	navigationSession.beginMovement(step, std::chrono::steady_clock::now());
 	schedule(navigationDecisionDelay(*player));
 	return false;
 }

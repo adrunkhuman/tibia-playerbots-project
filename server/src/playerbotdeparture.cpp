@@ -153,8 +153,7 @@ void PlayerBotController::beginOracleDeparture(Player& player, const Position& p
 	progressionAttempts = 0;
 	serviceTargetId = departurePlan.npcId;
 	serviceGreetingAcknowledged = false;
-	navigationTarget = departurePlan.approachPosition;
-	navigationSteps = std::move(steps);
+	navigationSession.adopt(departurePlan.approachPosition, std::move(steps));
 	emit("strategy_selection", position,
 	     "\"goal\":\"oracle_departure\",\"npc_id\":" + std::to_string(departurePlan.npcId) +
 	         ",\"town\":\"thais\",\"town_id\":" + std::to_string(oracleTownId) +

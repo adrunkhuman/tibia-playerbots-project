@@ -333,9 +333,10 @@ void PlayerBotController::lootCorpse(Player* player, const Position& currentPosi
 			consecutiveCorpseNavigationFailures = 0;
 		}
 		const uint64_t pathfindingFailuresBefore = counters.pathfindingFailures;
-		const uint32_t blockedStepsBefore = blockedStepCount;
+		const uint32_t blockedStepsBefore = navigationSession.stepFailureCount();
 		processNavigation(player, currentPosition, lootPosition);
-		if (counters.pathfindingFailures > pathfindingFailuresBefore || blockedStepCount > blockedStepsBefore) {
+		if (counters.pathfindingFailures > pathfindingFailuresBefore ||
+		    navigationSession.stepFailureCount() > blockedStepsBefore) {
 			++corpseNavigationFailures;
 			++consecutiveCorpseNavigationFailures;
 			corpseNavigationFailurePosition = currentPosition;
