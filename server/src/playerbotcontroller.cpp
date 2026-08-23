@@ -135,7 +135,9 @@ PlayerBotController::PlayerBotController(const Player& player,
                             std::map<Position, std::chrono::steady_clock::time_point>& sharedHuntRegionCooldowns,
                             const PlayerBotTestPolicy& testPolicy) :
 	playerId(player.getID()), playerGuid(player.getGUID()), playerName(player.getName()), testPolicy(testPolicy),
-	huntRegionCooldowns(sharedHuntRegionCooldowns)
+	inventoryPolicy(itemSellValues, [this](const Player& candidatePlayer, const Item& item) {
+		return evaluateEquipmentUpgrade(candidatePlayer, item).has_value();
+	}), huntRegionCooldowns(sharedHuntRegionCooldowns)
 {
 	if (testPolicy.forceRepeatedNavigationStepFailures) {
 		forcedNavigationStepFailuresRemaining = maximumRepeatedNavigationStepFailures;
@@ -285,168 +287,13 @@ void PlayerBotController::logActionFailure(const char* action, const char* reaso
 	     ",\"result\":\"failed\",\"reason\":" + jsonString(reason));
 }
 
-uint32_t PlayerBotController::getInventoryItemCount(const Player& player, uint16_t itemId) const
-{
-	return static_cast<const Cylinder&>(player).getItemTypeCount(itemId);
-}
-
-uint64_t PlayerBotController::desiredCarriedGold(const Player& player) const
-{
-	return std::min<uint64_t>(carriedGoldReserve, player.getMoney() + player.getBankBalance());
-}
-
-bool PlayerBotController::isFoodItem(uint16_t itemId)
-{
-	return itemId == 2362 || (itemId >= 2666 && itemId <= 2691) || (itemId >= 2695 && itemId <= 2696) ||
-	       (itemId >= 2787 && itemId <= 2796) || itemId == 5097 || itemId == 6125 ||
-	       (itemId >= 6278 && itemId <= 6279) || (itemId >= 6393 && itemId <= 6394) || itemId == 6501 ||
-	       (itemId >= 6541 && itemId <= 6545) || itemId == 6569 || itemId == 6574 ||
-	       (itemId >= 7158 && itemId <= 7159) || (itemId >= 7372 && itemId <= 7377) ||
-	       (itemId >= 7909 && itemId <= 7910) || itemId == 7963 || itemId == 8112 ||
-	       (itemId >= 8838 && itemId <= 8845) || itemId == 8847 || itemId == 9005 || itemId == 9114 ||
-	       itemId == 11246 || itemId == 11370 || itemId == 11429 ||
-	       (itemId >= 12415 && itemId <= 12418) || (itemId >= 12637 && itemId <= 12639);
-}
-
-PlayerBotController::FoodInventory PlayerBotController::getFoodInventory(const Player& player) const
-{
-	uint64_t count = 0;
-	uint64_t weight = 0;
-	std::function<void(const Item&)> inspect = [&](const Item& item) {
-		if (isFoodItem(item.getID())) {
-			count += item.getItemCount();
-			weight += static_cast<uint64_t>(item.getItemCount()) * item.getBaseWeight();
-		}
-		if (const Container* container = item.getContainer()) {
-			for (const Item* child : container->getItemList()) {
-				inspect(*child);
-			}
-		}
-	};
-	for (int32_t slot = CONST_SLOT_FIRST; slot <= CONST_SLOT_LAST; ++slot) {
-		if (const Item* item = player.getInventoryItem(static_cast<slots_t>(slot))) {
-			inspect(*item);
-		}
-	}
-	FoodInventory food;
-	food.count = static_cast<uint32_t>(std::min<uint64_t>(count, std::numeric_limits<uint32_t>::max()));
-	food.weight = static_cast<uint32_t>(std::min<uint64_t>(weight, std::numeric_limits<uint32_t>::max()));
-	return food;
-}
-
-uint32_t PlayerBotController::effectiveFreeCapacity(const Player& player) const
-{
-	return static_cast<uint32_t>(std::min<uint64_t>(
-	    static_cast<uint64_t>(player.getFreeCapacity()) + getFoodInventory(player).weight,
-	    std::numeric_limits<uint32_t>::max()));
-}
-
-uint32_t PlayerBotController::itemUnitValue(uint16_t itemId) const
-{
-	const ItemType& type = Item::items[itemId];
-	if (type.worth != 0) {
-		return type.worth;
-	}
-	auto it = itemSellValues.find(itemId);
-	return it == itemSellValues.end() ? 0 : it->second;
-}
-
-uint32_t PlayerBotController::protectedItemReserve(uint16_t itemId) const
-{
-	if (itemId == ropeItemId || itemId == 2554) {
-		return 1;
-	}
-	if (isFoodItem(itemId)) {
-		return preferredFoodCount;
-	}
-	if (itemId == smallHealthPotionItemId) {
-		return smallHealthPotionRestockTarget;
-	}
-	return 0;
-}
-
-uint32_t PlayerBotController::getBackpackSaleItemCount(const Player& player, uint16_t itemId) const
-{
-	if (isFoodItem(itemId)) {
-		return 0;
-	}
-	const ItemType& type = Item::items[itemId];
-	if ((type.isContainer() && type.corpseType == RACE_NONE) || type.isFluidContainer() || type.isSplash()) {
-		return 0;
-	}
-	if ((type.slotPosition & SLOTP_TWO_HAND) != 0 && type.weaponType != WEAPON_NONE) {
-		return 0;
-	}
-	Item* backpackItem = player.getInventoryItem(CONST_SLOT_BACKPACK);
-	Container* backpack = backpackItem ? backpackItem->getContainer() : nullptr;
-	if (!backpack) {
-		return 0;
-	}
-	uint32_t count = 0;
-	for (Item* item : backpack->getItemList()) {
-		if (item->getID() == itemId) {
-			if (evaluateEquipmentUpgrade(player, *item)) {
-				return 0;
-			}
-			const Container* container = item->getContainer();
-			if (container && !container->empty()) {
-				return 0;
-			}
-			count += item->getItemCount();
-		}
-	}
-	uint32_t removableCount = 0;
-	for (int32_t slot = CONST_SLOT_FIRST; slot <= CONST_SLOT_LAST; ++slot) {
-		Item* inventoryItem = player.getInventoryItem(static_cast<slots_t>(slot));
-		Container* container = inventoryItem ? inventoryItem->getContainer() : nullptr;
-		if (!container) {
-			continue;
-		}
-		for (ContainerIterator it = container->iterator(); it.hasNext(); it.advance()) {
-			Item* nestedItem = *it;
-			if (nestedItem->getID() == itemId) {
-				if (evaluateEquipmentUpgrade(player, *nestedItem)) {
-					return 0;
-				}
-				removableCount += nestedItem->getItemCount();
-			}
-		}
-	}
-	if (removableCount != count) {
-		return 0;
-	}
-	const uint32_t reserve = protectedItemReserve(itemId);
-	return count > reserve ? count - reserve : 0;
-}
-
-bool PlayerBotController::isItemValidForSlot(const Item& item, slots_t slot) const
-{
-	uint32_t slotPosition = 0;
-	switch (slot) {
-		case CONST_SLOT_HEAD: slotPosition = SLOTP_HEAD; break;
-		case CONST_SLOT_NECKLACE: slotPosition = SLOTP_NECKLACE; break;
-		case CONST_SLOT_BACKPACK: slotPosition = SLOTP_BACKPACK; break;
-		case CONST_SLOT_ARMOR: slotPosition = SLOTP_ARMOR; break;
-		case CONST_SLOT_RIGHT: slotPosition = SLOTP_RIGHT; break;
-		case CONST_SLOT_LEFT: slotPosition = SLOTP_LEFT; break;
-		case CONST_SLOT_LEGS: slotPosition = SLOTP_LEGS; break;
-		case CONST_SLOT_FEET: slotPosition = SLOTP_FEET; break;
-		case CONST_SLOT_RING: slotPosition = SLOTP_RING; break;
-		case CONST_SLOT_AMMO: slotPosition = SLOTP_AMMO; break;
-		default: return false;
-	}
-	return (item.getSlotPosition() & slotPosition) != 0;
-}
-
 Item* PlayerBotController::findActionableSlottedItem(const Player& player, uint16_t itemId, slots_t& slot) const
 {
 	const auto now = std::chrono::steady_clock::now();
 	for (int32_t slotIndex = CONST_SLOT_FIRST; slotIndex <= CONST_SLOT_LAST; ++slotIndex) {
 		const slots_t candidateSlot = static_cast<slots_t>(slotIndex);
 		Item* item = player.getInventoryItem(candidateSlot);
-		if (!item || candidateSlot == CONST_SLOT_BACKPACK || (itemId != 0 && item->getID() != itemId) ||
-		    isItemValidForSlot(*item, candidateSlot) || isProtectedInventoryItem(*item) ||
-		    isProtectedDepositItem(player, *item)) {
+		if (!item || !inventoryPolicy.isActionableSlottedItem(player, *item, candidateSlot, itemId)) {
 			continue;
 		}
 		auto suppressed = unavailableSlottedSales.find({item->getID(), candidateSlot});
@@ -461,7 +308,7 @@ Item* PlayerBotController::findActionableSlottedItem(const Player& player, uint1
 
 uint32_t PlayerBotController::getSaleItemCount(const Player& player, uint16_t itemId) const
 {
-	uint32_t count = getBackpackSaleItemCount(player, itemId);
+	uint32_t count = inventoryPolicy.backpackSaleItemCount(player, itemId);
 	slots_t slot = CONST_SLOT_WHEREEVER;
 	if (Item* slotted = findActionableSlottedItem(player, itemId, slot)) {
 		count += slotted->getItemCount();

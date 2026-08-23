@@ -15,6 +15,7 @@
 
 #include "playerbot.h"
 #include "playerbothuntregions.h"
+#include "playerbotinventorypolicy.h"
 #include "playerbotnavigation.h"
 #include "playerbotnavigationsession.h"
 #include "playerbotspellcalibration.h"
@@ -49,11 +50,7 @@ namespace playerbot {
 	inline constexpr std::chrono::seconds repeatedEventInterval(60);
 	inline constexpr uint16_t ratCorpseItemId = 5964;
 	inline constexpr uint16_t meatItemId = 2666;
-	inline constexpr uint16_t smallHealthPotionItemId = 8704;
-	inline constexpr uint32_t smallHealthPotionReturnThreshold = 1;
-	inline constexpr uint32_t smallHealthPotionRestockTarget = 10;
 	inline constexpr int32_t healingHealthPercent = 60;
-	inline constexpr uint32_t preferredFoodCount = 2;
 	inline constexpr int32_t meatFoodTicks = 108000;
 	inline constexpr int32_t maximumFoodSeconds = 1200;
 	inline constexpr uint32_t maximumEatFailures = 3;
@@ -70,7 +67,6 @@ namespace playerbot {
 	inline constexpr uint32_t corpseNavigationSuspendThreshold = 3;
 	inline constexpr uint32_t corpseNavigationRetryInterval = 2000;
 	inline constexpr std::chrono::seconds corpseLootTimeout(20);
-	inline constexpr uint16_t ropeItemId = 2120;
 	inline constexpr std::chrono::seconds traversalCombatTimeout(60);
 	inline constexpr std::chrono::seconds traversalTargetSuppression(120);
 	inline constexpr std::chrono::seconds lostTargetPursuitTimeout(5);
@@ -120,7 +116,6 @@ namespace playerbot {
 	inline constexpr int32_t foodPreferenceUtility = 20;
 	inline constexpr int32_t sellableItemUtility = 10;
 	inline constexpr uint32_t returnCapacityThreshold = 30 * 100;
-	inline constexpr uint32_t carriedGoldReserve = 100;
 	inline constexpr uint32_t maximumServiceAttempts = 3;
 	// Prevent a rejected slotted-item move from blocking the service/depot loop.
 	inline constexpr std::chrono::seconds unavailableDispositionCooldown(60);
@@ -493,11 +488,6 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 			uint32_t availableCount;
 		};
 
-		struct FoodInventory {
-			uint32_t count = 0;
-			uint32_t weight = 0;
-		};
-
 		struct Counters {
 			uint64_t decisions = 0;
 			uint64_t decisionTimeUs = 0;
@@ -620,19 +610,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 
 		void logLootSuccess(uint16_t itemId, uint32_t count, uint32_t inventoryCount, const Position& position);
 
-		uint32_t getInventoryItemCount(const Player& player, uint16_t itemId) const;
-		uint64_t desiredCarriedGold(const Player& player) const;
-		static bool isFoodItem(uint16_t itemId);
-		FoodInventory getFoodInventory(const Player& player) const;
-		uint32_t effectiveFreeCapacity(const Player& player) const;
-
-		uint32_t itemUnitValue(uint16_t itemId) const;
-
-		uint32_t protectedItemReserve(uint16_t itemId) const;
-
 		uint32_t getSaleItemCount(const Player& player, uint16_t itemId) const;
-		uint32_t getBackpackSaleItemCount(const Player& player, uint16_t itemId) const;
-		bool isItemValidForSlot(const Item& item, slots_t slot) const;
 		Item* findActionableSlottedItem(const Player& player, uint16_t itemId, slots_t& slot) const;
 
 		int32_t getFoodTicks(const Player& player) const;
@@ -645,7 +623,6 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		bool isLegalEquipmentItem(const Player& player, const Item& item) const;
 		bool isKnightMeleeWeapon(const Player& player, const Item& item) const;
 		bool isCombatEquipment(const Item& item) const;
-		bool isProtectedInventoryItem(const Item& item) const;
 		bool isCombatReady(const Player& player, std::string& recovery, std::string& terminalReason) const;
 		void emitCombatReadiness(const Player& player, const Position& position, const char* result,
 		                         const std::string& recovery, const std::string& terminalReason) const;
@@ -895,7 +872,6 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		bool processNavigation(Player* player, const Position& currentPosition, const Position& destination);
 		void adoptNavigationPlan(const Position& destination, std::deque<PlayerBotNavigationStep> steps);
 
-		bool isProtectedDepositItem(const Player& player, const Item& item) const;
 		bool findDepositableItem(const Player& player, Container* container, Container*& source,
 		                         Item*& depositItem, uint8_t& count) const;
 		bool findDepotLocker(const Position& position, uint16_t expectedDepotId, uint16_t& lockerItemId) const;
@@ -1022,6 +998,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		DepotStage depotStage = DepotStage::Discover;
 		std::set<uint16_t> unavailableLootItemIds;
 		std::map<uint16_t, uint32_t> itemSellValues;
+		playerbot::PlayerBotInventoryPolicy inventoryPolicy;
 		bool pendingHeal = false;
 		int32_t pendingHealHealth = 0;
 		int32_t pendingHealHealthMax = 0;

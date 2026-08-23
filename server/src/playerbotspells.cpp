@@ -584,7 +584,7 @@ bool PlayerBotController::handleSpellHealing(Player* player, const Position& cur
 		return false;
 	}
 	const int32_t missingHealth = player->getMaxHealth() - player->getHealth();
-	if (missingHealth > smallHealthPotionMaximumHealing && getInventoryItemCount(*player, smallHealthPotionItemId) != 0) {
+	if (missingHealth > smallHealthPotionMaximumHealing && inventoryPolicy.inventoryItemCount(*player, smallHealthPotionItemId) != 0) {
 		return false;
 	}
 	return startSpellCast(*player, currentPosition, "Light Healing", "recovery");
@@ -641,7 +641,7 @@ uint64_t PlayerBotController::spellTrainingReserve(const Player& player) const
 	if (potionPrice == std::numeric_limits<uint32_t>::max()) {
 		return std::numeric_limits<uint64_t>::max();
 	}
-	const uint32_t potionCount = getInventoryItemCount(player, smallHealthPotionItemId);
+	const uint32_t potionCount = inventoryPolicy.inventoryItemCount(player, smallHealthPotionItemId);
 	const uint32_t potionGap = potionCount < smallHealthPotionRestockTarget ?
 	                               smallHealthPotionRestockTarget - potionCount : 0;
 	return carriedGoldReserve + static_cast<uint64_t>(potionGap) * potionPrice;
@@ -673,7 +673,7 @@ bool PlayerBotController::findSpellTraining(Player& player, const Position& posi
 	const uint16_t vocationId = player.getVocationId();
 	const uint16_t baseVocationId = player.getVocation()->getFromVocation() == 0 ? vocationId :
 	                               player.getVocation()->getFromVocation();
-	const bool suppliesReady = getInventoryItemCount(player, smallHealthPotionItemId) > smallHealthPotionReturnThreshold;
+	const bool suppliesReady = inventoryPolicy.inventoryItemCount(player, smallHealthPotionItemId) > smallHealthPotionReturnThreshold;
 	bool found = false;
 
 	for (const auto& entry : g_game.getNpcs()) {

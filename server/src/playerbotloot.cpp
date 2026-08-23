@@ -20,8 +20,8 @@ void PlayerBotController::logLootSuccess(uint16_t itemId, uint32_t count, uint32
 	std::ostringstream fields;
 	fields << "\"action\":\"loot\",\"result\":\"success\",\"item_id\":" << itemId
 	       << ",\"count\":" << count << ",\"inventory_count\":" << inventoryCount
-	       << ",\"unit_value\":" << itemUnitValue(itemId)
-	       << ",\"total_value\":" << static_cast<uint64_t>(itemUnitValue(itemId)) * count
+	       << ",\"unit_value\":" << inventoryPolicy.itemUnitValue(itemId)
+	       << ",\"total_value\":" << static_cast<uint64_t>(inventoryPolicy.itemUnitValue(itemId)) * count
 	       << ",\"unit_weight\":" << Item::items[itemId].weight;
 	emit("action_result", position, fields.str());
 }
@@ -156,9 +156,9 @@ uint8_t PlayerBotController::backpackDestinationIndex(const Container& backpack,
 bool PlayerBotController::isReplaceableCargo(const Item& item) const
 {
 	const ItemType& type = Item::items[item.getID()];
-	const bool food = isFoodItem(item.getID());
-	const bool protectedItem = isProtectedInventoryItem(item) && !food;
-	return !protectedItem && type.corpseType == RACE_NONE && (food || itemUnitValue(item.getID()) != 0) &&
+	const bool food = PlayerBotInventoryPolicy::isFoodItem(item.getID());
+	const bool protectedItem = inventoryPolicy.isProtectedInventoryItem(item) && !food;
+	return !protectedItem && type.corpseType == RACE_NONE && (food || inventoryPolicy.itemUnitValue(item.getID()) != 0) &&
 	       item.getBaseWeight() != 0;
 }
 
@@ -177,7 +177,7 @@ bool PlayerBotController::chooseCargoReplacement(const Container& backpack, cons
 		for (size_t index = 0; index < items.size() && index <= UINT8_MAX; ++index) {
 			Item* item = items[index];
 			if (isReplaceableCargo(*item)) {
-				candidates.push_back({item, &source, static_cast<uint8_t>(index), itemUnitValue(item->getID()),
+				candidates.push_back({item, &source, static_cast<uint8_t>(index), inventoryPolicy.itemUnitValue(item->getID()),
 				                      item->getBaseWeight(), item->getItemCount()});
 			}
 			if (Container* nested = item->getContainer()) {
@@ -215,7 +215,7 @@ bool PlayerBotController::chooseCargoReplacement(const Container& backpack, cons
 		requiredWeight -= releasedWeight;
 	}
 
-	const uint64_t incomingValue = static_cast<uint64_t>(itemUnitValue(incoming.getID())) * incomingCount;
+	const uint64_t incomingValue = static_cast<uint64_t>(inventoryPolicy.itemUnitValue(incoming.getID())) * incomingCount;
 	if (!selected || requiredWeight != 0 || incomingValue <= totalDiscardedValue) {
 		return false;
 	}
@@ -232,7 +232,7 @@ void PlayerBotController::discardCargoForLoot(Player* player, Container* backpac
 		std::ostringstream fields;
 		fields << "\"action\":\"loot\",\"result\":\"skipped\",\"reason\":\"no_capacity\""
 		       << ",\"item_id\":" << incoming->getID() << ",\"count\":" << incoming->getItemCount()
-		       << ",\"unit_value\":" << itemUnitValue(incoming->getID())
+		       << ",\"unit_value\":" << inventoryPolicy.itemUnitValue(incoming->getID())
 		       << ",\"weight\":" << incoming->getWeight() << ",\"free_capacity\":" << player->getFreeCapacity();
 		emit("action_result", currentPosition, fields.str());
 		unavailableLootItemIds.insert(incoming->getID());
@@ -253,7 +253,7 @@ void PlayerBotController::discardCargoForLoot(Player* player, Container* backpac
 	}
 	pendingDiscardItemId = replacement.item->getID();
 	pendingDiscardCount = replacementCount;
-	pendingDiscardInventoryCount = getInventoryItemCount(*player, pendingDiscardItemId);
+	pendingDiscardInventoryCount = inventoryPolicy.inventoryItemCount(*player, pendingDiscardItemId);
 	pendingDiscardValue = replacementCount * replacement.unitValue;
 	pendingDiscardIncomingItemId = incoming->getID();
 	const Position fromPosition(0xFFFF, 0x40 | static_cast<uint8_t>(sourceContainerId), replacement.index);
@@ -265,7 +265,7 @@ void PlayerBotController::discardCargoForLoot(Player* player, Container* backpac
 void PlayerBotController::verifyPendingLootMoves(Player* player, const Position& currentPosition)
 {
 	if (pendingLootItemId != 0) {
-		const uint32_t inventoryCount = getInventoryItemCount(*player, pendingLootItemId);
+		const uint32_t inventoryCount = inventoryPolicy.inventoryItemCount(*player, pendingLootItemId);
 		if (inventoryCount > pendingLootInventoryCount) {
 			logLootSuccess(pendingLootItemId, inventoryCount - pendingLootInventoryCount, inventoryCount, currentPosition);
 			lootedCurrentCorpse = true;
@@ -276,14 +276,14 @@ void PlayerBotController::verifyPendingLootMoves(Player* player, const Position&
 		pendingLootItemId = 0;
 	}
 	if (pendingDiscardItemId != 0) {
-		const uint32_t inventoryCount = getInventoryItemCount(*player, pendingDiscardItemId);
+		const uint32_t inventoryCount = inventoryPolicy.inventoryItemCount(*player, pendingDiscardItemId);
 		if (inventoryCount + pendingDiscardCount <= pendingDiscardInventoryCount) {
 			std::ostringstream fields;
 			fields << "\"action\":\"loot_replace\",\"result\":\"success\",\"discarded_item_id\":"
 			       << pendingDiscardItemId << ",\"discarded_count\":" << static_cast<uint32_t>(pendingDiscardCount)
 			       << ",\"discarded_value\":" << pendingDiscardValue
 			       << ",\"incoming_item_id\":" << pendingDiscardIncomingItemId
-			       << ",\"incoming_unit_value\":" << itemUnitValue(pendingDiscardIncomingItemId);
+			       << ",\"incoming_unit_value\":" << inventoryPolicy.itemUnitValue(pendingDiscardIncomingItemId);
 			emit("action_result", currentPosition, fields.str());
 		} else {
 			logActionFailure("loot_replace", "discard_not_verified", currentPosition);
@@ -424,14 +424,14 @@ void PlayerBotController::lootCorpse(Player* player, const Position& currentPosi
 
 	Item* lootItem = nullptr;
 	uint8_t lootIndex = 0;
-	const uint32_t heldFood = getFoodInventory(*player).count;
+	const uint32_t heldFood = inventoryPolicy.foodInventory(*player).count;
 	bool skippedSurplusFood = false;
 	uint16_t skippedFoodItemId = 0;
 	const ItemDeque& corpseItems = corpse->getItemList();
 	for (size_t index = 0; index < corpseItems.size(); ++index) {
 		Item* candidate = corpseItems[index];
-		const bool foodCandidate = isFoodItem(candidate->getID());
-		const uint32_t candidateValue = std::max<uint32_t>(itemUnitValue(candidate->getID()), foodCandidate ? 1 : 0);
+		const bool foodCandidate = PlayerBotInventoryPolicy::isFoodItem(candidate->getID());
+		const uint32_t candidateValue = std::max<uint32_t>(inventoryPolicy.itemUnitValue(candidate->getID()), foodCandidate ? 1 : 0);
 		if (candidateValue == 0 || unavailableLootItemIds.find(candidate->getID()) != unavailableLootItemIds.end()) {
 			continue;
 		}
@@ -446,9 +446,9 @@ void PlayerBotController::lootCorpse(Player* player, const Position& currentPosi
 			continue;
 		}
 		const uint64_t candidateDensity = static_cast<uint64_t>(candidateValue) * lootItem->getBaseWeight();
-		const uint64_t selectedDensity = static_cast<uint64_t>(itemUnitValue(lootItem->getID())) * candidate->getBaseWeight();
+		const uint64_t selectedDensity = static_cast<uint64_t>(inventoryPolicy.itemUnitValue(lootItem->getID())) * candidate->getBaseWeight();
 		if (candidateDensity > selectedDensity ||
-		    (candidateDensity == selectedDensity && candidateValue > itemUnitValue(lootItem->getID()))) {
+		    (candidateDensity == selectedDensity && candidateValue > inventoryPolicy.itemUnitValue(lootItem->getID()))) {
 			lootItem = candidate;
 			lootIndex = static_cast<uint8_t>(index);
 		}
@@ -470,8 +470,8 @@ void PlayerBotController::lootCorpse(Player* player, const Position& currentPosi
 		return;
 	}
 
-	const uint32_t inventoryCount = getInventoryItemCount(*player, lootItem->getID());
-	const uint8_t moveCount = isFoodItem(lootItem->getID()) ?
+	const uint32_t inventoryCount = inventoryPolicy.inventoryItemCount(*player, lootItem->getID());
+	const uint8_t moveCount = PlayerBotInventoryPolicy::isFoodItem(lootItem->getID()) ?
 	                          static_cast<uint8_t>(std::min<uint32_t>(lootItem->getItemCount(), preferredFoodCount - heldFood)) :
 	                          static_cast<uint8_t>(lootItem->getItemCount());
 	const uint32_t moveWeight = lootItem->getBaseWeight() * moveCount;
