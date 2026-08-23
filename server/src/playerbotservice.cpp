@@ -83,7 +83,7 @@ void PlayerBotController::onNpcReply(uint32_t replyingPlayerId, uint32_t npcId, 
 
 void PlayerBotController::beginService(Player* player, const Position& position, const char* reason)
 {
-	const bool interruptedHunt = fixtureRuntime.progressionEnabled() && goalArbiter.activeGoal() == TopLevelGoal::Hunt &&
+	const bool interruptedHunt = fixtureDriver.progressionEnabled() && goalArbiter.activeGoal() == TopLevelGoal::Hunt &&
 	                             !hasCompletedRookgaardDeparture(*player);
 	finishHuntRegion(*player, position, reason);
 	if (interruptedHunt) {
@@ -259,7 +259,7 @@ void PlayerBotController::refreshItemValues()
 
 const ShopInfo* PlayerBotController::findOffer(const ServiceNpc& service, uint16_t itemId, bool buying) const
 {
-	if (!buying && fixtureRuntime.suppressSlottedLootSeller() && itemId == 2398) {
+	if (!buying && fixtureDriver.suppressSlottedLootSeller() && itemId == 2398) {
 		return nullptr;
 	}
 	Npc* npc = g_game.getNpcByID(service.id);
@@ -303,7 +303,7 @@ const PlayerBotController::ServiceNpc* PlayerBotController::findLootSeller(Playe
 		}
 		for (const ShopInfo& offer : npc->getShopOffers()) {
 			if (offer.sellPrice != 0 &&
-			    !(fixtureRuntime.suppressSlottedLootSeller() && offer.itemId == 2398) &&
+			    !(fixtureDriver.suppressSlottedLootSeller() && offer.itemId == 2398) &&
 			    getSaleItemCount(*player, offer.itemId) > 0 &&
 			    (!nearest || offer.sellPrice > selectedSellPrice ||
 			     (offer.sellPrice == selectedSellPrice && serviceDistance(position, service) < serviceDistance(position, *nearest)))) {
@@ -1023,7 +1023,7 @@ bool PlayerBotController::openDepotChest(Player& player, const Position& current
 		stop("depot_chest_missing", currentPosition);
 		return false;
 	}
-	if (fixtureRuntime.depotMoveFixture() == DepotMoveFixture::Rejected) {
+	if (fixtureDriver.depotMoveScenario() == DepotMoveFixture::Rejected) {
 		chest->setMaxDepotItems(chest->getItemHoldingCount());
 	}
 	if (player.getContainerByID(depotChestContainerId) == chest) {
@@ -1064,7 +1064,7 @@ bool PlayerBotController::openDepotChest(Player& player, const Position& current
 bool PlayerBotController::pauseDepotFixtureForRestart(Player& player, DepotRestartCheckpoint checkpoint,
                                                        const Position& currentPosition)
 {
-	if (!fixtureRuntime.consumeDepotRestartCheckpoint(player, checkpoint)) {
+	if (!fixtureDriver.consumeDepotRestartCheckpoint(player, checkpoint)) {
 		return false;
 	}
 	const char* phase = checkpoint == DepotRestartCheckpoint::Approach ? "approach" :
@@ -1149,7 +1149,7 @@ void PlayerBotController::processFixtureDeposit(Player* player, const Position& 
 		}
 		emit("action_result", currentPosition, "\"action\":\"deposit\",\"result\":\"complete\",\"fixture\":true,\"cycle\":" +
 	                     std::to_string(huntRuntime.completedCycles()));
-		if (fixtureRuntime.progressionEnabled()) {
+		if (fixtureDriver.progressionEnabled()) {
 			emit("goal_result", currentPosition,
 			     "\"decision_id\":" + std::to_string(goalArbiter.decisionId()) +
 			         ",\"goal\":\"service\",\"result\":\"success\",\"reason\":\"service_complete\"");
@@ -1308,7 +1308,7 @@ void PlayerBotController::processDeposit(Player* player, const Position& current
 		if (pauseDepotFixtureForRestart(*player, DepotRestartCheckpoint::Depart, currentPosition)) {
 			return;
 		}
-		if (fixtureRuntime.progressionEnabled()) {
+		if (fixtureDriver.progressionEnabled()) {
 			emit("goal_result", currentPosition,
 			     "\"decision_id\":" + std::to_string(goalArbiter.decisionId()) +
 			         ",\"goal\":\"service\",\"result\":\"success\",\"reason\":\"service_complete\"");
@@ -1352,7 +1352,7 @@ void PlayerBotController::processDeposit(Player* player, const Position& current
 
 	depotWorkflow.beginMove({depositItem->getID(), chest->getItemTypeCount(depositItem->getID()),
 	                        inventoryPolicy.inventoryItemCount(*player, depositItem->getID()), count, sourceSlot});
-	const uint8_t submittedCount = fixtureRuntime.depotMoveFixture() == DepotMoveFixture::Partial && count > 1 ? count - 1 : count;
+	const uint8_t submittedCount = fixtureDriver.depotMoveScenario() == DepotMoveFixture::Partial && count > 1 ? count - 1 : count;
 	telemetry.recordActionAttempt();
 	g_game.playerMoveItem(player, sourcePosition, depositItem->getClientID(), sourceIndex,
 	                      Position(0xFFFF, 0x40 | depotChestContainerId, containerDestinationIndex(*chest, *depositItem)),

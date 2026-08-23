@@ -17,7 +17,7 @@ using namespace playerbot;
 
 PlayerBotController::PlayerBotController(const Player& player,
 	                            std::map<Position, std::chrono::steady_clock::time_point>& sharedHuntRegionCooldowns) :
-	playerId(player.getID()), playerGuid(player.getGUID()), playerName(player.getName()), fixtureRuntime(playerBotTestPolicyFromEnvironment()),
+	playerId(player.getID()), playerGuid(player.getGUID()), playerName(player.getName()), fixtureDriver(playerBotTestPolicyFromEnvironment()),
 	telemetry(player.getName(), player.getGUID()),
 	equipmentPolicy(oracleVocationId),
 	inventoryPolicy(economyCatalog.sellValues(), [this](const Player& candidatePlayer, const Item& item) {
@@ -29,13 +29,13 @@ void PlayerBotController::start(const Position& position, bool recovered, uint32
 {
 	lastPosition = position;
 	refreshItemValues();
-	const bool startInHunt = !recovered && fixtureRuntime.startInHunt();
+	const bool startInHunt = !recovered && fixtureDriver.startInHunt();
 	Player* controlledPlayer = g_game.getPlayerByID(playerId);
 	const bool departureComplete = controlledPlayer && hasCompletedRookgaardDeparture(*controlledPlayer);
 	const bool departureRequired = controlledPlayer && requiresRookgaardDeparture(*controlledPlayer);
 	const bool useGoalSelector = controlledPlayer && !startInHunt &&
-	                             (departureRequired || (!recovered && fixtureRuntime.progressionEnabled()));
-	if (!fixtureRuntime.magicTrainingFixture() && !fixtureRuntime.deferProgressionFixtureInitialization() && useGoalSelector &&
+	                             (departureRequired || (!recovered && fixtureDriver.progressionEnabled()));
+	if (!fixtureDriver.magicTrainingScenario() && !fixtureDriver.deferInitialization() && useGoalSelector &&
 	    !selectTopLevelGoal(*controlledPlayer, position, "startup")) {
 		return;
 	}
@@ -43,22 +43,23 @@ void PlayerBotController::start(const Position& position, bool recovered, uint32
 	lifecycle << "\"status\":\"online\",\"message\":\"Playerbot online\""
 	          << ",\"recovered\":" << (recovered ? "true" : "false")
 	          << ",\"recovery_count\":" << recoveryCount
-	          << ",\"objective\":" << jsonString((fixtureRuntime.magicTrainingFixture() || fixtureRuntime.deferProgressionFixtureInitialization()) ? "fixture_pending" : useGoalSelector ? PlayerBotGoalArbiter::goalName(goalArbiter.activeGoal()) :
+	          << ",\"objective\":" << jsonString((fixtureDriver.magicTrainingScenario() || fixtureDriver.deferInitialization()) ? "fixture_pending" : useGoalSelector ? PlayerBotGoalArbiter::goalName(goalArbiter.activeGoal()) :
 	                                                    (startInHunt ? "hunt" : "service"))
 	          << ",\"step_speed\":" << (g_game.getPlayerByID(playerId) ? g_game.getPlayerByID(playerId)->getSpeed() : 0)
 		          << ",\"spell_calibration_profiles\":" << survivalRuntime.calibrationSize();
 	telemetry.emit("lifecycle", position, lifecycle.str());
-	if (fixtureRuntime.spellCalibrationFixture() && controlledPlayer) {
-		runSpellCalibrationFixture(*controlledPlayer, position);
+	if (controlledPlayer) {
+		emitFixtureEvents(fixtureDriver.runSpellCalibration(*controlledPlayer, survivalRuntime), position);
+		emitFixtureEvents(fixtureDriver.runAdaptiveChallenge(*controlledPlayer, huntRuntime), position);
 	}
-	if (fixtureRuntime.magicTrainingFixture() || fixtureRuntime.deferProgressionFixtureInitialization()) {
-		fixtureRuntime.beginDelayedInitialization();
+	if (fixtureDriver.magicTrainingScenario() || fixtureDriver.deferInitialization()) {
+		fixtureDriver.beginDelayedInitialization();
 	} else if (useGoalSelector) {
 		// The selected goal initialized its own executor state.
 	} else if (startInHunt) {
 		progressionRuntime.setActiveGoal(TopLevelGoal::Hunt);
 		startHunt(g_game.getPlayerByID(playerId), position, "focused_fixture");
-	} else if (fixtureRuntime.depotFixture()) {
+	} else if (fixtureDriver.depotScenario()) {
 		progressionRuntime.setActiveGoal(TopLevelGoal::Service);
 		cyclePhase = CyclePhase::ReturnToDepot;
 	} else {
@@ -68,7 +69,7 @@ void PlayerBotController::start(const Position& position, bool recovered, uint32
 	setStage(ScenarioStage::Traverse, position);
 	// Login fixtures run through Lua after controller creation. Let the real-map
 	// depot fixture establish its Naji position before its first discovery pass.
-	schedule(fixtureRuntime.depotFixture() ? 2000 : fixtureRuntime.magicTrainingFixture() ? 1000 : navigationInterval);
+	schedule(fixtureDriver.depotScenario() ? 2000 : fixtureDriver.magicTrainingScenario() ? 1000 : navigationInterval);
 }
 
 void PlayerBotController::schedule(uint32_t interval)
@@ -171,6 +172,11 @@ playerbot::PlayerBotTelemetrySummary PlayerBotController::telemetrySummary() con
 	return summary;
 }
 
+void PlayerBotController::emitFixtureEvents(const std::vector<playerbot::PlayerBotFixtureEvent>& events, const Position& position) const
+{
+	for (const auto& event : events) emit(event.name, position, event.fields);
+}
+
 void PlayerBotController::stop(const char* reason, const Position& position)
 {
 	if (telemetry.terminalLogged()) {
@@ -255,7 +261,7 @@ bool PlayerBotController::executeNavigationStep(Player* player, const PlayerBotN
 {
 	telemetry.recordActionAttempt();
 	if (step.action == PlayerBotNavigationAction::Move) {
-		if (fixtureRuntime.consumeNavigationStepFailure()) {
+		if (fixtureDriver.consumeNavigationStepFailure()) {
 			return true;
 		}
 		g_game.playerMove(playerId, step.direction);
@@ -313,14 +319,14 @@ bool PlayerBotController::processNavigation(Player* player, const Position& curr
                                             PlayerBotNavigationRuntimeOutcome* navigationOutcome)
 {
 	const auto now = std::chrono::steady_clock::now();
-	const bool forcePlanFailure = fixtureRuntime.forceNavigationPlanFailure();
+	const bool forcePlanFailure = fixtureDriver.forceNavigationPlanFailure();
 	const PlayerBotNavigationRuntimeOutcome outcome = navigationRuntime.process({
 		*player, currentPosition, destination, player->getWalkDelay() > 0 || !player->canDoAction(), player->canDoAction(),
 		forcePlanFailure,
 		{now, navigationStepTimeout, navigationBlockSuppression, navigationOscillationSuppression},
 	});
 	if (navigationOutcome) *navigationOutcome = outcome;
-	fixtureRuntime.consumeNavigationPlanFailure(outcome.plan.attempted);
+	fixtureDriver.observeNavigationPlan(outcome.plan.attempted);
 	if (outcome.destinationReached) {
 		clearNavigation();
 		return true;
@@ -436,7 +442,7 @@ void PlayerBotController::navigate()
 
 	const Position currentPosition = player->getPosition();
 	lastPosition = currentPosition;
-	if (const PlayerBotFixtureInitialization initialization = fixtureRuntime.delayedInitializationStatus(*player);
+	if (const PlayerBotFixtureInitialization initialization = fixtureDriver.delayedInitializationStatus(*player);
 	    initialization != PlayerBotFixtureInitialization::NotPending) {
 		if (initialization == PlayerBotFixtureInitialization::Cancelled) {
 			return;
@@ -445,16 +451,14 @@ void PlayerBotController::navigate()
 			schedule(navigationInterval);
 			return;
 		}
-		if (fixtureRuntime.magicTrainingFixture()) {
-			runMagicTrainingFixture(*player, currentPosition);
-		}
-		const bool useGoalSelector = !fixtureRuntime.startInHunt() &&
-		                             (requiresRookgaardDeparture(*player) || fixtureRuntime.progressionEnabled());
+		emitFixtureEvents(fixtureDriver.runMagicTraining(*player), currentPosition);
+		const bool useGoalSelector = !fixtureDriver.startInHunt() &&
+		                             (requiresRookgaardDeparture(*player) || fixtureDriver.progressionEnabled());
 		if (useGoalSelector) {
 			if (!selectTopLevelGoal(*player, currentPosition, "startup")) {
 				return;
 			}
-		} else if (fixtureRuntime.startInHunt()) {
+		} else if (fixtureDriver.startInHunt()) {
 			progressionRuntime.setActiveGoal(TopLevelGoal::Hunt);
 			startHunt(player, currentPosition, "focused_fixture");
 		} else {

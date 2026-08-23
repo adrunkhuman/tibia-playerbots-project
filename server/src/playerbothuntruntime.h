@@ -7,6 +7,7 @@
 
 #include "playerbothuntplanningsession.h"
 #include "playerbothuntpolicy.h"
+#include "playerbotequipmentpolicy.h"
 #include "playerbotnavigationruntime.h"
 
 #include <map>
@@ -102,9 +103,24 @@ class PlayerBotHuntRuntime
 		                                                       uint32_t configuredDurationSeconds);
 		void observeDeath(bool activeCombat, std::chrono::steady_clock::time_point now, std::chrono::steady_clock::duration cooldown);
 		const PlayerBotHuntPolicy& huntPolicy() const { return policy; }
-		PlayerBotHuntPolicy& testPolicy() { return policy; }
-		PlayerBotHuntRegionPlanner& testPlanner() { return planner; }
-		const PlayerBotHuntRegionPlanner& testPlanner() const { return planner; }
+		PlayerBotEquipmentHuntSummary scoreEquipmentHunts(Player& player, const PlayerBotCombatProfile& profile,
+		                                                  size_t maximumRegions) const;
+
+		// Explicit fixture hooks. Production code never obtains mutable policy or planner access.
+		void fixtureResetCombatEvidence() { policy.resetCombatEvidence(); }
+		void fixtureObserveCombat(const PlayerBotHuntCombatSample& sample) { policy.observeCombat(sample); }
+		void fixtureObserveKill() { policy.observeKill(); }
+		void fixtureObserveRecovery(bool potion) { policy.observeRecovery(potion); }
+		void fixtureObserveDeath() { policy.observeDeath(); }
+		PlayerBotHuntCombatSummary fixtureCombatSummary() const { return policy.combatSummary(); }
+		PlayerBotHuntChallengeUpdate fixtureUpdateChallenge(uint64_t seconds, int32_t maximumHealth)
+		{
+			return policy.updateChallengeFrontier({seconds, maximumHealth});
+		}
+		bool fixtureScoreRegion(Player& player, const PlayerBotCombatProfile& profile,
+		                        PlayerBotHuntRegion& current, PlayerBotHuntRegion& improved) const;
+		void fixtureCancelPlanning() { cancelPlanning(); }
+		void fixtureInvalidatePlanningRevision() { PlayerBotHuntRegionPlanner::invalidateCache(); }
 
 		PlayerBotHuntPatrolOutcome patrolTarget() const;
 		PlayerBotHuntPatrolOutcome observePatrolNavigation(const PlayerBotNavigationRuntimeOutcome& navigation,

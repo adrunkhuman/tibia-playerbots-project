@@ -25,6 +25,7 @@
 #include "playerbotprogressionruntime.h"
 #include "playerbotsurvivalruntime.h"
 #include "playerbottestpolicy.h"
+#include "playerbotfixturedriver.h"
 #include "playerbottelemetry.h"
 #include "playerbotserviceworkflow.h"
 
@@ -148,8 +149,6 @@ namespace playerbot {
 	}};
 	inline constexpr const char* botAccountName = "bot-one";
 
-	std::string jsonString(const std::string& value);
-	std::string utcTimestamp();
 	void emitPlayerbotEvent(const std::string& playerName, uint32_t playerGuid, const char* event,
 	                        const Position& position, const std::string& fields = {});
 }
@@ -499,9 +498,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		void recordHuntRecovery(bool potion);
 		void emitChallengeFrontier(const PlayerBotHuntChallengeUpdate& update, const Position& position,
 		                           const char* reason) const;
-		void runAdaptiveChallengeFixture(Player& player, const Position& position);
-		void runSpellCalibrationFixture(Player& player, const Position& position);
-		void runMagicTrainingFixture(Player& player, const Position& position);
+		void emitFixtureEvents(const std::vector<playerbot::PlayerBotFixtureEvent>& events, const Position& position) const;
 		void emitHuntRegionPlanning(const PlayerBotHuntPlanningSession& planning, const Position& position, const char* phase) const;
 
 		void finishHuntRegion(const Player& player, const Position& position, const char* reason);
@@ -529,7 +526,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		uint32_t playerId;
 		uint32_t playerGuid;
 		std::string playerName;
-		playerbot::PlayerBotFixtureRuntime fixtureRuntime;
+		playerbot::PlayerBotFixtureDriver fixtureDriver;
 		playerbot::PlayerBotTelemetry telemetry;
 		Position lastPosition;
 		ScenarioStage scenarioStage = ScenarioStage::Traverse;

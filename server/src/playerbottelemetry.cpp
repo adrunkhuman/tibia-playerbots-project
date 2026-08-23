@@ -97,16 +97,6 @@ void PlayerBotTelemetry::recordPathfinding(std::chrono::microseconds elapsed, bo
 	}
 }
 
-uint64_t PlayerBotTelemetry::actionsAttempted() const
-{
-	return actionsAttemptedCount;
-}
-
-uint64_t PlayerBotTelemetry::pathfindingFailures() const
-{
-	return pathfindingFailuresCount;
-}
-
 void PlayerBotTelemetry::emitSummary(const Position& position, bool final, const PlayerBotTelemetrySummary& summary)
 {
 	const auto uptimeMs = std::chrono::duration_cast<std::chrono::milliseconds>(
