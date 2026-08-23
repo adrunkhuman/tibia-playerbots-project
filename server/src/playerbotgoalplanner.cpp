@@ -6,6 +6,7 @@
 #include "playerbotgoalplanner.h"
 
 #include <algorithm>
+#include <utility>
 
 namespace {
 	constexpr int32_t serviceGoalBaseUtility = 400;
@@ -47,8 +48,12 @@ PlayerBotGoalArbiter::GoalCandidate PlayerBotGoalPlanner::serviceCandidate(const
 	        snapshot.cashAdjustment ? "cash_reserve" : "no_service_need"};
 }
 
-PlayerBotGoalArbiter::GoalDecision PlayerBotGoalPlanner::decide(const PlayerBotGoalPlannerSnapshot& snapshot,
-	                                                               PlayerBotGoalArbiter& arbiter) const
+PlayerBotGoalArbiter::GoalCandidate PlayerBotGoalPlanner::forcedServiceCandidate(std::string reason) const
+{
+	return {PlayerBotGoalArbiter::TopLevelGoal::Service, true, criticalHealingServiceUtility, std::move(reason)};
+}
+
+std::vector<PlayerBotGoalArbiter::GoalCandidate> PlayerBotGoalPlanner::candidates(const PlayerBotGoalPlannerSnapshot& snapshot) const
 {
 	using Goal = PlayerBotGoalArbiter::TopLevelGoal;
 	const auto departure = departureCandidate(snapshot);
@@ -68,6 +73,6 @@ PlayerBotGoalArbiter::GoalDecision PlayerBotGoalPlanner::decide(const PlayerBotG
 		!snapshot.magicCoolingDown && snapshot.magicTrainingReason.empty(),
 		!snapshot.magicCoolingDown && snapshot.magicTrainingReason.empty() ? magicTrainingGoalUtility : 0,
 		snapshot.magicCoolingDown ? "cooldown" : snapshot.magicTrainingReason.empty() ? "next_tick_overflow" : snapshot.magicTrainingReason};
-	return arbiter.decide({departure, service, pickup, spell, equipment, magic,
-	                       {Goal::Hunt, true, huntGoalUtility, "autonomous_hunting_available"}});
+	return {departure, service, pickup, spell, equipment, magic,
+	        {Goal::Hunt, true, huntGoalUtility, "autonomous_hunting_available"}};
 }

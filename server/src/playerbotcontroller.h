@@ -18,6 +18,7 @@
 #include "playerbotdepotworkflow.h"
 #include "playerboteconomy.h"
 #include "playerbotequipmentpolicy.h"
+#include "playerbotequipmentadapter.h"
 #include "playerbothuntruntime.h"
 #include "playerbotinventorypolicy.h"
 #include "playerbotlootworkflow.h"
@@ -101,7 +102,6 @@ namespace playerbot {
 	// critical healing > departure > capacity service > useful rewards > ordinary service > hunting >
 	// economic pickup. Dynamic service and reward adjustments may cross these baselines. Equal scores
 	// retain the candidate declaration order.
-	inline constexpr int32_t serviceGoalBaseUtility = 400;
 	inline constexpr int32_t pickupRewardBaseUtility = 650;
 	inline constexpr int32_t spellTrainingGoalUtility = 550;
 	inline constexpr int32_t equipmentPurchaseGoalUtility = 500;
@@ -109,12 +109,9 @@ namespace playerbot {
 	inline constexpr int32_t economicPickupBaseUtility = 250;
 	inline constexpr int32_t huntGoalUtility = 300;
 	inline constexpr int32_t oracleDepartureUtility = 950;
-	inline constexpr int32_t capacityServiceUtility = 900;
-	inline constexpr int32_t criticalHealingServiceUtility = 1000;
 	inline constexpr size_t maximumEquipmentCandidateSimulations = 16;
 	inline constexpr int32_t missingPotionUtility = 15;
 	inline constexpr int32_t foodPreferenceUtility = 20;
-	inline constexpr int32_t sellableItemUtility = 10;
 	inline constexpr uint32_t returnCapacityThreshold = 30 * 100;
 	inline constexpr uint32_t maximumServiceAttempts = 3;
 	// Prevent a rejected slotted-item move from blocking the service/depot loop.
@@ -173,7 +170,6 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 
 		using TopLevelGoal = PlayerBotGoalArbiter::TopLevelGoal;
 		using GoalCandidate = PlayerBotGoalArbiter::GoalCandidate;
-		using ServiceStage = PlayerBotServiceStage;
 
 		using EquipmentUpgrade = PlayerBotEquipmentUpgrade;
 		using EquipmentLoadout = PlayerBotEquipmentLoadout;
@@ -221,11 +217,11 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		uint32_t getSaleItemCount(const Player& player, uint16_t itemId) const;
 		Item* findActionableSlottedItem(const Player& player, uint16_t itemId, slots_t& slot) const;
 
-		PlayerBotSurvivalSnapshot survivalSnapshot(const Player& player) const;
+		PlayerBotSurvivalSnapshot survivalSnapshot(const Player& player, const Creature* target = nullptr) const;
 		void emitCombatReadiness(const Player& player, const Position& position, const char* result,
 		                         const std::string& recovery, const std::string& terminalReason) const;
 		PlayerBotEquipmentReadinessInput equipmentReadinessInput(const Player& player) const;
-		bool beginReadinessEquipment(Player* player, const Position& position, const char* reason);
+		bool beginReadinessEquipment(Player* player, const Position& position, const char* reason, bool resumeService = false);
 		void processReadinessEquipment(Player* player, const Position& position);
 		bool ensureCombatReady(Player* player, const Position& position, const char* reason);
 
@@ -334,8 +330,6 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 
 		uint32_t saleableItemCount(const Player& player) const;
 
-		GoalCandidate serviceGoalCandidate(const Player& player) const;
-
 		void emitGoalCandidate(const Player& player, const GoalCandidate& candidate, uint64_t decisionId, const Position& position, const char* decisionReason,
 		                       const PlayerBotRewardPlan* reward = nullptr, const PlayerBotOracleDeparturePlan* departure = nullptr,
 		                       const EquipmentOfferEvaluation* equipment = nullptr) const;
@@ -370,10 +364,6 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 
 		void finishHuntAndSelectGoal(Player* player, const Position& position, const char* reason);
 
-		void discoverServices(const Position& position);
-
-		bool approachServiceNpc(Player* player, const ServiceNpc& service, const Position& currentPosition);
-
 		void refreshItemValues();
 
 		const ShopInfo* findOffer(const ServiceNpc& service, uint16_t itemId, bool buying) const;
@@ -382,24 +372,14 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 
 		const ServiceNpc* findNearestService(const std::vector<ServiceNpc>& services, const Position& position) const;
 
-		const ServiceNpc* findShopFor(uint16_t itemId, bool buying, const Position& position) const;
-
-		const ServiceNpc* findLootSeller(Player* player, const Position& position, uint16_t& itemId) const;
-		bool prepareSlottedSaleItem(Player* player, uint16_t itemId, const Position& position);
-
-		void completeServiceAction(Player* player, const char* action, const PlayerBotServiceTransaction& transaction,
-		                           const Position& position);
-
-		void processServiceShop(Player* player, const Position& currentPosition, const ServiceNpc& service, const char* action,
-		                        uint16_t itemId, uint32_t amount, bool purchase);
-
-		void processBank(Player* player, const Position& currentPosition, const ServiceNpc& banker);
-
 		void processService(Player* player, const Position& currentPosition);
 
 		Item* findNavigationItem(const PlayerBotNavigationStep& step) const;
 
 		bool executeNavigationStep(Player* player, const PlayerBotNavigationStep& step);
+		PlayerBotNavigationRoutePlan planNavigationRoute(Player& player, const Position& destination,
+		                                                const std::set<Position>& blockedPositions = {},
+		                                                uint64_t maximumExpandedNodes = playerBotNavigationMaximumExpandedNodes) const;
 
 		uint32_t navigationDecisionDelay(const Player& player) const;
 
@@ -409,15 +389,14 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 
 		bool processNavigation(Player* player, const Position& currentPosition, const Position& destination,
 		                       PlayerBotNavigationRuntimeOutcome* navigationOutcome = nullptr);
-		void adoptNavigationPlan(const Position& destination, std::deque<PlayerBotNavigationStep> steps);
+		void observeNavigationPlan(const Position& destination, std::deque<PlayerBotNavigationStep> steps);
 
 		bool findDepositableItem(const Player& player, Container* container, Container*& source,
 		                         Item*& depositItem, uint8_t& count) const;
 		bool findDepotLocker(const Position& position, uint16_t expectedDepotId, uint16_t& lockerItemId) const;
-		void clearDepotDiscovery();
 		bool discoverDepot(Player& player, const Position& currentPosition);
-		bool openDepotLocker(Player& player, const Position& currentPosition);
-		bool openDepotChest(Player& player, const Position& currentPosition);
+		bool openDepotLocker(Player& player, const PlayerBotDepotSnapshot& depot, const Position& currentPosition);
+		bool openDepotChest(Player& player, const PlayerBotDepotSnapshot& depot, const Position& currentPosition);
 		bool pauseDepotFixtureForRestart(Player& player, playerbot::DepotRestartCheckpoint checkpoint,
 		                                 const Position& currentPosition);
 		bool openContainer(Player& player, Container& container, uint8_t containerId, const Position& currentPosition);
@@ -431,10 +410,14 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		                           const char* reason) const;
 		void emitFixtureEvents(const std::vector<playerbot::PlayerBotFixtureEvent>& events, const Position& position) const;
 		void emitHuntRegionPlanning(const PlayerBotHuntPlanningSession& planning, const Position& position, const char* phase) const;
+		std::set<Position> activeHuntCooldowns(std::chrono::steady_clock::time_point now);
+		void applyHuntCooldown(const std::optional<PlayerBotHuntRuntimeCooldownCommand>& cooldown,
+		                       std::chrono::steady_clock::time_point now);
 
 		void finishHuntRegion(const Player& player, const Position& position, const char* reason);
 
-		bool selectHuntRegion(Player& player, const Position& position, const char* reason);
+		bool selectHuntRegion(Player& player, const Position& position, const char* reason,
+		                      std::chrono::steady_clock::duration* retryAfter = nullptr);
 		void beginHuntCycle(Player* player, const Position& position, const char* reason);
 
 		void startHunt(Player* player, const Position& position, const char* reason);
@@ -483,22 +466,10 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		PlayerBotEquipmentProviderPlanner equipmentProviderPlanner;
 		PlayerBotSpellTrainingPlanner spellTrainingPlanner;
 		PlayerBotDeparturePlanner departurePlanner;
-		// These references keep the game-adapter code narrow while the runtime owns
-		// all progression state. New procedure logic must use progressionRuntime.
-		const PlayerBotProgressionSession& progressionSession = progressionRuntime.session();
-		const PlayerBotRewardSession& rewardSession = progressionRuntime.reward();
-		const PlayerBotOracleDepartureSession& departureSession = progressionRuntime.departure();
-		const PlayerBotSpellTrainingSession& spellTrainingSession = progressionRuntime.spellTraining();
-		const PlayerBotEquipmentPurchaseSession& equipmentPurchaseSession = progressionRuntime.equipmentPurchase();
-		const PlayerBotGoalArbiter& goalArbiter = progressionRuntime.goalArbiter();
 		std::map<uint16_t, std::string> rewardInspectionFingerprints;
-		uint16_t pendingReadinessItemId = 0;
-		slots_t pendingReadinessSlot = CONST_SLOT_WHEREEVER;
-		uint32_t pendingReadinessAttempts = 0;
-		bool readinessEquipmentPending = false;
-		bool readinessResumeService = false;
 		PlayerBotServiceWorkflow serviceWorkflow;
 		PlayerBotNavigationRuntime navigationRuntime;
+		std::map<Position, std::chrono::steady_clock::time_point>& huntRegionCooldowns;
 		PlayerBotHuntRuntime huntRuntime;
 		bool deathObserved = false;
 };

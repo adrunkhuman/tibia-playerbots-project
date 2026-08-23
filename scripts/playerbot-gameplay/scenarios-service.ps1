@@ -10,13 +10,8 @@
 
 			Invoke-Compose stop server
 			Invoke-Compose up --detach server
-			$restartLogs = ""
-			for ($attempt = 0; $attempt -lt 300; $attempt++) {
-				Start-Sleep -Seconds 1
-				$restartLogs = Get-LatestServerGenerationLogs -Logs (Get-ServerLogs)
-				if ($restartLogs -match '"action":"deposit","result":"complete","depot_id":2' -and
-					$restartLogs -match '"action":"hunt_cycle","result":"started","cycle":1') { break }
-			}
+			Wait-ForLatestServerGenerationLog -Pattern '"action":"deposit","result":"complete","depot_id":2' | Out-Null
+			$restartLogs = Wait-ForLatestServerGenerationLog -Pattern '"action":"hunt_cycle","result":"started","cycle":1'
 			Assert-MainlandLoopEvents -Logs $restartLogs -MinimumCycles 1 -MinimumDeposits 1
 		}
 	}
@@ -72,12 +67,7 @@
 
 			Invoke-Compose stop server
 			Invoke-Compose up --detach server
-			$secondCycleLogs = ""
-			for ($attempt = 0; $attempt -lt 180; $attempt++) {
-				Start-Sleep -Seconds 1
-				$secondCycleLogs = Get-LatestServerGenerationLogs -Logs (Get-ServerLogs)
-				if ($secondCycleLogs -match '"action":"deposit","result":"complete"') { break }
-			}
+			$secondCycleLogs = Wait-ForLatestServerGenerationLog -Pattern '"action":"deposit","result":"complete"'
 			Assert-DepotEvents -Logs $secondCycleLogs -ExpectedDepositedCount 1 -ExpectedEquipmentDeposits 0
 			$sentinelCount = Invoke-DatabaseScalar -Query "SELECT COALESCE(SUM(count), 0) FROM player_depotitems JOIN players ON players.id = player_depotitems.player_id WHERE players.name = 'Rook Tester' AND pid = 2 AND itemtype = 2684"
 			if ($sentinelCount -ne 7) {
@@ -103,12 +93,7 @@
 				}
 				Invoke-Compose stop server
 				Invoke-Compose up --detach server
-				$recoveryLogs = ""
-				for ($attempt = 0; $attempt -lt 150; $attempt++) {
-					Start-Sleep -Seconds 1
-					$recoveryLogs = Get-LatestServerGenerationLogs -Logs (Get-ServerLogs)
-					if ($recoveryLogs -match '"action":"deposit","result":"complete"') { break }
-				}
+				$recoveryLogs = Wait-ForLatestServerGenerationLog -Pattern '"action":"deposit","result":"complete"'
 				Assert-DepotRecoveryEvents -Logs $recoveryLogs -Phase $phase
 			}
 		}

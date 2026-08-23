@@ -21,7 +21,7 @@ namespace {
 		Position position;
 	};
 
-	std::optional<CorpseDiscovery> findOwnedCorpse(Player& player, const Position& searchPosition)
+	std::optional<CorpseDiscovery> findOwnedCorpse(Player& player, const Position& searchPosition, uint16_t expectedItemId)
 	{
 		std::optional<CorpseDiscovery> fallback;
 		for (int32_t offsetX = -1; offsetX <= 1; ++offsetX) {
@@ -33,7 +33,7 @@ namespace {
 				for (auto it = items->getBeginDownItem(); it != items->getEndDownItem(); ++it) {
 					Item* item = *it;
 					Container* corpse = item->getContainer();
-					if (!corpse || Item::items[item->getID()].corpseType == RACE_NONE) continue;
+					if (!corpse || item->getID() != expectedItemId || Item::items[item->getID()].corpseType == RACE_NONE) continue;
 					const uint32_t owner = corpse->getCorpseOwner();
 					if (owner != 0 && !player.canOpenCorpse(owner)) continue;
 					if (position == searchPosition) return {{corpse, position}};
@@ -151,10 +151,13 @@ void PlayerBotController::lootCorpse(Player* player, const Position& currentPosi
 	}
 
 	Container* openedCorpse = player->getContainerByID(corpseContainerId);
-	if (openedCorpse && Item::items[openedCorpse->getID()].corpseType == RACE_NONE) openedCorpse = nullptr;
+	Tile* openedCorpseTile = openedCorpse ? openedCorpse->getTile() : nullptr;
+	if (openedCorpse && (openedCorpse->getID() != lootWorkflow.expectedCorpse().itemId ||
+	    Item::items[openedCorpse->getID()].corpseType == RACE_NONE || !openedCorpseTile ||
+	    !Position::areInRange<1, 1, 0>(openedCorpseTile->getPosition(), lootWorkflow.corpsePosition()))) openedCorpse = nullptr;
 	std::optional<CorpseDiscovery> discovery;
-	if (openedCorpse) discovery = {{openedCorpse, lootWorkflow.corpsePosition()}};
-	else discovery = findOwnedCorpse(*player, lootWorkflow.corpsePosition());
+	if (openedCorpse) discovery = {{openedCorpse, openedCorpseTile->getPosition()}};
+	else discovery = findOwnedCorpse(*player, lootWorkflow.corpsePosition(), lootWorkflow.expectedCorpse().itemId);
 
 	PlayerBotLootWorkflowSnapshot snapshot;
 	snapshot.currentPosition = currentPosition;
@@ -243,9 +246,9 @@ void PlayerBotController::lootCorpse(Player* player, const Position& currentPosi
 		       << ",\"free_capacity\":" << player->getFreeCapacity();
 		emit("action_result", currentPosition, fields.str());
 	}
+	schedule(navigationInterval);
 	if (command.type == PlayerBotLootCommandType::Fail) {
 		finishLootFailure(player, currentPosition, command.outcome == PlayerBotLootOutcome::CorpseExpired ? "corpse_expired" : "corpse_inaccessible");
-		schedule(navigationInterval);
 		return;
 	}
 	if (command.type == PlayerBotLootCommandType::Finish) {
@@ -271,7 +274,6 @@ void PlayerBotController::lootCorpse(Player* player, const Position& currentPosi
 		return;
 	}
 
-	schedule(navigationInterval);
 	if (command.type == PlayerBotLootCommandType::OpenCorpse && discovery) {
 		player->closeContainer(corpseContainerId);
 		Tile* tile = g_game.map.getTile(discovery->position);

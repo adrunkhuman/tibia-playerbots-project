@@ -96,10 +96,9 @@ class PlayerBotHuntPlanningSession
 
 		const std::vector<PlayerBotHuntRegion>& regions() const { return scoredRegions; }
 		const PlayerBotHuntRegion& region(size_t index) const { return scoredRegions.at(index); }
-		void rejectSuitableCandidates(const std::string& reason);
+	private:
 		void refreshSuitableCandidates();
 
-	private:
 		enum class Phase : uint8_t {
 			Scoring,
 			Reachability,

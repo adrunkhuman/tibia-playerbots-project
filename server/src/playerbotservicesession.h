@@ -14,6 +14,8 @@ struct PlayerBotServiceTransaction {
 	uint32_t itemCount = 0;
 	uint64_t money = 0;
 	uint64_t balance = 0;
+	uint32_t unitPrice = 0;
+	uint8_t subType = 0;
 };
 
 enum class PlayerBotServiceVerificationResult : uint8_t {
@@ -33,11 +35,15 @@ class PlayerBotServiceSession
 	public:
 	void reset();
 
-	bool hasShopTransaction() const;
-	const PlayerBotServiceTransaction* shopTransaction() const;
+		bool hasShopTransaction() const;
+		const PlayerBotServiceTransaction* shopTransaction() const;
+
+	private:
+	friend class PlayerBotServiceWorkflow;
+	friend class PlayerBotProgressionRuntime;
 	void beginShopTransaction(PlayerBotServiceTransaction transaction);
 	PlayerBotServiceVerification verifyShopTransaction(uint32_t itemCount, uint64_t money, uint64_t balance,
-	                                                   bool purchase, uint32_t unitPrice, uint32_t maximumRetries);
+	                                                   bool purchase, uint32_t maximumRetries);
 
 	bool bankDepositComplete() const { return depositComplete; }
 	void markBankDepositComplete() { depositComplete = true; depositPending = false; }
@@ -49,7 +55,6 @@ class PlayerBotServiceSession
 	const PlayerBotServiceTransaction& bankTransaction() const { return bank; }
 	PlayerBotServiceVerification verifyBankWithdrawal(uint64_t money, uint64_t balance, uint32_t maximumRetries);
 
-	private:
 	PlayerBotServiceTransaction shop;
 	PlayerBotServiceTransaction bank;
 	uint32_t shopRetries = 0;

@@ -95,7 +95,7 @@ void PlayerBotController::emitSpellCastEvent(const Position& position, const cha
 			       << ",\"haste_ticks_observed\":" << pending->hasteTicksObserved
 			       << ",\"haste_duration_measured\":" << pending->hasteDurationMeasured;
 		}
-		if (const PlayerBotSpellProfile* profile = survivalRuntime.calibrationProfile(*pending)) {
+		if (const auto profile = survivalRuntime.calibrationProfile(*pending)) {
 			fields << ",\"calibration\":{\"accepted\":" << profile->accepted << ",\"rejected\":" << profile->rejected
 			       << ",\"ambiguous\":" << profile->ambiguous << ",\"minimum\":" << profile->minimum
 			       << ",\"maximum\":" << profile->maximum << ",\"conservative\":" << profile->conservative
@@ -115,26 +115,35 @@ void PlayerBotController::emitSpellCastEvent(const Position& position, const cha
 bool PlayerBotController::dispatchSpellCommand(Player& player, const Position& position, PlayerBotSurvivalCommand command)
 {
 	if (command.type != PlayerBotSurvivalCommandType::CastSpell || !command.spell) {
-		if (!command.reason) return false;
-		const PlayerBotSpellDescriptor* descriptor = command.candidate;
+		if (command.reason.empty()) return false;
+		const PlayerBotSpellDescriptor* descriptor = command.candidateName.empty() ? nullptr :
+		                                              playerBotSpellDescriptor(command.candidateName.c_str());
 		const std::string key = std::string("cast_spell:") + command.reason + ':' + (descriptor ? descriptor->name : "unknown");
 		if (!descriptor || shouldEmitRepeated(key)) {
 			emitSpellCastEvent(position, descriptor ? descriptor->name : nullptr, descriptor ? descriptor->words : nullptr,
-			                   descriptor ? playerBotSpellRoleName(descriptor->role) : nullptr, command.need ? command.need : "unknown",
-			                   "skipped", "not_attempted", command.reason, nullptr, &player,
-			                   descriptor ? fallbackForRole(descriptor->role) : fallbackForNeed(command.need ? command.need : ""));
+			                   descriptor ? playerBotSpellRoleName(descriptor->role) : nullptr, command.need.empty() ? "unknown" : command.need.c_str(),
+			                   "skipped", "not_attempted", command.reason.c_str(), nullptr, &player,
+			                   descriptor ? fallbackForRole(descriptor->role) : fallbackForNeed(command.need.c_str()));
 		}
 		return false;
 	}
 	const auto& cast = *command.spell;
+	InstantSpell* spell = g_spells ? g_spells->getInstantSpellByName(cast.name) : nullptr;
+	if (!spell || spell->getWords() != cast.words) {
+		telemetry.recordActionFailure();
+		emitSpellCastEvent(position, cast.name.c_str(), cast.words.c_str(), playerBotSpellRoleName(cast.role),
+		                   cast.pending.need.c_str(), "failed", "rejected", "unsupported_metadata", &cast.pending, &player,
+		                   fallbackForRole(cast.role));
+		return false;
+	}
 	telemetry.recordActionAttempt();
-	emitSpellCastEvent(position, cast.descriptor->name, cast.descriptor->words, playerBotSpellRoleName(cast.descriptor->role),
+	emitSpellCastEvent(position, cast.name.c_str(), cast.words.c_str(), playerBotSpellRoleName(cast.role),
 	                   cast.pending.need.c_str(), "requested", "unchecked", nullptr, &cast.pending, &player, nullptr);
 	// The normal speech handler remains the authoritative spell engine.
 	survivalRuntime.beginEngineSpellCast();
-	g_game.playerSay(playerId, 0, TALKTYPE_SAY, "", cast.spell->getWords());
+	g_game.playerSay(playerId, 0, TALKTYPE_SAY, "", cast.words);
 	survivalRuntime.endEngineSpellCast();
-	if (cast.descriptor->role == PlayerBotSpellRole::Support) {
+	if (cast.role == PlayerBotSpellRole::Support) {
 		if (Condition* haste = player.getCondition(CONDITION_HASTE)) survivalRuntime.observeHasteAfterCast(haste->getTicks(), haste->getEndTime());
 	}
 	return true;
@@ -143,7 +152,7 @@ bool PlayerBotController::dispatchSpellCommand(Player& player, const Position& p
 void PlayerBotController::verifySpellCast(Player& player, const Position& position)
 {
 	// The runtime owns pending-cast verification and calibration; the controller only supplies live observations.
-	const PlayerBotSpellPendingCast* pending = survivalRuntime.pendingSpell();
+	const auto pending = survivalRuntime.pendingSpell();
 	if (!pending) return;
 	Creature* target = g_game.getCreatureByID(pending->targetId);
 	Condition* haste = player.getCondition(CONDITION_HASTE);
@@ -176,9 +185,9 @@ void PlayerBotController::verifySpellCast(Player& player, const Position& positi
 
 void PlayerBotController::finishMagicTraining(Player& player, const Position& position, const char* result, const char* reason)
 {
-	progressionRuntime.setCooldown(TopLevelGoal::MagicTraining, magicTrainingRetryDelay);
-	if (goalArbiter.activeGoal() == TopLevelGoal::MagicTraining) {
-		emit("goal_result", position, "\"decision_id\":" + std::to_string(goalArbiter.decisionId()) +
+	progressionRuntime.completeMagicTraining(magicTrainingRetryDelay);
+	if (progressionRuntime.activeGoal() == TopLevelGoal::MagicTraining) {
+		emit("goal_result", position, "\"decision_id\":" + std::to_string(progressionRuntime.decisionId()) +
 		     ",\"goal\":\"magic_training\",\"result\":" + jsonString(result) + ",\"reason\":" + jsonString(reason));
 		if (selectTopLevelGoal(player, position, "magic_training_complete")) {
 			schedule(SCHEDULER_MINTICKS);
@@ -189,8 +198,8 @@ void PlayerBotController::finishMagicTraining(Player& player, const Position& po
 bool PlayerBotController::processMagicTraining(Player& player, const Position& position)
 {
 	const PlayerBotSurvivalSnapshot snapshot = survivalSnapshot(player);
-	const char* reason = survivalRuntime.magicTrainingReason(player, snapshot);
-	const std::optional<PlayerBotMagicTrainingCommand> selected = !reason ? survivalRuntime.decideMagicTraining(player, snapshot) : std::nullopt;
+	const char* reason = survivalRuntime.magicTrainingReason(snapshot);
+	const std::optional<PlayerBotMagicTrainingCommand> selected = !reason ? survivalRuntime.decideMagicTraining(snapshot) : std::nullopt;
 	if (!selected) {
 		finishMagicTraining(player, position, "skipped", reason ? reason : "opportunity_lost");
 		return false;
@@ -203,15 +212,21 @@ bool PlayerBotController::processMagicTraining(Player& player, const Position& p
 	telemetry.recordActionAttempt();
 	std::ostringstream request;
 	request << "\"action\":\"magic_training\",\"result\":\"requested\",\"source\":\"engine_path\""
-	        << ",\"spell\":" << jsonString(selected->descriptor->name) << ",\"audited_priority\":"
-	        << static_cast<uint32_t>(selected->descriptor->magicTrainingPriority) << ",\"refresh\":"
+	        << ",\"spell\":" << jsonString(selected->name) << ",\"audited_priority\":"
+	        << static_cast<uint32_t>(selected->priority) << ",\"refresh\":"
 	        << (selected->refresh ? "true" : "false") << ",\"mana_before\":" << manaBefore
 	        << ",\"mana_max\":" << player.getMaxMana() << ",\"mana_gain\":" << selected->manaGain
 	        << ",\"mana_tick_interval\":" << selected->manaTickInterval << ",\"mana_tick_remaining\":" << selected->manaTickRemaining
 	        << ",\"predicted_mana\":" << predictedMana << ",\"wasted_mana\":" << wastedMana
 	        << ",\"mana_cost\":" << selected->cost << ",\"emergency_reserve\":" << magicTrainingEmergencyReserve;
 	emit("action_result", position, request.str());
-	g_game.playerSay(playerId, 0, TALKTYPE_SAY, "", selected->spell->getWords());
+	InstantSpell* spell = g_spells ? g_spells->getInstantSpellByName(selected->name) : nullptr;
+	if (!spell || spell->getWords() != selected->words) {
+		telemetry.recordActionFailure();
+		finishMagicTraining(player, position, "failed", "unsupported_metadata");
+		return false;
+	}
+	g_game.playerSay(playerId, 0, TALKTYPE_SAY, "", selected->words);
 	uint64_t manaAfter = player.getMana();
 	const uint64_t manaSpentAfter = player.getSpentMana();
 	const uint32_t magicLevelAfter = player.getBaseMagicLevel();
@@ -223,7 +238,7 @@ bool PlayerBotController::processMagicTraining(Player& player, const Position& p
 	std::ostringstream result;
 	result << "\"action\":\"magic_training\",\"result\":" << jsonString(verified ? "success" : "failed")
 	       << ",\"source\":\"engine_verification\",\"engine_result\":" << jsonString(verified ? "accepted" : "rejected")
-	       << ",\"spell\":" << jsonString(selected->descriptor->name) << ",\"mana_before\":" << manaBefore
+	       << ",\"spell\":" << jsonString(selected->name) << ",\"mana_before\":" << manaBefore
 	       << ",\"mana_after\":" << manaAfter << ",\"mana_cost\":" << selected->cost << ",\"mana_delta\":" << manaDelta
 	       << ",\"mana_spent_before\":" << manaSpentBefore << ",\"mana_spent_after\":" << manaSpentAfter
 	       << ",\"magic_level_before\":" << magicLevelBefore << ",\"magic_level_after\":" << magicLevelAfter
@@ -240,7 +255,7 @@ bool PlayerBotController::trySupportSpell(Player* player, const Position& curren
 {
 	if (!player) return false;
 	return dispatchSpellCommand(*player, currentPosition,
-	    survivalRuntime.decideSupportSpell(*player, survivalSnapshot(*player), currentPosition, std::chrono::steady_clock::now()));
+	    survivalRuntime.decideSupportSpell(survivalSnapshot(*player), std::chrono::steady_clock::now()));
 }
 
 bool PlayerBotController::tryOffensiveSpell(Player* player, const Position& currentPosition)
@@ -249,7 +264,7 @@ bool PlayerBotController::tryOffensiveSpell(Player* player, const Position& curr
 	const auto traversalTarget = combatRuntime.traversalTarget();
 	Creature* target = traversalTarget ? g_game.getCreatureByID(traversalTarget->id) : nullptr;
 	return dispatchSpellCommand(*player, currentPosition,
-	    survivalRuntime.decideOffensiveSpell(*player, survivalSnapshot(*player), currentPosition, target, std::chrono::steady_clock::now()));
+	    survivalRuntime.decideOffensiveSpell(survivalSnapshot(*player, target), std::chrono::steady_clock::now()));
 }
 
 uint64_t PlayerBotController::spellTrainingReserve(const Player& player) const
@@ -303,8 +318,8 @@ bool PlayerBotController::findSpellTraining(Player& player, const Position& posi
 	const uint16_t baseVocationId = player.getVocation()->getFromVocation() == 0 ? vocationId :
 	                               player.getVocation()->getFromVocation();
 	const bool suppliesReady = inventoryPolicy.inventoryItemCount(player, smallHealthPotionItemId) > smallHealthPotionReturnThreshold;
-	std::vector<PlayerBotSpellOfferSnapshot> feasibleOffers;
-	std::vector<std::deque<PlayerBotNavigationStep>> feasibleRoutes;
+	std::vector<PlayerBotSpellOfferSnapshot> offers;
+	std::vector<std::deque<PlayerBotNavigationStep>> routes;
 
 	for (const auto& entry : g_game.getNpcs()) {
 		Npc* npc = entry.second;
@@ -355,8 +370,8 @@ bool PlayerBotController::findSpellTraining(Player& player, const Position& posi
 				std::deque<PlayerBotNavigationStep> steps;
 				uint64_t expandedNodes = 0;
 				const auto startedAt = std::chrono::steady_clock::now();
-				const PlayerBotNavigationRoutePlan routePlan = approach == position ? PlayerBotNavigationRoutePlan{} :
-					navigationRuntime.plan(player, approach);
+			const PlayerBotNavigationRoutePlan routePlan = approach == position ? PlayerBotNavigationRoutePlan{} :
+				planNavigationRoute(player, approach);
 				const PlayerBotNavigationResult result = approach == position ? PlayerBotNavigationResult::Reached : routePlan.metrics.result;
 				if (approach != position) {
 					steps = routePlan.steps;
@@ -375,79 +390,47 @@ bool PlayerBotController::findSpellTraining(Player& player, const Position& posi
 			return false;
 		};
 		for (const NpcSpellOffer& offer : npc->getSpellOffers()) {
-			if (!inScope) {
-				emitSpellCandidate(*npc, offer, position, "rejected", "outside_thais_scope", reserve);
-				continue;
-			}
 			Spell* spell = g_spells ? g_spells->getSpellByName(offer.spellName) : nullptr;
-			if (!spell || !spell->isInstant() || !spell->isLearnable() || spell->getLevel() != offer.level ||
-			    spell->isPremium() != offer.premium) {
-				emitSpellCandidate(*npc, offer, position, "rejected", "spell_registry_mismatch", reserve);
-				continue;
-			}
-			if (std::find(offer.vocationIds.begin(), offer.vocationIds.end(), baseVocationId) == offer.vocationIds.end() ||
-			    spell->getVocMap().find(vocationId) == spell->getVocMap().end()) {
-				emitSpellCandidate(*npc, offer, position, "rejected", "vocation_ineligible", reserve);
-				continue;
-			}
-			if (player.getLevel() < offer.level) {
-				emitSpellCandidate(*npc, offer, position, "rejected", "level_ineligible", reserve);
-				continue;
-			}
-			if (offer.premium && !player.isPremium()) {
-				emitSpellCandidate(*npc, offer, position, "rejected", "premium_ineligible", reserve);
-				continue;
-			}
-			if (player.hasLearnedInstantSpell(offer.spellName)) {
-				emitSpellCandidate(*npc, offer, position, "rejected", "already_learned", reserve);
-				continue;
-			}
-			if (!suppliesReady) {
-				emitSpellCandidate(*npc, offer, position, "rejected", "supply_reserve_unmet", reserve);
-				continue;
-			}
-			if (reserve == std::numeric_limits<uint64_t>::max()) {
-				emitSpellCandidate(*npc, offer, position, "rejected", "recovery_reserve_unavailable", reserve);
-				continue;
-			}
-			if (totalMoney < reserve + offer.price) {
-				emitSpellCandidate(*npc, offer, position, "rejected", "unaffordable_after_reserves", reserve);
-				continue;
-			}
-
-			if (!findTrainerApproach()) {
-				emitSpellCandidate(*npc, offer, position, "rejected", "trainer_unreachable", reserve);
-				continue;
-			}
-			emitSpellCandidate(*npc, offer, position, "feasible", nullptr, reserve, static_cast<uint32_t>(trainerSteps.size()));
-			feasibleOffers.push_back({npc->getID(), npc->getPosition(), npc->getName(), offer.spellName, offer.keyword,
-			                         offer.price, offer.level, offer.premium, true, true, true, true, true, false, true,
-			                         {true, false, trainerApproach, static_cast<uint32_t>(trainerSteps.size()), 0}});
-			feasibleRoutes.push_back(trainerSteps);
+			const bool registryMatches = spell && spell->isInstant() && spell->isLearnable() &&
+			                             spell->getLevel() == offer.level && spell->isPremium() == offer.premium;
+			const bool vocationEligible = registryMatches &&
+			    std::find(offer.vocationIds.begin(), offer.vocationIds.end(), baseVocationId) != offer.vocationIds.end() &&
+			    spell->getVocMap().find(vocationId) != spell->getVocMap().end();
+			const bool routeReachable = findTrainerApproach();
+			offers.push_back({npc->getID(), npc->getPosition(), npc->getName(), offer.spellName, offer.keyword,
+			                  offer.price, offer.level, offer.premium, inScope, registryMatches, vocationEligible,
+			                  player.getLevel() >= offer.level, !offer.premium || player.isPremium(),
+			                  player.hasLearnedInstantSpell(offer.spellName), suppliesReady,
+			                  {routeReachable, false, trainerApproach, static_cast<uint32_t>(trainerSteps.size()), 0}});
+			routes.push_back(trainerSteps);
 		}
 	}
 	const PlayerBotSpellTrainingDecision decision = spellTrainingPlanner.select({reserve, totalMoney,
-	    reserve != std::numeric_limits<uint64_t>::max(), feasibleOffers});
+	    reserve != std::numeric_limits<uint64_t>::max(), offers});
+	for (size_t offerIndex = 0; offerIndex < offers.size(); ++offerIndex) {
+		const auto& offer = offers[offerIndex];
+		const auto rejection = std::find_if(decision.rejections.begin(), decision.rejections.end(),
+		                                    [offerIndex](const PlayerBotPlannerOfferRejection& result) {
+			                                    return result.offerIndex == offerIndex;
+		                                    });
+		Npc* npc = g_game.getNpcByID(offer.npcId);
+		if (npc) emitSpellCandidate(*npc, {offer.spellName, offer.keyword, offer.price, offer.level, offer.premium, {}}, position,
+		                           rejection == decision.rejections.end() ? "feasible" : "rejected",
+		                           rejection == decision.rejections.end() ? nullptr : rejection->reason.c_str(), reserve, offer.route.steps);
+	}
 	if (!decision.selected) return false;
 	plan = *decision.selected;
-	for (size_t index = 0; index < feasibleRoutes.size(); ++index) {
-		// The planner's stable price/route/name ordering identifies this immutable offer.
-		if (plan.npcId == feasibleOffers[index].npcId && plan.spellName == feasibleOffers[index].spellName &&
-		    plan.price == feasibleOffers[index].price && plan.travelSteps == feasibleOffers[index].route.steps) {
-			selectedSteps = std::move(feasibleRoutes[index]);
-			return true;
-		}
-	}
-	return false;
+	if (!decision.selectedOfferIndex || *decision.selectedOfferIndex >= routes.size()) return false;
+	selectedSteps = std::move(routes[*decision.selectedOfferIndex]);
+	return true;
 }
 
 void PlayerBotController::beginSpellTraining(Player& player, const Position& position, PlayerBotSpellTrainingPlan plan,
                                              std::deque<PlayerBotNavigationStep> steps)
 {
 	progressionRuntime.beginSpellTraining(std::move(plan));
-	const auto& training = spellTrainingSession.plan();
-	serviceWorkflow.resetNpc(training.npcId);
-	navigationRuntime.adopt(training.approachPosition, std::move(steps));
+	const auto& training = progressionRuntime.spellTraining().plan();
+	observeNavigationPlan(training.approachPosition, std::move(steps));
 	emit("strategy_selection", position, "\"goal\":\"learn_spell\",\"npc_id\":" +
 	     std::to_string(training.npcId) + ",\"spell\":" + jsonString(training.spellName) +
 	     ",\"keyword\":" + jsonString(training.keyword) + ",\"price\":" +
@@ -459,19 +442,18 @@ void PlayerBotController::beginSpellTraining(Player& player, const Position& pos
 void PlayerBotController::finishSpellTraining(Player* player, const Position& position, const char* result, const char* reason)
 {
 	emit("strategy_objective_result", position, "\"goal\":\"learn_spell\",\"spell\":" +
-	     jsonString(spellTrainingSession.plan().spellName) + ",\"result\":" + jsonString(result) + ",\"reason\":" +
+	     jsonString(progressionRuntime.spellTraining().plan().spellName) + ",\"result\":" + jsonString(result) + ",\"reason\":" +
 	     jsonString(reason));
-	emit("goal_result", position, "\"decision_id\":" + std::to_string(goalArbiter.decisionId()) +
+	emit("goal_result", position, "\"decision_id\":" + std::to_string(progressionRuntime.decisionId()) +
 	     ",\"goal\":\"learn_spell\",\"result\":" + jsonString(result) + ",\"reason\":" + jsonString(reason));
 	if (player) {
 		say(*player, "Spell training " + std::string(result) + ": " + reason + '.');
 	}
 	progressionRuntime.finish();
-	serviceWorkflow.resetNpc();
 	clearNavigation();
-	progressionRuntime.setCooldown(TopLevelGoal::LearnSpell,
-	                       std::strcmp(result, "success") == 0 ? spellTrainingSuccessCooldown : spellTrainingFailureCooldown);
-	if (player && fixtureDriver.goalLoop(true).selectGoal) {
+	progressionRuntime.completeSpellTraining(std::strcmp(result, "success") == 0,
+	    std::strcmp(result, "success") == 0 ? spellTrainingSuccessCooldown : spellTrainingFailureCooldown);
+	if (player && fixtureDriver.progressionGoalLoop(true).selectGoal) {
 		selectTopLevelGoal(*player, position, std::strcmp(result, "success") == 0 ? "spell_training_complete" : "spell_training_failed");
 	}
 	schedule(SCHEDULER_MINTICKS);
@@ -479,23 +461,23 @@ void PlayerBotController::finishSpellTraining(Player* player, const Position& po
 
 void PlayerBotController::processSpellTraining(Player* player, const Position& currentPosition)
 {
-	const auto& training = spellTrainingSession.plan();
+	const auto& training = progressionRuntime.spellTraining().plan();
 	Npc* trainer = g_game.getNpcByID(training.npcId);
 	PlayerBotSpellTrainingObservation observation;
 	observation.totalMoney = player->getMoney() + player->getBankBalance();
-	if (spellTrainingSession.stage() == PlayerBotSpellTrainingStage::Travel) {
+	if (progressionRuntime.spellTraining().stage() == PlayerBotSpellTrainingStage::Travel) {
 		observation.navigationReached = processNavigation(player, currentPosition, training.approachPosition);
 		observation.navigationFailed = navigationRuntime.fixedTargetRouteFailureCount() >= maximumProgressionAttempts;
 	} else {
 		observation.npcAvailable = trainer && !trainer->isRemoved() && Position::areInRange<3, 3, 0>(currentPosition, trainer->getPosition());
-		observation.greetingAcknowledged = serviceWorkflow.isGreetingAcknowledged();
+		observation.greetingAcknowledged = progressionRuntime.greetingAcknowledged();
 		observation.learned = player->hasLearnedInstantSpell(training.spellName);
 	}
 	const PlayerBotProgressionOutcome result = progressionRuntime.advanceSpellTraining(observation);
 	if (result.type == PlayerBotProgressionOutcomeType::Succeeded) {
 		emit("action_result", currentPosition, "\"action\":\"learn_spell\",\"result\":\"success\",\"spell\":" +
 	     jsonString(training.spellName) + ",\"price\":" + std::to_string(training.price) +
-	     ",\"money_before\":" + std::to_string(spellTrainingSession.moneyBefore()) + ",\"money_after\":" +
+	     ",\"money_before\":" + std::to_string(progressionRuntime.spellTraining().moneyBefore()) + ",\"money_after\":" +
 	     std::to_string(observation.totalMoney));
 		finishSpellTraining(player, currentPosition, "success", result.reason);
 		return;
@@ -507,7 +489,7 @@ void PlayerBotController::processSpellTraining(Player* player, const Position& c
 	if (result.command.type == PlayerBotProgressionCommandType::Speak) {
 		if (!trainer || trainer->isRemoved()) return;
 		const char* words = std::strcmp(result.command.reason, "request") == 0 ? training.keyword.c_str() : result.command.reason;
-		if (std::strcmp(words, "hi") == 0) serviceWorkflow.resetGreetingAcknowledgement();
+		if (std::strcmp(words, "hi") == 0) progressionRuntime.clearGreetingAcknowledgement();
 		telemetry.recordActionAttempt();
 		trainer->receiveSpeech(player, TALKTYPE_PRIVATE_PN, words);
 	}

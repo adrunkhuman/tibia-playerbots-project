@@ -9,19 +9,36 @@
 #include "playerbotspellruntime.h"
 
 #include <chrono>
+#include <cstdint>
 #include <optional>
 #include <string>
+#include <vector>
 
-class Player;
-class Creature;
-class InstantSpell;
-struct Position;
+struct PlayerBotSurvivalTargetObservation {
+	uint32_t id = 0;
+	int32_t health = 0;
+	std::string targetClass = "self";
+	bool valid = false;
+};
+
+struct PlayerBotSurvivalSpellObservation {
+	std::string name;
+	bool metadataMatches = false;
+	bool learned = false;
+	bool targetReachable = false;
+	bool magicTrainingEligible = false;
+	uint32_t manaCost = 0;
+	PlayerBotSpellEnvelope envelope;
+};
 
 struct PlayerBotSurvivalSnapshot {
 	int32_t health = 0;
 	int32_t healthMaximum = 0;
 	uint32_t mana = 0;
 	uint32_t manaMaximum = 0;
+	uint64_t manaSpent = 0;
+	uint32_t level = 0;
+	uint32_t magicLevel = 0;
 	uint32_t potionCount = 0;
 	uint32_t foodCount = 0;
 	uint32_t foodInventoryCount = 0;
@@ -38,8 +55,19 @@ struct PlayerBotSurvivalSnapshot {
 	bool combatOrPursuit = false;
 	bool navigationPending = false;
 	bool healingExhausted = false;
+	bool combatExhausted = false;
 	bool hasteActive = false;
+	int32_t hasteTicks = 0;
+	bool lightActive = false;
+	bool regenerationActive = false;
+	bool protectionZone = false;
+	bool regenerationForecastActive = false;
+	uint64_t regenerationManaGain = 0;
+	uint32_t regenerationTickInterval = 0;
+	uint32_t regenerationTickRemaining = 0;
 	uint32_t routeSteps = 0;
+	PlayerBotSurvivalTargetObservation target;
+	std::vector<PlayerBotSurvivalSpellObservation> spells;
 };
 
 enum class PlayerBotSurvivalCommandType : uint8_t {
@@ -52,21 +80,23 @@ enum class PlayerBotSurvivalCommandType : uint8_t {
 };
 
 struct PlayerBotSurvivalSpellCommand {
-	const PlayerBotSpellDescriptor* descriptor = nullptr;
-	InstantSpell* spell = nullptr;
-	Creature* target = nullptr;
+	std::string name;
+	std::string words;
+	PlayerBotSpellRole role = PlayerBotSpellRole::Healing;
+	uint32_t targetId = 0;
 	PlayerBotSpellPendingCast pending;
 };
 
 struct PlayerBotSurvivalCommand {
 	PlayerBotSurvivalCommandType type = PlayerBotSurvivalCommandType::None;
+	uint16_t itemId = 0;
 	uint16_t itemClientId = 0;
-	const PlayerBotSpellDescriptor* candidate = nullptr;
-	const char* need = nullptr;
+	std::string candidateName;
+	std::string need;
 	std::optional<PlayerBotPotionVerification> potionVerification;
 	std::optional<PlayerBotFoodVerification> foodVerification;
 	std::optional<PlayerBotSurvivalSpellCommand> spell;
-	const char* reason = nullptr;
+	std::string reason;
 };
 
 struct PlayerBotSurvivalSpellVerification {
@@ -77,8 +107,9 @@ struct PlayerBotSurvivalSpellVerification {
 };
 
 struct PlayerBotMagicTrainingCommand {
-	const PlayerBotSpellDescriptor* descriptor = nullptr;
-	InstantSpell* spell = nullptr;
+	std::string name;
+	std::string words;
+	uint8_t priority = 0;
 	uint64_t cost = 0;
 	bool refresh = false;
 	uint64_t manaBefore = 0;
@@ -98,17 +129,13 @@ class PlayerBotSurvivalRuntime
 		bool hasPendingDefensiveWork() const;
 		uint16_t pendingFoodItemId() const;
 		void beginPotion(const PlayerBotSurvivalSnapshot& snapshot);
-		PlayerBotSurvivalCommand decideHealing(Player& player, const PlayerBotSurvivalSnapshot& snapshot,
-		                                      const Position& position, std::chrono::steady_clock::time_point now);
+		PlayerBotSurvivalCommand decideHealing(const PlayerBotSurvivalSnapshot& snapshot,
+		                                      std::chrono::steady_clock::time_point now);
 		PlayerBotSurvivalCommand decideFood(const PlayerBotSurvivalSnapshot& snapshot,
 		                                   std::chrono::steady_clock::time_point now);
-		PlayerBotSurvivalCommand decideSpell(Player& player, const PlayerBotSurvivalSnapshot& snapshot,
-		                                    const Position& position, const char* spellName, const char* need,
-		                                    Creature* target, std::chrono::steady_clock::time_point now);
-		PlayerBotSurvivalCommand decideSupportSpell(Player& player, const PlayerBotSurvivalSnapshot& snapshot,
-		                                           const Position& position, std::chrono::steady_clock::time_point now);
-		PlayerBotSurvivalCommand decideOffensiveSpell(Player& player, const PlayerBotSurvivalSnapshot& snapshot,
-		                                             const Position& position, Creature* target,
+		PlayerBotSurvivalCommand decideSupportSpell(const PlayerBotSurvivalSnapshot& snapshot,
+		                                           std::chrono::steady_clock::time_point now);
+		PlayerBotSurvivalCommand decideOffensiveSpell(const PlayerBotSurvivalSnapshot& snapshot,
 		                                             std::chrono::steady_clock::time_point now);
 		std::optional<PlayerBotSurvivalSpellVerification> verifySpell(const PlayerBotSpellVerificationInput& input);
 		void beginEngineSpellCast();
@@ -118,21 +145,17 @@ class PlayerBotSurvivalRuntime
 		void observeCombatDamage(uint32_t attackerId, uint32_t targetId, uint32_t playerId, uint32_t damage);
 		void observeHealthGain(bool controlledHealer, bool controlledTarget, uint32_t gain);
 		bool canRetrySpell(std::chrono::steady_clock::time_point now) const;
-		const PlayerBotSpellPendingCast* pendingSpell() const;
+		std::optional<PlayerBotSpellPendingCast> pendingSpell() const;
 		void deferSpellRetry(std::chrono::steady_clock::time_point now);
-		const PlayerBotSpellProfile* calibrationProfile(const PlayerBotSpellPendingCast& pending) const;
+		std::optional<PlayerBotSpellProfile> calibrationProfile(const PlayerBotSpellPendingCast& pending) const;
 		double calibrationRanking(const PlayerBotSpellPendingCast& pending) const;
 		size_t calibrationSize() const;
-		const PlayerBotSpellProfile& observeCalibrationFixture(const std::string& spell, const std::string& targetClass,
-		                                                      const PlayerBotSpellEnvelope& envelope,
-		                                                      PlayerBotSpellEvidence evidence, int32_t value);
-		std::optional<std::string> takeCalibrationEviction();
-		void clearCalibration();
-		const char* magicTrainingReason(const Player& player, const PlayerBotSurvivalSnapshot& snapshot) const;
-		std::optional<PlayerBotMagicTrainingCommand> decideMagicTraining(const Player& player,
-		                                                                 const PlayerBotSurvivalSnapshot& snapshot) const;
+		const char* magicTrainingReason(const PlayerBotSurvivalSnapshot& snapshot) const;
+		std::optional<PlayerBotMagicTrainingCommand> decideMagicTraining(const PlayerBotSurvivalSnapshot& snapshot) const;
 
 	private:
+		PlayerBotSurvivalCommand decideSpell(const PlayerBotSurvivalSnapshot& snapshot, const char* spellName,
+		                                    const char* need, std::chrono::steady_clock::time_point now);
 		PlayerBotRecoverySession recovery;
 		PlayerBotSpellRuntime spells;
 		PlayerBotSpellCalibration calibration;

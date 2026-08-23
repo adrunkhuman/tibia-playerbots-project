@@ -7,12 +7,9 @@
 
 #include "playerbotsurvivalruntime.h"
 
-#include "condition.h"
-#include "player.h"
 #include "playerbotinventorypolicy.h"
-#include "spells.h"
 
-extern Spells* g_spells;
+#include <algorithm>
 
 namespace {
 	constexpr int32_t healingHealthPercent = 60;
@@ -26,36 +23,12 @@ namespace {
 	constexpr auto retryDelay = std::chrono::seconds(2);
 	constexpr auto foodCooldown = std::chrono::minutes(5);
 
-	std::string targetClass(const Creature* target)
+	const PlayerBotSurvivalSpellObservation* spellObservation(const PlayerBotSurvivalSnapshot& snapshot, const char* name)
 	{
-		if (!target) return "self";
-		if (!target->getMonster()) return "creature";
-		std::string name = target->getName();
-		name.resize(std::min<size_t>(name.size(), 48));
-		return "monster:" + name;
-	}
-
-	bool magicTrainingEffectUseful(const Player& player, PlayerBotTrainingEffect effect)
-	{
-		return effect == PlayerBotTrainingEffect::Haste ? !player.hasCondition(CONDITION_HASTE) :
-		       effect == PlayerBotTrainingEffect::Light ? !player.hasCondition(CONDITION_LIGHT) : false;
-	}
-
-	bool magicTrainingSpellLegal(const Player& player, const PlayerBotSpellDescriptor& descriptor, InstantSpell*& spell,
-	                            uint64_t& cost)
-	{
-		if (!descriptor.magicTrainingSafe || descriptor.magicTrainingPriority == 0 ||
-		    descriptor.magicTrainingEffect == PlayerBotTrainingEffect::None || !player.hasLearnedInstantSpell(descriptor.name)) return false;
-		spell = g_spells ? g_spells->getInstantSpellByName(descriptor.name) : nullptr;
-		if (!spell || spell->getWords() != descriptor.words || !spell->isLearnable() || !spell->isEnabled() ||
-		    player.getLevel() < spell->getLevel() || player.getMagicLevel() < spell->getMagicLevel() ||
-		    player.getSoul() < spell->getSoulCost() || (spell->isPremium() && !player.isPremium()) ||
-		    (spell->getNeedWeapon() && !player.getWeapon(true)) || player.hasCondition(CONDITION_EXHAUST_HEAL) ||
-		    spell->getAggressive() || !spell->getSelfTarget() || spell->getNeedTarget() || spell->getHasParam() ||
-		    spell->getHasPlayerNameParam() || spell->getNeedDirection() || spell->getNeedCasterTargetOrDirection()) return false;
-		cost = spell->getManaCost(&player);
-		return cost != 0 && cost <= static_cast<uint64_t>(player.getMana()) -
-		       std::min<uint64_t>(player.getMana(), magicTrainingEmergencyReserve);
+		const auto found = std::find_if(snapshot.spells.begin(), snapshot.spells.end(), [name](const auto& spell) {
+			return spell.name == name;
+		});
+		return found == snapshot.spells.end() ? nullptr : &*found;
 	}
 }
 
@@ -75,8 +48,8 @@ uint16_t PlayerBotSurvivalRuntime::pendingFoodItemId() const
 	return pending ? pending->itemId : 0;
 }
 
-PlayerBotSurvivalCommand PlayerBotSurvivalRuntime::decideHealing(Player& player, const PlayerBotSurvivalSnapshot& snapshot,
-	const Position& position, std::chrono::steady_clock::time_point now)
+PlayerBotSurvivalCommand PlayerBotSurvivalRuntime::decideHealing(const PlayerBotSurvivalSnapshot& snapshot,
+	std::chrono::steady_clock::time_point now)
 {
 	PlayerBotSurvivalCommand command;
 	PlayerBotSurvivalCommand spellAttempt;
@@ -89,7 +62,7 @@ PlayerBotSurvivalCommand PlayerBotSurvivalRuntime::decideHealing(Player& player,
 		return command;
 	}
 	if (snapshot.healthMaximum - snapshot.health <= smallHealthPotionMaximumHealing || snapshot.potionCount == 0) {
-		spellAttempt = decideSpell(player, snapshot, position, "Light Healing", "recovery", nullptr, now);
+		spellAttempt = decideSpell(snapshot, "Light Healing", "recovery", now);
 		if (spellAttempt.type == PlayerBotSurvivalCommandType::CastSpell) return spellAttempt;
 	}
 	if (snapshot.potionCount == 0) {
@@ -98,7 +71,8 @@ PlayerBotSurvivalCommand PlayerBotSurvivalRuntime::decideHealing(Player& player,
 		return command;
 	}
 	command.type = PlayerBotSurvivalCommandType::UsePotion;
-	command.candidate = spellAttempt.candidate;
+	command.itemId = playerbot::smallHealthPotionItemId;
+	command.candidateName = spellAttempt.candidateName;
 	command.need = spellAttempt.need;
 	command.reason = spellAttempt.reason;
 	return command;
@@ -126,78 +100,80 @@ PlayerBotSurvivalCommand PlayerBotSurvivalRuntime::decideFood(const PlayerBotSur
 	}
 	recovery.beginFood({snapshot.foodItemId, snapshot.foodCount, snapshot.foodTicks});
 	command.type = PlayerBotSurvivalCommandType::UseFood;
+	command.itemId = snapshot.foodItemId;
 	command.itemClientId = snapshot.foodClientId;
 	return command;
 }
 
-PlayerBotSurvivalCommand PlayerBotSurvivalRuntime::decideSpell(Player& player, const PlayerBotSurvivalSnapshot& snapshot,
-	const Position& position, const char* spellName, const char* need, Creature* target, std::chrono::steady_clock::time_point now)
+PlayerBotSurvivalCommand PlayerBotSurvivalRuntime::decideSpell(const PlayerBotSurvivalSnapshot& snapshot,
+	const char* spellName, const char* need, std::chrono::steady_clock::time_point now)
 {
 	PlayerBotSurvivalCommand command;
 	command.need = need;
 	const PlayerBotSpellDescriptor* descriptor = playerBotSpellDescriptor(spellName);
 	if (!descriptor) { command.reason = "unsupported_descriptor"; return command; }
-	command.candidate = descriptor;
-	InstantSpell* spell = g_spells ? g_spells->getInstantSpellByName(descriptor->name) : nullptr;
-	if (!spell || spell->getWords() != descriptor->words || !spell->isLearnable()) { command.reason = "unsupported_metadata"; return command; }
-	if (!player.hasLearnedInstantSpell(descriptor->name)) { command.reason = "unlearned"; return command; }
+	command.candidateName = descriptor->name;
+	const PlayerBotSurvivalSpellObservation* spell = spellObservation(snapshot, descriptor->name);
+	if (!spell || !spell->metadataMatches) { command.reason = "unsupported_metadata"; return command; }
+	if (!spell->learned) { command.reason = "unlearned"; return command; }
 	if (!snapshot.canDoAction || spells.hasPending() || !spells.canRetry(now)) return command;
 	const bool healingGroup = descriptor->role == PlayerBotSpellRole::Healing || descriptor->role == PlayerBotSpellRole::Support;
-	if (player.hasCondition(healingGroup ? CONDITION_EXHAUST_HEAL : CONDITION_EXHAUST_COMBAT)) { command.reason = "cooldown"; return command; }
+	if (healingGroup ? snapshot.healingExhausted : snapshot.combatExhausted) { command.reason = "cooldown"; return command; }
 	if ((descriptor->role == PlayerBotSpellRole::MeleeOffense || descriptor->role == PlayerBotSpellRole::RangedOffense) &&
-	    (!target || target->isRemoved() || target->isDead() || player.getAttackedCreature() != target || !player.canSeeCreature(target) ||
-	     !player.canSee(target->getPosition()) || !Position::areInRange<1, 1, 0>(position, target->getPosition()))) { command.reason = "lost_target"; return command; }
-	if (spell->getNeedTarget() && !spell->canThrowSpell(&player, target)) { command.reason = "target_unreachable"; return command; }
-	const uint32_t manaCost = spell->getManaCost(&player);
+	    !snapshot.target.valid) { command.reason = "lost_target"; return command; }
+	if (!spell->targetReachable) { command.reason = "target_unreachable"; return command; }
+	const uint32_t manaCost = spell->manaCost;
 	const uint32_t reserve = descriptor->role == PlayerBotSpellRole::Healing ? 0 : higherPriorityRecoveryManaReserve;
-	if (player.getMana() < manaCost + reserve) { command.reason = "insufficient_mana_reserve"; return command; }
+	if (snapshot.mana < manaCost + reserve) { command.reason = "insufficient_mana_reserve"; return command; }
 	PlayerBotSpellPendingCast pending;
 	pending.name = descriptor->name;
 	pending.role = descriptor->role;
 	pending.need = need;
-	pending.manaBefore = player.getMana();
+	pending.manaBefore = snapshot.mana;
 	pending.manaReserve = reserve;
-	pending.healthBefore = player.getHealth();
-	pending.targetId = target ? target->getID() : 0;
-	pending.targetHealthBefore = target ? target->getHealth() : 0;
-	pending.missingHealth = player.getMaxHealth() - player.getHealth();
-	pending.hasteTicksBefore = snapshot.hasteActive ? player.getCondition(CONDITION_HASTE)->getTicks() : 0;
-	pending.envelope = playerBotSpellEnvelope(player, *descriptor);
-	pending.targetClass = targetClass(target);
-	pending.otherRecovery = descriptor->role == PlayerBotSpellRole::Healing && player.hasCondition(CONDITION_REGENERATION);
+	pending.healthBefore = snapshot.health;
+	pending.targetId = snapshot.target.id;
+	pending.targetHealthBefore = snapshot.target.health;
+	pending.missingHealth = snapshot.healthMaximum - snapshot.health;
+	pending.hasteTicksBefore = snapshot.hasteTicks;
+	pending.envelope = spell->envelope;
+	pending.targetClass = snapshot.target.targetClass;
+	pending.otherRecovery = descriptor->role == PlayerBotSpellRole::Healing && snapshot.regenerationActive;
 	pending.observedAt = now;
 	spells.begin(pending);
 	command.type = PlayerBotSurvivalCommandType::CastSpell;
-	command.spell = PlayerBotSurvivalSpellCommand{descriptor, spell, target, std::move(pending)};
+	command.spell = PlayerBotSurvivalSpellCommand{descriptor->name, descriptor->words, descriptor->role, snapshot.target.id, std::move(pending)};
 	return command;
 }
 
-PlayerBotSurvivalCommand PlayerBotSurvivalRuntime::decideSupportSpell(Player& player, const PlayerBotSurvivalSnapshot& snapshot,
-	const Position& position, std::chrono::steady_clock::time_point now)
+PlayerBotSurvivalCommand PlayerBotSurvivalRuntime::decideSupportSpell(const PlayerBotSurvivalSnapshot& snapshot,
+	std::chrono::steady_clock::time_point now)
 {
 	if (snapshot.hasteActive || snapshot.routeSteps < minimumHasteRouteSteps || needsHealing(snapshot)) return {};
-	return decideSpell(player, snapshot, position, "Haste", "safe_route", nullptr, now);
+	return decideSpell(snapshot, "Haste", "safe_route", now);
 }
 
-PlayerBotSurvivalCommand PlayerBotSurvivalRuntime::decideOffensiveSpell(Player& player, const PlayerBotSurvivalSnapshot& snapshot,
-	const Position& position, Creature* target, std::chrono::steady_clock::time_point now)
+PlayerBotSurvivalCommand PlayerBotSurvivalRuntime::decideOffensiveSpell(const PlayerBotSurvivalSnapshot& snapshot,
+	std::chrono::steady_clock::time_point now)
 {
 	if (needsHealing(snapshot)) return {};
-	if (player.hasLearnedInstantSpell("Berserk") && player.getLevel() >= 35) {
+	const PlayerBotSurvivalSpellObservation* berserk = spellObservation(snapshot, "Berserk");
+	if (berserk && berserk->learned && snapshot.level >= 35) {
 		const PlayerBotSpellDescriptor* ranged = playerBotSpellDescriptor("Whirlwind Throw");
 		const PlayerBotSpellDescriptor* melee = playerBotSpellDescriptor("Berserk");
-		const std::string kind = targetClass(target);
-		if (ranged && melee) {
+		const PlayerBotSurvivalSpellObservation* rangedSpell = spellObservation(snapshot, "Whirlwind Throw");
+		const std::string& kind = snapshot.target.targetClass;
+		if (ranged && melee && rangedSpell) {
 			const PlayerBotSpellProfile* profile = calibration.find(ranged->name, kind);
 			if (profile && profile->confidence >= 1.0 &&
-			    calibration.ranking(ranged->name, kind, playerBotSpellEnvelope(player, *ranged)) >
-			        calibration.ranking(melee->name, kind, playerBotSpellEnvelope(player, *melee))) {
-				return decideSpell(player, snapshot, position, ranged->name, "offense", target, now);
+			    calibration.ranking(ranged->name, kind, rangedSpell->envelope) >
+			        calibration.ranking(melee->name, kind, berserk->envelope)) {
+				return decideSpell(snapshot, ranged->name, "offense", now);
 			}
 		}
-		return decideSpell(player, snapshot, position, "Berserk", "offense", target, now);
+		return decideSpell(snapshot, "Berserk", "offense", now);
 	}
-	return decideSpell(player, snapshot, position, "Whirlwind Throw", "offense", target, now);
+	return decideSpell(snapshot, "Whirlwind Throw", "offense", now);
 }
 
 std::optional<PlayerBotSurvivalSpellVerification> PlayerBotSurvivalRuntime::verifySpell(const PlayerBotSpellVerificationInput& input)
@@ -220,20 +196,21 @@ void PlayerBotSurvivalRuntime::observeHealthDrain(bool controlledPlayer) { spell
 void PlayerBotSurvivalRuntime::observeCombatDamage(uint32_t attackerId, uint32_t targetId, uint32_t playerId, uint32_t damage) { spells.observeCombatDamage(attackerId, targetId, playerId, damage); }
 void PlayerBotSurvivalRuntime::observeHealthGain(bool controlledHealer, bool controlledTarget, uint32_t gain) { spells.observeHealthGain(controlledHealer, controlledTarget, gain); }
 bool PlayerBotSurvivalRuntime::canRetrySpell(std::chrono::steady_clock::time_point now) const { return spells.canRetry(now); }
-const PlayerBotSpellPendingCast* PlayerBotSurvivalRuntime::pendingSpell() const { return spells.pending(); }
+std::optional<PlayerBotSpellPendingCast> PlayerBotSurvivalRuntime::pendingSpell() const
+{
+	if (const PlayerBotSpellPendingCast* pending = spells.pending()) return *pending;
+	return std::nullopt;
+}
 void PlayerBotSurvivalRuntime::deferSpellRetry(std::chrono::steady_clock::time_point now) { spells.deferRetry(now, retryDelay); }
-const PlayerBotSpellProfile* PlayerBotSurvivalRuntime::calibrationProfile(const PlayerBotSpellPendingCast& pending) const { return calibration.find(pending.name, pending.targetClass); }
+std::optional<PlayerBotSpellProfile> PlayerBotSurvivalRuntime::calibrationProfile(const PlayerBotSpellPendingCast& pending) const
+{
+	if (const PlayerBotSpellProfile* profile = calibration.find(pending.name, pending.targetClass)) return *profile;
+	return std::nullopt;
+}
 double PlayerBotSurvivalRuntime::calibrationRanking(const PlayerBotSpellPendingCast& pending) const { return calibration.ranking(pending.name, pending.targetClass, pending.envelope); }
 size_t PlayerBotSurvivalRuntime::calibrationSize() const { return calibration.size(); }
-const PlayerBotSpellProfile& PlayerBotSurvivalRuntime::observeCalibrationFixture(const std::string& spell, const std::string& targetClass,
-	const PlayerBotSpellEnvelope& envelope, PlayerBotSpellEvidence evidence, int32_t value)
-{
-	return calibration.observe(spell, targetClass, envelope, evidence, value);
-}
-std::optional<std::string> PlayerBotSurvivalRuntime::takeCalibrationEviction() { return calibration.takeEvictedProfile(); }
-void PlayerBotSurvivalRuntime::clearCalibration() { calibration.clear(); }
 
-const char* PlayerBotSurvivalRuntime::magicTrainingReason(const Player& player, const PlayerBotSurvivalSnapshot& snapshot) const
+const char* PlayerBotSurvivalRuntime::magicTrainingReason(const PlayerBotSurvivalSnapshot& snapshot) const
 {
 	if (snapshot.hunting) return "hunting";
 	if (snapshot.progressionActive) return "progression_objective";
@@ -241,32 +218,32 @@ const char* PlayerBotSurvivalRuntime::magicTrainingReason(const Player& player, 
 	if (snapshot.navigationPending) return "pending_navigation";
 	if (hasPendingDefensiveWork() || needsHealing(snapshot)) return "defensive_work";
 	if (!snapshot.canDoAction || snapshot.healingExhausted) return "spell_cooldown";
-	if (player.getZone() == ZONE_PROTECTION) return "regeneration_paused";
-	const auto forecast = player.getManaRegenerationForecast();
-	if (!forecast) return "no_active_regeneration_forecast";
-	if (static_cast<uint64_t>(player.getMana()) + forecast->gain <= player.getMaxMana()) return "next_tick_not_overflow";
-	return decideMagicTraining(player, snapshot) ? nullptr : "no_audited_safe_spell";
+	if (snapshot.protectionZone) return "regeneration_paused";
+	if (!snapshot.regenerationForecastActive) return "no_active_regeneration_forecast";
+	if (static_cast<uint64_t>(snapshot.mana) + snapshot.regenerationManaGain <= snapshot.manaMaximum) return "next_tick_not_overflow";
+	return decideMagicTraining(snapshot) ? nullptr : "no_audited_safe_spell";
 }
 
-std::optional<PlayerBotMagicTrainingCommand> PlayerBotSurvivalRuntime::decideMagicTraining(const Player& player,
-	const PlayerBotSurvivalSnapshot&) const
+std::optional<PlayerBotMagicTrainingCommand> PlayerBotSurvivalRuntime::decideMagicTraining(const PlayerBotSurvivalSnapshot& snapshot) const
 {
-	const auto forecast = player.getManaRegenerationForecast();
-	if (!forecast) return std::nullopt;
+	if (!snapshot.regenerationForecastActive) return std::nullopt;
 	std::optional<PlayerBotMagicTrainingCommand> useful;
 	std::optional<PlayerBotMagicTrainingCommand> refresh;
 	for (const PlayerBotSpellDescriptor& descriptor : playerBotSpellDescriptors()) {
-		InstantSpell* spell = nullptr;
-		uint64_t cost = 0;
-		if (!magicTrainingSpellLegal(player, descriptor, spell, cost)) continue;
-		PlayerBotMagicTrainingCommand candidate{&descriptor, spell, cost, false, player.getMana(), player.getSpentMana(),
-		    player.getBaseMagicLevel(), forecast->gain, forecast->interval, forecast->remaining,
-		    static_cast<uint64_t>(player.getMana()) + forecast->gain,
-		    static_cast<uint64_t>(player.getMana()) + forecast->gain - player.getMaxMana()};
-		if (magicTrainingEffectUseful(player, descriptor.magicTrainingEffect)) {
-			if (!useful || descriptor.magicTrainingPriority > useful->descriptor->magicTrainingPriority) useful = candidate;
-		} else if (descriptor.magicTrainingRefreshSafe && (!refresh || cost < refresh->cost ||
-		           (cost == refresh->cost && descriptor.magicTrainingPriority > refresh->descriptor->magicTrainingPriority))) {
+		const PlayerBotSurvivalSpellObservation* spell = spellObservation(snapshot, descriptor.name);
+		if (!spell || !spell->magicTrainingEligible || spell->manaCost == 0 ||
+		    spell->manaCost > static_cast<uint64_t>(snapshot.mana) - std::min<uint64_t>(snapshot.mana, magicTrainingEmergencyReserve)) continue;
+		PlayerBotMagicTrainingCommand candidate{descriptor.name, descriptor.words, descriptor.magicTrainingPriority, spell->manaCost,
+		    false, snapshot.mana, snapshot.manaSpent, snapshot.magicLevel, snapshot.regenerationManaGain,
+		    snapshot.regenerationTickInterval, snapshot.regenerationTickRemaining,
+		    static_cast<uint64_t>(snapshot.mana) + snapshot.regenerationManaGain,
+		    static_cast<uint64_t>(snapshot.mana) + snapshot.regenerationManaGain - snapshot.manaMaximum};
+		const bool usefulEffect = descriptor.magicTrainingEffect == PlayerBotTrainingEffect::Haste ? !snapshot.hasteActive :
+		                           descriptor.magicTrainingEffect == PlayerBotTrainingEffect::Light ? !snapshot.lightActive : false;
+		if (usefulEffect) {
+			if (!useful || descriptor.magicTrainingPriority > useful->priority) useful = candidate;
+		} else if (descriptor.magicTrainingRefreshSafe && (!refresh || spell->manaCost < refresh->cost ||
+		           (spell->manaCost == refresh->cost && descriptor.magicTrainingPriority > refresh->priority))) {
 			candidate.refresh = true;
 			refresh = candidate;
 		}

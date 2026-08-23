@@ -20,6 +20,7 @@ void PlayerBotDepotSession::reset()
 void PlayerBotDepotSession::clearDiscovery()
 {
 	selectedDepotId = 0;
+	depotSelected = false;
 	selectedLockerItemId = 0;
 	selectedLockerPosition = Position();
 	selectedApproachPosition = Position();
@@ -29,6 +30,7 @@ void PlayerBotDepotSession::clearDiscovery()
 void PlayerBotDepotSession::select(PlayerBotDepotCandidate candidate)
 {
 	selectedDepotId = candidate.depotId;
+	depotSelected = true;
 	selectedLockerItemId = candidate.lockerItemId;
 	selectedLockerPosition = candidate.lockerPosition;
 	selectedApproachPosition = candidate.approachPosition;
@@ -119,6 +121,7 @@ PlayerBotDepotMoveVerification PlayerBotDepotSession::verifyMove(uint32_t invent
 	verification.attempts = ++depotAttempts;
 	if (depotAttempts < maximumAttempts) {
 		clearMove();
+		depotStage = PlayerBotDepotStage::Deposit;
 		verification.result = PlayerBotDepotMoveResult::Retry;
 		return verification;
 	}

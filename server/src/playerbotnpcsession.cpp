@@ -10,10 +10,8 @@
 
 #include "otpch.h"
 
+#include "const.h"
 #include "playerbotnpcsession.h"
-
-#include "player.h"
-#include "npc.h"
 
 namespace {
 	constexpr uint32_t npcReplyDelay = 1000;
@@ -42,48 +40,27 @@ bool PlayerBotNpcSession::retryLimitReached(uint32_t maximumRetries)
 	return ++retries >= maximumRetries;
 }
 
-PlayerBotNpcSessionOutcome PlayerBotNpcSession::establishFocus(Player& player, Npc& npc, uint32_t maximumRetries)
+PlayerBotNpcSessionOutcome PlayerBotNpcSession::advanceShop(const PlayerBotNpcShopObservation& observation, uint32_t maximumRetries)
 {
-	if (conversationStep == PlayerBotNpcConversationStep::Greet) {
-		npc.receiveSpeech(&player, TALKTYPE_PRIVATE_PN, "hi");
-		conversationStep = PlayerBotNpcConversationStep::Request;
-		pendingDelay = npcReplyDelay;
-		return {PlayerBotNpcSessionResult::Pending, 1};
-	}
-	if (conversationStep != PlayerBotNpcConversationStep::Request || greetingAcknowledged) {
-		return {PlayerBotNpcSessionResult::Ready, 0};
-	}
-	if (retryLimitReached(maximumRetries)) {
-		return {PlayerBotNpcSessionResult::Failed, 0};
-	}
-	conversationStep = PlayerBotNpcConversationStep::Greet;
-	pendingDelay = npcReplyDelay;
-	return {PlayerBotNpcSessionResult::Pending, 0};
-}
-
-PlayerBotNpcSessionOutcome PlayerBotNpcSession::openShop(Player& player, Npc& npc, uint32_t maximumRetries)
-{
-	int32_t onBuy;
-	int32_t onSell;
-	Npc* shopOwner = player.getShopOwner(onBuy, onSell);
-	if (shopOwner == &npc && !player.getShopItemList().empty()) {
+	if (observation.shopOpen) {
 		if (conversationStep != PlayerBotNpcConversationStep::Verify) {
 			conversationStep = PlayerBotNpcConversationStep::Ready;
 			retries = 0;
 		}
 		return {PlayerBotNpcSessionResult::Ready, 0};
 	}
-	if (shopOwner && shopOwner != &npc && conversationStep == PlayerBotNpcConversationStep::Greet) {
-		player.closeShopWindow(false);
+	if (conversationStep == PlayerBotNpcConversationStep::Greet) {
+		conversationStep = PlayerBotNpcConversationStep::Request;
+		pendingDelay = npcReplyDelay;
+		return {PlayerBotNpcSessionResult::Pending, 1};
 	}
-
-	if (conversationStep == PlayerBotNpcConversationStep::Greet ||
-	    conversationStep == PlayerBotNpcConversationStep::Request) {
-		const PlayerBotNpcSessionOutcome focus = establishFocus(player, npc, maximumRetries);
-		if (focus.result != PlayerBotNpcSessionResult::Ready) {
-			return focus;
+	if (conversationStep == PlayerBotNpcConversationStep::Request) {
+		if (!observation.greetingAcknowledged) {
+			if (retryLimitReached(maximumRetries)) return {PlayerBotNpcSessionResult::Failed, 0};
+			conversationStep = PlayerBotNpcConversationStep::Greet;
+			pendingDelay = npcReplyDelay;
+			return {PlayerBotNpcSessionResult::Pending, 0};
 		}
-		npc.receiveSpeech(&player, TALKTYPE_PRIVATE_PN, "trade");
 		conversationStep = PlayerBotNpcConversationStep::Ready;
 		pendingDelay = npcReplyDelay;
 		return {PlayerBotNpcSessionResult::Pending, 1};

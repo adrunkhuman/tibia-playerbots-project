@@ -60,7 +60,6 @@ void PlayerBotController::beginReturn(Player* player, const Position& position, 
 	clearNavigation();
 	lootWorkflow.reset();
 	depotWorkflow.reset();
-	navigationRuntime.resetFixedTargetRouteFailures();
 	player->closeContainer(corpseContainerId);
 	setStage(ScenarioStage::Traverse, position);
 	setCyclePhase(CyclePhase::ReturnToDepot, position, reason);
@@ -73,7 +72,9 @@ void PlayerBotController::beginReturn(Player* player, const Position& position, 
 
 void PlayerBotController::onNpcReply(uint32_t replyingPlayerId, uint32_t npcId, uint8_t type, const std::string& text)
 {
-	if (!serviceWorkflow.acceptNpcReply(playerId, replyingPlayerId, npcId, type)) {
+	const bool serviceAccepted = serviceWorkflow.reportNpcReply(playerId, replyingPlayerId, npcId, type);
+	const bool progressionAccepted = progressionRuntime.reportNpcReply(playerId, replyingPlayerId, npcId, type);
+	if (!serviceAccepted && !progressionAccepted) {
 		return;
 	}
 	Npc* npc = g_game.getNpcByID(npcId);
@@ -83,23 +84,21 @@ void PlayerBotController::onNpcReply(uint32_t replyingPlayerId, uint32_t npcId, 
 
 void PlayerBotController::beginService(Player* player, const Position& position, const char* reason)
 {
-	const bool interruptedHunt = fixtureDriver.goalLoop(true).selectGoal && goalArbiter.activeGoal() == TopLevelGoal::Hunt &&
+	const bool interruptedHunt = fixtureDriver.progressionGoalLoop(true).selectGoal && progressionRuntime.activeGoal() == TopLevelGoal::Hunt &&
 	                             !departurePlanner.hasCompleted(departureSnapshot(*player));
 	finishHuntRegion(*player, position, reason);
 	if (interruptedHunt) {
 		emit("goal_result", position,
-		     "\"decision_id\":" + std::to_string(goalArbiter.decisionId()) +
+		     "\"decision_id\":" + std::to_string(progressionRuntime.decisionId()) +
 		         ",\"goal\":\"hunt\",\"result\":\"interrupted\",\"reason\":" + jsonString(reason));
-		const PlayerBotGoalArbiter::GoalDecision decision = progressionRuntime.force(
-		    {TopLevelGoal::Service, true, criticalHealingServiceUtility, "forced_interrupt"});
-		progressionRuntime.apply(decision);
+		const PlayerBotGoalArbiter::GoalDecision decision = progressionRuntime.interruptHuntForService("forced_interrupt");
 		emit("goal_selection", position,
 		     "\"decision_id\":" + std::to_string(decision.id) + ",\"decision_reason\":" + jsonString(reason) +
 		         ",\"from_goal\":\"hunt\",\"to_goal\":\"service\",\"utility\":" +
-		         std::to_string(criticalHealingServiceUtility) + ',' +
+		         std::to_string(decision.candidate(TopLevelGoal::Service).utility) + ',' +
 		         "\"reason\":\"forced_interrupt\",\"forced\":true");
 	}
-	progressionRuntime.setActiveGoal(TopLevelGoal::Service);
+	progressionRuntime.enterService();
 	g_game.playerCancelAttackAndFollow(playerId);
 	clearTraversalTarget(position, reason);
 	clearNavigation();
@@ -121,127 +120,10 @@ void PlayerBotController::finishHuntAndSelectGoal(Player* player, const Position
 	setStage(ScenarioStage::Traverse, position);
 	setCyclePhase(CyclePhase::Idle, position, reason);
 	emit("goal_result", position,
-	     "\"decision_id\":" + std::to_string(goalArbiter.decisionId()) +
+	     "\"decision_id\":" + std::to_string(progressionRuntime.decisionId()) +
 	         ",\"goal\":\"hunt\",\"result\":\"success\",\"reason\":" + jsonString(reason));
 	selectTopLevelGoal(*player, position, reason);
 	schedule(SCHEDULER_MINTICKS);
-}
-
-void PlayerBotController::discoverServices(const Position& position)
-{
-	std::vector<ServiceNpc> shops;
-	std::vector<ServiceNpc> bankers;
-	Player* player = g_game.getPlayerByID(playerId);
-	for (const auto& entry : g_game.getNpcs()) {
-		Npc* npc = entry.second;
-		const std::string* capability = npc && !npc->isRemoved() ? npc->getParameter("playerbot_service") : nullptr;
-		if (!capability || !player ||
-		    serviceDistance(player->getTemplePosition(), {npc->getID(), npc->getPosition()}) > maximumServiceDistanceFromTemple) {
-			continue;
-		}
-		std::vector<ServiceNpc>* services = *capability == "shop" ? &shops :
-		                                    (*capability == "banker" ? &bankers : nullptr);
-		if (!services) {
-			continue;
-		}
-		ServiceNpc provider{npc->getID(), npc->getPosition()};
-		for (const ShopInfo& offer : npc->getShopOffers()) {
-			const ItemType& type = Item::items[offer.itemId];
-			if (!type.isFluidContainer() && !type.isSplash() &&
-			    fixtureDriver.observeProvider(true, offer.itemId, offer.sellPrice == 0).available) {
-				provider.offers.push_back({offer.itemId, offer.buyPrice, offer.sellPrice, static_cast<uint8_t>(offer.subType)});
-			}
-		}
-		services->push_back(std::move(provider));
-		emit("service_discovered", position, "\"capability\":" + jsonString(*capability) +
-		     ",\"npc_id\":" + std::to_string(npc->getID()) + ",\"npc_name\":" + jsonString(npc->getName()) +
-		     ",\"offers\":" + std::to_string(npc->getShopOffers().size()));
-	}
-	if (shops.empty() || bankers.empty()) {
-		stop("service_npc_unavailable", position);
-		return;
-	}
-	PlayerBotServiceObservation observation;
-	observation.currentPosition = position;
-	observation.discoveryObserved = true;
-	observation.shops = std::move(shops);
-	observation.bankers = std::move(bankers);
-	if (serviceWorkflow.advance(observation, economyCatalog, dispositionPolicy).type == PlayerBotServiceCommandType::Fail) {
-		stop("service_npc_unavailable", position);
-		return;
-	}
-	economyCatalog.learn(serviceWorkflow.shops());
-}
-
-bool PlayerBotController::approachServiceNpc(Player* player, const ServiceNpc& service, const Position& currentPosition)
-{
-	Npc* npc = g_game.getNpcByID(service.id);
-	if (!npc || npc->isRemoved()) {
-		stop("service_npc_unavailable", currentPosition);
-		return false;
-	}
-	const Position servicePosition = npc->getPosition();
-	if (Position::areInRange<3, 3, 0>(currentPosition, servicePosition)) {
-		serviceWorkflow.clearApproach();
-		return true;
-	}
-	if (serviceWorkflow.approachTarget() != Position()) {
-		if (currentPosition == serviceWorkflow.approachTarget()) {
-			serviceWorkflow.clearApproach();
-			clearNavigation();
-			schedule(SCHEDULER_MINTICKS);
-			return false;
-		}
-		return processNavigation(player, currentPosition, serviceWorkflow.approachTarget());
-	}
-
-	std::vector<Position> candidates;
-	candidates.reserve(48);
-	for (int32_t xOffset = -3; xOffset <= 3; ++xOffset) {
-		for (int32_t yOffset = -3; yOffset <= 3; ++yOffset) {
-			if (xOffset != 0 || yOffset != 0) {
-				candidates.emplace_back(servicePosition.x + xOffset, servicePosition.y + yOffset, servicePosition.z);
-			}
-		}
-	}
-	std::sort(candidates.begin(), candidates.end(), [&currentPosition](const Position& left, const Position& right) {
-		const int32_t leftDistance = std::max(Position::getDistanceX(currentPosition, left), Position::getDistanceY(currentPosition, left));
-		const int32_t rightDistance = std::max(Position::getDistanceX(currentPosition, right), Position::getDistanceY(currentPosition, right));
-		return leftDistance == rightDistance ? left < right : leftDistance < rightDistance;
-	});
-	for (const Position& candidate : candidates) {
-		if (serviceWorkflow.isApproachRejected(candidate)) {
-			continue;
-		}
-		Tile* tile = g_game.map.getTile(candidate);
-		if (!tile || tile->queryAdd(0, *player, 1, 0) != RETURNVALUE_NOERROR) {
-			continue;
-		}
-		std::deque<PlayerBotNavigationStep> candidateSteps;
-		uint64_t expandedNodes = 0;
-		const auto startedAt = std::chrono::steady_clock::now();
-		PlayerBotNavigationRoutePlan routePlan = navigationRuntime.plan(*player, candidate);
-		const bool planned = routePlan.metrics.result == PlayerBotNavigationResult::Reached;
-		candidateSteps = std::move(routePlan.steps);
-		expandedNodes = routePlan.metrics.expandedNodes;
-		telemetry.recordPathfinding(std::chrono::duration_cast<std::chrono::microseconds>(
-			std::chrono::steady_clock::now() - startedAt), planned && !candidateSteps.empty());
-		if (!planned || candidateSteps.empty()) {
-			serviceWorkflow.rejectApproach(candidate);
-			schedule(SCHEDULER_MINTICKS);
-			return false;
-		}
-		serviceWorkflow.setApproachTarget(candidate);
-		navigationRuntime.adopt(candidate, std::move(candidateSteps));
-		std::ostringstream fields;
-		fields << "\"action\":\"plan\",\"result\":\"success\",\"steps\":" << navigationRuntime.routeSize()
-		       << ",\"expanded_nodes\":" << expandedNodes << ",\"destination\":{\"x\":" << candidate.x
-		       << ",\"y\":" << candidate.y << ",\"z\":" << static_cast<uint16_t>(candidate.z) << '}';
-		emit("action_result", currentPosition, fields.str());
-		return processNavigation(player, currentPosition, candidate);
-	}
-	stop("service_approach_unavailable", currentPosition);
-	return false;
 }
 
 void PlayerBotController::refreshItemValues()
@@ -256,10 +138,9 @@ void PlayerBotController::refreshItemValues()
 		PlayerBotEconomyProvider provider{npc->getID(), npc->getPosition()};
 		for (const ShopInfo& offer : npc->getShopOffers()) {
 			const ItemType& type = Item::items[offer.itemId];
-			if (offer.sellPrice != 0 && !type.isFluidContainer() && !type.isSplash() &&
-			    fixtureDriver.observeProvider(true, offer.itemId, false).available) {
-				provider.offers.push_back({offer.itemId, offer.buyPrice, offer.sellPrice, static_cast<uint8_t>(offer.subType)});
-			}
+			if (type.isFluidContainer() || type.isSplash()) continue;
+			if (offer.buyPrice != 0 || offer.sellPrice != 0) provider.offers.push_back(
+			    {offer.itemId, offer.buyPrice, offer.sellPrice, static_cast<uint8_t>(offer.subType)});
 		}
 		providers.push_back(std::move(provider));
 	}
@@ -288,323 +169,6 @@ uint32_t PlayerBotController::serviceDistance(const Position& from, const Servic
 	       (from.z == service.position.z ? 0 : 32 * Position::getDistanceZ(from, service.position));
 }
 
-const PlayerBotController::ServiceNpc* PlayerBotController::findNearestService(const std::vector<PlayerBotController::ServiceNpc>& services, const Position& position) const
-{
-	auto it = std::min_element(services.begin(), services.end(), [this, &position](const ServiceNpc& left, const ServiceNpc& right) {
-		return serviceDistance(position, left) < serviceDistance(position, right);
-	});
-	return it == services.end() ? nullptr : &*it;
-}
-
-const PlayerBotController::ServiceNpc* PlayerBotController::findShopFor(uint16_t itemId, bool buying, const Position& position) const
-{
-	return economyCatalog.rankedProvider(serviceWorkflow.shops(), itemId, buying, position);
-}
-
-const PlayerBotController::ServiceNpc* PlayerBotController::findLootSeller(Player* player, const Position& position, uint16_t& itemId) const
-{
-	const ServiceNpc* nearest = nullptr;
-	uint32_t selectedSellPrice = 0;
-	for (const ServiceNpc& service : serviceWorkflow.shops()) {
-		Npc* npc = g_game.getNpcByID(service.id);
-		if (!npc || npc->isRemoved()) {
-			continue;
-		}
-		for (const ShopInfo& offer : npc->getShopOffers()) {
-			if (offer.sellPrice != 0 && fixtureDriver.observeProvider(true, offer.itemId, false).available &&
-			    getSaleItemCount(*player, offer.itemId) > 0 &&
-			    (!nearest || offer.sellPrice > selectedSellPrice ||
-			     (offer.sellPrice == selectedSellPrice && serviceDistance(position, service) < serviceDistance(position, *nearest)))) {
-				itemId = offer.itemId;
-				nearest = &service;
-				selectedSellPrice = offer.sellPrice;
-			}
-		}
-	}
-	return nearest;
-}
-
-bool PlayerBotController::prepareSlottedSaleItem(Player* player, uint16_t itemId, const Position& position)
-{
-	Item* backpackItem = player->getInventoryItem(CONST_SLOT_BACKPACK);
-	Container* backpack = backpackItem ? backpackItem->getContainer() : nullptr;
-	if (!backpack) {
-		return false;
-	}
-	if (const auto pending = serviceWorkflow.pendingSlottedSale()) {
-		Item* sourceAfter = player->getInventoryItem(pending->sourceSlot);
-		const uint32_t backpackAfter = backpack->getItemTypeCount(pending->itemId);
-		const bool moved = (!sourceAfter || sourceAfter->getID() != pending->itemId) && backpackAfter > pending->backpackCount;
-		const PlayerBotSlottedSaleObservation observation = serviceWorkflow.observeSlottedSale(
-		    moved, maximumServiceAttempts, std::chrono::steady_clock::now(), unavailableDispositionCooldown);
-		if (observation == PlayerBotSlottedSaleObservation::Moved) {
-			emit("action_result", position,
-			     "\"action\":\"item_disposition\",\"result\":\"success\",\"disposition\":\"sell\",\"item_id\":" +
-			         std::to_string(pending->itemId) + ",\"source_slot\":" +
-			         std::to_string(pending->sourceSlot) + ",\"provider_available\":true");
-			schedule(SCHEDULER_MINTICKS);
-			return true;
-		}
-		const uint16_t failedItemId = pending->itemId;
-		const slots_t failedSlot = pending->sourceSlot;
-		if (observation == PlayerBotSlottedSaleObservation::Deferred) {
-			emit("action_result", position,
-			     "\"action\":\"item_disposition\",\"result\":\"deferred\",\"reason\":\"move_not_verified\",\"disposition\":\"sell\",\"item_id\":" +
-			         std::to_string(failedItemId) + ",\"source_slot\":" + std::to_string(failedSlot) +
-			         ",\"provider_available\":true,\"cooldown_ms\":" +
-			         std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(unavailableDispositionCooldown).count()));
-			serviceWorkflow.skipSelling();
-			schedule(SCHEDULER_MINTICKS);
-			return true;
-		}
-		schedule(navigationDecisionDelay(*player));
-		return true;
-	}
-
-	slots_t sourceSlot = CONST_SLOT_WHEREEVER;
-	Item* item = findActionableSlottedItem(*player, itemId, sourceSlot);
-	if (!item) {
-		return false;
-	}
-	const int8_t backpackId = player->getContainerID(backpack);
-	if (backpackId < 0) {
-		if (!player->canDoAction()) {
-			schedule(navigationDecisionDelay(*player));
-			return true;
-		}
-		telemetry.recordActionAttempt();
-		g_game.playerUseItem(playerId, Position(0xFFFF, CONST_SLOT_BACKPACK, 0), 0,
-		                     depotSourceContainerId, backpack->getClientID());
-		schedule(navigationDecisionDelay(*player));
-		return true;
-	}
-	if (!player->canDoAction()) {
-		schedule(navigationDecisionDelay(*player));
-		return true;
-	}
-	Position sourcePosition;
-	uint8_t sourceIndex = 0;
-	g_game.internalGetPosition(item, sourcePosition, sourceIndex);
-	serviceWorkflow.beginSlottedSale(itemId, sourceSlot, backpack->getItemTypeCount(itemId));
-	telemetry.recordActionAttempt();
-	g_game.playerMoveItem(player, sourcePosition, item->getClientID(), sourceIndex,
-	                      Position(0xFFFF, 0x40 | static_cast<uint8_t>(backpackId),
-	                               containerDestinationIndex(*backpack, *item)),
-	                      static_cast<uint8_t>(item->getItemCount()), item, backpack);
-	emit("action_result", position,
-	     "\"action\":\"item_disposition\",\"result\":\"requested\",\"disposition\":\"sell\",\"item_id\":" +
-	         std::to_string(itemId) + ",\"source_slot\":" + std::to_string(sourceSlot) +
-	         ",\"provider_available\":true,\"attempt\":" + std::to_string(serviceWorkflow.slottedSaleAttempts()));
-	schedule(navigationDecisionDelay(*player));
-	return true;
-}
-
-void PlayerBotController::completeServiceAction(Player* player, const char* action,
-	const PlayerBotServiceTransaction& transaction, const Position& position)
-{
-	std::ostringstream fields;
-	fields << "\"action\":" << jsonString(action) << ",\"result\":\"success\",\"item_id\":" << transaction.itemId
-	       << ",\"count\":" << transaction.amount << ",\"carried_before\":" << transaction.money
-	       << ",\"carried_after\":" << player->getMoney() << ",\"bank_before\":" << transaction.balance
-	       << ",\"bank_after\":" << player->getBankBalance();
-	emit("action_result", position, fields.str());
-	const ItemType& itemType = Item::items[transaction.itemId];
-	const std::string itemName = transaction.amount == 1 ? itemType.name : itemType.getPluralName();
-	say(*player, std::string(action) == "sell" ?
-	     "Sold " + std::to_string(transaction.amount) + " " + itemName + '.' :
-	     "Bought " + std::to_string(transaction.amount) + " " + itemName + '.');
-	serviceWorkflow.setNpcStep(PlayerBotNpcConversationStep::Ready);
-	serviceWorkflow.resetNpcRetries();
-	schedule(SCHEDULER_MINTICKS);
-}
-
-void PlayerBotController::processServiceShop(Player* player, const Position& currentPosition, const ServiceNpc& service, const char* action,
-                        uint16_t itemId, uint32_t amount, bool purchase)
-{
-	if (!approachServiceNpc(player, service, currentPosition)) {
-		return;
-	}
-	Npc* npc = g_game.getNpcByID(service.id);
-	if (!npc || npc->isRemoved()) {
-		stop("service_npc_unavailable", currentPosition);
-		return;
-	}
-	const PlayerBotNpcSessionOutcome sessionOutcome = serviceWorkflow.openNpcShop(*player, *npc, maximumServiceAttempts);
-	for (uint8_t action = 0; action < sessionOutcome.actionsIssued; ++action) {
-		telemetry.recordActionAttempt();
-	}
-	if (sessionOutcome.result != PlayerBotNpcSessionResult::Ready) {
-		if (sessionOutcome.result == PlayerBotNpcSessionResult::Failed) {
-			logActionFailure("shop", serviceWorkflow.npcStep() == PlayerBotNpcConversationStep::Request ?
-			                 "npc_focus_unconfirmed" : "shop_window_unavailable", currentPosition);
-			stop("shop_transaction_unavailable", currentPosition);
-		} else {
-			schedule(serviceWorkflow.npcNextDelay() == 0 ? SCHEDULER_MINTICKS : serviceWorkflow.npcNextDelay());
-		}
-		return;
-	}
-	const ShopInfo* offer = findOffer(service, itemId, purchase);
-	if (!offer || amount == 0 || amount > 100) {
-		stop("shop_offer_unavailable", currentPosition);
-		return;
-	}
-	if (serviceWorkflow.npcStep() == PlayerBotNpcConversationStep::Ready) {
-		if (!serviceWorkflow.hasShopTransaction()) {
-			serviceWorkflow.beginShopTransaction({itemId, amount, inventoryPolicy.inventoryItemCount(*player, itemId),
-			                                     player->getMoney(), player->getBankBalance()});
-		}
-		serviceWorkflow.setNpcStep(PlayerBotNpcConversationStep::Verify);
-		telemetry.recordActionAttempt();
-		if (purchase) {
-			g_game.playerPurchaseItem(playerId, Item::items[itemId].clientId, static_cast<uint8_t>(offer->subType),
-			                         static_cast<uint8_t>(amount), false, false);
-		} else {
-			g_game.playerSellItem(playerId, Item::items[itemId].clientId, static_cast<uint8_t>(offer->subType),
-			                     static_cast<uint8_t>(amount), true);
-		}
-		schedule(navigationDecisionDelay(*player));
-		return;
-	}
-
-	const PlayerBotServiceTransaction* transaction = serviceWorkflow.shopTransaction();
-	if (!transaction) {
-		stop("shop_transaction_missing", currentPosition);
-		return;
-	}
-	const PlayerBotServiceVerification verification = serviceWorkflow.verifyShopTransaction(
-		inventoryPolicy.inventoryItemCount(*player, transaction->itemId), player->getMoney(), player->getBankBalance(), purchase,
-		purchase ? offer->buyPrice : offer->sellPrice, maximumServiceAttempts);
-	if (verification.result == PlayerBotServiceVerificationResult::Success) {
-		completeServiceAction(player, action, verification.before, currentPosition);
-		return;
-	}
-	if (verification.result == PlayerBotServiceVerificationResult::Mismatch) {
-		logActionFailure(action, "transaction_delta_mismatch", currentPosition);
-		stop("shop_transaction_delta_mismatch", currentPosition);
-		return;
-	}
-	if (verification.result == PlayerBotServiceVerificationResult::Rejected) {
-		logActionFailure(action, "transaction_not_verified", currentPosition);
-		stop("shop_transaction_not_verified", currentPosition);
-		return;
-	}
-	serviceWorkflow.setNpcStep(PlayerBotNpcConversationStep::Ready);
-	schedule(navigationDecisionDelay(*player));
-}
-
-void PlayerBotController::processBank(Player* player, const Position& currentPosition, const ServiceNpc& banker)
-{
-	if (!approachServiceNpc(player, banker, currentPosition)) {
-		return;
-	}
-	Npc* npc = g_game.getNpcByID(banker.id);
-	if (!npc || npc->isRemoved()) {
-		stop("banker_unavailable", currentPosition);
-		return;
-	}
-	if (serviceWorkflow.npcStep() == PlayerBotNpcConversationStep::Greet ||
-	    serviceWorkflow.npcStep() == PlayerBotNpcConversationStep::Request) {
-		const PlayerBotNpcSessionOutcome focus = serviceWorkflow.establishNpcFocus(*player, *npc, maximumServiceAttempts);
-		for (uint8_t action = 0; action < focus.actionsIssued; ++action) {
-			telemetry.recordActionAttempt();
-		}
-		if (focus.result == PlayerBotNpcSessionResult::Failed) {
-			logActionFailure("bank", "npc_focus_unconfirmed", currentPosition);
-			stop("banker_focus_unconfirmed", currentPosition);
-			return;
-		}
-		if (focus.result == PlayerBotNpcSessionResult::Pending) {
-			schedule(serviceWorkflow.npcNextDelay());
-			return;
-		}
-	}
-	if (serviceWorkflow.npcStep() == PlayerBotNpcConversationStep::Request) {
-		if (!serviceWorkflow.hasBankDeposit()) {
-			serviceWorkflow.beginBankDeposit(player->getMoney(), player->getBankBalance());
-		}
-		if (serviceWorkflow.bankTransaction().money == 0) {
-			serviceWorkflow.markBankDepositComplete();
-			serviceWorkflow.setNpcStep(PlayerBotNpcConversationStep::Ready);
-			schedule(SCHEDULER_MINTICKS);
-			return;
-		}
-		telemetry.recordActionAttempt();
-		npc->receiveSpeech(player, TALKTYPE_PRIVATE_PN, "deposit all");
-		serviceWorkflow.setNpcStep(PlayerBotNpcConversationStep::Confirm);
-		schedule(SCHEDULER_MINTICKS);
-		return;
-	}
-	if (serviceWorkflow.npcStep() == PlayerBotNpcConversationStep::Confirm) {
-		telemetry.recordActionAttempt();
-		npc->receiveSpeech(player, TALKTYPE_PRIVATE_PN, "yes");
-		serviceWorkflow.setNpcStep(PlayerBotNpcConversationStep::Verify);
-		schedule(SCHEDULER_MINTICKS);
-		return;
-	}
-	if (serviceWorkflow.npcStep() == PlayerBotNpcConversationStep::Verify && !serviceWorkflow.bankDepositComplete()) {
-		const PlayerBotServiceVerification verification = serviceWorkflow.verifyBankDeposit(
-			player->getMoney(), player->getBankBalance(), maximumServiceAttempts);
-		if (verification.result != PlayerBotServiceVerificationResult::Success) {
-			if (verification.result == PlayerBotServiceVerificationResult::Rejected) {
-				logActionFailure("bank_deposit", "transaction_not_verified", currentPosition);
-				stop("bank_deposit_not_verified", currentPosition);
-				return;
-			}
-			serviceWorkflow.setNpcStep(PlayerBotNpcConversationStep::Request);
-			schedule(SCHEDULER_MINTICKS);
-			return;
-		}
-		emit("action_result", currentPosition, "\"action\":\"bank_deposit\",\"result\":\"success\",\"count\":" +
-		     std::to_string(verification.before.money) + ",\"bank_before\":" + std::to_string(verification.before.balance) +
-		     ",\"bank_after\":" + std::to_string(player->getBankBalance()));
-		say(*player, "Deposited " + std::to_string(verification.before.money) + " gold. Bank: " +
-		     std::to_string(player->getBankBalance()) + '.');
-		serviceWorkflow.markBankDepositComplete();
-		serviceWorkflow.setNpcStep(PlayerBotNpcConversationStep::Ready);
-	}
-	if (serviceWorkflow.npcStep() == PlayerBotNpcConversationStep::Ready) {
-		if (!serviceWorkflow.hasBankWithdrawal()) {
-			const uint32_t amount = dispositionPolicy.bankWithdrawal(
-			    {0, player->getFreeCapacity(), player->getMoney(), player->getBankBalance()}, Item::items[ITEM_GOLD_COIN].weight);
-			if (amount == 0) {
-				serviceWorkflow.complete();
-				schedule(SCHEDULER_MINTICKS);
-				return;
-			}
-			serviceWorkflow.beginBankWithdrawal(player->getBankBalance(), amount);
-		}
-		telemetry.recordActionAttempt();
-		npc->receiveSpeech(player, TALKTYPE_PRIVATE_PN, "withdraw " + std::to_string(serviceWorkflow.bankTransaction().amount));
-		serviceWorkflow.setNpcStep(PlayerBotNpcConversationStep::Confirm);
-		schedule(SCHEDULER_MINTICKS);
-		return;
-	}
-	if (serviceWorkflow.npcStep() == PlayerBotNpcConversationStep::Confirm) {
-		telemetry.recordActionAttempt();
-		npc->receiveSpeech(player, TALKTYPE_PRIVATE_PN, "yes");
-		serviceWorkflow.setNpcStep(PlayerBotNpcConversationStep::Verify);
-		schedule(SCHEDULER_MINTICKS);
-		return;
-	}
-	const PlayerBotServiceVerification verification = serviceWorkflow.verifyBankWithdrawal(
-		player->getMoney(), player->getBankBalance(), maximumServiceAttempts);
-	if (verification.result == PlayerBotServiceVerificationResult::Success) {
-		emit("action_result", currentPosition, "\"action\":\"bank_withdraw\",\"result\":\"success\",\"count\":" +
-		     std::to_string(verification.before.amount) + ",\"bank_before\":" +
-		     std::to_string(verification.before.balance) + ",\"bank_after\":" + std::to_string(player->getBankBalance()));
-		serviceWorkflow.complete();
-		schedule(SCHEDULER_MINTICKS);
-		return;
-	}
-	if (verification.result == PlayerBotServiceVerificationResult::Rejected) {
-		logActionFailure("bank_withdraw", "transaction_not_verified", currentPosition);
-		stop("bank_withdraw_not_verified", currentPosition);
-		return;
-	}
-	serviceWorkflow.setNpcStep(PlayerBotNpcConversationStep::Ready);
-	schedule(SCHEDULER_MINTICKS);
-}
-
 void PlayerBotController::processService(Player* player, const Position& currentPosition)
 {
 	PlayerBotServiceObservation observation;
@@ -612,103 +176,202 @@ void PlayerBotController::processService(Player* player, const Position& current
 	observation.freeCapacity = player->getFreeCapacity();
 	observation.money = player->getMoney();
 	observation.bankBalance = player->getBankBalance();
-	for (const ServiceNpc& shop : serviceWorkflow.shops()) {
-		for (const auto& offer : shop.offers) {
+	observation.goldCoinWeight = Item::items[ITEM_GOLD_COIN].weight;
+	observation.smallHealthPotionWeight = Item::items[PlayerBotDispositionPolicy::smallHealthPotionItemId].weight;
+	Item* serviceBackpackItem = player->getInventoryItem(CONST_SLOT_BACKPACK);
+	Container* serviceBackpack = serviceBackpackItem ? serviceBackpackItem->getContainer() : nullptr;
+	observation.actionAvailable = player->canDoAction();
+	observation.backpackAvailable = serviceBackpack != nullptr;
+	observation.backpackOpen = serviceBackpack && player->getContainerID(serviceBackpack) >= 0;
+	observation.maximumAttempts = maximumServiceAttempts;
+	observation.slottedSaleCooldownMs = static_cast<uint32_t>(
+		std::chrono::duration_cast<std::chrono::milliseconds>(unavailableDispositionCooldown).count());
+	for (const auto& entry : g_game.getNpcs()) {
+		Npc* npc = entry.second;
+		const std::string* capability = npc && !npc->isRemoved() ? npc->getParameter("playerbot_service") : nullptr;
+		if (!capability || serviceDistance(player->getTemplePosition(), {npc->getID(), npc->getPosition()}) > maximumServiceDistanceFromTemple) continue;
+		if (*capability != "shop" && *capability != "banker") continue;
+		PlayerBotEconomyProvider provider{npc->getID(), npc->getPosition()};
+		for (const ShopInfo& offer : npc->getShopOffers()) {
+			const ItemType& type = Item::items[offer.itemId];
+			if (type.isFluidContainer() || type.isSplash()) continue;
+			const bool buyAvailable = offer.buyPrice != 0 && fixtureDriver.observeProvider(true, offer.itemId, true).available;
+			const bool sellAvailable = offer.sellPrice != 0 && fixtureDriver.observeProvider(true, offer.itemId, false).available;
+			if (!buyAvailable && !sellAvailable) continue;
+			provider.offers.push_back({offer.itemId, buyAvailable ? offer.buyPrice : 0,
+			                           sellAvailable ? offer.sellPrice : 0, static_cast<uint8_t>(offer.subType)});
 			observation.inventoryCounts.emplace(offer.itemId, inventoryPolicy.inventoryItemCount(*player, offer.itemId));
 			observation.backpackSaleCounts.emplace(offer.itemId, inventoryPolicy.backpackSaleItemCount(*player, offer.itemId));
 		}
+		int32_t onBuy;
+		int32_t onSell;
+		PlayerBotServiceProviderObservation providerObservation{
+			true, Position::areInRange<3, 3, 0>(currentPosition, npc->getPosition()),
+			player->getShopOwner(onBuy, onSell) == npc && !player->getShopItemList().empty()};
+		if (!providerObservation.inRange) {
+			for (int32_t xOffset = -3; xOffset <= 3; ++xOffset) for (int32_t yOffset = -3; yOffset <= 3; ++yOffset) {
+				if (xOffset == 0 && yOffset == 0) continue;
+				const Position approach(npc->getPosition().x + xOffset, npc->getPosition().y + yOffset, npc->getPosition().z);
+				Tile* tile = g_game.map.getTile(approach);
+				if (tile && tile->queryAdd(0, *player, 1, 0) == RETURNVALUE_NOERROR) {
+					providerObservation.approaches.push_back({approach, static_cast<uint32_t>(
+						std::max(Position::getDistanceX(currentPosition, approach), Position::getDistanceY(currentPosition, approach)))});
+				}
+			}
+			std::sort(providerObservation.approaches.begin(), providerObservation.approaches.end(), [](const auto& left,
+			                                                                                             const auto& right) {
+				return left.distance != right.distance ? left.distance < right.distance : left.position < right.position;
+			});
+		}
+		observation.providers[npc->getID()] = std::move(providerObservation);
+		observation.discoveries.push_back({npc->getID(), npc->getName(), *capability,
+		                                  static_cast<uint32_t>(npc->getShopOffers().size())});
+		if (*capability == "shop" && !provider.offers.empty()) observation.shops.push_back(std::move(provider));
+		else if (*capability == "banker") observation.bankers.push_back(std::move(provider));
 	}
-	if (const auto item = observation.inventoryCounts.find(2398); item != observation.inventoryCounts.end()) {
-		item->second = fixtureDriver.observeProvider(true, 2398, false, item->second).inventoryCount;
+	observation.now = std::chrono::steady_clock::now();
+	for (int32_t slot = CONST_SLOT_FIRST; slot <= CONST_SLOT_LAST; ++slot) {
+		Item* item = player->getInventoryItem(static_cast<slots_t>(slot));
+		if (item && inventoryPolicy.isActionableSlottedItem(*player, *item, static_cast<slots_t>(slot), 0)) {
+			observation.slottedSaleItems.push_back({item->getID(), static_cast<slots_t>(slot), item->getItemCount()});
+		}
 	}
-	const PlayerBotServiceCommand command = serviceWorkflow.advance(observation, economyCatalog, dispositionPolicy);
-	if (command.type == PlayerBotServiceCommandType::RequestDiscoverySnapshot) {
-		discoverServices(currentPosition);
-		schedule(SCHEDULER_MINTICKS);
-		return;
+	PlayerBotServiceCommand command = serviceWorkflow.advance(observation, economyCatalog, dispositionPolicy);
+	const std::vector<PlayerBotServiceDiscovery> discoveries = command.discoveries;
+	std::deque<PlayerBotNavigationStep> approachSteps;
+	while (command.type == PlayerBotServiceCommandType::ValidateProviderRoute) {
+		PlayerBotServiceObservation routeObservation = observation;
+		routeObservation.approachRoute.providerId = command.providerId;
+		routeObservation.approachRoute.destination = command.destination;
+		const auto startedAt = std::chrono::steady_clock::now();
+		PlayerBotNavigationRoutePlan routePlan;
+		if (command.destination != currentPosition) routePlan = planNavigationRoute(*player, command.destination);
+		const bool reached = command.destination == currentPosition ||
+		                     (routePlan.metrics.result == PlayerBotNavigationResult::Reached && !routePlan.steps.empty());
+		telemetry.recordPathfinding(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - startedAt), reached);
+		routeObservation.approachRoute.result = reached ? PlayerBotServiceRouteResult::Reached : PlayerBotServiceRouteResult::Unreachable;
+		routeObservation.approachRoute.steps = static_cast<uint32_t>(routePlan.steps.size());
+		routeObservation.approachRoute.expandedNodes = routePlan.metrics.expandedNodes;
+		if (reached) approachSteps = std::move(routePlan.steps);
+		command = serviceWorkflow.advance(routeObservation, economyCatalog, dispositionPolicy);
+	}
+	for (const PlayerBotServiceDiscovery& discovery : discoveries) {
+		emit("service_discovered", currentPosition, "\"capability\":" + jsonString(discovery.capability) +
+		     ",\"npc_id\":" + std::to_string(discovery.npcId) + ",\"npc_name\":" + jsonString(discovery.npcName) +
+		     ",\"offers\":" + std::to_string(discovery.offers));
+	}
+	if (command.verification && command.verification->result == PlayerBotServiceVerificationResult::Success && command.transaction) {
+		const PlayerBotServiceTransaction& transaction = *command.transaction;
+		if (transaction.itemId != 0) {
+			const char* action = serviceWorkflow.stage() == PlayerBotServiceStage::SellLoot ? "sell" : "buy_potions";
+			emit("action_result", currentPosition, "\"action\":" + jsonString(action) + ",\"result\":\"success\",\"item_id\":" +
+			     std::to_string(transaction.itemId) + ",\"count\":" + std::to_string(transaction.amount) +
+			     ",\"carried_before\":" + std::to_string(transaction.money) + ",\"carried_after\":" +
+			     std::to_string(observation.money) + ",\"bank_before\":" + std::to_string(transaction.balance) +
+			     ",\"bank_after\":" + std::to_string(observation.bankBalance));
+			const ItemType& itemType = Item::items[transaction.itemId];
+			say(*player, std::string(action) == "sell" ? "Sold " + std::to_string(transaction.amount) + " " +
+			    (transaction.amount == 1 ? itemType.name : itemType.getPluralName()) + '.' : "Bought " +
+			    std::to_string(transaction.amount) + " " + (transaction.amount == 1 ? itemType.name : itemType.getPluralName()) + '.');
+		} else if (command.type == PlayerBotServiceCommandType::Complete) {
+			emit("action_result", currentPosition, "\"action\":\"bank_withdraw\",\"result\":\"success\",\"count\":" +
+			     std::to_string(transaction.amount) + ",\"bank_before\":" + std::to_string(transaction.balance) +
+			     ",\"bank_after\":" + std::to_string(observation.bankBalance));
+		} else {
+			emit("action_result", currentPosition, "\"action\":\"bank_deposit\",\"result\":\"success\",\"count\":" +
+			     std::to_string(transaction.money) + ",\"bank_before\":" + std::to_string(transaction.balance) +
+			     ",\"bank_after\":" + std::to_string(observation.bankBalance));
+			say(*player, "Deposited " + std::to_string(transaction.money) + " gold. Bank: " +
+			    std::to_string(observation.bankBalance) + '.');
+		}
 	}
 	if (command.type == PlayerBotServiceCommandType::Fail) {
 		stop(command.outcome == PlayerBotServiceOutcome::InsufficientFunds ? "insufficient_potion_funds" : "required_shop_offer_unavailable", currentPosition);
 		return;
 	}
-	if (serviceWorkflow.npcStep() == PlayerBotNpcConversationStep::Verify && serviceWorkflow.hasShopTransaction() &&
-	    (serviceWorkflow.stage() == PlayerBotServiceStage::SellLoot || serviceWorkflow.stage() == PlayerBotServiceStage::BuyPotions)) {
-		auto service = std::find_if(serviceWorkflow.shops().begin(), serviceWorkflow.shops().end(), [this](const ServiceNpc& candidate) {
-			return candidate.id == serviceWorkflow.npcTargetId();
-		});
-		if (service == serviceWorkflow.shops().end()) {
-			stop("shop_transaction_service_unavailable", currentPosition);
-			return;
+	if (command.type == PlayerBotServiceCommandType::Wait && command.itemId != 0 &&
+	    command.sourceSlot != CONST_SLOT_WHEREEVER) {
+		if (command.outcome == PlayerBotServiceOutcome::Success) {
+			emit("action_result", currentPosition,
+			     "\"action\":\"item_disposition\",\"result\":\"success\",\"disposition\":\"sell\",\"item_id\":" +
+			         std::to_string(command.itemId) + ",\"source_slot\":" + std::to_string(command.sourceSlot) +
+			         ",\"provider_available\":" + (command.providerAvailable ? "true" : "false"));
+		} else if (command.outcome == PlayerBotServiceOutcome::Unavailable) {
+			emit("action_result", currentPosition,
+			     "\"action\":\"item_disposition\",\"result\":\"deferred\",\"reason\":\"move_not_verified\",\"disposition\":\"sell\",\"item_id\":" +
+			         std::to_string(command.itemId) + ",\"source_slot\":" + std::to_string(command.sourceSlot) +
+			         ",\"provider_available\":" + (command.providerAvailable ? "true" : "false") +
+			         ",\"cooldown_ms\":" + std::to_string(command.cooldownMs));
 		}
-		const bool purchase = serviceWorkflow.stage() != PlayerBotServiceStage::SellLoot;
-		const char* action = serviceWorkflow.stage() == PlayerBotServiceStage::SellLoot ? "sell" : "buy_potions";
-		const PlayerBotServiceTransaction& transaction = *serviceWorkflow.shopTransaction();
-		processServiceShop(player, currentPosition, *service, action, transaction.itemId, transaction.amount, purchase);
+	}
+	Npc* provider = command.providerId == 0 ? nullptr : g_game.getNpcByID(command.providerId);
+	if (command.type == PlayerBotServiceCommandType::NavigateProvider && provider) {
+		if (!approachSteps.empty()) observeNavigationPlan(command.destination, std::move(approachSteps));
+		if (processNavigation(player, currentPosition, command.destination)) schedule(SCHEDULER_MINTICKS);
 		return;
 	}
-	if (command.type == PlayerBotServiceCommandType::Sell ||
-	    (command.type == PlayerBotServiceCommandType::Wait && command.itemId != 0 && serviceWorkflow.stage() == PlayerBotServiceStage::SellLoot)) {
-		if (const auto pending = serviceWorkflow.pendingSlottedSale(); pending &&
-		    prepareSlottedSaleItem(player, pending->itemId, currentPosition)) {
-			return;
-		}
-		const uint16_t itemId = command.itemId;
-		const ServiceNpc* seller = serviceWorkflow.provider(command.providerId, true);
-		if (!seller) {
-			stop("shop_transaction_service_unavailable", currentPosition);
-			return;
-		}
-		if (!serviceWorkflow.npcTargets(seller->id)) {
-			serviceWorkflow.resetNpc(seller->id);
-			serviceWorkflow.clearApproach();
-			serviceWorkflow.clearRejectedApproaches();
-			clearNavigation();
-		}
-		const uint32_t backpackSaleCount = command.amount;
-		if (backpackSaleCount == 0 && prepareSlottedSaleItem(player, itemId, currentPosition)) {
-			return;
-		}
-		if (backpackSaleCount != 0) {
-			processServiceShop(player, currentPosition, *seller, "sell", itemId, backpackSaleCount, false);
-		} else {
+	if (command.type == PlayerBotServiceCommandType::Speak && provider) {
+		telemetry.recordActionAttempt();
+		provider->receiveSpeech(player, TALKTYPE_PRIVATE_PN, command.speech);
+		schedule(1000);
+		return;
+	}
+	if (command.type == PlayerBotServiceCommandType::OpenBackpack) {
+		if (!serviceBackpack) { stop("service_backpack_unavailable", currentPosition); return; }
+		if (!player->canDoAction()) { schedule(navigationDecisionDelay(*player)); return; }
+		telemetry.recordActionAttempt();
+		g_game.playerUseItem(playerId, Position(0xFFFF, CONST_SLOT_BACKPACK, 0), 0, depotSourceContainerId,
+		                     serviceBackpack->getClientID());
+		schedule(navigationDecisionDelay(*player));
+		return;
+	}
+	if (command.type == PlayerBotServiceCommandType::MoveSlottedSale) {
+		Item* item = player->getInventoryItem(command.sourceSlot);
+		Item* backpackItem = player->getInventoryItem(CONST_SLOT_BACKPACK);
+		Container* backpack = backpackItem ? backpackItem->getContainer() : nullptr;
+		if (!item || !backpack || !player->canDoAction()) { schedule(navigationDecisionDelay(*player)); return; }
+		const int8_t backpackId = player->getContainerID(backpack);
+		if (backpackId < 0) {
+			telemetry.recordActionAttempt();
+			g_game.playerUseItem(playerId, Position(0xFFFF, CONST_SLOT_BACKPACK, 0), 0, depotSourceContainerId, backpack->getClientID());
 			schedule(navigationDecisionDelay(*player));
-		}
-		return;
-	}
-	if (command.type == PlayerBotServiceCommandType::Buy) {
-		const ServiceNpc* seller = serviceWorkflow.provider(command.providerId, true);
-		if (!seller) {
-			stop("required_shop_offer_unavailable", currentPosition);
 			return;
 		}
-		if (!serviceWorkflow.npcTargets(seller->id)) {
-			serviceWorkflow.resetNpc(seller->id);
-			serviceWorkflow.clearApproach();
-			serviceWorkflow.clearRejectedApproaches();
-			clearNavigation();
-		}
-		processServiceShop(player, currentPosition, *seller, "buy_potions", command.itemId, command.amount, true);
+		Position source; uint8_t index = 0;
+		g_game.internalGetPosition(item, source, index);
+		telemetry.recordActionAttempt();
+		g_game.playerMoveItem(player, source, item->getClientID(), index,
+		                      Position(0xFFFF, 0x40 | static_cast<uint8_t>(backpackId), containerDestinationIndex(*backpack, *item)),
+		                      static_cast<uint8_t>(item->getItemCount()), item, backpack);
+		emit("action_result", currentPosition,
+		     "\"action\":\"item_disposition\",\"result\":\"requested\",\"disposition\":\"sell\",\"item_id\":" +
+		         std::to_string(command.itemId) + ",\"source_slot\":" + std::to_string(command.sourceSlot) +
+		         ",\"provider_available\":true,\"attempt\":" + std::to_string(command.attempt));
+		schedule(navigationDecisionDelay(*player));
 		return;
 	}
-	if (command.type == PlayerBotServiceCommandType::DepositAll || command.type == PlayerBotServiceCommandType::Withdraw) {
-		const ServiceNpc* banker = serviceWorkflow.provider(command.providerId, false);
-		if (!banker) {
-			stop("banker_unavailable", currentPosition);
-			return;
-		}
-		if (!serviceWorkflow.npcTargets(banker->id)) {
-			serviceWorkflow.resetNpc(banker->id);
-			serviceWorkflow.clearApproach();
-			serviceWorkflow.clearRejectedApproaches();
-			clearNavigation();
-		}
-		processBank(player, currentPosition, *banker);
+	if (command.type == PlayerBotServiceCommandType::Sell || command.type == PlayerBotServiceCommandType::Buy) {
+		if (!provider || !command.transaction) { stop("shop_offer_unavailable", currentPosition); return; }
+		telemetry.recordActionAttempt();
+		if (command.type == PlayerBotServiceCommandType::Buy) g_game.playerPurchaseItem(playerId, Item::items[command.itemId].clientId,
+		    command.subType, static_cast<uint8_t>(command.amount), false, false);
+		else g_game.playerSellItem(playerId, Item::items[command.itemId].clientId, command.subType,
+		    static_cast<uint8_t>(command.amount), true);
+		schedule(navigationDecisionDelay(*player));
+		return;
+	}
+	if ((command.type == PlayerBotServiceCommandType::DepositAll || command.type == PlayerBotServiceCommandType::Withdraw) && provider) {
+		telemetry.recordActionAttempt();
+		provider->receiveSpeech(player, TALKTYPE_PRIVATE_PN, command.type == PlayerBotServiceCommandType::DepositAll ? "deposit all" :
+		    "withdraw " + std::to_string(command.amount));
+		schedule(1000);
 		return;
 	}
 	if (command.type == PlayerBotServiceCommandType::Complete) {
 		beginReturn(player, currentPosition, "service_complete");
 	} else {
-		schedule(SCHEDULER_MINTICKS);
+		schedule(command.outcome == PlayerBotServiceOutcome::Retry && command.cooldownMs != 0 ?
+		         command.cooldownMs : SCHEDULER_MINTICKS);
 	}
 }
 
@@ -716,9 +379,16 @@ bool PlayerBotController::findDepositableItem(const Player& player, Container* c
                                               Item*& depositItem, uint8_t& count) const
 {
 	for (Item* item : container->getItemList()) {
-		if (Container* nested = item->getContainer(); nested &&
-		    findDepositableItem(player, nested, source, depositItem, count)) {
-			return true;
+		if (Container* nested = item->getContainer()) {
+			if (findDepositableItem(player, nested, source, depositItem, count)) {
+				return true;
+			}
+			if (nested->empty() && item->getID() == ITEM_BAG) {
+				source = container;
+				depositItem = item;
+				count = 1;
+				return true;
+			}
 		}
 		if (inventoryPolicy.isProtectedDepositItem(player, *item)) {
 			continue;
@@ -754,178 +424,124 @@ bool PlayerBotController::findDepotLocker(const Position& position, uint16_t exp
 	return false;
 }
 
-void PlayerBotController::clearDepotDiscovery()
-{
-	depotWorkflow.clearDiscovery();
-}
-
 bool PlayerBotController::discoverDepot(Player& player, const Position& currentPosition)
 {
 	const auto now = std::chrono::steady_clock::now();
 	const PlayerBotFixtureDepotEndpoint fixtureDepot = fixtureDriver.depotEndpoint();
-	if (fixtureDepot.synthetic) {
-		if (!depotWorkflow.hasSelectedDepot()) {
-			depotWorkflow.select({fixtureDepot.depotId, fixtureDepot.lockerItemId, fixtureDepot.lockerPosition,
-			                     fixtureDepot.approachPosition, 0});
+	auto advance = [&](PlayerBotDepotObservation observation) {
+		observation.currentPosition = currentPosition;
+		observation.now = now;
+		observation.fixtureSynthetic = fixtureDepot.synthetic;
+		return depotWorkflow.advance(observation, depotRouteValidationsPerDecision, maximumDepotDiscoveryAttempts,
+		                             depotApproachSuppression);
+	};
+	auto scan = [&] {
+		PlayerBotDepotScan result;
+		result.observed = true;
+		if (fixtureDepot.synthetic) {
+			result.indexedCandidates = result.inScopeCandidates = result.standableCandidates = 1;
+			result.candidates.push_back({fixtureDepot.depotId, fixtureDepot.lockerItemId, fixtureDepot.lockerPosition,
+			                             fixtureDepot.approachPosition, 0});
+			return result;
 		}
-		return true;
-	}
-	depotWorkflow.expireRejectedApproaches(now);
-	if (!depotWorkflow.hasSelectedDepot() && depotWorkflow.candidatesPrepared() &&
-	    depotWorkflow.discoveryAnchor() != currentPosition) {
-		clearDepotDiscovery();
-		depotWorkflow.resetAttempts();
-	}
-	uint16_t lockerItemId = 0;
-	if (depotWorkflow.hasSelectedDepot() && depotWorkflow.approachPosition() != Position() &&
-	    playerbot::isInsideLocalPlanningArea(currentPosition, depotWorkflow.lockerPosition()) &&
-	    findDepotLocker(depotWorkflow.lockerPosition(), depotWorkflow.depotId(), lockerItemId) &&
-	    lockerItemId == depotWorkflow.lockerItemId()) {
-		return true;
-	}
-	if (depotWorkflow.hasSelectedDepot()) {
-		clearDepotDiscovery();
-		depotWorkflow.resetAttempts();
-	}
-	auto finishUnavailable = [&](const char* reason) {
-		const uint32_t attempts = depotWorkflow.incrementAttempts();
-		const uint32_t retryDelay = std::min<uint32_t>(depotRetryMaximumInterval,
-		                                               depotRetryInitialInterval << std::min<uint32_t>(attempts - 1, 2));
-		if (shouldEmitRepeated(std::string("depot_discover:") + reason)) {
-			emit("action_result", currentPosition,
-			     std::string("\"action\":\"depot_discover\",\"result\":\"unavailable\",\"reason\":") + jsonString(reason) +
-			         ",\"indexed\":" + std::to_string(depotWorkflow.indexedCandidateCount()) +
-			         ",\"in_scope\":" + std::to_string(depotWorkflow.inScopeCandidateCount()) +
-			         ",\"standable\":" + std::to_string(depotWorkflow.standableCandidateCount()) +
-			         ",\"suppressed\":" + std::to_string(depotWorkflow.suppressedApproachCount()) +
-			         ",\"attempt\":" + std::to_string(attempts));
+		for (const auto& entry : g_game.map.getDepotLockerPositions()) for (const Position& lockerPosition : entry.second) {
+			++result.indexedCandidates;
+			if (!playerbot::isInsideLocalPlanningArea(currentPosition, lockerPosition)) continue;
+			uint16_t lockerItemId = 0;
+			if (!findDepotLocker(lockerPosition, entry.first, lockerItemId)) continue;
+			++result.inScopeCandidates;
+			for (int32_t xOffset = -1; xOffset <= 1; ++xOffset) for (int32_t yOffset = -1; yOffset <= 1; ++yOffset) {
+				if (xOffset == 0 && yOffset == 0) continue;
+				const Position approach(lockerPosition.x + xOffset, lockerPosition.y + yOffset, lockerPosition.z);
+				Tile* tile = g_game.map.getTile(approach);
+				if (!tile || tile->queryAdd(0, player, 1, FLAG_IGNOREBLOCKCREATURE) != RETURNVALUE_NOERROR) continue;
+				++result.standableCandidates;
+				result.candidates.push_back({entry.first, lockerItemId, lockerPosition, approach,
+				                             playerbot::localPlanningDistance(currentPosition, approach)});
+			}
 		}
-		clearDepotDiscovery();
-		if (attempts >= maximumDepotDiscoveryAttempts) {
-			logActionFailure("depot_discover", reason, currentPosition);
-			stop("depot_unavailable", currentPosition);
-			return;
-		}
-		schedule(retryDelay);
+		return result;
 	};
 
-	if (!depotWorkflow.candidatesPrepared()) {
-		depotWorkflow.beginDiscovery(currentPosition);
-		for (const auto& entry : g_game.map.getDepotLockerPositions()) {
-			for (const Position& lockerPosition : entry.second) {
-				depotWorkflow.recordIndexedCandidate();
-				if (!playerbot::isInsideLocalPlanningArea(currentPosition, lockerPosition)) {
-					continue;
-				}
-				uint16_t indexedLockerItemId = 0;
-				if (!findDepotLocker(lockerPosition, entry.first, indexedLockerItemId)) {
-					continue;
-				}
-				depotWorkflow.recordInScopeCandidate();
-				for (int32_t xOffset = -1; xOffset <= 1; ++xOffset) {
-					for (int32_t yOffset = -1; yOffset <= 1; ++yOffset) {
-						if (xOffset == 0 && yOffset == 0) {
-							continue;
-						}
-						const Position approach(lockerPosition.x + xOffset, lockerPosition.y + yOffset, lockerPosition.z);
-						Tile* approachTile = g_game.map.getTile(approach);
-						if (!approachTile || approachTile->queryAdd(0, player, 1, FLAG_IGNOREBLOCKCREATURE) != RETURNVALUE_NOERROR) {
-							continue;
-						}
-						depotWorkflow.recordStandableCandidate();
-						if (depotWorkflow.isApproachRejected(approach)) {
-							depotWorkflow.recordSuppressedApproach();
-							continue;
-						}
-						depotWorkflow.recordCandidate({entry.first, indexedLockerItemId, lockerPosition, approach,
-						                                     playerbot::localPlanningDistance(currentPosition, approach)});
-					}
-				}
-			}
+	PlayerBotDepotCommand command = advance({});
+	if (command.snapshot.hasSelectedDepot && !fixtureDepot.synthetic) {
+		uint16_t lockerItemId = 0;
+		if (!findDepotLocker(command.snapshot.selected.lockerPosition, command.snapshot.selected.depotId, lockerItemId) ||
+		    lockerItemId != command.snapshot.selected.lockerItemId) {
+			PlayerBotDepotObservation observation;
+			observation.actionResult = PlayerBotDepotActionResult::SelectedLockerUnavailable;
+			command = advance(observation);
 		}
-		depotWorkflow.sortCandidates();
+	}
+	if (command.type == PlayerBotDepotCommandType::Scan) {
+		PlayerBotDepotObservation observation;
+		observation.scan = scan();
+		command = advance(observation);
 	}
 
-	if (!depotWorkflow.hasCandidates()) {
-		if (depotWorkflow.suppressedApproachCount() != 0) {
-			const auto earliestExpiry = depotWorkflow.earliestRejectedApproachExpiry();
-			if (!earliestExpiry) {
-				return false;
-			}
-			const uint32_t retryDelay = static_cast<uint32_t>(std::max<int64_t>(
-			    1, std::chrono::duration_cast<std::chrono::milliseconds>(*earliestExpiry - now).count()));
-			clearDepotDiscovery();
-			schedule(retryDelay);
-			return false;
-		}
-		finishUnavailable(depotWorkflow.inScopeCandidateCount() == 0 ? "no_local_locker" :
-		                  depotWorkflow.standableCandidateCount() == 0 ? "no_standable_approach" : "no_reachable_locker");
+	std::deque<PlayerBotNavigationStep> steps;
+	uint32_t routeValidations = 0;
+	while (command.type == PlayerBotDepotCommandType::ValidateRoute && command.snapshot.hasRouteCandidate &&
+	       routeValidations < depotRouteValidationsPerDecision) {
+		++routeValidations;
+		const PlayerBotDepotCandidate& candidate = command.snapshot.routeCandidate;
+		PlayerBotDepotObservation observation;
+		uint16_t lockerItemId = 0;
+		Tile* tile = g_game.map.getTile(candidate.approachPosition);
+		const bool valid = fixtureDepot.synthetic ||
+			(playerbot::isInsideLocalPlanningArea(currentPosition, candidate.lockerPosition) &&
+			 findDepotLocker(candidate.lockerPosition, candidate.depotId, lockerItemId) && lockerItemId == candidate.lockerItemId &&
+			 tile && tile->queryAdd(0, player, 1, FLAG_IGNOREBLOCKCREATURE) == RETURNVALUE_NOERROR);
+		const auto startedAt = std::chrono::steady_clock::now();
+		PlayerBotNavigationRoutePlan routePlan;
+		if (valid && candidate.approachPosition != currentPosition) routePlan = planNavigationRoute(player, candidate.approachPosition);
+		const bool reached = valid && (candidate.approachPosition == currentPosition ||
+			(routePlan.metrics.result == PlayerBotNavigationResult::Reached && !routePlan.steps.empty()));
+		telemetry.recordPathfinding(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - startedAt), reached);
+		observation.routeResult = reached ? PlayerBotDepotRouteResult::Reached : PlayerBotDepotRouteResult::Unreachable;
+		observation.routeSteps = static_cast<uint32_t>(routePlan.steps.size());
+		observation.expandedNodes = routePlan.metrics.expandedNodes;
+		if (reached) steps = std::move(routePlan.steps);
+		command = advance(observation);
+	}
+	if (command.type == PlayerBotDepotCommandType::ValidateRoute) {
+		emit("action_result", currentPosition,
+		     "\"action\":\"depot_discover\",\"result\":\"continuing\",\"reason\":\"route_validation_budget_exhausted\",\"indexed\":" +
+		         std::to_string(command.snapshot.indexedCandidates) + ",\"in_scope\":" +
+		         std::to_string(command.snapshot.inScopeCandidates) + ",\"standable\":" +
+		         std::to_string(command.snapshot.standableCandidates) + ",\"route_validations\":" +
+		         std::to_string(routeValidations));
+		schedule(blockedRouteRetryInterval);
 		return false;
 	}
-
-	uint32_t routeValidations = 0;
-	while (depotWorkflow.hasNextCandidate() && routeValidations < depotRouteValidationsPerDecision) {
-		const std::optional<PlayerBotDepotCandidate> nextCandidate = depotWorkflow.takeNextCandidate();
-		if (!nextCandidate) {
-			break;
+	if (command.type == PlayerBotDepotCommandType::Navigate && command.snapshot.hasSelectedDepot) {
+		if (!steps.empty()) {
+			observeNavigationPlan(command.snapshot.selected.approachPosition, std::move(steps));
 		}
-		const PlayerBotDepotCandidate candidate = *nextCandidate;
-		uint16_t candidateLockerItemId = 0;
-		Tile* approachTile = g_game.map.getTile(candidate.approachPosition);
-		if (!playerbot::isInsideLocalPlanningArea(currentPosition, candidate.lockerPosition) ||
-		    !findDepotLocker(candidate.lockerPosition, candidate.depotId, candidateLockerItemId) ||
-		    candidateLockerItemId != candidate.lockerItemId || !approachTile ||
-		    approachTile->queryAdd(0, player, 1, FLAG_IGNOREBLOCKCREATURE) != RETURNVALUE_NOERROR) {
-			continue;
-		}
-		std::deque<PlayerBotNavigationStep> steps;
-		uint64_t expandedNodes = 0;
-		++routeValidations;
-		const auto startedAt = std::chrono::steady_clock::now();
-		const PlayerBotNavigationRoutePlan routePlan = candidate.approachPosition == currentPosition ? PlayerBotNavigationRoutePlan{} :
-			navigationRuntime.plan(player, candidate.approachPosition);
-		const PlayerBotNavigationResult result = candidate.approachPosition == currentPosition ? PlayerBotNavigationResult::Reached : routePlan.metrics.result;
-		if (candidate.approachPosition != currentPosition) {
-			steps = routePlan.steps;
-			expandedNodes = routePlan.metrics.expandedNodes;
-		}
-		telemetry.recordPathfinding(std::chrono::duration_cast<std::chrono::microseconds>(
-			std::chrono::steady_clock::now() - startedAt), result == PlayerBotNavigationResult::Reached &&
-				(candidate.approachPosition == currentPosition || !steps.empty()));
-		if (result != PlayerBotNavigationResult::Reached ||
-		    (candidate.approachPosition != currentPosition && steps.empty())) {
-			depotWorkflow.rejectApproach(candidate.approachPosition, now + depotApproachSuppression);
-			continue;
-		}
-		depotWorkflow.select(candidate);
-		navigationRuntime.resetFixedTargetRouteFailures();
-		const size_t routeSteps = steps.size();
-		adoptNavigationPlan(depotWorkflow.approachPosition(), std::move(steps));
+		const PlayerBotDepotCandidate& depot = command.snapshot.selected;
 		std::ostringstream fields;
-		fields << "\"action\":\"depot_discover\",\"result\":\"success\",\"depot_id\":" << depotWorkflow.depotId()
-		       << ",\"locker_item_id\":" << depotWorkflow.lockerItemId() << ",\"locker\":{\"x\":" << depotWorkflow.lockerPosition().x
-		       << ",\"y\":" << depotWorkflow.lockerPosition().y << ",\"z\":" << static_cast<uint16_t>(depotWorkflow.lockerPosition().z)
-		       << "},\"approach\":{\"x\":" << depotWorkflow.approachPosition().x << ",\"y\":" << depotWorkflow.approachPosition().y
-		       << ",\"z\":" << static_cast<uint16_t>(depotWorkflow.approachPosition().z) << "},\"distance\":" << candidate.distance
-		       << ",\"route_steps\":" << routeSteps << ",\"expanded_nodes\":" << expandedNodes
-		       << ",\"indexed\":" << depotWorkflow.indexedCandidateCount() << ",\"in_scope\":" << depotWorkflow.inScopeCandidateCount()
-		       << ",\"standable\":" << depotWorkflow.standableCandidateCount();
+		fields << "\"action\":\"depot_discover\",\"result\":\"success\",\"depot_id\":" << depot.depotId
+		       << ",\"locker_item_id\":" << depot.lockerItemId << ",\"locker\":{\"x\":" << depot.lockerPosition.x
+		       << ",\"y\":" << depot.lockerPosition.y << ",\"z\":" << static_cast<uint16_t>(depot.lockerPosition.z)
+		       << "},\"approach\":{\"x\":" << depot.approachPosition.x << ",\"y\":" << depot.approachPosition.y
+		       << ",\"z\":" << static_cast<uint16_t>(depot.approachPosition.z) << "},\"distance\":" << depot.distance
+		       << ",\"route_steps\":" << command.telemetry.routeSteps
+		       << ",\"expanded_nodes\":" << command.telemetry.expandedNodes << ",\"indexed\":" << command.snapshot.indexedCandidates
+		       << ",\"in_scope\":" << command.snapshot.inScopeCandidates << ",\"standable\":" << command.snapshot.standableCandidates;
 		emit("action_result", currentPosition, fields.str());
 		return true;
 	}
-
-	if (depotWorkflow.hasNextCandidate()) {
-		emit("action_result", currentPosition,
-		     std::string("\"action\":\"depot_discover\",\"result\":\"continuing\",\"reason\":\"route_validation_budget_exhausted\"") +
-		         ",\"indexed\":" + std::to_string(depotWorkflow.indexedCandidateCount()) +
-		         ",\"in_scope\":" + std::to_string(depotWorkflow.inScopeCandidateCount()) +
-		         ",\"standable\":" + std::to_string(depotWorkflow.standableCandidateCount()) +
-		         ",\"route_validations\":" + std::to_string(routeValidations));
-		schedule(blockedRouteRetryInterval);
-	return false;
+	if (command.type == PlayerBotDepotCommandType::Fail) {
+		const char* reason = command.snapshot.inScopeCandidates == 0 ? "no_local_locker" :
+		                     command.snapshot.standableCandidates == 0 ? "no_standable_approach" : "no_reachable_locker";
+		logActionFailure("depot_discover", reason, currentPosition);
+		stop("depot_unavailable", currentPosition);
+		return false;
 	}
-
-	finishUnavailable("no_reachable_locker");
+	const uint32_t retryDelay = command.snapshot.retryAt ? static_cast<uint32_t>(std::max<int64_t>(1,
+		std::chrono::duration_cast<std::chrono::milliseconds>(*command.snapshot.retryAt - now).count())) :
+		std::min<uint32_t>(depotRetryMaximumInterval, depotRetryInitialInterval << std::min<uint32_t>(command.snapshot.attempts, 2));
+	schedule(command.type == PlayerBotDepotCommandType::Wait ? retryDelay : blockedRouteRetryInterval);
 	return false;
 }
 
@@ -969,23 +585,18 @@ bool PlayerBotController::openContainer(Player& player, Container& container, ui
 	return false;
 }
 
-bool PlayerBotController::openDepotLocker(Player& player, const Position& currentPosition)
+bool PlayerBotController::openDepotLocker(Player& player, const PlayerBotDepotSnapshot& depot, const Position& currentPosition)
 {
 	if (fixtureDriver.depotEndpoint().synthetic) {
-		depotWorkflow.resetAttempts();
-		depotWorkflow.lockerOpened();
 		return true;
 	}
 	Container* opened = player.getContainerByID(depotLockerContainerId);
-	if (opened && opened->getDepotLocker() && opened->getDepotLocker()->getDepotId() == depotWorkflow.depotId()) {
-		depotWorkflow.resetAttempts();
-		depotWorkflow.lockerOpened();
+	if (opened && opened->getDepotLocker() && opened->getDepotLocker()->getDepotId() == depot.selected.depotId) {
 		return true;
 	}
-	Tile* tile = g_game.map.getTile(depotWorkflow.lockerPosition());
+	Tile* tile = g_game.map.getTile(depot.selected.lockerPosition);
 	TileItemVector* items = tile ? tile->getItemList() : nullptr;
 	if (!items) {
-		clearDepotDiscovery();
 		setCyclePhase(CyclePhase::ReturnToDepot, currentPosition, "depot_locker_tile_unavailable");
 		schedule(blockedRouteRetryInterval);
 		return false;
@@ -996,26 +607,20 @@ bool PlayerBotController::openDepotLocker(Player& player, const Position& curren
 	}
 	for (Item* item : *items) {
 		Container* container = item->getContainer();
-		if (!container || !container->getDepotLocker() || container->getDepotLocker()->getDepotId() != depotWorkflow.depotId()) {
+		if (!container || !container->getDepotLocker() || container->getDepotLocker()->getDepotId() != depot.selected.depotId) {
 			continue;
 		}
 		const int32_t stackPosition = tile->getThingIndex(item);
 		if (stackPosition < 0 || stackPosition > UINT8_MAX) {
 			break;
 		}
-		if (depotWorkflow.attempts() >= maximumDepotAttempts) {
-			logActionFailure("depot_open_locker", "open_not_verified", currentPosition);
-			stop("depot_locker_open_failed", currentPosition);
-			return false;
-		}
-		const uint32_t attempts = depotWorkflow.incrementAttempts();
 		player.closeContainer(depotLockerContainerId);
 		telemetry.recordActionAttempt();
-		g_game.playerUseItem(playerId, depotWorkflow.lockerPosition(), static_cast<uint8_t>(stackPosition), depotLockerContainerId,
+		g_game.playerUseItem(playerId, depot.selected.lockerPosition, static_cast<uint8_t>(stackPosition), depotLockerContainerId,
 		                     item->getClientID());
 		emit("action_result", currentPosition, "\"action\":\"depot_open_locker\",\"result\":\"requested\",\"depot_id\":" +
-		     std::to_string(depotWorkflow.depotId()) + ",\"container_id\":" + std::to_string(depotLockerContainerId) +
-		     ",\"attempt\":" + std::to_string(attempts));
+		     std::to_string(depot.selected.depotId) + ",\"container_id\":" + std::to_string(depotLockerContainerId) +
+		     ",\"attempt\":" + std::to_string(depot.attempts));
 		if (pauseDepotFixtureForRestart(player, DepotRestartCheckpoint::Locker, currentPosition)) {
 			return false;
 		}
@@ -1023,27 +628,23 @@ bool PlayerBotController::openDepotLocker(Player& player, const Position& curren
 		return false;
 	}
 	logActionFailure("depot_open_locker", "locker_identity_changed", currentPosition);
-	clearDepotDiscovery();
 	clearNavigation();
 	setCyclePhase(CyclePhase::ReturnToDepot, currentPosition, "depot_locker_identity_changed");
 	schedule(blockedRouteRetryInterval);
 	return false;
 }
 
-bool PlayerBotController::openDepotChest(Player& player, const Position& currentPosition)
+bool PlayerBotController::openDepotChest(Player& player, const PlayerBotDepotSnapshot& depot, const Position& currentPosition)
 {
 	if (fixtureDriver.depotEndpoint().synthetic) {
-		depotWorkflow.resetAttempts();
-		depotWorkflow.chestOpened();
 		return true;
 	}
 	Container* locker = player.getContainerByID(depotLockerContainerId);
-	if (!locker || !locker->getDepotLocker() || locker->getDepotLocker()->getDepotId() != depotWorkflow.depotId()) {
-		depotWorkflow.reopenLocker();
+	if (!locker || !locker->getDepotLocker() || locker->getDepotLocker()->getDepotId() != depot.selected.depotId) {
 		schedule(blockedRouteRetryInterval);
 		return false;
 	}
-	DepotChest* chest = player.getDepotChest(depotWorkflow.depotId(), false);
+	DepotChest* chest = player.getDepotChest(depot.selected.depotId, false);
 	if (!chest) {
 		logActionFailure("depot_open_chest", "player_chest_missing", currentPosition);
 		stop("depot_chest_missing", currentPosition);
@@ -1051,8 +652,6 @@ bool PlayerBotController::openDepotChest(Player& player, const Position& current
 	}
 	fixtureDriver.prepareDepotMoveDestination(*chest);
 	if (player.getContainerByID(depotChestContainerId) == chest) {
-		depotWorkflow.resetAttempts();
-		depotWorkflow.chestOpened();
 		return true;
 	}
 	const int32_t index = locker->getThingIndex(chest);
@@ -1065,19 +664,13 @@ bool PlayerBotController::openDepotChest(Player& player, const Position& current
 		schedule(navigationDecisionDelay(player));
 		return false;
 	}
-	if (depotWorkflow.attempts() >= maximumDepotAttempts) {
-		logActionFailure("depot_open_chest", "open_not_verified", currentPosition);
-		stop("depot_chest_open_failed", currentPosition);
-		return false;
-	}
-	const uint32_t attempts = depotWorkflow.incrementAttempts();
 	player.closeContainer(depotChestContainerId);
 	telemetry.recordActionAttempt();
 	g_game.playerUseItem(playerId, Position(0xFFFF, 0x40 | depotLockerContainerId, static_cast<uint8_t>(index)),
 	                     static_cast<uint8_t>(index), depotChestContainerId, chest->getClientID());
 	emit("action_result", currentPosition, "\"action\":\"depot_open_chest\",\"result\":\"requested\",\"depot_id\":" +
-	     std::to_string(depotWorkflow.depotId()) + ",\"container_id\":" + std::to_string(depotChestContainerId) +
-	     ",\"attempt\":" + std::to_string(attempts));
+	     std::to_string(depot.selected.depotId) + ",\"container_id\":" + std::to_string(depotChestContainerId) +
+	     ",\"attempt\":" + std::to_string(depot.attempts));
 	if (pauseDepotFixtureForRestart(player, DepotRestartCheckpoint::Chest, currentPosition)) {
 		return false;
 	}
@@ -1122,99 +715,139 @@ void PlayerBotController::processDeposit(Player* player, const Position& current
 		stop("depot_destination_unavailable", currentPosition);
 		return;
 	}
+	auto advance = [&](PlayerBotDepotObservation observation) {
+		observation.currentPosition = currentPosition;
+		observation.now = std::chrono::steady_clock::now();
+		observation.fixtureSynthetic = fixtureDepot.synthetic;
+		return depotWorkflow.advance(observation, depotRouteValidationsPerDecision, maximumDepotAttempts, depotApproachSuppression);
+	};
+	PlayerBotDepotCommand command = advance({});
+	PlayerBotDepotObservation observation;
+	if (command.snapshot.hasSelectedDepot) {
+		observation.atApproach = fixtureDepot.synthetic || Position::areInRange<1, 1, 0>(currentPosition, command.snapshot.selected.lockerPosition);
+		observation.lockerOpen = fixtureDepot.synthetic || player->getContainerByID(depotLockerContainerId) != nullptr;
+		observation.chestOpen = fixtureDepot.synthetic || player->getContainerByID(depotChestContainerId) != nullptr;
+		observation.canDoAction = player->canDoAction();
+		if (command.snapshot.hasPendingMove) {
+			Container* chest = player->getContainerByID(depotChestContainerId);
+			if (!chest && !fixtureDepot.synthetic) {
+				observation.atApproach = true;
+				observation.lockerOpen = player->getContainerByID(depotLockerContainerId) != nullptr;
+				observation.chestOpen = false;
+				observation.canDoAction = player->canDoAction();
+				observation.actionResult = PlayerBotDepotActionResult::MoveDestinationUnavailable;
+				command = advance(observation);
+				if (command.type == PlayerBotDepotCommandType::OpenLocker &&
+				    !openDepotLocker(*player, command.snapshot, currentPosition)) return;
+				if (command.type == PlayerBotDepotCommandType::OpenChest &&
+				    !openDepotChest(*player, command.snapshot, currentPosition)) return;
+				schedule(navigationDecisionDelay(*player));
+				return;
+			}
+			observation.move = {true, inventoryPolicy.inventoryItemCount(*player, command.snapshot.pendingMove.itemId),
+			                    fixtureDepot.synthetic ? fixtureDestination->getItemTypeCount(command.snapshot.pendingMove.itemId) :
+			                                             chest->getItemTypeCount(command.snapshot.pendingMove.itemId)};
+		}
+		command = advance(observation);
+	}
+	if (command.telemetry.moveVerification) {
+		const PlayerBotDepotMoveVerification& verification = *command.telemetry.moveVerification;
+		const PlayerBotDepotMove& move = verification.before;
+		if (verification.result == PlayerBotDepotMoveResult::Mismatch) {
+			logActionFailure("deposit", "move_delta_mismatch", currentPosition);
+			stop("depot_move_delta_mismatch", currentPosition);
+			return;
+		}
+		if (verification.result == PlayerBotDepotMoveResult::Rejected) {
+			emit("action_result", currentPosition, "\"action\":\"deposit\",\"result\":\"failed\",\"reason\":\"no_slot_or_move_rejected\",\"policy\":\"known_loot\",\"depot_id\":" +
+			     std::to_string(command.snapshot.selected.depotId) + ",\"container_id\":" + std::to_string(depotChestContainerId) +
+			     ",\"item_id\":" + std::to_string(move.itemId) + ",\"requested\":" + std::to_string(move.requestedCount) +
+			     ",\"verified\":0,\"inventory_before\":" + std::to_string(move.inventoryCount) + ",\"inventory_after\":" +
+			     std::to_string(verification.inventoryCount) + ",\"depot_before\":" + std::to_string(move.destinationCount) +
+			     ",\"depot_after\":" + std::to_string(verification.destinationCount) + ",\"retry\":" + std::to_string(verification.attempts));
+			stop("depot_no_slot_or_move_rejected", currentPosition);
+			return;
+		}
+		std::ostringstream fields;
+		fields << "\"action\":\"deposit\",\"result\":" << jsonString(verification.result == PlayerBotDepotMoveResult::Moved ?
+			(verification.movedCount == move.requestedCount ? "success" : "partial") :
+			verification.result == PlayerBotDepotMoveResult::Deferred ? "deferred" : "retry") << ",\"policy\":\"known_loot\",\"depot_id\":"
+		       << command.snapshot.selected.depotId << ",\"container_id\":" << static_cast<uint32_t>(depotChestContainerId)
+		       << ",\"item_id\":" << move.itemId << ",\"requested\":" << static_cast<uint32_t>(move.requestedCount)
+		       << ",\"verified\":" << verification.movedCount;
+		if (verification.result == PlayerBotDepotMoveResult::Moved && verification.movedCount == move.requestedCount) {
+			fields << ",\"count\":" << verification.movedCount;
+		}
+		fields << ",\"inventory_before\":" << move.inventoryCount
+		       << ",\"inventory_after\":" << verification.inventoryCount << ",\"depot_before\":" << move.destinationCount
+		       << ",\"depot_after\":" << verification.destinationCount << ",\"source_slot\":"
+		       << (move.sourceSlot == CONST_SLOT_WHEREEVER ? "null" : std::to_string(move.sourceSlot))
+		       << ",\"provider_available\":false,\"disposition\":\"deposit\",\"retry\":" << verification.attempts;
+		emit("action_result", currentPosition, fields.str());
+		if (verification.result == PlayerBotDepotMoveResult::Deferred) {
+			const int64_t delay = command.snapshot.deferredDepositRetryAt ?
+			    std::chrono::duration_cast<std::chrono::milliseconds>(
+			        *command.snapshot.deferredDepositRetryAt - std::chrono::steady_clock::now()).count() : 1;
+			schedule(static_cast<uint32_t>(std::max<int64_t>(1, delay)));
+			return;
+		}
+		if (verification.result == PlayerBotDepotMoveResult::Retry) {
+			schedule(navigationDecisionDelay(*player));
+			return;
+		}
+	}
+	if (command.type == PlayerBotDepotCommandType::OpenLocker) {
+		if (!openDepotLocker(*player, command.snapshot, currentPosition)) return;
+		schedule(navigationDecisionDelay(*player));
+		return;
+	}
+	if (command.type == PlayerBotDepotCommandType::OpenChest) {
+		if (!openDepotChest(*player, command.snapshot, currentPosition)) return;
+		schedule(navigationDecisionDelay(*player));
+		return;
+	}
+	if (command.type == PlayerBotDepotCommandType::Wait) {
+		if (command.outcome == PlayerBotDepotOutcome::Deferred && command.snapshot.deferredDepositRetryAt) {
+			const int64_t delay = std::chrono::duration_cast<std::chrono::milliseconds>(
+			    *command.snapshot.deferredDepositRetryAt - std::chrono::steady_clock::now()).count();
+			schedule(static_cast<uint32_t>(std::max<int64_t>(1, delay)));
+		} else {
+			schedule(navigationDecisionDelay(*player));
+		}
+		return;
+	}
+	if (command.type == PlayerBotDepotCommandType::Fail) {
+		stop("depot_action_failed", currentPosition);
+		return;
+	}
+	if (command.type == PlayerBotDepotCommandType::Depart) {
+		std::ostringstream fields;
+		fields << "\"action\":\"deposit\",\"result\":\"complete\",\"depot_id\":" << command.snapshot.selected.depotId
+		       << ",\"container_id\":" << static_cast<uint32_t>(depotChestContainerId) << ",\"cycle\":" << huntRuntime.completedCycles();
+		emit("action_result", currentPosition, fields.str());
+		player->closeContainer(depotChestContainerId);
+		player->closeContainer(depotLockerContainerId);
+		if (pauseDepotFixtureForRestart(*player, DepotRestartCheckpoint::Depart, currentPosition)) return;
+		if (fixtureDriver.progressionGoalLoop(true).selectGoal) {
+			emit("goal_result", currentPosition,
+			     "\"decision_id\":" + std::to_string(progressionRuntime.decisionId()) +
+			         ",\"goal\":\"service\",\"result\":\"success\",\"reason\":\"service_complete\"");
+			selectTopLevelGoal(*player, currentPosition, "service_complete");
+		}
+		else startHunt(player, currentPosition, "deposit_complete");
+		schedule(navigationInterval);
+		return;
+	}
+	if (command.type != PlayerBotDepotCommandType::SelectDeposit) return;
+
 	Item* backpackItem = player->getInventoryItem(CONST_SLOT_BACKPACK);
 	Container* backpack = backpackItem ? backpackItem->getContainer() : nullptr;
 	if (!backpack) {
 		stop("depot_backpack_unavailable", currentPosition);
 		return;
 	}
-	if (depotWorkflow.hasPendingMove()) {
-		Container* chest = player->getContainerByID(depotChestContainerId);
-		if (!chest && !fixtureDepot.synthetic) {
-			depotWorkflow.reopenChest();
-			schedule(navigationDecisionDelay(*player));
-			return;
-		}
-		const PlayerBotDepotMoveVerification verification = depotWorkflow.verifyMove(
-			inventoryPolicy.inventoryItemCount(*player, depotWorkflow.move().itemId),
-			fixtureDepot.synthetic ? fixtureDestination->getItemTypeCount(depotWorkflow.move().itemId) :
-			                         chest->getItemTypeCount(depotWorkflow.move().itemId), maximumDepotAttempts);
-		const PlayerBotDepotMove& move = verification.before;
-		if (verification.result == PlayerBotDepotMoveResult::Moved) {
-			std::ostringstream fields;
-			fields << "\"action\":\"deposit\",\"result\":" << jsonString(verification.movedCount == move.requestedCount ? "success" : "partial")
-			       << ",\"policy\":\"known_loot\",\"depot_id\":" << depotWorkflow.depotId() << ",\"container_id\":"
-			       << static_cast<uint32_t>(depotChestContainerId) << ",\"item_id\":" << move.itemId
-			       << ",\"requested\":" << static_cast<uint32_t>(move.requestedCount)
-			       << ",\"verified\":" << verification.movedCount << ",\"inventory_before\":" << move.inventoryCount
-			       << ",\"inventory_after\":" << verification.inventoryCount << ",\"depot_before\":" << move.destinationCount
-			       << ",\"depot_after\":" << verification.destinationCount
-			       << ",\"source_slot\":" << (move.sourceSlot == CONST_SLOT_WHEREEVER ? "null" : std::to_string(move.sourceSlot))
-			       << ",\"provider_available\":false,\"disposition\":\"deposit\"";
-			emit("action_result", currentPosition, fields.str());
-		} else if (verification.result == PlayerBotDepotMoveResult::Mismatch) {
-			logActionFailure("deposit", "move_delta_mismatch", currentPosition);
-			stop("depot_move_delta_mismatch", currentPosition);
-			return;
-		} else if (verification.result == PlayerBotDepotMoveResult::Deferred) {
-			const uint16_t failedItemId = move.itemId;
-			const slots_t failedSlot = move.sourceSlot;
-			serviceWorkflow.deferSlottedSale(failedItemId, failedSlot,
-			                                 std::chrono::steady_clock::now() + unavailableDispositionCooldown);
-			emit("action_result", currentPosition,
-			     "\"action\":\"deposit\",\"result\":\"deferred\",\"reason\":\"move_not_verified\",\"policy\":\"known_loot\",\"depot_id\":" +
-			         std::to_string(depotWorkflow.depotId()) + ",\"container_id\":" + std::to_string(depotChestContainerId) +
-			         ",\"item_id\":" + std::to_string(failedItemId) + ",\"source_slot\":" + std::to_string(failedSlot) +
-			         ",\"provider_available\":false,\"disposition\":\"deposit\",\"cooldown_ms\":" +
-			         std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(unavailableDispositionCooldown).count()));
-			schedule(SCHEDULER_MINTICKS);
-			return;
-		} else if (verification.result == PlayerBotDepotMoveResult::Rejected) {
-			emit("action_result", currentPosition, "\"action\":\"deposit\",\"result\":\"failed\",\"reason\":\"no_slot_or_move_rejected\",\"policy\":\"known_loot\",\"depot_id\":" +
-			     std::to_string(depotWorkflow.depotId()) + ",\"container_id\":" + std::to_string(depotChestContainerId) +
-			     ",\"item_id\":" + std::to_string(move.itemId) + ",\"requested\":" +
-			     std::to_string(move.requestedCount) + ",\"verified\":0,\"inventory_before\":" +
-			     std::to_string(move.inventoryCount) + ",\"inventory_after\":" + std::to_string(verification.inventoryCount) +
-			     ",\"depot_before\":" + std::to_string(move.destinationCount) + ",\"depot_after\":" +
-			     std::to_string(verification.destinationCount) + ",\"retry\":" + std::to_string(verification.attempts));
-			stop("depot_no_slot_or_move_rejected", currentPosition);
-			return;
-		} else {
-			emit("action_result", currentPosition, "\"action\":\"deposit\",\"result\":\"retry\",\"reason\":\"not_verified\",\"policy\":\"known_loot\",\"depot_id\":" +
-			     std::to_string(depotWorkflow.depotId()) + ",\"container_id\":" + std::to_string(depotChestContainerId) +
-			     ",\"item_id\":" + std::to_string(move.itemId) + ",\"requested\":" +
-			     std::to_string(move.requestedCount) + ",\"verified\":0,\"inventory_before\":" +
-			     std::to_string(move.inventoryCount) + ",\"inventory_after\":" + std::to_string(verification.inventoryCount) +
-			     ",\"depot_before\":" + std::to_string(move.destinationCount) + ",\"depot_after\":" +
-			     std::to_string(verification.destinationCount) + ",\"retry\":" + std::to_string(verification.attempts));
-			schedule(navigationDecisionDelay(*player));
-			return;
-		}
-	}
-
-	PlayerBotDepotObservation depotObservation;
-	depotObservation.currentPosition = currentPosition;
-	depotObservation.now = std::chrono::steady_clock::now();
-	depotObservation.atApproach = fixtureDepot.synthetic || Position::areInRange<1, 1, 0>(currentPosition, depotWorkflow.lockerPosition());
-	depotObservation.lockerOpen = fixtureDepot.synthetic || player->getContainerByID(depotLockerContainerId) != nullptr;
-	depotObservation.chestOpen = fixtureDepot.synthetic || player->getContainerByID(depotChestContainerId) != nullptr;
-	depotObservation.canDoAction = player->canDoAction();
-	// Selection remains an adapter concern because Item pointers are needed to build
-	// the normal move request. The workflow still owns the surrounding phases.
-	depotObservation.hasDepositableItem = true;
-	const PlayerBotDepotCommand depotCommand = depotWorkflow.advance(depotObservation, depotRouteValidationsPerDecision,
-	                                                                  maximumDepotDiscoveryAttempts, depotApproachSuppression);
-	if ((depotCommand.type == PlayerBotDepotCommandType::OpenLocker || depotWorkflow.stage() == PlayerBotDepotStage::OpenLocker) &&
-	    !openDepotLocker(*player, currentPosition)) {
-		return;
-	}
-	if ((depotCommand.type == PlayerBotDepotCommandType::OpenChest || depotWorkflow.stage() == PlayerBotDepotStage::OpenChest) &&
-	    !openDepotChest(*player, currentPosition)) {
-		return;
-	}
 	Container* chest = player->getContainerByID(depotChestContainerId);
-	if (!fixtureDepot.synthetic && (!chest || player->getDepotChest(depotWorkflow.depotId(), false) != chest)) {
-		depotWorkflow.reopenChest();
+	if (!fixtureDepot.synthetic && (!chest || player->getDepotChest(command.snapshot.selected.depotId, false) != chest)) {
 		schedule(blockedRouteRetryInterval);
 		return;
 	}
@@ -1226,9 +859,8 @@ void PlayerBotController::processDeposit(Player* player, const Position& current
 	refreshItemValues();
 	Item* upgrade = nullptr;
 	EquipmentUpgrade upgradeInfo{};
-	if (equipmentPolicy.findCarriedUpgrade(*player, upgrade, upgradeInfo)) {
-		readinessResumeService = true;
-		if (!beginReadinessEquipment(player, currentPosition, "depot_carried_upgrade")) {
+	if (PlayerBotEquipmentAdapter::findCarriedUpgrade(equipmentPolicy, *player, upgrade, upgradeInfo)) {
+		if (!beginReadinessEquipment(player, currentPosition, "depot_carried_upgrade", true)) {
 			schedule(navigationDecisionDelay(*player));
 		}
 		return;
@@ -1243,42 +875,42 @@ void PlayerBotController::processDeposit(Player* player, const Position& current
 			count = static_cast<uint8_t>(std::min<uint32_t>(movable, UINT8_MAX));
 		}
 	}
-	if (!depositItem || count == 0) {
-		if (inventoryPolicy.effectiveFreeCapacity(*player) < returnCapacityThreshold) {
-			const auto now = std::chrono::steady_clock::now();
-			if (const auto deferred = serviceWorkflow.nextDeferredSlottedSale(now)) {
-				schedule(static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
-				                                   *deferred - now).count()));
-				return;
-			}
-			stop("depot_capacity_not_recovered", currentPosition);
-			return;
-		}
-		std::ostringstream fields;
-		fields << "\"action\":\"deposit\",\"result\":\"complete\",\"depot_id\":" << depotWorkflow.depotId()
-	                       << ",\"container_id\":" << static_cast<uint32_t>(depotChestContainerId) << ",\"cycle\":" << huntRuntime.completedCycles();
-		emit("action_result", currentPosition, fields.str());
-		player->closeContainer(depotChestContainerId);
-		player->closeContainer(depotLockerContainerId);
-		depotWorkflow.depart();
-		if (pauseDepotFixtureForRestart(*player, DepotRestartCheckpoint::Depart, currentPosition)) {
-			return;
-		}
-		if (fixtureDriver.goalLoop(true).selectGoal) {
-			emit("goal_result", currentPosition,
-			     "\"decision_id\":" + std::to_string(goalArbiter.decisionId()) +
-			         ",\"goal\":\"service\",\"result\":\"success\",\"reason\":\"service_complete\"");
-			selectTopLevelGoal(*player, currentPosition, "service_complete");
+	if ((!depositItem || count == 0) && inventoryPolicy.effectiveFreeCapacity(*player) < returnCapacityThreshold) {
+		stop("depot_capacity_not_recovered", currentPosition);
+		return;
+	}
+	if (depositItem && count != 0 && source &&
+	    !openContainer(*player, *source, depotSourceContainerId, currentPosition)) {
+		return;
+	}
+	PlayerBotDepotObservation depositObservation;
+	depositObservation.atApproach = true;
+	depositObservation.lockerOpen = true;
+	depositObservation.chestOpen = true;
+	depositObservation.canDoAction = player->canDoAction();
+	depositObservation.deposit.observed = true;
+	depositObservation.deposit.hasDepositableItem = depositItem && count != 0;
+	if (depositObservation.deposit.hasDepositableItem) {
+		depositObservation.deposit.move = {depositItem->getID(), fixtureDepot.synthetic ? fixtureDestination->getItemTypeCount(depositItem->getID()) : chest->getItemTypeCount(depositItem->getID()),
+		                                   inventoryPolicy.inventoryItemCount(*player, depositItem->getID()), count, sourceSlot};
+	}
+	command = advance(depositObservation);
+	if (command.type == PlayerBotDepotCommandType::Depart) {
+		processDeposit(player, currentPosition);
+		return;
+	}
+	if (command.type == PlayerBotDepotCommandType::Wait) {
+		if (command.outcome == PlayerBotDepotOutcome::Deferred && command.snapshot.deferredDepositRetryAt) {
+			const int64_t delay = std::chrono::duration_cast<std::chrono::milliseconds>(
+			    *command.snapshot.deferredDepositRetryAt - std::chrono::steady_clock::now()).count();
+			schedule(static_cast<uint32_t>(std::max<int64_t>(1, delay)));
 		} else {
-			startHunt(player, currentPosition, "deposit_complete");
+			schedule(navigationDecisionDelay(*player));
 		}
-		schedule(navigationInterval);
 		return;
 	}
+	if (command.type != PlayerBotDepotCommandType::MoveDeposit || !depositItem) return;
 
-	if (source && !openContainer(*player, *source, depotSourceContainerId, currentPosition)) {
-		return;
-	}
 	Position sourcePosition;
 	uint8_t sourceIndex = 0;
 	if (source) {
@@ -1301,13 +933,6 @@ void PlayerBotController::processDeposit(Player* player, const Position& current
 			return;
 		}
 	}
-	if (!player->canDoAction()) {
-		schedule(navigationDecisionDelay(*player));
-		return;
-	}
-
-	depotWorkflow.beginMove({depositItem->getID(), fixtureDepot.synthetic ? fixtureDestination->getItemTypeCount(depositItem->getID()) : chest->getItemTypeCount(depositItem->getID()),
-	                        inventoryPolicy.inventoryItemCount(*player, depositItem->getID()), count, sourceSlot});
 	const PlayerBotFixtureEngineCommand moveCommand = fixtureDriver.depotMoveCommand(count);
 	const uint8_t submittedCount = moveCommand.count;
 	telemetry.recordActionAttempt();
@@ -1316,10 +941,10 @@ void PlayerBotController::processDeposit(Player* player, const Position& current
 		                          Position(0xFFFF, 0x40 | depotChestContainerId, containerDestinationIndex(*chest, *depositItem)),
 		submittedCount, depositItem, fixtureDepot.synthetic ? static_cast<Cylinder*>(fixtureDestination) : static_cast<Cylinder*>(chest));
 	emit("action_result", currentPosition, "\"action\":\"deposit\",\"result\":\"requested\",\"policy\":\"known_loot\",\"depot_id\":" +
-	     std::to_string(depotWorkflow.depotId()) + ",\"container_id\":" + std::to_string(depotChestContainerId) + ",\"item_id\":" +
-	     std::to_string(depotWorkflow.move().itemId) + ",\"requested\":" + std::to_string(count) + ",\"submitted\":" +
+	     std::to_string(command.snapshot.selected.depotId) + ",\"container_id\":" + std::to_string(depotChestContainerId) + ",\"item_id\":" +
+	     std::to_string(command.snapshot.pendingMove.itemId) + ",\"requested\":" + std::to_string(count) + ",\"submitted\":" +
 	     std::to_string(submittedCount) + ",\"inventory_before\":" +
-	     std::to_string(depotWorkflow.move().inventoryCount) + ",\"depot_before\":" + std::to_string(depotWorkflow.move().destinationCount) +
+	     std::to_string(command.snapshot.pendingMove.inventoryCount) + ",\"depot_before\":" + std::to_string(command.snapshot.pendingMove.destinationCount) +
 	     ",\"source_slot\":" + (sourceSlot == CONST_SLOT_WHEREEVER ? "null" : std::to_string(sourceSlot)) +
 	     ",\"provider_available\":false,\"disposition\":\"deposit\"");
 	if (pauseDepotFixtureForRestart(*player, DepotRestartCheckpoint::Deposit, currentPosition)) {

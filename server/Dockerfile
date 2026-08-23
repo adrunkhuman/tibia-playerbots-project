@@ -32,6 +32,7 @@ RUN --mount=type=cache,target=/root/.cache/ccache \
         -DCMAKE_C_COMPILER_LAUNCHER=ccache \
         -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
         -DCMAKE_CXX_FLAGS=-fpch-preprocess \
+        -DDISABLE_STATS=1 \
         -DSKIP_GIT=ON \
         -DUSE_LUAJIT=ON \
     && cmake --build build --parallel 2 \

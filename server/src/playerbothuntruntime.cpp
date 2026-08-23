@@ -2,91 +2,68 @@
 
 #include "playerbothuntruntime.h"
 
-#include "configmanager.h"
-#include "player.h"
+#include "playerbotequipmentpolicy.h"
 
-extern ConfigManager g_config;
-
-namespace {
-	double projectedHuntStaminaMultiplier(const Player& player, double availableHuntSeconds)
-	{
-		const uint16_t staminaMinutes = player.getStaminaMinutes();
-		if (staminaMinutes == 0) return 0;
-		if (!g_config.getBoolean(ConfigManager::STAMINA_SYSTEM)) return 1;
-		if (staminaMinutes > 2400 && player.isPremium() && availableHuntSeconds > 0) {
-			const double bonusSeconds = std::min(availableHuntSeconds, std::max<int32_t>(0, staminaMinutes - 2402) * 60.0);
-			return 1 + 0.5 * bonusSeconds / availableHuntSeconds;
-		}
-		return staminaMinutes <= 840 ? 0.5 : 1;
-	}
-}
-
-PlayerBotHuntRuntime::PlayerBotHuntRuntime(std::map<Position, std::chrono::steady_clock::time_point>& sharedCooldowns,
-	                                         std::vector<Position> fallbackPatrol) :
-	cooldowns(sharedCooldowns), fallbackPatrol(std::move(fallbackPatrol))
+PlayerBotHuntRuntime::PlayerBotHuntRuntime(std::vector<Position> fallbackPatrol) :
+	fallbackPatrol(std::move(fallbackPatrol))
 {}
 
-PlayerBotHuntPlanningSnapshot PlayerBotHuntRuntime::snapshot(const Player& player, uint64_t revision,
-	                                                          std::chrono::steady_clock::time_point now)
+PlayerBotHuntPlanningSnapshot PlayerBotHuntRuntime::snapshot(const PlayerBotHuntRuntimePlayerObservation& player, uint64_t revision)
 {
-	std::set<Position> excluded;
-	for (auto it = cooldowns.begin(); it != cooldowns.end();) {
-		if (now >= it->second) it = cooldowns.erase(it);
-		else { excluded.insert(it->first); ++it; }
-	}
-	return {player.getPosition(), player.getLevel(), player.getHealth(), player.getStaminaMinutes(), revision, std::move(excluded)};
+	return {player.position, player.level, player.health, player.staminaMinutes, revision, player.excludedRegions};
 }
 
-PlayerBotHuntRuntimeOutcome PlayerBotHuntRuntime::advancePlanning(Player& player, const char* reason,
+bool PlayerBotHuntRuntime::planningStartRequired(std::chrono::steady_clock::time_point now) const
+{
+	return !planning && now >= scopeReevaluationAfter;
+}
+
+PlayerBotHuntRuntimeOutcome PlayerBotHuntRuntime::advancePlanning(const PlayerBotHuntRuntimePlanningInput& input,
 	                                                                std::chrono::steady_clock::time_point now,
-	                                                                uint32_t huntDurationSeconds)
+	                                                                const PlayerBotHuntPlanningObservation& observation)
 {
 	PlayerBotHuntRuntimeOutcome outcome;
-	const uint64_t revision = PlayerBotHuntRegionPlanner::getCacheRevision();
-	const PlayerBotHuntPlanningSnapshot current = snapshot(player, revision, now);
+	if (observation.invalidateCacheRevision) {
+		planning.reset();
+		pendingScoreCandidates.clear();
+		outcome.staleRevision = true;
+		outcome.invalidateCache = true;
+		return outcome;
+	}
+	const PlayerBotHuntPlanningSnapshot current = snapshot(input.player, input.cacheRevision);
 	if (!planning && now < scopeReevaluationAfter) {
 		outcome.command = PlayerBotHuntRuntimeCommand::ScopeReevaluationPending;
 		outcome.retryAfter = scopeReevaluationAfter - now;
 		return outcome;
 	}
 	if (planning && planning->invalidated(current)) {
-		outcome.staleRevision = planning->snapshot().cacheRevision != revision;
+		outcome.staleRevision = planning->snapshot().cacheRevision != input.cacheRevision;
 		planning.reset();
+		pendingScoreCandidates.clear();
+	}
+	if (planning && observation.cancelAtScoreBarrier && !planning->scoring()) {
+		planning.reset();
+		pendingScoreCandidates.clear();
+		outcome.command = PlayerBotHuntRuntimeCommand::PlanningCancelled;
+		return outcome;
 	}
 	if (!planning) {
-		const PlayerBotHuntRegionScan scan = planner.beginScan(player);
-		const Item* weapon = player.getWeapon(true);
-		const PlayerBotCombatProfile combat{player.getLevel(), player.getMaxHealth(), player.getArmor(), player.getDefense(),
-			weapon ? weapon->getAttack() : 7, weapon ? player.getWeaponSkill(weapon) : player.getSkillLevel(SKILL_FIST), player.getAttackFactor()};
-		planning.emplace(PlayerBotHuntPlanningStart{scan, playerBotHuntPlanningProfile(player, combat, policy.challengeFrontier()),
-			snapshot(player, scan.revision, now), reason, now});
+		if (!input.start) return outcome;
+		PlayerBotHuntPlanningProfile profile = planningProfile(input.start->profile);
+		planning.emplace(PlayerBotHuntPlanningStart{input.start->scan, std::move(profile),
+			snapshot(input.player, input.start->scan.revision), input.reason, now});
+		plannedHuntDurationSeconds = input.huntDurationSeconds;
 		outcome.command = PlayerBotHuntRuntimeCommand::PlanningStarted;
 		return outcome;
 	}
 
 	planning->beginTurn();
 	if (planning->scoring()) {
-		const auto started = std::chrono::steady_clock::now();
 		while (const auto work = planning->nextScoringWork(32)) {
-			PlayerBotHuntRegion region;
-			if (!planner.score(player, planning->profile(), planning->snapshot().cacheRevision, work->candidateIndex,
-			                  planning->snapshot().excludedRegions, policy.regionPerformance(), huntDurationSeconds, region)) {
-				outcome.staleRevision = true;
-				planning.reset();
-				return outcome;
-			}
-			planning->scoreCompleted(std::move(region));
+			pendingScoreCandidates.push_back(work->candidateIndex);
+			outcome.scoreWork.push_back({work->candidateIndex, planning->profile(), planning->snapshot().cacheRevision,
+				planning->snapshot().excludedRegions, policy.regionPerformance(), plannedHuntDurationSeconds});
 		}
-		planning->addScoringTime(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count());
-		if (planning->completeScoring() == PlayerBotHuntPlanningProgress::ScoringYield) {
-			outcome.command = PlayerBotHuntRuntimeCommand::PlanningYield;
-			return outcome;
-		}
-		if (forceScopeExhaustion) {
-			planning->rejectSuitableCandidates("fixture_scope_exhausted");
-			forceScopeExhaustion = false;
-		}
-		outcome.command = PlayerBotHuntRuntimeCommand::PlanningYield;
 		return outcome;
 	}
 	if (const auto work = planning->nextRouteValidationWork(1)) {
@@ -97,53 +74,107 @@ PlayerBotHuntRuntimeOutcome PlayerBotHuntRuntime::advancePlanning(Player& player
 
 	const auto& regions = planning->regions();
 	outcome.candidates = regions;
+	if (!observation.candidatesAvailable) return exhaustScope(now, std::chrono::seconds(1));
 	if (playerBotHuntScopeExhausted(regions)) {
-		++scopeExhaustions;
-		const bool validationBudget = std::any_of(regions.begin(), regions.end(), [](const auto& region) { return region.rejectionReason == "navigation_node_budget"; });
-		outcome.command = PlayerBotHuntRuntimeCommand::ScopeExhausted;
-		outcome.scopeExhaustionAttempt = scopeExhaustions;
-		outcome.stopForScopeExhaustion = scopeExhaustions >= 3;
-		outcome.retryAfter = forceScopeExhaustion ? std::chrono::seconds(1) : std::chrono::seconds(30);
-		(void) validationBudget;
-		scopeReevaluationAfter = now + outcome.retryAfter;
-		planning.reset();
-		return outcome;
+		return exhaustScope(now, std::chrono::seconds(30));
 	}
 	auto selected = std::max_element(regions.begin(), regions.end(), [](const auto& left, const auto& right) {
 		return playerBotPreferHuntRegion(right, left);
 	});
-	activate(*selected, player, now);
+	activate(*selected, input.player, now);
 	outcome.command = PlayerBotHuntRuntimeCommand::RegionSelected;
 	outcome.selectedRegion = activeRegion;
-	planning.reset();
 	scopeExhaustions = 0;
 	scopeReevaluationAfter = {};
 	return outcome;
 }
 
-void PlayerBotHuntRuntime::completeRouteWork(Player& player, const PlayerBotHuntRuntimeRouteWork& work,
-	                                          const PlayerBotNavigationRoutePlan& routePlan, uint32_t huntDurationSeconds)
+PlayerBotHuntRuntimeOutcome PlayerBotHuntRuntime::completeScoreWork(const std::vector<PlayerBotHuntRuntimeScoreObservation>& observations,
+	                                                                  uint64_t elapsedUs)
+{
+	PlayerBotHuntRuntimeOutcome outcome;
+	if (!planning || !planning->scoring() || observations.size() != pendingScoreCandidates.size()) return outcome;
+	for (size_t index = 0; index < observations.size(); ++index) {
+		if (!observations[index].valid || observations[index].candidateIndex != pendingScoreCandidates[index]) {
+			outcome.staleRevision = true;
+			planning.reset();
+			pendingScoreCandidates.clear();
+			return outcome;
+		}
+		PlayerBotHuntRegion region = observations[index].region;
+		applyCandidateSuitability(region, observations[index]);
+		planning->scoreCompleted(std::move(region));
+	}
+	pendingScoreCandidates.clear();
+	planning->addScoringTime(elapsedUs);
+	if (planning->completeScoring() == PlayerBotHuntPlanningProgress::ScoringYield) {
+		outcome.command = PlayerBotHuntRuntimeCommand::PlanningYield;
+		return outcome;
+	}
+	outcome.command = PlayerBotHuntRuntimeCommand::PlanningScored;
+	return outcome;
+}
+
+void PlayerBotHuntRuntime::applyCandidateSuitability(PlayerBotHuntRegion& region,
+	const PlayerBotHuntRuntimeScoreObservation& observation) const
+{
+	region.challengeFrontier = policy.challengeFrontier();
+	region.challengeBandMinimum = std::max(0.0, region.challengeFrontier - 0.05);
+	region.challengeBandMaximum = region.challengeFrontier + 0.05;
+	region.inChallengeBand = region.threatRatio >= region.challengeBandMinimum &&
+	                         region.threatRatio <= region.challengeBandMaximum;
+	region.suitable = observation.candidateFactsAvailable && !region.predictedLethal &&
+	                  region.threatRatio <= region.challengeBandMaximum && observation.withinPlanningScope;
+	if (planning->snapshot().excludedRegions.find(region.center) != planning->snapshot().excludedRegions.end()) {
+		region.suitable = false;
+		region.rejectionReason = "observed_danger_cooldown";
+	} else if (!observation.withinPlanningScope) {
+		region.rejectionReason = "travel_distance";
+	} else if (region.predictedLethal) {
+		region.rejectionReason = "predicted_lethal";
+	} else if (!region.suitable) {
+		region.rejectionReason = "challenge_frontier";
+	} else {
+		region.rejectionReason.clear();
+	}
+}
+
+PlayerBotHuntRuntimeOutcome PlayerBotHuntRuntime::exhaustScope(std::chrono::steady_clock::time_point now,
+	std::chrono::steady_clock::duration retryAfter)
+{
+	PlayerBotHuntRuntimeOutcome outcome;
+	outcome.candidates = planning->regions();
+	++scopeExhaustions;
+	outcome.command = PlayerBotHuntRuntimeCommand::ScopeExhausted;
+	outcome.scopeExhaustionAttempt = scopeExhaustions;
+	outcome.stopForScopeExhaustion = scopeExhaustions >= 3;
+	outcome.retryAfter = retryAfter;
+	scopeReevaluationAfter = now + retryAfter;
+	planning.reset();
+	pendingScoreCandidates.clear();
+	return outcome;
+}
+
+void PlayerBotHuntRuntime::completeRouteWork(const PlayerBotHuntRuntimeRouteWork& work,
+	                                          const PlayerBotHuntRuntimeRouteObservation& route)
 {
 	if (!planning) return;
-	double travelSeconds = 0;
-	for (const PlayerBotNavigationStep& step : routePlan.steps) travelSeconds += step.action == PlayerBotNavigationAction::Move ? player.getStepDuration(step.direction) / 1000.0 : 1.0;
-	const double available = std::max(0.0, huntDurationSeconds - travelSeconds);
-	planning->routeValidationCompleted(work.regionIndex, routePlan.metrics.attempted,
-		routePlan.metrics.result == PlayerBotNavigationResult::Reached, routePlan.metrics.result == PlayerBotNavigationResult::NodeLimit,
-		routePlan.metrics.expandedNodes, static_cast<uint32_t>(routePlan.steps.size()), travelSeconds,
-		projectedHuntStaminaMultiplier(player, available), huntDurationSeconds);
+	planning->routeValidationCompleted(work.regionIndex, route.pathfindingCalled, route.reachable, route.nodeLimit,
+		route.expandedNodes, route.travelSteps, route.estimatedTravelSeconds,
+		route.staminaExperienceMultiplier, plannedHuntDurationSeconds);
 	planning->completeRouteValidation();
 }
 
-void PlayerBotHuntRuntime::activate(PlayerBotHuntRegion region, const Player& player, std::chrono::steady_clock::time_point now)
+void PlayerBotHuntRuntime::activate(PlayerBotHuntRegion region, const PlayerBotHuntRuntimePlayerObservation& player,
+	                                 std::chrono::steady_clock::time_point now)
 {
 	auto first = std::find(region.patrolPoints.begin(), region.patrolPoints.end(), region.destination);
 	if (first != region.patrolPoints.end()) std::rotate(region.patrolPoints.begin(), first, region.patrolPoints.end());
 	activeRegion = std::move(region);
 	patrolIndex = 0;
 	huntStarted = now;
-	huntStartExperience = player.getExperience();
-	huntStartLevel = player.getLevel();
+	huntStartExperience = player.experience;
+	huntStartLevel = player.level;
 	policy.resetCombatEvidence();
 	resetPatrolFailures();
 }
@@ -161,18 +192,18 @@ bool PlayerBotHuntRuntime::matchesMonster(const std::string& name) const
 	});
 }
 
-PlayerBotEquipmentHuntSummary PlayerBotHuntRuntime::scoreEquipmentHunts(Player& player,
-	const PlayerBotCombatProfile& profile, size_t maximumRegions) const
+PlayerBotHuntPlanningProfile PlayerBotHuntRuntime::planningProfile(PlayerBotHuntPlanningProfile profile) const
+{
+	profile.challengeFrontier = policy.challengeFrontier();
+	return profile;
+}
+
+PlayerBotEquipmentHuntSummary PlayerBotHuntRuntime::summarizeEquipmentHunts(const std::vector<PlayerBotHuntRegion>& regions,
+	bool truncated) const
 {
 	PlayerBotEquipmentHuntSummary summary;
 	summary.lowestThreatRatio = std::numeric_limits<double>::max();
-	const PlayerBotHuntRegionScan scan = planner.beginScan(player);
-	const PlayerBotHuntPlanningProfile planningProfile = playerBotHuntPlanningProfile(player, profile, policy.challengeFrontier());
-	const uint32_t duration = static_cast<uint32_t>(std::max<int32_t>(1, g_config.getNumber(ConfigManager::PLAYERBOT_HUNT_DURATION_SECONDS)));
-	for (size_t candidateIndex : scan.candidateIndices) {
-		if (summary.evaluatedRegions >= maximumRegions) { summary.truncated = true; break; }
-		PlayerBotHuntRegion region;
-		if (!planner.score(player, planningProfile, scan.revision, candidateIndex, {}, policy.regionPerformance(), duration, region)) continue;
+	for (const PlayerBotHuntRegion& region : regions) {
 		++summary.evaluatedRegions;
 		summary.lowestThreatRatio = std::min(summary.lowestThreatRatio, region.threatRatio);
 		if (region.suitable) {
@@ -180,32 +211,19 @@ PlayerBotEquipmentHuntSummary PlayerBotHuntRuntime::scoreEquipmentHunts(Player& 
 			summary.bestProjectedExperience = std::max(summary.bestProjectedExperience, region.projectedExperience);
 		}
 	}
+	summary.truncated = truncated;
 	if (summary.lowestThreatRatio == std::numeric_limits<double>::max()) summary.lowestThreatRatio = 0;
 	return summary;
 }
 
-bool PlayerBotHuntRuntime::fixtureScoreRegion(Player& player, const PlayerBotCombatProfile& profile,
-	PlayerBotHuntRegion& current, PlayerBotHuntRegion& improved) const
+std::optional<PlayerBotHuntRuntimeCooldownCommand> PlayerBotHuntRuntime::dangerObserved(int32_t maximumHealth,
+	std::chrono::steady_clock::time_point now, std::chrono::steady_clock::duration cooldown)
 {
-	const PlayerBotHuntRegionScan scan = planner.beginScan(player);
-	if (scan.candidateIndices.empty()) return false;
-	const uint32_t duration = static_cast<uint32_t>(std::max<int32_t>(1, g_config.getNumber(ConfigManager::PLAYERBOT_HUNT_DURATION_SECONDS)));
-	const PlayerBotHuntPlanningProfile before = playerBotHuntPlanningProfile(player, profile, policy.challengeFrontier());
-	PlayerBotCombatProfile upgraded = profile;
-	upgraded.armor += 20;
-	const PlayerBotHuntPlanningProfile after = playerBotHuntPlanningProfile(player, upgraded, policy.challengeFrontier());
-	return planner.score(player, before, scan.revision, scan.candidateIndices.front(), {}, policy.regionPerformance(), duration, current) &&
-	       planner.score(player, after, scan.revision, scan.candidateIndices.front(), {}, policy.regionPerformance(), duration, improved);
+	if (!activeRegion || !policy.observeDanger(maximumHealth, now - huntStarted)) return std::nullopt;
+	return {{activeRegion->center, cooldown}};
 }
 
-bool PlayerBotHuntRuntime::dangerObserved(Player& player, std::chrono::steady_clock::time_point now, std::chrono::steady_clock::duration cooldown)
-{
-	if (!activeRegion || !policy.observeDanger(player.getMaxHealth(), now - huntStarted)) return false;
-	cooldowns[activeRegion->center] = now + cooldown;
-	return true;
-}
-
-std::optional<PlayerBotHuntRuntimeCompletion> PlayerBotHuntRuntime::complete(Player& player, const char* reason,
+std::optional<PlayerBotHuntRuntimeCompletion> PlayerBotHuntRuntime::complete(const PlayerBotHuntRuntimePlayerObservation& player,
 	                                                                           std::chrono::steady_clock::time_point now,
 	                                                                           uint32_t configuredDurationSeconds)
 {
@@ -213,21 +231,23 @@ std::optional<PlayerBotHuntRuntimeCompletion> PlayerBotHuntRuntime::complete(Pla
 	PlayerBotHuntRuntimeCompletion result;
 	result.region = *activeRegion;
 	result.durationSeconds = static_cast<uint64_t>(std::max<int64_t>(0, std::chrono::duration_cast<std::chrono::seconds>(now - huntStarted).count()));
-	result.experienceGained = player.getExperience() >= huntStartExperience ? player.getExperience() - huntStartExperience : 0;
+	result.experienceGained = player.experience >= huntStartExperience ? player.experience - huntStartExperience : 0;
 	result.levelBefore = huntStartLevel;
 	result.combat = policy.combatSummary();
 	result.performance = policy.observePerformance(activeRegion->center, {result.durationSeconds, result.combat.kills, result.experienceGained,
 		activeRegion->projectedExperience, activeRegion->observedCorrection, configuredDurationSeconds});
-	result.challenge = policy.updateChallengeFrontier({result.durationSeconds, player.getMaxHealth()});
+	result.challenge = policy.updateChallengeFrontier({result.durationSeconds, player.maximumHealth});
 	activeRegion.reset();
 	policy.resetCombatEvidence();
 	return result;
 }
 
-void PlayerBotHuntRuntime::observeDeath(bool activeCombat, std::chrono::steady_clock::time_point now, std::chrono::steady_clock::duration cooldown)
+std::optional<PlayerBotHuntRuntimeCooldownCommand> PlayerBotHuntRuntime::observeDeath(bool activeCombat,
+	std::chrono::steady_clock::duration cooldown)
 {
 	if (activeCombat) policy.observeDeath();
-	if (activeRegion) cooldowns[activeRegion->center] = now + cooldown;
+	if (!activeRegion) return std::nullopt;
+	return {{activeRegion->center, cooldown}};
 }
 
 PlayerBotHuntPatrolOutcome PlayerBotHuntRuntime::patrolTarget() const
@@ -274,7 +294,7 @@ PlayerBotHuntPatrolOutcome PlayerBotHuntRuntime::observePatrolNavigation(const P
 		activeRegion->patrolPoints.erase(activeRegion->patrolPoints.begin() + patrolIndex);
 		if (activeRegion->patrolPoints.empty()) {
 			outcome.command = PlayerBotHuntPatrolCommand::RegionExhausted;
-			cooldowns[activeRegion->center] = now + std::chrono::minutes(10);
+			outcome.cooldown = {{activeRegion->center, std::chrono::minutes(10)}};
 		} else patrolIndex %= activeRegion->patrolPoints.size();
 	} else if (!fallbackPatrol.empty()) patrolIndex = (patrolIndex + 1) % fallbackPatrol.size();
 	resetPatrolFailures();

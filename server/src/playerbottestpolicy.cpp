@@ -93,6 +93,7 @@ const playerbot::PlayerBotTestPolicy& playerbot::playerBotTestPolicyFromEnvironm
 			DepotMoveFixture::Rejected : DepotMoveFixture::Normal;
 		return PlayerBotTestPolicy{
 			!regressionMode && (!gameplayMode || progressionMode),
+			!regressionMode && (!gameplayMode || progressionMode || std::strcmp(gameplayMode, "mainland") == 0),
 			startInHunt,
 			fixedFixtureRoute,
 			gameplayMode && std::strcmp(gameplayMode, "depot") == 0,

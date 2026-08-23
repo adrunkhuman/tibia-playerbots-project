@@ -13,3 +13,4 @@
 # Local configuration and build output
 .env
 /server/build/
+/artifacts/

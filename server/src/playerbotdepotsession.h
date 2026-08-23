@@ -64,6 +64,10 @@ class PlayerBotDepotSession
 	void clearDiscovery();
 
 	PlayerBotDepotStage stage() const { return depotStage; }
+
+	private:
+	friend class PlayerBotDepotWorkflow;
+	void discover() { depotStage = PlayerBotDepotStage::Discover; }
 	void openLocker() { depotStage = PlayerBotDepotStage::OpenLocker; }
 	void openChest() { depotStage = PlayerBotDepotStage::OpenChest; }
 	void deposit() { depotStage = PlayerBotDepotStage::Deposit; }
@@ -76,7 +80,7 @@ class PlayerBotDepotSession
 	uint16_t lockerItemId() const { return selectedLockerItemId; }
 	const Position& lockerPosition() const { return selectedLockerPosition; }
 	const Position& approachPosition() const { return selectedApproachPosition; }
-	bool hasSelectedDepot() const { return selectedDepotId != 0; }
+	bool hasSelectedDepot() const { return depotSelected; }
 	void select(PlayerBotDepotCandidate candidate);
 
 	bool candidatesPrepared() const { return candidatesReady; }
@@ -105,10 +109,10 @@ class PlayerBotDepotSession
 	PlayerBotDepotMoveVerification verifyMove(uint32_t inventoryCount, uint32_t destinationCount,
 	                                          uint32_t maximumAttempts);
 
-	private:
 	PlayerBotDepotStage depotStage = PlayerBotDepotStage::Discover;
 	uint32_t depotAttempts = 0;
 	uint16_t selectedDepotId = 0;
+	bool depotSelected = false;
 	uint16_t selectedLockerItemId = 0;
 	Position selectedLockerPosition;
 	Position selectedApproachPosition;

@@ -13,9 +13,6 @@
 
 #include <cstdint>
 
-class Npc;
-class Player;
-
 enum class PlayerBotNpcSessionResult : uint8_t {
 	Pending,
 	Ready,
@@ -25,6 +22,12 @@ enum class PlayerBotNpcSessionResult : uint8_t {
 struct PlayerBotNpcSessionOutcome {
 	PlayerBotNpcSessionResult result = PlayerBotNpcSessionResult::Pending;
 	uint8_t actionsIssued = 0;
+};
+
+struct PlayerBotNpcShopObservation {
+	bool shopOpen = false;
+	bool otherShopOpen = false;
+	bool greetingAcknowledged = false;
 };
 
 enum class PlayerBotNpcConversationStep : uint8_t {
@@ -47,16 +50,18 @@ class PlayerBotNpcSession
 		void resetGreetingAcknowledgement() { greetingAcknowledged = false; }
 		bool isGreetingAcknowledged() const { return greetingAcknowledged; }
 
+	private:
+	friend class PlayerBotServiceWorkflow;
+	friend class PlayerBotProgressionRuntime;
+
 		PlayerBotNpcConversationStep step() const { return conversationStep; }
 		void setStep(PlayerBotNpcConversationStep step) { conversationStep = step; }
 		void resetRetries() { retries = 0; }
 		bool retryLimitReached(uint32_t maximumRetries);
 
-		PlayerBotNpcSessionOutcome establishFocus(Player& player, Npc& npc, uint32_t maximumRetries);
-		PlayerBotNpcSessionOutcome openShop(Player& player, Npc& npc, uint32_t maximumRetries);
+		PlayerBotNpcSessionOutcome advanceShop(const PlayerBotNpcShopObservation& observation, uint32_t maximumRetries);
 		uint32_t nextDelay() const { return pendingDelay; }
 
-	private:
 		uint32_t targetNpcId = 0;
 		uint32_t retries = 0;
 		uint32_t pendingDelay = 0;

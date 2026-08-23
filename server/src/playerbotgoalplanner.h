@@ -40,10 +40,10 @@ struct PlayerBotGoalPlannerSnapshot {
 
 class PlayerBotGoalPlanner {
 	public:
-		PlayerBotGoalArbiter::GoalDecision decide(const PlayerBotGoalPlannerSnapshot& snapshot,
-		                                          PlayerBotGoalArbiter& arbiter) const;
+		std::vector<PlayerBotGoalArbiter::GoalCandidate> candidates(const PlayerBotGoalPlannerSnapshot& snapshot) const;
 		PlayerBotGoalArbiter::GoalCandidate departureCandidate(const PlayerBotGoalPlannerSnapshot& snapshot) const;
 		PlayerBotGoalArbiter::GoalCandidate serviceCandidate(const PlayerBotGoalPlannerSnapshot& snapshot) const;
+		PlayerBotGoalArbiter::GoalCandidate forcedServiceCandidate(std::string reason) const;
 };
 
 #endif
