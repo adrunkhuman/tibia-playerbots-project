@@ -28,6 +28,7 @@
 #include "playerbotrecoverysession.h"
 #include "playerbotspellcalibration.h"
 #include "playerbotspellruntime.h"
+#include "playerbottestpolicy.h"
 #include "playerbottelemetry.h"
 #include "playerbotservicesession.h"
 #include "playerbottargetingsession.h"
@@ -144,8 +145,6 @@ namespace playerbot {
 	inline constexpr std::chrono::seconds depotApproachSuppression(2);
 	inline constexpr uint32_t depotRetryInitialInterval = 1000;
 	inline constexpr uint32_t depotRetryMaximumInterval = 4000;
-	inline constexpr uint32_t depotRestartCheckpointStorage = 50096;
-	inline constexpr uint32_t gameplayFixtureReadyStorage = 50099;
 	inline constexpr std::array<Position, 4> huntingLoop = {{
 		Position(32084, 32144, 5),
 		Position(32103, 32124, 8),
@@ -154,51 +153,10 @@ namespace playerbot {
 	}};
 	inline constexpr const char* botAccountName = "bot-one";
 
-	enum class DepotRestartCheckpoint : uint8_t {
-		None,
-		Approach,
-		Locker,
-		Chest,
-		Deposit,
-		Depart,
-	};
-	enum class DepotMoveFixture : uint8_t {
-		Normal,
-		Partial,
-		Rejected,
-	};
-
-	struct PlayerBotTestPolicy {
-		bool progressionEnabled;
-		bool startInHunt;
-		bool fixedFixtureRoute;
-		bool depotFixture;
-		DepotRestartCheckpoint depotRestartCheckpoint;
-		DepotMoveFixture depotMoveFixture;
-		bool forceFirstHuntCandidateUnreachable;
-		bool forceSecondHuntCandidateNodeLimit;
-		bool cancelHuntPlanningAtScoreBarrier;
-		bool forceRepeatedNavigationStepFailures;
-		bool forceCorpseNavigationFailures;
-		bool forcePatrolRouteFailures;
-		bool suppressSlottedLootSeller;
-		bool equipmentPurchasesEnabled;
-		bool equipmentPurchaseFixture;
-		bool forceEquipmentPurchaseRejected;
-		bool pauseAfterEquipmentStorageRejection;
-		bool adaptiveChallengeFixture;
-		bool forceHuntScopeExhaustion;
-		bool deferProgressionFixtureInitialization;
-		bool spellCalibrationFixture;
-		bool magicTrainingFixture;
-		bool forceMagicTrainingVerificationFailure;
-	};
-
 	std::string jsonString(const std::string& value);
 	std::string utcTimestamp();
 	void emitPlayerbotEvent(const std::string& playerName, uint32_t playerGuid, const char* event,
 	                        const Position& position, const std::string& fields = {});
-	const PlayerBotTestPolicy& testPolicyFromEnvironment();
 }
 
 class PlayerBotController : public std::enable_shared_from_this<PlayerBotController>
@@ -207,8 +165,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 
 	public:
 		explicit PlayerBotController(const Player& player,
-		                            std::map<Position, std::chrono::steady_clock::time_point>& sharedHuntRegionCooldowns,
-		                            const playerbot::PlayerBotTestPolicy& testPolicy);
+		                            std::map<Position, std::chrono::steady_clock::time_point>& sharedHuntRegionCooldowns);
 
 		void start(const Position& position, bool recovered, uint32_t recoveryCount);
 
@@ -607,7 +564,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		uint32_t playerId;
 		uint32_t playerGuid;
 		std::string playerName;
-		const playerbot::PlayerBotTestPolicy testPolicy;
+		playerbot::PlayerBotFixtureRuntime fixtureRuntime;
 		playerbot::PlayerBotTelemetry telemetry;
 		Position lastPosition;
 		ScenarioStage scenarioStage = ScenarioStage::Traverse;
@@ -617,8 +574,6 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		Position patrolRouteFailureTarget;
 		std::chrono::steady_clock::time_point patrolRouteFailureStarted;
 		uint64_t lastNavigationExpandedNodes = 0;
-		uint32_t forcedNavigationStepFailuresRemaining = 0;
-		uint32_t forcedNavigationPlanFailuresRemaining = 0;
 		bool lastNavigationRouteUnavailable = false;
 		std::map<uint16_t, uint32_t> itemSellValues;
 		PlayerBotEquipmentPolicy equipmentPolicy;
@@ -668,12 +623,6 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		std::chrono::steady_clock::time_point huntRegionStarted;
 		uint64_t huntRegionStartExperience = 0;
 		uint32_t huntRegionStartLevel = 0;
-		bool adaptiveChallengeFixtureRun = false;
-		bool huntPlanningFixtureCancelled = false;
-		bool huntPlanningFixtureStaleRevisionTriggered = false;
-		bool huntPlanningFixtureForcedUnreachable = false;
-		bool huntPlanningFixtureForcedNodeLimit = false;
-		bool fixtureInitializationPending = false;
 		bool deathObserved = false;
 };
 #endif

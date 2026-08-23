@@ -1126,11 +1126,11 @@ bool PlayerBotController::selectTopLevelGoal(Player& player, const Position& pos
 	const bool equipmentPurchaseCoolingDown = goalArbiter.isCoolingDown(TopLevelGoal::BuyEquipment, now);
 	const std::optional<EquipmentOfferEvaluation> equipment = equipmentPurchaseCoolingDown ? std::nullopt :
 	                                                        evaluateEquipmentOffers(player, position);
-	const bool equipmentFound = testPolicy.equipmentPurchasesEnabled && equipment.has_value();
+	const bool equipmentFound = fixtureRuntime.equipmentPurchasesEnabled() && equipment.has_value();
 	const GoalCandidate buyEquipment{TopLevelGoal::BuyEquipment, equipmentFound,
 	                                 equipmentFound ? equipmentPurchaseGoalUtility : 0,
 	                                 equipmentPurchaseCoolingDown ? "cooldown" :
-	                                 !testPolicy.equipmentPurchasesEnabled ? "shadow_only" :
+	                                 !fixtureRuntime.equipmentPurchasesEnabled() ? "shadow_only" :
 	                                 equipmentFound ? PlayerBotEquipmentPolicy::decisionRuleName(equipment->rule) : "no_justified_offer"};
 	const bool magicTrainingCoolingDown = goalArbiter.isCoolingDown(TopLevelGoal::MagicTraining, now);
 	const char* magicTrainingReason = magicTrainingCoolingDown ? "cooldown" : magicTrainingCandidateReason(player);
@@ -1150,7 +1150,7 @@ bool PlayerBotController::selectTopLevelGoal(Player& player, const Position& pos
 	                  equipmentFound ? &*equipment : nullptr);
 	emitGoalCandidate(player, decision.candidate(TopLevelGoal::MagicTraining), decision.id, position, decisionReason);
 	emitGoalCandidate(player, decision.candidate(TopLevelGoal::Hunt), decision.id, position, decisionReason);
-	if (testPolicy.pauseAfterEquipmentStorageRejection) {
+	if (fixtureRuntime.pauseAfterEquipmentStorageRejection()) {
 		return false;
 	}
 
@@ -1232,7 +1232,7 @@ void PlayerBotController::finishProgressionObjective(Player* player, const Posit
 	cyclePhase = CyclePhase::Service;
 	goalArbiter.setCooldown(TopLevelGoal::PickupReward, std::strcmp(result, "success") == 0 ? pickupRewardSuccessCooldown :
 	                                                                                              pickupRewardFailureCooldown);
-	if (testPolicy.progressionEnabled && player) {
+	if (fixtureRuntime.progressionEnabled() && player) {
 		const char* decisionReason = std::strcmp(result, "success") == 0 ? "pickup_complete" :
 		                             std::strcmp(result, "interrupted") == 0 ? "pickup_interrupted" : "pickup_failed";
 		selectTopLevelGoal(*player, position, decisionReason);

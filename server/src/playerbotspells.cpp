@@ -371,7 +371,7 @@ bool PlayerBotController::processMagicTraining(Player& player, const Position& p
 	uint64_t manaAfter = player.getMana();
 	const uint64_t manaSpentAfter = player.getSpentMana();
 	const uint32_t magicLevelAfter = player.getBaseMagicLevel();
-	if (testPolicy.forceMagicTrainingVerificationFailure) {
+	if (fixtureRuntime.forceMagicTrainingVerificationFailure()) {
 		// The engine cast remains real; this fixture corrupts only the post-cast observation snapshot.
 		++manaAfter;
 	}
@@ -808,7 +808,7 @@ void PlayerBotController::finishSpellTraining(Player* player, const Position& po
 	clearNavigation();
 	goalArbiter.setCooldown(TopLevelGoal::LearnSpell,
 	                       std::strcmp(result, "success") == 0 ? spellTrainingSuccessCooldown : spellTrainingFailureCooldown);
-	if (player && testPolicy.progressionEnabled) {
+	if (player && fixtureRuntime.progressionEnabled()) {
 		selectTopLevelGoal(*player, position, std::strcmp(result, "success") == 0 ? "spell_training_complete" : "spell_training_failed");
 	}
 	schedule(SCHEDULER_MINTICKS);

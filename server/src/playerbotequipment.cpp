@@ -352,13 +352,13 @@ void PlayerBotController::finishEquipmentPurchase(Player* player, const Position
 	serviceSession.reset();
 	clearNavigation();
 	cyclePhase = CyclePhase::Service;
-	if (succeeded && testPolicy.equipmentPurchaseFixture) {
+	if (succeeded && fixtureRuntime.equipmentPurchaseFixture()) {
 		if (player) {
-			player->addStorageValue(gameplayFixtureReadyStorage, -1);
+			fixtureRuntime.completeEquipmentPurchaseFixture(*player);
 		}
 		return;
 	}
-	if (testPolicy.progressionEnabled && player) {
+	if (fixtureRuntime.progressionEnabled() && player) {
 		selectTopLevelGoal(*player, position, succeeded ? "equipment_purchase_complete" : "equipment_purchase_failed");
 	} else {
 		goalArbiter.setActiveGoal(TopLevelGoal::Service);
@@ -432,7 +432,7 @@ void PlayerBotController::processEquipmentPurchase(Player* player, const Positio
 		}
 		equipmentPurchaseSession.setStage(PlayerBotEquipmentPurchaseStage::VerifyPurchase);
 		telemetry.recordActionAttempt();
-		if (!testPolicy.forceEquipmentPurchaseRejected) {
+		if (!fixtureRuntime.forceEquipmentPurchaseRejected()) {
 			g_game.playerPurchaseItem(playerId, Item::items[purchase.itemId].clientId,
 			                          static_cast<uint8_t>(offer->subType), 1, false, false);
 		}
