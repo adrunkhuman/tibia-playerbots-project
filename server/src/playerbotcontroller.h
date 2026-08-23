@@ -24,6 +24,7 @@
 #include "playerbotnavigation.h"
 #include "playerbotnavigationsession.h"
 #include "playerbotnpcsession.h"
+#include "playerbotprogressionsession.h"
 #include "playerbotrecoverysession.h"
 #include "playerbotspellcalibration.h"
 #include "playerbotspellruntime.h"
@@ -229,55 +230,13 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 			Complete,
 		};
 
-		enum class ProgressionObjective : uint8_t {
-			None,
-			PickupReward,
-			OracleDeparture,
-			LearnSpell,
-			BuyEquipment,
-		};
-
 		using TopLevelGoal = PlayerBotGoalArbiter::TopLevelGoal;
 		using GoalCandidate = PlayerBotGoalArbiter::GoalCandidate;
-
-		enum class ProgressionStage : uint8_t {
-			Travel,
-			UseReward,
-			VerifyReward,
-			EquipReward,
-			VerifyEquipment,
-		};
-
-		enum class DepartureStage : uint8_t {
-			Travel,
-			Greet,
-			ConfirmReady,
-			ChooseTown,
-			ChooseVocation,
-			ConfirmVocation,
-			Verify,
-		};
-
-		enum class SpellTrainingStage : uint8_t {
-			Travel,
-			Greet,
-			Request,
-			Confirm,
-			Verify,
-		};
 
 		using EquipmentUpgrade = PlayerBotEquipmentUpgrade;
 		using EquipmentLoadout = PlayerBotEquipmentLoadout;
 		using EquipmentHuntSummary = PlayerBotEquipmentHuntSummary;
 		using EquipmentOfferEvaluation = PlayerBotEquipmentOfferEvaluation;
-
-		enum class EquipmentPurchaseStage : uint8_t {
-			Travel,
-			Purchase,
-			VerifyPurchase,
-			Equip,
-			VerifyEquipment,
-		};
 
 		struct RewardItemInspection {
 			uint16_t itemId;
@@ -319,64 +278,9 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 			int32_t knownUtility = 0;
 		};
 
-		struct PickupReward {
-			uint16_t uniqueId = 0;
-			uint16_t itemId = 0;
-			uint16_t rootItemId = 0;
-			uint16_t rootOrdinal = 0;
-			Position itemPosition;
-			Position approachPosition;
-			slots_t slot = CONST_SLOT_WHEREEVER;
-			int32_t benefit = 0;
-			std::string metric;
-			int32_t currentValue = 0;
-			int32_t candidateValue = 0;
-			uint32_t travelSteps = 0;
-			uint32_t estimatedDistance = 0;
-			uint32_t requiredBackpackSlots = 0;
-			uint16_t replacedItemId = 0;
-			uint16_t displacedLeftItemId = 0;
-			uint16_t displacedRightItemId = 0;
-			uint32_t knownUtility = 0;
-			uint32_t itemCount = 0;
-			uint32_t containerCount = 0;
-			uint32_t unknownCount = 0;
-			uint32_t currencyValue = 0;
-			uint32_t sellValue = 0;
-			uint32_t equipmentUpgradeCount = 0;
-			uint64_t expandedNodes = 0;
-			std::vector<uint16_t> selectedItemPath;
-			std::string rootSignature;
-			std::vector<std::string> rootSignatures;
-			std::vector<std::string> nonStackableRootSignatures;
-			std::map<uint16_t, uint32_t> stackableRootCounts;
-			bool resumeEquipment = false;
-		};
-
-		struct DeparturePlan {
-			uint32_t npcId = 0;
-			Position npcPosition;
-			Position approachPosition;
-			uint32_t travelSteps = 0;
-			uint64_t expandedNodes = 0;
-		};
-
 		struct ServiceNpc {
 			uint32_t id;
 			Position position;
-		};
-
-		struct SpellTrainingPlan {
-			uint32_t npcId = 0;
-			Position npcPosition;
-			Position approachPosition;
-			std::string spellName;
-			std::string keyword;
-			uint32_t price = 0;
-			uint32_t level = 0;
-			uint32_t travelSteps = 0;
-			uint64_t reserve = 0;
-			uint64_t moneyBefore = 0;
 		};
 
 		enum class ScenarioStage : uint8_t {
@@ -543,7 +447,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 
 		std::string rewardInspectionItemsJson(const RewardInspection& inspection) const;
 
-		int32_t estimatedPickupUtility(const PickupReward& reward) const;
+		int32_t estimatedPickupUtility(const PlayerBotRewardPlan& reward) const;
 
 		Container* playerBackpack(Player& player) const;
 
@@ -564,23 +468,23 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		bool planSimpleRewardApproach(Player& player, const Position& rewardPosition, Position& approachPosition,
 		                              std::deque<PlayerBotNavigationStep>& approachSteps, uint64_t& expandedNodes);
 
-		void emitRewardCandidate(const PickupReward& candidate, const Position& position, const char* result,
+		void emitRewardCandidate(const PlayerBotRewardPlan& candidate, const Position& position, const char* result,
 		                         const char* reason = nullptr) const;
 
 		void emitRewardInspection(uint16_t uniqueId, const Position& rewardPosition,
 		                          const RewardInspection& inspection, const Position& position);
 
-		bool findPickupReward(Player& player, const Position& position, PickupReward& reward,
+		bool findPickupReward(Player& player, const Position& position, PlayerBotRewardPlan& reward,
 		                      std::deque<PlayerBotNavigationStep>& rewardSteps);
 
 		bool hasCompletedRookgaardDeparture(const Player& player) const;
 		bool requiresRookgaardDeparture(const Player& player) const;
 
-		bool findOracleDeparture(Player& player, const Position& position, DeparturePlan& plan,
+		bool findOracleDeparture(Player& player, const Position& position, PlayerBotOracleDeparturePlan& plan,
 		                         std::deque<PlayerBotNavigationStep>& departureSteps);
 		bool forceOracleDeparture(Player& player, const Position& position, const char* decisionReason);
 
-		void beginOracleDeparture(Player& player, const Position& position, DeparturePlan plan,
+		void beginOracleDeparture(Player& player, const Position& position, PlayerBotOracleDeparturePlan plan,
 		                          std::deque<PlayerBotNavigationStep> departureSteps);
 
 		void processOracleDeparture(Player* player, const Position& currentPosition);
@@ -590,9 +494,9 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		uint64_t spellTrainingReserve(const Player& player) const;
 		void emitSpellCandidate(const Npc& npc, const NpcSpellOffer& offer, const Position& position, const char* result,
 		                        const char* reason, uint64_t reserve = 0, uint32_t travelSteps = 0) const;
-		bool findSpellTraining(Player& player, const Position& position, SpellTrainingPlan& plan,
+		bool findSpellTraining(Player& player, const Position& position, PlayerBotSpellTrainingPlan& plan,
 		                       std::deque<PlayerBotNavigationStep>& steps);
-		void beginSpellTraining(Player& player, const Position& position, SpellTrainingPlan plan,
+		void beginSpellTraining(Player& player, const Position& position, PlayerBotSpellTrainingPlan plan,
 		                        std::deque<PlayerBotNavigationStep> steps);
 		void finishSpellTraining(Player* player, const Position& position, const char* result, const char* reason);
 		void processSpellTraining(Player* player, const Position& currentPosition);
@@ -608,10 +512,10 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		GoalCandidate serviceGoalCandidate(const Player& player) const;
 
 		void emitGoalCandidate(const Player& player, const GoalCandidate& candidate, uint64_t decisionId, const Position& position, const char* decisionReason,
-		                       const PickupReward* reward = nullptr, const DeparturePlan* departure = nullptr,
+		                       const PlayerBotRewardPlan* reward = nullptr, const PlayerBotOracleDeparturePlan* departure = nullptr,
 		                       const EquipmentOfferEvaluation* equipment = nullptr) const;
 
-		void beginPickupReward(Player& player, const Position& position, PickupReward reward,
+		void beginPickupReward(Player& player, const Position& position, PlayerBotRewardPlan reward,
 		                       std::deque<PlayerBotNavigationStep> rewardSteps);
 
 		bool selectTopLevelGoal(Player& player, const Position& position, const char* decisionReason);
@@ -789,25 +693,13 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		PlayerBotTargetingSession targetingSession;
 		CyclePhase cyclePhase = CyclePhase::ReturnToDepot;
 		ServiceStage serviceStage = ServiceStage::Discover;
-		ProgressionObjective progressionObjective = ProgressionObjective::None;
-		ProgressionStage progressionStage = ProgressionStage::Travel;
-		DepartureStage departureStage = DepartureStage::Travel;
-		SpellTrainingStage spellTrainingStage = SpellTrainingStage::Travel;
-		PickupReward pickupReward;
-		DeparturePlan departurePlan;
-		SpellTrainingPlan spellTrainingPlan;
-		EquipmentOfferEvaluation equipmentPurchase;
-		EquipmentPurchaseStage equipmentPurchaseStage = EquipmentPurchaseStage::Travel;
+		PlayerBotProgressionSession progressionSession;
+		PlayerBotRewardSession rewardSession;
+		PlayerBotOracleDepartureSession departureSession;
+		PlayerBotSpellTrainingSession spellTrainingSession;
+		PlayerBotEquipmentPurchaseSession equipmentPurchaseSession;
 		PlayerBotGoalArbiter goalArbiter;
-		uint32_t progressionAttempts = 0;
-		uint32_t pendingRewardItemCount = 0;
-		uint32_t pendingRewardRootCount = 0;
-		std::map<std::string, uint32_t> pendingRewardRootCounts;
-		std::map<uint16_t, uint32_t> pendingRewardStackableCounts;
-		size_t pendingRewardContainerDepth = SIZE_MAX;
-		uint32_t pendingRewardContainerOpenAttempts = 0;
 		std::map<uint16_t, std::string> rewardInspectionFingerprints;
-		std::map<uint16_t, uint32_t> pendingEquipmentDisplacedCounts;
 		uint16_t pendingReadinessItemId = 0;
 		slots_t pendingReadinessSlot = CONST_SLOT_WHEREEVER;
 		uint32_t pendingReadinessAttempts = 0;

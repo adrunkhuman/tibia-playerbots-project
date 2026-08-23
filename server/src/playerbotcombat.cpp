@@ -139,8 +139,8 @@ bool PlayerBotController::handleHealing(Player* player, const Position& currentP
 			       << ",\"resource_before\":0,\"resource_after\":0";
 			emit("action_result", currentPosition, fields.str());
 		}
-		if (progressionObjective != ProgressionObjective::None) {
-			if (progressionObjective == ProgressionObjective::OracleDeparture) {
+		if (progressionSession.active() != PlayerBotProgressionProcedure::None) {
+			if (progressionSession.active(PlayerBotProgressionProcedure::OracleDeparture)) {
 				finishOracleDeparture(player, currentPosition, "interrupted", "healing_supply_missing");
 			} else {
 				finishProgressionObjective(player, currentPosition, "interrupted", "healing_supply_missing", false);
@@ -1043,7 +1043,7 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 		processReadinessEquipment(player, currentPosition);
 		return;
 	}
-	if (cyclePhase != CyclePhase::Hunt || progressionObjective != ProgressionObjective::None) {
+	if (cyclePhase != CyclePhase::Hunt || progressionSession.active() != PlayerBotProgressionProcedure::None) {
 		if (targetingSession.defensiveTarget()) {
 			processDefensiveCombat(player, currentPosition);
 			return;
@@ -1061,7 +1061,7 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 		processDefensiveCombat(player, currentPosition);
 		return;
 	}
-	if (progressionObjective != ProgressionObjective::None) {
+	if (progressionSession.active() != PlayerBotProgressionProcedure::None) {
 		processProgression(player, currentPosition);
 		return;
 	}

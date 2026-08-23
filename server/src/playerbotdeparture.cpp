@@ -25,7 +25,7 @@ bool PlayerBotController::requiresRookgaardDeparture(const Player& player) const
 	return player.getVocation()->getId() == 0 && player.getLevel() >= oracleMinimumLevel;
 }
 
-bool PlayerBotController::findOracleDeparture(Player& player, const Position& position, DeparturePlan& plan,
+bool PlayerBotController::findOracleDeparture(Player& player, const Position& position, PlayerBotOracleDeparturePlan& plan,
 	                                           std::deque<PlayerBotNavigationStep>& departureSteps)
 {
 	Npc* oracle = nullptr;
@@ -107,10 +107,10 @@ bool PlayerBotController::forceOracleDeparture(Player& player, const Position& p
 	lootCorpseExpectation = {};
 	player.closeContainer(corpseContainerId);
 	setStage(ScenarioStage::Traverse, position);
-	progressionObjective = ProgressionObjective::None;
+	progressionSession.reset();
 	serviceStage = ServiceStage::Discover;
 
-	DeparturePlan plan;
+	PlayerBotOracleDeparturePlan plan;
 	std::deque<PlayerBotNavigationStep> route;
 	const bool withinOracleLevelRange = player.getLevel() <= oracleMaximumLevel;
 	const bool found = withinOracleLevelRange && findOracleDeparture(player, position, plan, route);
@@ -146,20 +146,19 @@ bool PlayerBotController::forceOracleDeparture(Player& player, const Position& p
 	return true;
 }
 
-void PlayerBotController::beginOracleDeparture(Player& player, const Position& position, DeparturePlan plan,
+void PlayerBotController::beginOracleDeparture(Player& player, const Position& position, PlayerBotOracleDeparturePlan plan,
 	                                            std::deque<PlayerBotNavigationStep> steps)
 {
-	departurePlan = std::move(plan);
-	progressionObjective = ProgressionObjective::OracleDeparture;
-	departureStage = DepartureStage::Travel;
-	progressionAttempts = 0;
-	npcSession.reset(departurePlan.npcId);
-	navigationSession.adopt(departurePlan.approachPosition, std::move(steps));
+	departureSession.begin(std::move(plan));
+	progressionSession.begin(PlayerBotProgressionProcedure::OracleDeparture);
+	const auto& departure = departureSession.plan();
+	npcSession.reset(departure.npcId);
+	navigationSession.adopt(departure.approachPosition, std::move(steps));
 	emit("strategy_selection", position,
-	     "\"goal\":\"oracle_departure\",\"npc_id\":" + std::to_string(departurePlan.npcId) +
+	     "\"goal\":\"oracle_departure\",\"npc_id\":" + std::to_string(departure.npcId) +
 	         ",\"town\":\"thais\",\"town_id\":" + std::to_string(oracleTownId) +
 	         ",\"vocation\":\"knight\",\"vocation_id\":" + std::to_string(oracleVocationId) +
-	         ",\"travel_steps\":" + std::to_string(departurePlan.travelSteps));
+	         ",\"travel_steps\":" + std::to_string(departure.travelSteps));
 	say(player, "I have reached level 8. Going to the Oracle to become a knight of Thais.");
 }
 
@@ -169,7 +168,8 @@ void PlayerBotController::finishOracleDeparture(Player* player, const Position& 
 	     "\"decision_id\":" + std::to_string(goalArbiter.decisionId()) +
 	         ",\"goal\":\"oracle_departure\",\"result\":" + jsonString(result) +
 	         ",\"reason\":" + jsonString(reason));
-	progressionObjective = ProgressionObjective::None;
+	progressionSession.reset();
+	departureSession.reset();
 	npcSession.reset();
 	clearNavigation();
 	if (std::strcmp(result, "success") == 0) {
@@ -189,19 +189,20 @@ void PlayerBotController::finishOracleDeparture(Player* player, const Position& 
 
 void PlayerBotController::processOracleDeparture(Player* player, const Position& currentPosition)
 {
-	if (departureStage == DepartureStage::Travel) {
-		if (!processNavigation(player, currentPosition, departurePlan.approachPosition)) {
+	const auto& departure = departureSession.plan();
+	if (departureSession.stage() == PlayerBotOracleDepartureStage::Travel) {
+		if (!processNavigation(player, currentPosition, departure.approachPosition)) {
 			if (fixedTargetRouteFailureCount >= maximumProgressionAttempts) {
 				finishOracleDeparture(player, currentPosition, "failed", "route_unavailable");
 			}
 			return;
 		}
-		departureStage = DepartureStage::Greet;
+		departureSession.setStage(PlayerBotOracleDepartureStage::Greet);
 		schedule(SCHEDULER_MINTICKS);
 		return;
 	}
 
-	if (departureStage == DepartureStage::Verify) {
+	if (departureSession.stage() == PlayerBotOracleDepartureStage::Verify) {
 		const bool correctVocation = player->getVocation()->getId() == oracleVocationId;
 		const bool correctTown = player->getTown() && player->getTown()->getID() == oracleTownId;
 		const bool teleported = correctTown && currentPosition == player->getTown()->getTemplePosition();
@@ -217,53 +218,53 @@ void PlayerBotController::processOracleDeparture(Player* player, const Position&
 		return;
 	}
 
-	Npc* oracle = g_game.getNpcByID(departurePlan.npcId);
+	Npc* oracle = g_game.getNpcByID(departure.npcId);
 	if (!oracle || oracle->isRemoved() || !Position::areInRange<3, 3, 0>(currentPosition, oracle->getPosition())) {
 		finishOracleDeparture(player, currentPosition, "failed", "oracle_unavailable");
 		return;
 	}
 
-	if (departureStage == DepartureStage::Greet) {
+	if (departureSession.stage() == PlayerBotOracleDepartureStage::Greet) {
 		npcSession.resetGreetingAcknowledgement();
 		++counters.actionsAttempted;
 		oracle->receiveSpeech(player, TALKTYPE_PRIVATE_PN, "hi");
-		departureStage = DepartureStage::ConfirmReady;
+		departureSession.setStage(PlayerBotOracleDepartureStage::ConfirmReady);
 		schedule(1000);
 		return;
 	}
-	if (departureStage == DepartureStage::ConfirmReady) {
+	if (departureSession.stage() == PlayerBotOracleDepartureStage::ConfirmReady) {
 		if (!npcSession.isGreetingAcknowledged()) {
-			if (++progressionAttempts >= maximumProgressionAttempts) {
+			if (departureSession.incrementRetries() >= maximumProgressionAttempts) {
 				finishOracleDeparture(player, currentPosition, "failed", "oracle_focus_unconfirmed");
 				return;
 			}
-			departureStage = DepartureStage::Greet;
+			departureSession.setStage(PlayerBotOracleDepartureStage::Greet);
 			schedule(1000);
 			return;
 		}
 		++counters.actionsAttempted;
 		oracle->receiveSpeech(player, TALKTYPE_PRIVATE_PN, "yes");
-		departureStage = DepartureStage::ChooseTown;
+		departureSession.setStage(PlayerBotOracleDepartureStage::ChooseTown);
 		schedule(1000);
 		return;
 	}
-	if (departureStage == DepartureStage::ChooseTown) {
+	if (departureSession.stage() == PlayerBotOracleDepartureStage::ChooseTown) {
 		++counters.actionsAttempted;
 		oracle->receiveSpeech(player, TALKTYPE_PRIVATE_PN, "thais");
-		departureStage = DepartureStage::ChooseVocation;
+		departureSession.setStage(PlayerBotOracleDepartureStage::ChooseVocation);
 		schedule(1000);
 		return;
 	}
-	if (departureStage == DepartureStage::ChooseVocation) {
+	if (departureSession.stage() == PlayerBotOracleDepartureStage::ChooseVocation) {
 		++counters.actionsAttempted;
 		oracle->receiveSpeech(player, TALKTYPE_PRIVATE_PN, "knight");
-		departureStage = DepartureStage::ConfirmVocation;
+		departureSession.setStage(PlayerBotOracleDepartureStage::ConfirmVocation);
 		schedule(1000);
 		return;
 	}
-	if (departureStage == DepartureStage::ConfirmVocation) {
+	if (departureSession.stage() == PlayerBotOracleDepartureStage::ConfirmVocation) {
 		++counters.actionsAttempted;
-		departureStage = DepartureStage::Verify;
+		departureSession.setStage(PlayerBotOracleDepartureStage::Verify);
 		oracle->receiveSpeech(player, TALKTYPE_PRIVATE_PN, "yes");
 		schedule(1000);
 		return;

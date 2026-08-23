@@ -708,18 +708,18 @@ void PlayerBotController::navigate()
 			return;
 		}
 	}
-	const bool accessingReward = progressionObjective == ProgressionObjective::PickupReward &&
-	                             (progressionStage == ProgressionStage::VerifyReward ||
-	                              progressionStage == ProgressionStage::EquipReward ||
-	                              progressionStage == ProgressionStage::VerifyEquipment);
-	const bool verifyingDeparture = progressionObjective == ProgressionObjective::OracleDeparture &&
-	                                departureStage == DepartureStage::Verify;
+	const bool accessingReward = progressionSession.active(PlayerBotProgressionProcedure::PickupReward) &&
+	                             (rewardSession.stage() == PlayerBotRewardStage::VerifyReward ||
+	                              rewardSession.stage() == PlayerBotRewardStage::EquipReward ||
+	                              rewardSession.stage() == PlayerBotRewardStage::VerifyEquipment);
+	const bool verifyingDeparture = progressionSession.active(PlayerBotProgressionProcedure::OracleDeparture) &&
+	                                departureSession.stage() == PlayerBotOracleDepartureStage::Verify;
 	if (!accessingReward && !verifyingDeparture && handleHealing(player, currentPosition)) {
 		schedule(blockedRouteRetryInterval);
 		return;
 	}
 	const bool waitingForRecovery = cyclePhase == CyclePhase::Service && needsHealing(*player);
-	if (!accessingReward && progressionObjective != ProgressionObjective::OracleDeparture &&
+	if (!accessingReward && !progressionSession.active(PlayerBotProgressionProcedure::OracleDeparture) &&
 	    requiresRookgaardDeparture(*player) && !waitingForRecovery) {
 		if (selectTopLevelGoal(*player, currentPosition, "level_eight_interrupt")) {
 			schedule(SCHEDULER_MINTICKS);

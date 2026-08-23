@@ -463,7 +463,7 @@ std::string PlayerBotController::rewardInspectionItemsJson(const RewardInspectio
 	return json.str();
 }
 
-int32_t PlayerBotController::estimatedPickupUtility(const PickupReward& reward) const
+int32_t PlayerBotController::estimatedPickupUtility(const PlayerBotRewardPlan& reward) const
 {
 	const int32_t base = reward.equipmentUpgradeCount != 0 ? pickupRewardBaseUtility : economicPickupBaseUtility;
 	return std::max<int32_t>(0, base + static_cast<int32_t>(reward.knownUtility) -
@@ -497,19 +497,19 @@ uint32_t PlayerBotController::matchingRewardRootCount(Player& player, const std:
 bool PlayerBotController::allRewardRootsAdded(Player& player) const
 {
 	std::map<std::string, uint32_t> expectedCounts;
-	for (const std::string& signature : pickupReward.nonStackableRootSignatures) {
+	for (const std::string& signature : rewardSession.plan().nonStackableRootSignatures) {
 		++expectedCounts[signature];
 	}
 	for (const auto& entry : expectedCounts) {
-		auto beforeIt = pendingRewardRootCounts.find(entry.first);
-		const uint32_t before = beforeIt == pendingRewardRootCounts.end() ? 0 : beforeIt->second;
+		auto beforeIt = rewardSession.claimSnapshot().roots.find(entry.first);
+		const uint32_t before = beforeIt == rewardSession.claimSnapshot().roots.end() ? 0 : beforeIt->second;
 		if (matchingRewardRootCount(player, entry.first) < before + entry.second) {
 			return false;
 		}
 	}
-	for (const auto& entry : pickupReward.stackableRootCounts) {
-		auto beforeIt = pendingRewardStackableCounts.find(entry.first);
-		const uint32_t before = beforeIt == pendingRewardStackableCounts.end() ? 0 : beforeIt->second;
+	for (const auto& entry : rewardSession.plan().stackableRootCounts) {
+		auto beforeIt = rewardSession.claimSnapshot().stackables.find(entry.first);
+		const uint32_t before = beforeIt == rewardSession.claimSnapshot().stackables.end() ? 0 : beforeIt->second;
 		if (inventoryPolicy.inventoryItemCount(player, entry.first) < before + entry.second) {
 			return false;
 		}
@@ -570,22 +570,23 @@ bool PlayerBotController::prepareRewardItemAccess(Player& player, const Position
 		return false;
 	}
 
-	Item* root = findMatchingRewardRoot(player, pickupReward.rootSignature);
+	const auto& reward = rewardSession.plan();
+	Item* root = findMatchingRewardRoot(player, reward.rootSignature);
 	if (!root) {
-		Item* extracted = g_game.findItemOfType(&player, pickupReward.itemId, true);
-		if (extracted && isRewardClaimed(player, pickupReward.uniqueId)) {
+		Item* extracted = g_game.findItemOfType(&player, reward.itemId, true);
+		if (extracted && isRewardClaimed(player, reward.uniqueId)) {
 			selectedItem = extracted;
 			return true;
 		}
 		failure = "reward_bundle_unavailable";
 		return false;
 	}
-	if (pickupReward.selectedItemPath.size() > maximumContainerId - rewardContainerIdBase + 1) {
+	if (reward.selectedItemPath.size() > maximumContainerId - rewardContainerIdBase + 1) {
 		failure = "reward_container_depth_unsupported";
 		return false;
 	}
-	for (size_t depth = 0; depth < pickupReward.selectedItemPath.size(); ++depth) {
-		Item* ancestor = resolveRewardPath(root, pickupReward.selectedItemPath, depth);
+	for (size_t depth = 0; depth < reward.selectedItemPath.size(); ++depth) {
+		Item* ancestor = resolveRewardPath(root, reward.selectedItemPath, depth);
 		Container* container = ancestor ? ancestor->getContainer() : nullptr;
 		if (!container) {
 			failure = "reward_container_path_invalid";
@@ -593,9 +594,8 @@ bool PlayerBotController::prepareRewardItemAccess(Player& player, const Position
 		}
 		const uint8_t containerId = static_cast<uint8_t>(rewardContainerIdBase + depth);
 		if (player.getContainerByID(containerId) == container) {
-			if (pendingRewardContainerDepth == depth) {
-				pendingRewardContainerDepth = SIZE_MAX;
-				pendingRewardContainerOpenAttempts = 0;
+			if (rewardSession.containerAccess().depth == depth) {
+				rewardSession.containerAccess() = {};
 			}
 			continue;
 		}
@@ -611,11 +611,11 @@ bool PlayerBotController::prepareRewardItemAccess(Player& player, const Position
 			failure = "reward_container_position_unavailable";
 			return false;
 		}
-		if (pendingRewardContainerDepth != depth) {
-			pendingRewardContainerDepth = depth;
-			pendingRewardContainerOpenAttempts = 0;
+		if (rewardSession.containerAccess().depth != depth) {
+			rewardSession.containerAccess().depth = depth;
+			rewardSession.containerAccess().openAttempts = 0;
 		}
-		if (++pendingRewardContainerOpenAttempts >= maximumProgressionAttempts) {
+		if (++rewardSession.containerAccess().openAttempts >= maximumProgressionAttempts) {
 			failure = "reward_container_open_failed";
 			return false;
 		}
@@ -627,8 +627,8 @@ bool PlayerBotController::prepareRewardItemAccess(Player& player, const Position
 		schedule(navigationDecisionDelay(player));
 		return false;
 	}
-	selectedItem = resolveRewardPath(root, pickupReward.selectedItemPath, pickupReward.selectedItemPath.size());
-	if (!selectedItem || selectedItem->getID() != pickupReward.itemId) {
+	selectedItem = resolveRewardPath(root, reward.selectedItemPath, reward.selectedItemPath.size());
+	if (!selectedItem || selectedItem->getID() != reward.itemId) {
 		failure = "reward_item_path_invalid";
 		return false;
 	}
@@ -706,7 +706,7 @@ bool PlayerBotController::planSimpleRewardApproach(Player& player, const Positio
 	return false;
 }
 
-void PlayerBotController::emitRewardCandidate(const PickupReward& candidate, const Position& position, const char* result,
+void PlayerBotController::emitRewardCandidate(const PlayerBotRewardPlan& candidate, const Position& position, const char* result,
                          const char* reason) const
 {
 	std::ostringstream fields;
@@ -767,11 +767,11 @@ void PlayerBotController::emitRewardInspection(uint16_t uniqueId, const Position
 	emit("reward_inspection", position, fingerprint);
 }
 
-bool PlayerBotController::findPickupReward(Player& player, const Position& position, PickupReward& reward,
+bool PlayerBotController::findPickupReward(Player& player, const Position& position, PlayerBotRewardPlan& reward,
                       std::deque<PlayerBotNavigationStep>& rewardSteps)
 {
-	std::optional<PickupReward> claimedUpgrade;
-	std::vector<PickupReward> unclaimedCandidates;
+	std::optional<PlayerBotRewardPlan> claimedUpgrade;
+	std::vector<PlayerBotRewardPlan> unclaimedCandidates;
 	std::deque<PlayerBotNavigationStep> selectedSteps;
 	const EquipmentLoadout currentLoadout = equipmentPolicy.loadout(player);
 	const PlayerBotCombatProfile currentProfile = equipmentPolicy.combatProfile(player, currentLoadout);
@@ -798,7 +798,7 @@ bool PlayerBotController::findPickupReward(Player& player, const Position& posit
 		if (!tile || !isRewardPosition(player, tile->getPosition())) {
 			continue;
 		}
-		PickupReward rejected;
+		PlayerBotRewardPlan rejected;
 		rejected.uniqueId = rewardObject->getUniqueId();
 		rejected.rootItemId = rewardObject->getID();
 		rejected.itemPosition = tile->getPosition();
@@ -846,7 +846,7 @@ bool PlayerBotController::findPickupReward(Player& player, const Position& posit
 			                                                            inspection.equipmentRejection.c_str());
 			continue;
 		}
-		PickupReward candidate;
+		PlayerBotRewardPlan candidate;
 		candidate.uniqueId = rewardObject->getUniqueId();
 		candidate.rootOrdinal = inspection.bestUpgrade ? inspection.bestRootOrdinal : inspection.primaryKnownRootOrdinal;
 		Item* selectedRoot = containerReward ? contents->getItemByIndex(candidate.rootOrdinal) : knownReward.get();
@@ -920,14 +920,14 @@ bool PlayerBotController::findPickupReward(Player& player, const Position& posit
 		unclaimedCandidates.push_back(candidate);
 	}
 
-	std::optional<PickupReward> selected;
+	std::optional<PlayerBotRewardPlan> selected;
 	bool resumeEquipment = false;
 	if (claimedUpgrade) {
 		selected = claimedUpgrade;
 		resumeEquipment = true;
 	} else {
-		std::sort(unclaimedCandidates.begin(), unclaimedCandidates.end(), [this](const PickupReward& left,
-		                                                                        const PickupReward& right) {
+		std::sort(unclaimedCandidates.begin(), unclaimedCandidates.end(), [this](const PlayerBotRewardPlan& left,
+		                                                                        const PlayerBotRewardPlan& right) {
 			const int32_t leftUtility = estimatedPickupUtility(left);
 			const int32_t rightUtility = estimatedPickupUtility(right);
 			if (leftUtility != rightUtility) {
@@ -938,7 +938,7 @@ bool PlayerBotController::findPickupReward(Player& player, const Position& posit
 			}
 			return left.uniqueId < right.uniqueId;
 		});
-		for (PickupReward candidate : unclaimedCandidates) {
+		for (PlayerBotRewardPlan candidate : unclaimedCandidates) {
 			if (estimatedPickupUtility(candidate) <= huntGoalUtility) {
 				emitRewardCandidate(candidate, position, "rejected", "utility_below_hunt");
 				continue;
@@ -1010,7 +1010,7 @@ PlayerBotController::GoalCandidate PlayerBotController::serviceGoalCandidate(con
 }
 
 void PlayerBotController::emitGoalCandidate(const Player& player, const GoalCandidate& candidate, uint64_t decisionId, const Position& position, const char* decisionReason,
-	                       const PickupReward* reward, const DeparturePlan* departure,
+	                       const PlayerBotRewardPlan* reward, const PlayerBotOracleDeparturePlan* departure,
 	                       const EquipmentOfferEvaluation* equipment) const
 {
 	std::ostringstream fields;
@@ -1057,34 +1057,30 @@ void PlayerBotController::emitGoalCandidate(const Player& player, const GoalCand
 	emit("goal_candidate", position, fields.str());
 }
 
-void PlayerBotController::beginPickupReward(Player& player, const Position& position, PickupReward reward,
+void PlayerBotController::beginPickupReward(Player& player, const Position& position, PlayerBotRewardPlan reward,
                        std::deque<PlayerBotNavigationStep> rewardSteps)
 {
-	pickupReward = std::move(reward);
-	progressionObjective = ProgressionObjective::PickupReward;
-	progressionStage = pickupReward.resumeEquipment ? ProgressionStage::EquipReward : ProgressionStage::Travel;
-	progressionAttempts = 0;
-	pendingRewardContainerDepth = SIZE_MAX;
-	pendingRewardContainerOpenAttempts = 0;
-	pendingEquipmentDisplacedCounts.clear();
-	for (uint16_t itemId : {pickupReward.replacedItemId, pickupReward.displacedLeftItemId,
-	                        pickupReward.displacedRightItemId}) {
+	rewardSession.begin(std::move(reward));
+	progressionSession.begin(PlayerBotProgressionProcedure::PickupReward);
+	const auto& selected = rewardSession.plan();
+	for (uint16_t itemId : {selected.replacedItemId, selected.displacedLeftItemId,
+	                        selected.displacedRightItemId}) {
 		if (itemId != 0) {
-			pendingEquipmentDisplacedCounts[itemId] = inventoryPolicy.inventoryItemCount(player, itemId);
+			rewardSession.displacedItemCounts()[itemId] = inventoryPolicy.inventoryItemCount(player, itemId);
 		}
 	}
-	if (!pickupReward.resumeEquipment) {
-		navigationSession.adopt(pickupReward.approachPosition, std::move(rewardSteps));
+	if (!selected.resumeEquipment) {
+		navigationSession.adopt(selected.approachPosition, std::move(rewardSteps));
 	}
 	std::ostringstream fields;
-	fields << "\"goal\":\"pickup_reward\",\"acquisition_source\":\"map_reward\",\"candidate_id\":" << pickupReward.uniqueId
-	       << ",\"reason\":" << jsonString(pickupReward.resumeEquipment ? "resume_claimed_upgrade" :
+	fields << "\"goal\":\"pickup_reward\",\"acquisition_source\":\"map_reward\",\"candidate_id\":" << selected.uniqueId
+	       << ",\"reason\":" << jsonString(selected.resumeEquipment ? "resume_claimed_upgrade" :
 	                                                                    "highest_known_utility_reachable_reward")
-	       << ",\"item_id\":" << pickupReward.itemId << ",\"root_item_id\":" << pickupReward.rootItemId
-	       << ",\"benefit\":" << pickupReward.benefit << ",\"known_utility\":" << pickupReward.knownUtility
-	       << ",\"travel_steps\":" << pickupReward.travelSteps;
+	       << ",\"item_id\":" << selected.itemId << ",\"root_item_id\":" << selected.rootItemId
+	       << ",\"benefit\":" << selected.benefit << ",\"known_utility\":" << selected.knownUtility
+	       << ",\"travel_steps\":" << selected.travelSteps;
 	emit("strategy_selection", position, fields.str());
-	say(player, pickupReward.resumeEquipment ? "Equipping a previously claimed reward." :
+	say(player, selected.resumeEquipment ? "Equipping a previously claimed reward." :
 	                                         "Going to claim a useful equipment reward.");
 }
 
@@ -1094,7 +1090,7 @@ bool PlayerBotController::selectTopLevelGoal(Player& player, const Position& pos
 		return forceOracleDeparture(player, position, decisionReason);
 	}
 	const GoalCandidate service = serviceGoalCandidate(player);
-	DeparturePlan departure;
+	PlayerBotOracleDeparturePlan departure;
 	std::deque<PlayerBotNavigationStep> departureRoute;
 	const bool departureEligible = player.getLevel() >= oracleMinimumLevel && player.getLevel() <= oracleMaximumLevel &&
 	                               player.getVocation()->getId() == 0;
@@ -1105,7 +1101,7 @@ bool PlayerBotController::selectTopLevelGoal(Player& player, const Position& pos
 	                                       player.getLevel() < oracleMinimumLevel ? "below_minimum_level" :
 	                                       player.getLevel() > oracleMaximumLevel ? "above_maximum_level" :
 	                                       departureFound ? "oracle_reachable" : "oracle_unreachable"};
-	PickupReward reward;
+	PlayerBotRewardPlan reward;
 	std::deque<PlayerBotNavigationStep> rewardSteps;
 	const auto now = std::chrono::steady_clock::now();
 	const bool pickupCoolingDown = goalArbiter.isCoolingDown(TopLevelGoal::PickupReward, now);
@@ -1115,7 +1111,7 @@ bool PlayerBotController::selectTopLevelGoal(Player& player, const Position& pos
 		                         static_cast<int32_t>(reward.knownUtility) - static_cast<int32_t>(reward.travelSteps)) : 0;
 	const GoalCandidate pickup{TopLevelGoal::PickupReward, pickupFound, pickupUtility,
 	                           pickupCoolingDown ? "cooldown" : pickupFound ? "useful_reachable_reward" : "no_useful_reward"};
-	SpellTrainingPlan spellTraining;
+	PlayerBotSpellTrainingPlan spellTraining;
 	std::deque<PlayerBotNavigationStep> spellTrainingSteps;
 	const bool spellTrainingCoolingDown = goalArbiter.isCoolingDown(TopLevelGoal::LearnSpell, now);
 	const bool spellTrainingFound = !spellTrainingCoolingDown && findSpellTraining(player, position, spellTraining, spellTrainingSteps);
@@ -1202,18 +1198,19 @@ bool PlayerBotController::selectTopLevelGoal(Player& player, const Position& pos
 
 const char* PlayerBotController::objectiveName() const
 {
-	return progressionObjective == ProgressionObjective::OracleDeparture ? "oracle_departure" :
-	       progressionObjective == ProgressionObjective::PickupReward ? "pickup_reward" :
-	       progressionObjective == ProgressionObjective::LearnSpell ? "learn_spell" :
-	       progressionObjective == ProgressionObjective::BuyEquipment ? "buy_equipment" : cyclePhaseName();
+	return progressionSession.active(PlayerBotProgressionProcedure::OracleDeparture) ? "oracle_departure" :
+	       progressionSession.active(PlayerBotProgressionProcedure::PickupReward) ? "pickup_reward" :
+	       progressionSession.active(PlayerBotProgressionProcedure::LearnSpell) ? "learn_spell" :
+	       progressionSession.active(PlayerBotProgressionProcedure::BuyEquipment) ? "buy_equipment" : cyclePhaseName();
 }
 
 void PlayerBotController::finishProgressionObjective(Player* player, const Position& position, const char* result, const char* reason,
-                                bool scheduleNext)
+                                 bool scheduleNext)
 {
+	const auto& reward = rewardSession.plan();
 	std::ostringstream fields;
-	fields << "\"goal\":\"pickup_reward\",\"acquisition_source\":\"map_reward\",\"candidate_id\":" << pickupReward.uniqueId
-	       << ",\"item_id\":" << pickupReward.itemId << ",\"result\":" << jsonString(result)
+	fields << "\"goal\":\"pickup_reward\",\"acquisition_source\":\"map_reward\",\"candidate_id\":" << reward.uniqueId
+	       << ",\"item_id\":" << reward.itemId << ",\"result\":" << jsonString(result)
 	       << ",\"reason\":" << jsonString(reason);
 	emit("strategy_objective_result", position, fields.str());
 	emit("goal_result", position,
@@ -1223,11 +1220,8 @@ void PlayerBotController::finishProgressionObjective(Player* player, const Posit
 	if (player) {
 		say(*player, std::string("Equipment reward objective ") + result + ": " + reason + '.');
 	}
-	progressionObjective = ProgressionObjective::None;
-	progressionStage = ProgressionStage::Travel;
-	pickupReward = PickupReward{};
-	pendingEquipmentDisplacedCounts.clear();
-	progressionAttempts = 0;
+	progressionSession.reset();
+	rewardSession.reset();
 	clearNavigation();
 	serviceStage = ServiceStage::Discover;
 	npcSession.reset();
@@ -1250,19 +1244,20 @@ void PlayerBotController::finishProgressionObjective(Player* player, const Posit
 
 void PlayerBotController::processPickupReward(Player* player, const Position& currentPosition)
 {
-	if (progressionStage == ProgressionStage::Travel) {
+	const auto& pickupReward = rewardSession.plan();
+	if (rewardSession.stage() == PlayerBotRewardStage::Travel) {
 		if (!processNavigation(player, currentPosition, pickupReward.approachPosition)) {
 			if (fixedTargetRouteFailureCount >= maximumProgressionAttempts) {
 				finishProgressionObjective(player, currentPosition, "failed", "route_unavailable");
 			}
 			return;
 		}
-		progressionStage = ProgressionStage::UseReward;
+		rewardSession.setStage(PlayerBotRewardStage::UseReward);
 		schedule(SCHEDULER_MINTICKS);
 		return;
 	}
 
-	if (progressionStage == ProgressionStage::UseReward) {
+	if (rewardSession.stage() == PlayerBotRewardStage::UseReward) {
 		Item* rewardObject = g_game.getUniqueItem(pickupReward.uniqueId);
 		Tile* tile = rewardObject ? rewardObject->getTile() : nullptr;
 		const int32_t stackPosition = tile ? tile->getThingIndex(rewardObject) : -1;
@@ -1272,7 +1267,7 @@ void PlayerBotController::processPickupReward(Player* player, const Position& cu
 			return;
 		}
 		if (!Position::areInRange<1, 1, 0>(currentPosition, pickupReward.itemPosition)) {
-			progressionStage = ProgressionStage::Travel;
+			rewardSession.setStage(PlayerBotRewardStage::Travel);
 			clearNavigation();
 			schedule(SCHEDULER_MINTICKS);
 			return;
@@ -1281,34 +1276,34 @@ void PlayerBotController::processPickupReward(Player* player, const Position& cu
 			schedule(navigationDecisionDelay(*player));
 			return;
 		}
-		pendingRewardItemCount = inventoryPolicy.inventoryItemCount(*player, pickupReward.itemId);
-		pendingRewardRootCount = matchingRewardRootCount(*player, pickupReward.rootSignature);
-		pendingRewardRootCounts.clear();
+		rewardSession.claimSnapshot().itemCount = inventoryPolicy.inventoryItemCount(*player, pickupReward.itemId);
+		rewardSession.claimSnapshot().rootCount = matchingRewardRootCount(*player, pickupReward.rootSignature);
+		rewardSession.claimSnapshot().roots.clear();
 		for (const std::string& signature : pickupReward.nonStackableRootSignatures) {
-			pendingRewardRootCounts.emplace(signature, matchingRewardRootCount(*player, signature));
+			rewardSession.claimSnapshot().roots.emplace(signature, matchingRewardRootCount(*player, signature));
 		}
-		pendingRewardStackableCounts.clear();
+		rewardSession.claimSnapshot().stackables.clear();
 		for (const auto& entry : pickupReward.stackableRootCounts) {
-			pendingRewardStackableCounts.emplace(entry.first, inventoryPolicy.inventoryItemCount(*player, entry.first));
+			rewardSession.claimSnapshot().stackables.emplace(entry.first, inventoryPolicy.inventoryItemCount(*player, entry.first));
 		}
 		++counters.actionsAttempted;
 		g_game.playerUseItem(playerId, pickupReward.itemPosition, static_cast<uint8_t>(stackPosition), 0,
 		                     rewardObject->getClientID());
-		progressionStage = ProgressionStage::VerifyReward;
+		rewardSession.setStage(PlayerBotRewardStage::VerifyReward);
 		schedule(navigationDecisionDelay(*player));
 		return;
 	}
 
-	if (progressionStage == ProgressionStage::VerifyReward) {
+	if (rewardSession.stage() == PlayerBotRewardStage::VerifyReward) {
 		const uint32_t itemCount = inventoryPolicy.inventoryItemCount(*player, pickupReward.itemId);
 		const uint32_t rootCount = matchingRewardRootCount(*player, pickupReward.rootSignature);
 		const bool bundleAdded = allRewardRootsAdded(*player);
-		if (!isRewardClaimed(*player, pickupReward.uniqueId) || itemCount <= pendingRewardItemCount || !bundleAdded) {
-			if (++progressionAttempts >= maximumProgressionAttempts) {
+		if (!isRewardClaimed(*player, pickupReward.uniqueId) || itemCount <= rewardSession.claimSnapshot().itemCount || !bundleAdded) {
+			if (rewardSession.incrementRetries() >= maximumProgressionAttempts) {
 				finishProgressionObjective(player, currentPosition, "failed", "claim_not_verified");
 				return;
 			}
-			progressionStage = ProgressionStage::UseReward;
+			rewardSession.setStage(PlayerBotRewardStage::UseReward);
 			schedule(navigationDecisionDelay(*player));
 			return;
 		}
@@ -1316,23 +1311,23 @@ void PlayerBotController::processPickupReward(Player* player, const Position& cu
 		     "\"action\":\"claim_reward\",\"result\":\"success\",\"candidate_id\":" +
 		         std::to_string(pickupReward.uniqueId) + ",\"item_id\":" + std::to_string(pickupReward.itemId) +
 		         ",\"root_item_id\":" + std::to_string(pickupReward.rootItemId) +
-		         ",\"inventory_before\":" + std::to_string(pendingRewardItemCount) +
+		         ",\"inventory_before\":" + std::to_string(rewardSession.claimSnapshot().itemCount) +
 		         ",\"inventory_after\":" + std::to_string(itemCount) +
-		         ",\"root_count_before\":" + std::to_string(pendingRewardRootCount) +
+		         ",\"root_count_before\":" + std::to_string(rewardSession.claimSnapshot().rootCount) +
 		         ",\"root_count_after\":" + std::to_string(rootCount) +
 		         ",\"top_level_root_count\":" + std::to_string(pickupReward.rootSignatures.size()) +
 		         ",\"all_roots_verified\":true");
-		progressionAttempts = 0;
+		rewardSession.resetRetries();
 		if (pickupReward.slot == CONST_SLOT_WHEREEVER) {
 			finishProgressionObjective(player, currentPosition, "success", "reward_bundle_claimed");
 			return;
 		}
-		progressionStage = ProgressionStage::EquipReward;
+		rewardSession.setStage(PlayerBotRewardStage::EquipReward);
 		schedule(SCHEDULER_MINTICKS);
 		return;
 	}
 
-	if (progressionStage == ProgressionStage::EquipReward) {
+	if (rewardSession.stage() == PlayerBotRewardStage::EquipReward) {
 		Item* equipped = player->getInventoryItem(pickupReward.slot);
 		if (equipped && equipped->getID() == pickupReward.itemId) {
 			finishProgressionObjective(player, currentPosition, "success", "reward_equipped");
@@ -1341,7 +1336,7 @@ void PlayerBotController::processPickupReward(Player* player, const Position& cu
 		if (equipped && equipped->getID() == pickupReward.rootItemId &&
 		    !pickupReward.selectedItemPath.empty() &&
 		    resolveRewardPath(equipped, pickupReward.selectedItemPath, pickupReward.selectedItemPath.size())) {
-			if (progressionAttempts >= maximumProgressionAttempts) {
+			if (rewardSession.retries() >= maximumProgressionAttempts) {
 				finishProgressionObjective(player, currentPosition, "failed", "reward_root_move_not_verified");
 				return;
 			}
@@ -1357,7 +1352,7 @@ void PlayerBotController::processPickupReward(Player* player, const Position& cu
 			Position rootPosition;
 			uint8_t rootIndex = 0;
 			g_game.internalGetPosition(equipped, rootPosition, rootIndex);
-			++progressionAttempts;
+			rewardSession.incrementRetries();
 			++counters.actionsAttempted;
 			emit("action_result", currentPosition,
 			     "\"action\":\"relocate_reward_root\",\"result\":\"requested\",\"item_id\":" +
@@ -1394,14 +1389,14 @@ void PlayerBotController::processPickupReward(Player* player, const Position& cu
 			}
 		}
 		if (displaced) {
-			if (progressionAttempts >= maximumProgressionAttempts) {
+			if (rewardSession.retries() >= maximumProgressionAttempts) {
 				finishProgressionObjective(player, currentPosition, "failed", "displaced_item_move_not_verified");
 				return;
 			}
 			Position displacedPosition;
 			uint8_t displacedIndex = 0;
 			g_game.internalGetPosition(displaced, displacedPosition, displacedIndex);
-			++progressionAttempts;
+			rewardSession.incrementRetries();
 			++counters.actionsAttempted;
 			emit("action_result", currentPosition,
 			     "\"action\":\"preserve_displaced_equipment\",\"result\":\"requested\",\"item_id\":" +
@@ -1434,24 +1429,24 @@ void PlayerBotController::processPickupReward(Player* player, const Position& cu
 		         ",\"source_index\":" + std::to_string(sourceIndex));
 		g_game.playerMoveItem(player, sourcePosition, reward->getClientID(), sourceIndex,
 		                      Position(0xFFFF, pickupReward.slot, 0), reward->getItemCount(), reward, nullptr);
-		progressionStage = ProgressionStage::VerifyEquipment;
+		rewardSession.setStage(PlayerBotRewardStage::VerifyEquipment);
 		schedule(navigationDecisionDelay(*player));
 		return;
 	}
 
 	Item* equipped = player->getInventoryItem(pickupReward.slot);
-	const bool displacedPreserved = std::all_of(pendingEquipmentDisplacedCounts.begin(),
-	                                           pendingEquipmentDisplacedCounts.end(),
+	const bool displacedPreserved = std::all_of(rewardSession.displacedItemCounts().begin(),
+	                                           rewardSession.displacedItemCounts().end(),
 	                                           [this, player](const auto& entry) {
 			                                           return inventoryPolicy.inventoryItemCount(*player, entry.first) >= entry.second;
 	                                           });
 	if (!equipped || equipped->getID() != pickupReward.itemId || !displacedPreserved) {
-		if (++progressionAttempts >= maximumProgressionAttempts) {
+		if (rewardSession.incrementRetries() >= maximumProgressionAttempts) {
 			finishProgressionObjective(player, currentPosition, "failed",
 			                           displacedPreserved ? "equip_not_verified" : "displaced_item_lost");
 			return;
 		}
-		progressionStage = ProgressionStage::EquipReward;
+		rewardSession.setStage(PlayerBotRewardStage::EquipReward);
 		schedule(navigationDecisionDelay(*player));
 		return;
 	}
@@ -1468,13 +1463,13 @@ void PlayerBotController::processPickupReward(Player* player, const Position& cu
 
 void PlayerBotController::processProgression(Player* player, const Position& currentPosition)
 {
-	if (progressionObjective == ProgressionObjective::OracleDeparture) {
+	if (progressionSession.active(PlayerBotProgressionProcedure::OracleDeparture)) {
 		processOracleDeparture(player, currentPosition);
-	} else if (progressionObjective == ProgressionObjective::PickupReward) {
+	} else if (progressionSession.active(PlayerBotProgressionProcedure::PickupReward)) {
 		processPickupReward(player, currentPosition);
-	} else if (progressionObjective == ProgressionObjective::LearnSpell) {
+	} else if (progressionSession.active(PlayerBotProgressionProcedure::LearnSpell)) {
 		processSpellTraining(player, currentPosition);
-	} else if (progressionObjective == ProgressionObjective::BuyEquipment) {
+	} else if (progressionSession.active(PlayerBotProgressionProcedure::BuyEquipment)) {
 		processEquipmentPurchase(player, currentPosition);
 	}
 }
