@@ -151,8 +151,7 @@ void PlayerBotController::beginOracleDeparture(Player& player, const Position& p
 	progressionObjective = ProgressionObjective::OracleDeparture;
 	departureStage = DepartureStage::Travel;
 	progressionAttempts = 0;
-	serviceTargetId = departurePlan.npcId;
-	serviceGreetingAcknowledged = false;
+	npcSession.reset(departurePlan.npcId);
 	navigationSession.adopt(departurePlan.approachPosition, std::move(steps));
 	emit("strategy_selection", position,
 	     "\"goal\":\"oracle_departure\",\"npc_id\":" + std::to_string(departurePlan.npcId) +
@@ -169,7 +168,7 @@ void PlayerBotController::finishOracleDeparture(Player* player, const Position& 
 	         ",\"goal\":\"oracle_departure\",\"result\":" + jsonString(result) +
 	         ",\"reason\":" + jsonString(reason));
 	progressionObjective = ProgressionObjective::None;
-	serviceTargetId = 0;
+	npcSession.reset();
 	clearNavigation();
 	if (std::strcmp(result, "success") == 0) {
 		if (player) {
@@ -223,7 +222,7 @@ void PlayerBotController::processOracleDeparture(Player* player, const Position&
 	}
 
 	if (departureStage == DepartureStage::Greet) {
-		serviceGreetingAcknowledged = false;
+		npcSession.resetGreetingAcknowledgement();
 		++counters.actionsAttempted;
 		oracle->receiveSpeech(player, TALKTYPE_PRIVATE_PN, "hi");
 		departureStage = DepartureStage::ConfirmReady;
@@ -231,7 +230,7 @@ void PlayerBotController::processOracleDeparture(Player* player, const Position&
 		return;
 	}
 	if (departureStage == DepartureStage::ConfirmReady) {
-		if (!serviceGreetingAcknowledged) {
+		if (!npcSession.isGreetingAcknowledged()) {
 			if (++progressionAttempts >= maximumProgressionAttempts) {
 				finishOracleDeparture(player, currentPosition, "failed", "oracle_focus_unconfirmed");
 				return;

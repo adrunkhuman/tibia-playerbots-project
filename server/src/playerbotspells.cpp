@@ -808,8 +808,7 @@ void PlayerBotController::beginSpellTraining(Player& player, const Position& pos
 	progressionObjective = ProgressionObjective::LearnSpell;
 	spellTrainingStage = SpellTrainingStage::Travel;
 	progressionAttempts = 0;
-	serviceTargetId = spellTrainingPlan.npcId;
-	serviceGreetingAcknowledged = false;
+	npcSession.reset(spellTrainingPlan.npcId);
 	navigationSession.adopt(spellTrainingPlan.approachPosition, std::move(steps));
 	emit("strategy_selection", position, "\"goal\":\"learn_spell\",\"npc_id\":" +
 	     std::to_string(spellTrainingPlan.npcId) + ",\"spell\":" + jsonString(spellTrainingPlan.spellName) +
@@ -832,7 +831,7 @@ void PlayerBotController::finishSpellTraining(Player* player, const Position& po
 	progressionObjective = ProgressionObjective::None;
 	spellTrainingStage = SpellTrainingStage::Travel;
 	spellTrainingPlan = SpellTrainingPlan{};
-	serviceTargetId = 0;
+	npcSession.reset();
 	clearNavigation();
 	spellTrainingCooldownUntil = std::chrono::steady_clock::now() +
 	                                  (std::strcmp(result, "success") == 0 ? spellTrainingSuccessCooldown : spellTrainingFailureCooldown);
@@ -862,7 +861,7 @@ void PlayerBotController::processSpellTraining(Player* player, const Position& c
 		return;
 	}
 	if (spellTrainingStage == SpellTrainingStage::Greet) {
-		serviceGreetingAcknowledged = false;
+		npcSession.resetGreetingAcknowledgement();
 		++counters.actionsAttempted;
 		trainer->receiveSpeech(player, TALKTYPE_PRIVATE_PN, "hi");
 		spellTrainingStage = SpellTrainingStage::Request;
@@ -870,7 +869,7 @@ void PlayerBotController::processSpellTraining(Player* player, const Position& c
 		return;
 	}
 	if (spellTrainingStage == SpellTrainingStage::Request) {
-		if (!serviceGreetingAcknowledged) {
+		if (!npcSession.isGreetingAcknowledged()) {
 			if (++progressionAttempts >= maximumProgressionAttempts) {
 				finishSpellTraining(player, currentPosition, "failed", "trainer_focus_unconfirmed");
 				return;

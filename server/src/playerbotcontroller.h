@@ -18,6 +18,7 @@
 #include "playerbotinventorypolicy.h"
 #include "playerbotnavigation.h"
 #include "playerbotnavigationsession.h"
+#include "playerbotnpcsession.h"
 #include "playerbotspellcalibration.h"
 
 #include "container.h"
@@ -225,14 +226,6 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 			BuyPotions,
 			Bank,
 			Complete,
-		};
-
-		enum class ConversationStep : uint8_t {
-			Greet,
-			Request,
-			Ready,
-			Confirm,
-			Verify,
 		};
 
 		enum class ProgressionObjective : uint8_t {
@@ -833,10 +826,6 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 
 		bool approachServiceNpc(Player* player, ServiceNpc& service, const Position& currentPosition);
 
-		void resetConversation(uint32_t targetId);
-
-		bool openServiceShop(Player* player, ServiceNpc& service, const Position& position);
-
 		void refreshItemValues();
 
 		const ShopInfo* findOffer(const ServiceNpc& service, uint16_t itemId, bool buying) const;
@@ -1023,7 +1012,6 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		std::unordered_map<uint32_t, std::chrono::steady_clock::time_point> suppressedTraversalTargets;
 		CyclePhase cyclePhase = CyclePhase::ReturnToDepot;
 		ServiceStage serviceStage = ServiceStage::Discover;
-		ConversationStep conversationStep = ConversationStep::Greet;
 		ProgressionObjective progressionObjective = ProgressionObjective::None;
 		ProgressionStage progressionStage = ProgressionStage::Travel;
 		DepartureStage departureStage = DepartureStage::Travel;
@@ -1055,10 +1043,8 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		bool readinessResumeService = false;
 		std::vector<ServiceNpc> serviceShops;
 		std::vector<ServiceNpc> serviceBankers;
-		uint32_t serviceTargetId = 0;
 		Position serviceApproachTarget;
 		std::set<Position> serviceRejectedApproaches;
-		uint32_t serviceAttempts = 0;
 		uint16_t serviceItemId = 0;
 		uint32_t serviceAmount = 0;
 		uint32_t serviceBeforeItemCount = 0;
@@ -1070,7 +1056,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		uint64_t serviceBeforeMoney = 0;
 		uint64_t serviceBeforeBalance = 0;
 		bool bankDepositComplete = false;
-		bool serviceGreetingAcknowledged = false;
+		PlayerBotNpcSession npcSession;
 		size_t huntRouteIndex = 0;
 		uint32_t completedCycles = 0;
 		std::chrono::steady_clock::time_point huntDeadline;
