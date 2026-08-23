@@ -33,10 +33,11 @@ development account `bot-one`, character `Bot One`, and `player_bots` registry.
 Provisioning is idempotent: it does not restore spent money, replace occupied
 equipment slots, or take over an unrelated same-named or deleted character.
 
-A new Bot One starts as a level 8 Knight at the Thais temple with development
-hunt skills, plate equipment, sword, shield, backpack, rope, shovel, five small
-health potions, one meat, 100 gp bank balance, and two 100-gp backpack stacks.
-Global `freePremium` supplies premium access.
+A new Bot One starts as a level 8 Knight at the Thais temple with sword and
+shielding skill 20, legion helmet, chain armor, studded legs, leather boots,
+Carlin sword, copper shield, backpack, rope, shovel, and 400 gp bank balance.
+It starts without carried money, food, or potions. Global `freePremium` supplies
+premium access.
 
 Inspect setup and startup with:
 
