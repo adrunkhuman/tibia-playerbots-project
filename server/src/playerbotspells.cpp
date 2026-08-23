@@ -303,7 +303,8 @@ bool PlayerBotController::findSpellTraining(Player& player, const Position& posi
 	const uint16_t baseVocationId = player.getVocation()->getFromVocation() == 0 ? vocationId :
 	                               player.getVocation()->getFromVocation();
 	const bool suppliesReady = inventoryPolicy.inventoryItemCount(player, smallHealthPotionItemId) > smallHealthPotionReturnThreshold;
-	bool found = false;
+	std::vector<PlayerBotSpellOfferSnapshot> feasibleOffers;
+	std::vector<std::deque<PlayerBotNavigationStep>> feasibleRoutes;
 
 	for (const auto& entry : g_game.getNpcs()) {
 		Npc* npc = entry.second;
@@ -418,19 +419,26 @@ bool PlayerBotController::findSpellTraining(Player& player, const Position& posi
 				emitSpellCandidate(*npc, offer, position, "rejected", "trainer_unreachable", reserve);
 				continue;
 			}
-			PlayerBotSpellTrainingPlan candidate{npc->getID(), npc->getPosition(), trainerApproach, offer.spellName, offer.keyword,
-			                            offer.price, offer.level, static_cast<uint32_t>(trainerSteps.size()), reserve};
-			emitSpellCandidate(*npc, offer, position, "feasible", nullptr, reserve, candidate.travelSteps);
-			if (!found || candidate.price < plan.price ||
-			    (candidate.price == plan.price && (candidate.travelSteps < plan.travelSteps ||
-			     (candidate.travelSteps == plan.travelSteps && candidate.spellName < plan.spellName)))) {
-				plan = std::move(candidate);
-				selectedSteps = trainerSteps;
-				found = true;
-			}
+			emitSpellCandidate(*npc, offer, position, "feasible", nullptr, reserve, static_cast<uint32_t>(trainerSteps.size()));
+			feasibleOffers.push_back({npc->getID(), npc->getPosition(), npc->getName(), offer.spellName, offer.keyword,
+			                         offer.price, offer.level, offer.premium, true, true, true, true, true, false, true,
+			                         {true, false, trainerApproach, static_cast<uint32_t>(trainerSteps.size()), 0}});
+			feasibleRoutes.push_back(trainerSteps);
 		}
 	}
-	return found;
+	const PlayerBotSpellTrainingDecision decision = spellTrainingPlanner.select({reserve, totalMoney,
+	    reserve != std::numeric_limits<uint64_t>::max(), feasibleOffers});
+	if (!decision.selected) return false;
+	plan = *decision.selected;
+	for (size_t index = 0; index < feasibleRoutes.size(); ++index) {
+		// The planner's stable price/route/name ordering identifies this immutable offer.
+		if (plan.npcId == feasibleOffers[index].npcId && plan.spellName == feasibleOffers[index].spellName &&
+		    plan.price == feasibleOffers[index].price && plan.travelSteps == feasibleOffers[index].route.steps) {
+			selectedSteps = std::move(feasibleRoutes[index]);
+			return true;
+		}
+	}
+	return false;
 }
 
 void PlayerBotController::beginSpellTraining(Player& player, const Position& position, PlayerBotSpellTrainingPlan plan,

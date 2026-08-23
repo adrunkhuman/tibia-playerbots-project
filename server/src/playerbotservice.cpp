@@ -84,7 +84,7 @@ void PlayerBotController::onNpcReply(uint32_t replyingPlayerId, uint32_t npcId, 
 void PlayerBotController::beginService(Player* player, const Position& position, const char* reason)
 {
 	const bool interruptedHunt = fixtureDriver.progressionEnabled() && goalArbiter.activeGoal() == TopLevelGoal::Hunt &&
-	                             !hasCompletedRookgaardDeparture(*player);
+	                             !departurePlanner.hasCompleted(departureSnapshot(*player));
 	finishHuntRegion(*player, position, reason);
 	if (interruptedHunt) {
 		emit("goal_result", position,

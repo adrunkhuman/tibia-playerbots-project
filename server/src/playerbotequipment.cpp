@@ -88,6 +88,7 @@ std::optional<PlayerBotController::EquipmentOfferEvaluation> PlayerBotController
 	std::map<uint32_t, std::optional<std::pair<Position, uint32_t>>> providerRoutes;
 	std::set<uint32_t> providerRouteNodeLimits;
 	std::optional<EquipmentOfferEvaluation> selected;
+	std::vector<PlayerBotEquipmentProviderOfferSnapshot> plannerOffers;
 	uint32_t feasibleCandidates = 0;
 	size_t simulatedItems = 0;
 	bool providerRouteBudgetExhausted = false;
@@ -217,6 +218,8 @@ std::optional<PlayerBotController::EquipmentOfferEvaluation> PlayerBotController
 			if (evaluation.carried) {
 				evaluation.travelSteps = 0;
 				emitEquipmentOffer(player, evaluation, currentProfile, currentHunts, reserve, position, "feasible", "carried_upgrade");
+				plannerOffers.push_back({evaluation, Item::items[offer.itemId].weight, freeBackpackSlots, backpack != nullptr,
+				                         false, {true, false, Position(), 0, 0}});
 				++feasibleCandidates;
 				if (!selected || PlayerBotEquipmentPolicy::prefers(evaluation, *selected)) {
 					selected = evaluation;
@@ -242,12 +245,17 @@ std::optional<PlayerBotController::EquipmentOfferEvaluation> PlayerBotController
 			evaluation.approachPosition = route->first;
 			evaluation.travelSteps = route->second;
 			emitEquipmentOffer(player, evaluation, currentProfile, currentHunts, reserve, position, "feasible", nullptr);
+			plannerOffers.push_back({evaluation, Item::items[offer.itemId].weight, freeBackpackSlots, backpack != nullptr,
+			                         false, {true, false, route->first, route->second, 0}});
 			++feasibleCandidates;
 			if (!selected || PlayerBotEquipmentPolicy::prefers(evaluation, *selected)) {
 				selected = evaluation;
 			}
 		}
 	}
+	const PlayerBotEquipmentProviderDecision plannerDecision = equipmentProviderPlanner.select({true, reserve, totalMoney,
+	    reserve != std::numeric_limits<uint64_t>::max(), player.getFreeCapacity(), std::move(plannerOffers)});
+	selected = plannerDecision.selected;
 	std::ostringstream fields;
 	fields << "\"result\":" << jsonString(selected ? (selected->carried ? "would_equip" : "would_buy") : "no_decision")
 	       << ",\"feasible_candidates\":" << feasibleCandidates

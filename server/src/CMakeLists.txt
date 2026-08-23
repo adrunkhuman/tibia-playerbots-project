@@ -66,6 +66,7 @@ set(tfs_SRC
 	${CMAKE_CURRENT_LIST_DIR}/playerbotlootsession.cpp
 	${CMAKE_CURRENT_LIST_DIR}/playerbotlootworkflow.cpp
 	${CMAKE_CURRENT_LIST_DIR}/playerbotprogression.cpp
+	${CMAKE_CURRENT_LIST_DIR}/playerbotprogressionplanners.cpp
 	${CMAKE_CURRENT_LIST_DIR}/playerbotprogressionruntime.cpp
 	${CMAKE_CURRENT_LIST_DIR}/playerbotprogressionsession.cpp
 	${CMAKE_CURRENT_LIST_DIR}/playerbotrecoverysession.cpp
