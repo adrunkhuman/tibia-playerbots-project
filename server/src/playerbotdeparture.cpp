@@ -63,7 +63,6 @@ bool PlayerBotController::findOracleDeparture(Player& player, const Position& po
 		}
 		std::deque<PlayerBotNavigationStep> steps;
 		uint64_t expandedNodes = 0;
-		++counters.pathfindingCalls;
 		const auto startedAt = std::chrono::steady_clock::now();
 		const PlayerBotNavigationRoutePlan routePlan = candidate == position ? PlayerBotNavigationRoutePlan{} :
 			navigationRuntime.plan(player, candidate);
@@ -73,10 +72,9 @@ bool PlayerBotController::findOracleDeparture(Player& player, const Position& po
 			expandedNodes = routePlan.metrics.expandedNodes;
 		}
 		const bool planned = planResult == PlayerBotNavigationResult::Reached;
-		counters.pathfindingTimeUs += std::chrono::duration_cast<std::chrono::microseconds>(
-			std::chrono::steady_clock::now() - startedAt).count();
+		telemetry.recordPathfinding(std::chrono::duration_cast<std::chrono::microseconds>(
+			std::chrono::steady_clock::now() - startedAt), planned);
 		if (!planned) {
-			++counters.pathfindingFailures;
 			continue;
 		}
 		plan.npcId = oracle->getID();
@@ -229,7 +227,7 @@ void PlayerBotController::processOracleDeparture(Player* player, const Position&
 
 	if (departureSession.stage() == PlayerBotOracleDepartureStage::Greet) {
 		npcSession.resetGreetingAcknowledgement();
-		++counters.actionsAttempted;
+		telemetry.recordActionAttempt();
 		oracle->receiveSpeech(player, TALKTYPE_PRIVATE_PN, "hi");
 		departureSession.setStage(PlayerBotOracleDepartureStage::ConfirmReady);
 		schedule(1000);
@@ -245,28 +243,28 @@ void PlayerBotController::processOracleDeparture(Player* player, const Position&
 			schedule(1000);
 			return;
 		}
-		++counters.actionsAttempted;
+		telemetry.recordActionAttempt();
 		oracle->receiveSpeech(player, TALKTYPE_PRIVATE_PN, "yes");
 		departureSession.setStage(PlayerBotOracleDepartureStage::ChooseTown);
 		schedule(1000);
 		return;
 	}
 	if (departureSession.stage() == PlayerBotOracleDepartureStage::ChooseTown) {
-		++counters.actionsAttempted;
+		telemetry.recordActionAttempt();
 		oracle->receiveSpeech(player, TALKTYPE_PRIVATE_PN, "thais");
 		departureSession.setStage(PlayerBotOracleDepartureStage::ChooseVocation);
 		schedule(1000);
 		return;
 	}
 	if (departureSession.stage() == PlayerBotOracleDepartureStage::ChooseVocation) {
-		++counters.actionsAttempted;
+		telemetry.recordActionAttempt();
 		oracle->receiveSpeech(player, TALKTYPE_PRIVATE_PN, "knight");
 		departureSession.setStage(PlayerBotOracleDepartureStage::ConfirmVocation);
 		schedule(1000);
 		return;
 	}
 	if (departureSession.stage() == PlayerBotOracleDepartureStage::ConfirmVocation) {
-		++counters.actionsAttempted;
+		telemetry.recordActionAttempt();
 		departureSession.setStage(PlayerBotOracleDepartureStage::Verify);
 		oracle->receiveSpeech(player, TALKTYPE_PRIVATE_PN, "yes");
 		schedule(1000);

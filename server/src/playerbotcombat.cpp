@@ -105,7 +105,7 @@ bool PlayerBotController::handleHealing(Player* player, const Position& currentP
 			logHealResult("success", nullptr, verification->before, verification->after, currentPosition);
 			recordHuntRecovery(true);
 		} else {
-			++counters.actionsFailed;
+			telemetry.recordActionFailure();
 			logHealResult("failed", verification->result == PlayerBotPotionVerificationResult::IneffectiveRecovery ?
 			              "ineffective_recovery" : "use_not_verified", verification->before, verification->after, currentPosition);
 		}
@@ -159,7 +159,7 @@ bool PlayerBotController::handleHealing(Player* player, const Position& currentP
 	}
 
 	recoverySession.beginPotion({player->getHealth(), player->getMaxHealth(), potionCount});
-	++counters.actionsAttempted;
+	telemetry.recordActionAttempt();
 	g_game.playerUseWithCreature(playerId, Position(0xFFFF, 0, 0), 0, playerId, potion->getClientID());
 	return true;
 }
@@ -230,7 +230,7 @@ bool PlayerBotController::handleFood(Player* player, const Position& currentPosi
 	}
 
 	recoverySession.beginFood({food->getID(), inventoryPolicy.inventoryItemCount(*player, food->getID()), getFoodTicks(*player)});
-	++counters.actionsAttempted;
+	telemetry.recordActionAttempt();
 	g_game.playerUseItem(playerId, Position(0xFFFF, 0, 0), 0, 0, food->getClientID());
 	return true;
 }
@@ -288,7 +288,7 @@ bool PlayerBotController::attackVisibleMonster(Player* player, const Position& c
 		if (!target) {
 			continue;
 		}
-		++counters.actionsAttempted;
+		telemetry.recordActionAttempt();
 		g_game.playerSetFightModes(playerId, FIGHTMODE_ATTACK, true, false);
 		g_game.playerSetAttackedCreature(playerId, target->getID());
 		if (player->getAttackedCreature() != target) {
@@ -334,7 +334,7 @@ bool PlayerBotController::attackDefensiveThreat(Player* player, const Position& 
 	if (!target) {
 		return false;
 	}
-	++counters.actionsAttempted;
+	telemetry.recordActionAttempt();
 	g_game.playerSetFightModes(playerId, FIGHTMODE_ATTACK, false, false);
 	g_game.playerSetAttackedCreature(playerId, target->getID());
 	if (player->getAttackedCreature() != target) {
@@ -457,7 +457,7 @@ void PlayerBotController::processTargetPursuit(Player* player, const Position& c
 		}
 	}
 	if (target) {
-		++counters.actionsAttempted;
+		telemetry.recordActionAttempt();
 		g_game.playerSetFightModes(playerId, FIGHTMODE_ATTACK, true, false);
 		g_game.playerSetAttackedCreature(playerId, target->getID());
 		if (player->getAttackedCreature() == target) {
@@ -903,18 +903,16 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 		std::deque<PlayerBotNavigationStep> route;
 		if (!forcedUnreachable) {
 			const auto pathStarted = std::chrono::steady_clock::now();
-			++counters.pathfindingCalls;
 			PlayerBotNavigationRoutePlan routePlan = navigationRuntime.plan(
 				player, candidate.destination, blockedPositions,
 				forcedNodeLimit ? 0 : playerBotNavigationMaximumExpandedNodes);
 			planResult = routePlan.metrics.result;
 			expandedNodes = routePlan.metrics.expandedNodes;
 			route = std::move(routePlan.steps);
-			counters.pathfindingTimeUs += std::chrono::duration_cast<std::chrono::microseconds>(
-				std::chrono::steady_clock::now() - pathStarted).count();
+			telemetry.recordPathfinding(std::chrono::duration_cast<std::chrono::microseconds>(
+				std::chrono::steady_clock::now() - pathStarted), planResult == PlayerBotNavigationResult::Reached);
 		}
 		if (planResult != PlayerBotNavigationResult::Reached) {
-			++counters.pathfindingFailures;
 		}
 		double estimatedTravelSeconds = 0;
 		for (const PlayerBotNavigationStep& step : route) {
@@ -1246,7 +1244,7 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 			         std::to_string(target.x) + ",\"y\":" + std::to_string(target.y) +
 			         ",\"z\":" + std::to_string(target.z) + "}");
 			if (repeatedStepFailure || repeatedRouteFailure) {
-				++counters.stuckEvents;
+				telemetry.recordStuckEvent();
 			}
 			resetPatrolRouteFailures();
 			navigationRuntime.clearBlockedPositions();

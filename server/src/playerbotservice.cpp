@@ -212,16 +212,14 @@ bool PlayerBotController::approachServiceNpc(Player* player, ServiceNpc& service
 		}
 		std::deque<PlayerBotNavigationStep> candidateSteps;
 		uint64_t expandedNodes = 0;
-		++counters.pathfindingCalls;
 		const auto startedAt = std::chrono::steady_clock::now();
 		PlayerBotNavigationRoutePlan routePlan = navigationRuntime.plan(*player, candidate);
 		const bool planned = routePlan.metrics.result == PlayerBotNavigationResult::Reached;
 		candidateSteps = std::move(routePlan.steps);
 		expandedNodes = routePlan.metrics.expandedNodes;
-		counters.pathfindingTimeUs += std::chrono::duration_cast<std::chrono::microseconds>(
-			std::chrono::steady_clock::now() - startedAt).count();
+		telemetry.recordPathfinding(std::chrono::duration_cast<std::chrono::microseconds>(
+			std::chrono::steady_clock::now() - startedAt), planned && !candidateSteps.empty());
 		if (!planned || candidateSteps.empty()) {
-			++counters.pathfindingFailures;
 			serviceRejectedApproaches.insert(candidate);
 			schedule(SCHEDULER_MINTICKS);
 			return false;
@@ -375,7 +373,7 @@ bool PlayerBotController::prepareSlottedSaleItem(Player* player, uint16_t itemId
 			schedule(navigationDecisionDelay(*player));
 			return true;
 		}
-		++counters.actionsAttempted;
+		telemetry.recordActionAttempt();
 		g_game.playerUseItem(playerId, Position(0xFFFF, CONST_SLOT_BACKPACK, 0), 0,
 		                     depotSourceContainerId, backpack->getClientID());
 		schedule(navigationDecisionDelay(*player));
@@ -392,7 +390,7 @@ bool PlayerBotController::prepareSlottedSaleItem(Player* player, uint16_t itemId
 	pendingSlottedSaleSourceSlot = sourceSlot;
 	pendingSlottedSaleBackpackCount = backpack->getItemTypeCount(itemId);
 	++slottedSaleMoveAttempts;
-	++counters.actionsAttempted;
+	telemetry.recordActionAttempt();
 	g_game.playerMoveItem(player, sourcePosition, item->getClientID(), sourceIndex,
 	                      Position(0xFFFF, 0x40 | static_cast<uint8_t>(backpackId),
 	                               containerDestinationIndex(*backpack, *item)),
@@ -435,7 +433,7 @@ void PlayerBotController::processServiceShop(Player* player, const Position& cur
 		stop("service_npc_unavailable", currentPosition);
 		return;
 	}
-	const PlayerBotNpcSessionResult sessionResult = npcSession.openShop(*player, *npc, counters.actionsAttempted,
+	const PlayerBotNpcSessionResult sessionResult = npcSession.openShop(*player, *npc, telemetry.actionsAttemptedForSession(),
 	                                                                    maximumServiceAttempts);
 	if (sessionResult != PlayerBotNpcSessionResult::Ready) {
 		if (sessionResult == PlayerBotNpcSessionResult::Failed) {
@@ -458,7 +456,7 @@ void PlayerBotController::processServiceShop(Player* player, const Position& cur
 			                                     player->getMoney(), player->getBankBalance()});
 		}
 		npcSession.setStep(PlayerBotNpcConversationStep::Verify);
-		++counters.actionsAttempted;
+		telemetry.recordActionAttempt();
 		if (purchase) {
 			g_game.playerPurchaseItem(playerId, Item::items[itemId].clientId, static_cast<uint8_t>(offer->subType),
 			                         static_cast<uint8_t>(amount), false, false);
@@ -508,7 +506,7 @@ void PlayerBotController::processBank(Player* player, const Position& currentPos
 	}
 	if (npcSession.step() == PlayerBotNpcConversationStep::Greet ||
 	    npcSession.step() == PlayerBotNpcConversationStep::Request) {
-		const PlayerBotNpcSessionResult focus = npcSession.establishFocus(*player, *npc, counters.actionsAttempted,
+		const PlayerBotNpcSessionResult focus = npcSession.establishFocus(*player, *npc, telemetry.actionsAttemptedForSession(),
 		                                                                   maximumServiceAttempts);
 		if (focus == PlayerBotNpcSessionResult::Failed) {
 			logActionFailure("bank", "npc_focus_unconfirmed", currentPosition);
@@ -530,14 +528,14 @@ void PlayerBotController::processBank(Player* player, const Position& currentPos
 			schedule(SCHEDULER_MINTICKS);
 			return;
 		}
-		++counters.actionsAttempted;
+		telemetry.recordActionAttempt();
 		npc->receiveSpeech(player, TALKTYPE_PRIVATE_PN, "deposit all");
 		npcSession.setStep(PlayerBotNpcConversationStep::Confirm);
 		schedule(SCHEDULER_MINTICKS);
 		return;
 	}
 	if (npcSession.step() == PlayerBotNpcConversationStep::Confirm) {
-		++counters.actionsAttempted;
+		telemetry.recordActionAttempt();
 		npc->receiveSpeech(player, TALKTYPE_PRIVATE_PN, "yes");
 		npcSession.setStep(PlayerBotNpcConversationStep::Verify);
 		schedule(SCHEDULER_MINTICKS);
@@ -578,14 +576,14 @@ void PlayerBotController::processBank(Player* player, const Position& currentPos
 			}
 			serviceSession.beginBankWithdrawal(player->getBankBalance(), amount);
 		}
-		++counters.actionsAttempted;
+		telemetry.recordActionAttempt();
 		npc->receiveSpeech(player, TALKTYPE_PRIVATE_PN, "withdraw " + std::to_string(serviceSession.bankTransaction().amount));
 		npcSession.setStep(PlayerBotNpcConversationStep::Confirm);
 		schedule(SCHEDULER_MINTICKS);
 		return;
 	}
 	if (npcSession.step() == PlayerBotNpcConversationStep::Confirm) {
-		++counters.actionsAttempted;
+		telemetry.recordActionAttempt();
 		npc->receiveSpeech(player, TALKTYPE_PRIVATE_PN, "yes");
 		npcSession.setStep(PlayerBotNpcConversationStep::Verify);
 		schedule(SCHEDULER_MINTICKS);
@@ -893,7 +891,6 @@ bool PlayerBotController::discoverDepot(Player& player, const Position& currentP
 		std::deque<PlayerBotNavigationStep> steps;
 		uint64_t expandedNodes = 0;
 		++routeValidations;
-		++counters.pathfindingCalls;
 		const auto startedAt = std::chrono::steady_clock::now();
 		const PlayerBotNavigationRoutePlan routePlan = candidate.approachPosition == currentPosition ? PlayerBotNavigationRoutePlan{} :
 			navigationRuntime.plan(player, candidate.approachPosition);
@@ -902,11 +899,11 @@ bool PlayerBotController::discoverDepot(Player& player, const Position& currentP
 			steps = routePlan.steps;
 			expandedNodes = routePlan.metrics.expandedNodes;
 		}
-		counters.pathfindingTimeUs += std::chrono::duration_cast<std::chrono::microseconds>(
-			std::chrono::steady_clock::now() - startedAt).count();
+		telemetry.recordPathfinding(std::chrono::duration_cast<std::chrono::microseconds>(
+			std::chrono::steady_clock::now() - startedAt), result == PlayerBotNavigationResult::Reached &&
+				(candidate.approachPosition == currentPosition || !steps.empty()));
 		if (result != PlayerBotNavigationResult::Reached ||
 		    (candidate.approachPosition != currentPosition && steps.empty())) {
-			++counters.pathfindingFailures;
 			depotSession.rejectApproach(candidate.approachPosition, now + depotApproachSuppression);
 			continue;
 		}
@@ -976,7 +973,7 @@ bool PlayerBotController::openContainer(Player& player, Container& container, ui
 		return false;
 	}
 	player.closeContainer(containerId);
-	++counters.actionsAttempted;
+	telemetry.recordActionAttempt();
 	g_game.playerUseItem(playerId, fromPosition, fromIndex, containerId, container.getClientID());
 	schedule(navigationDecisionDelay(player));
 	return false;
@@ -1018,7 +1015,7 @@ bool PlayerBotController::openDepotLocker(Player& player, const Position& curren
 		}
 		const uint32_t attempts = depotSession.incrementAttempts();
 		player.closeContainer(depotLockerContainerId);
-		++counters.actionsAttempted;
+		telemetry.recordActionAttempt();
 		g_game.playerUseItem(playerId, depotSession.lockerPosition(), static_cast<uint8_t>(stackPosition), depotLockerContainerId,
 		                     item->getClientID());
 		emit("action_result", currentPosition, "\"action\":\"depot_open_locker\",\"result\":\"requested\",\"depot_id\":" +
@@ -1077,7 +1074,7 @@ bool PlayerBotController::openDepotChest(Player& player, const Position& current
 	}
 	const uint32_t attempts = depotSession.incrementAttempts();
 	player.closeContainer(depotChestContainerId);
-	++counters.actionsAttempted;
+	telemetry.recordActionAttempt();
 	g_game.playerUseItem(playerId, Position(0xFFFF, 0x40 | depotLockerContainerId, static_cast<uint8_t>(index)),
 	                     static_cast<uint8_t>(index), depotChestContainerId, chest->getClientID());
 	emit("action_result", currentPosition, "\"action\":\"depot_open_chest\",\"result\":\"requested\",\"depot_id\":" +
@@ -1153,7 +1150,7 @@ void PlayerBotController::processFixtureDeposit(Player* player, const Position& 
 		if (const int8_t existingContainerId = player->getContainerID(backpack); existingContainerId >= 0) {
 			player->closeContainer(static_cast<uint8_t>(existingContainerId));
 		}
-		++counters.actionsAttempted;
+		telemetry.recordActionAttempt();
 		g_game.playerUseItem(playerId, Position(0xFFFF, CONST_SLOT_BACKPACK, 0), 0, backpackContainerId, backpack->getClientID());
 		schedule(navigationDecisionDelay(*player));
 		return;
@@ -1204,7 +1201,7 @@ void PlayerBotController::processFixtureDeposit(Player* player, const Position& 
 	depotSession.beginMove({depositItem->getID(), destination->getItemTypeCount(depositItem->getID()),
 	                        inventoryPolicy.inventoryItemCount(*player, depositItem->getID()),
 	                        static_cast<uint8_t>(depositItem->getItemCount()), CONST_SLOT_WHEREEVER});
-	++counters.actionsAttempted;
+	telemetry.recordActionAttempt();
 	g_game.playerMoveItem(player, Position(0xFFFF, 0x40 | backpackContainerId, sourceIndex), depositItem->getClientID(), sourceIndex,
 	                      fakeDepotTilePosition, static_cast<uint8_t>(depositItem->getItemCount()), depositItem, destination);
 	schedule(navigationDecisionDelay(*player));
@@ -1389,7 +1386,7 @@ void PlayerBotController::processDeposit(Player* player, const Position& current
 	depotSession.beginMove({depositItem->getID(), chest->getItemTypeCount(depositItem->getID()),
 	                        inventoryPolicy.inventoryItemCount(*player, depositItem->getID()), count, sourceSlot});
 	const uint8_t submittedCount = testPolicy.depotMoveFixture == DepotMoveFixture::Partial && count > 1 ? count - 1 : count;
-	++counters.actionsAttempted;
+	telemetry.recordActionAttempt();
 	g_game.playerMoveItem(player, sourcePosition, depositItem->getClientID(), sourceIndex,
 	                      Position(0xFFFF, 0x40 | depotChestContainerId, containerDestinationIndex(*chest, *depositItem)),
 	                      submittedCount, depositItem, chest);

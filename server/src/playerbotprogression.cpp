@@ -96,7 +96,7 @@ bool PlayerBotController::beginReadinessEquipment(Player* player, const Position
 		    pendingReadinessAttempts > maximumProgressionAttempts) {
 			return false;
 		}
-		++counters.actionsAttempted;
+		telemetry.recordActionAttempt();
 		g_game.playerUseItem(playerId, containerPosition, containerIndex, containerId, containerItem->getClientID());
 		emit("action_result", position, "\"action\":\"open_readiness_container\",\"result\":\"requested\",\"item_id\":" +
 		     std::to_string(containerItem->getID()) + ",\"container_id\":" + std::to_string(containerId));
@@ -107,7 +107,7 @@ bool PlayerBotController::beginReadinessEquipment(Player* player, const Position
 	pendingReadinessSlot = upgrade.slot;
 	readinessEquipmentPending = true;
 	pendingReadinessAttempts = 0;
-	++counters.actionsAttempted;
+	telemetry.recordActionAttempt();
 	g_game.playerMoveItem(player, source, item->getClientID(), sourceIndex,
 	                      Position(0xFFFF, upgrade.slot, 0), item->getItemCount(), item, nullptr);
 	emit("action_result", position, "\"action\":\"equip_readiness\",\"result\":\"requested\",\"item_id\":" +
@@ -680,7 +680,6 @@ bool PlayerBotController::planSimpleRewardApproach(Player& player, const Positio
 	for (const Position& candidate : candidates) {
 			std::deque<PlayerBotNavigationStep> steps;
 			uint64_t candidateExpandedNodes = 0;
-			++counters.pathfindingCalls;
 			const auto startedAt = std::chrono::steady_clock::now();
 			const PlayerBotNavigationRoutePlan routePlan = candidate == currentPosition ? PlayerBotNavigationRoutePlan{} :
 				navigationRuntime.plan(player, candidate);
@@ -690,8 +689,8 @@ bool PlayerBotController::planSimpleRewardApproach(Player& player, const Positio
 				candidateExpandedNodes = routePlan.metrics.expandedNodes;
 			}
 			const bool planned = planResult == PlayerBotNavigationResult::Reached;
-			counters.pathfindingTimeUs += std::chrono::duration_cast<std::chrono::microseconds>(
-				std::chrono::steady_clock::now() - startedAt).count();
+			telemetry.recordPathfindingAttempt(std::chrono::duration_cast<std::chrono::microseconds>(
+				std::chrono::steady_clock::now() - startedAt));
 			if (!planned || (candidate != currentPosition && steps.empty())) {
 				continue;
 			}
@@ -1291,7 +1290,7 @@ void PlayerBotController::processPickupReward(Player* player, const Position& cu
 		for (const auto& entry : pickupReward.stackableRootCounts) {
 			rewardSession.claimSnapshot().stackables.emplace(entry.first, inventoryPolicy.inventoryItemCount(*player, entry.first));
 		}
-		++counters.actionsAttempted;
+		telemetry.recordActionAttempt();
 		g_game.playerUseItem(playerId, pickupReward.itemPosition, static_cast<uint8_t>(stackPosition), 0,
 		                     rewardObject->getClientID());
 		rewardSession.setStage(PlayerBotRewardStage::VerifyReward);
@@ -1358,7 +1357,7 @@ void PlayerBotController::processPickupReward(Player* player, const Position& cu
 			uint8_t rootIndex = 0;
 			g_game.internalGetPosition(equipped, rootPosition, rootIndex);
 			rewardSession.incrementRetries();
-			++counters.actionsAttempted;
+			telemetry.recordActionAttempt();
 			emit("action_result", currentPosition,
 			     "\"action\":\"relocate_reward_root\",\"result\":\"requested\",\"item_id\":" +
 			         std::to_string(equipped->getID()) + ",\"slot\":" + std::to_string(pickupReward.slot));
@@ -1402,7 +1401,7 @@ void PlayerBotController::processPickupReward(Player* player, const Position& cu
 			uint8_t displacedIndex = 0;
 			g_game.internalGetPosition(displaced, displacedPosition, displacedIndex);
 			rewardSession.incrementRetries();
-			++counters.actionsAttempted;
+			telemetry.recordActionAttempt();
 			emit("action_result", currentPosition,
 			     "\"action\":\"preserve_displaced_equipment\",\"result\":\"requested\",\"item_id\":" +
 			         std::to_string(displaced->getID()) + ",\"slot\":" + std::to_string(displacedSlot));
@@ -1425,7 +1424,7 @@ void PlayerBotController::processPickupReward(Player* player, const Position& cu
 			finishProgressionObjective(player, currentPosition, "failed", "reward_inventory_position_unavailable");
 			return;
 		}
-		++counters.actionsAttempted;
+		telemetry.recordActionAttempt();
 		emit("action_result", currentPosition,
 		     "\"action\":\"equip_reward\",\"result\":\"requested\",\"item_id\":" +
 		         std::to_string(reward->getID()) + ",\"slot\":" + std::to_string(pickupReward.slot) +

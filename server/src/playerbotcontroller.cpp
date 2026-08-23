@@ -131,6 +131,7 @@ PlayerBotController::PlayerBotController(const Player& player,
                             std::map<Position, std::chrono::steady_clock::time_point>& sharedHuntRegionCooldowns,
                             const PlayerBotTestPolicy& testPolicy) :
 	playerId(player.getID()), playerGuid(player.getGUID()), playerName(player.getName()), testPolicy(testPolicy),
+	telemetry(player.getName(), player.getGUID()),
 	equipmentPolicy(oracleVocationId),
 	inventoryPolicy(itemSellValues, [this](const Player& candidatePlayer, const Item& item) {
 		return equipmentPolicy.evaluateUpgrade(candidatePlayer, item).has_value();
@@ -169,7 +170,7 @@ void PlayerBotController::start(const Position& position, bool recovered, uint32
 	                                                    (startInHunt ? "hunt" : "service"))
 	          << ",\"step_speed\":" << (g_game.getPlayerByID(playerId) ? g_game.getPlayerByID(playerId)->getSpeed() : 0)
 		          << ",\"spell_calibration_profiles\":" << spellCalibration.size();
-	emit("lifecycle", position, lifecycle.str());
+	telemetry.emit("lifecycle", position, lifecycle.str());
 	if (testPolicy.spellCalibrationFixture && controlledPlayer) {
 		runSpellCalibrationFixture(*controlledPlayer, position);
 	}
@@ -215,11 +216,6 @@ const char* PlayerBotController::stageName(ScenarioStage stage)
 	return "unknown";
 }
 
-void PlayerBotController::emit(const char* event, const Position& position, const std::string& fields) const
-{
-	emitPlayerbotEvent(playerName, playerGuid, event, position, fields);
-}
-
 void PlayerBotController::say(Player& player, const std::string& text) const
 {
 	Player* admin = g_game.getPlayerByName("GOD Admin");
@@ -228,19 +224,6 @@ void PlayerBotController::say(Player& player, const std::string& text) const
 	}
 	admin->sendTextMessage(MESSAGE_STATUS_CONSOLE_ORANGE, "[Bot One] " + text);
 	admin->sendPrivateMessage(&player, TALKTYPE_PRIVATE, text);
-}
-
-bool PlayerBotController::shouldEmitRepeated(const std::string& key)
-{
-	const auto now = std::chrono::steady_clock::now();
-	auto it = repeatedEventTimes.find(key);
-	if (it != repeatedEventTimes.end() && now - it->second < repeatedEventInterval) {
-		++counters.suppressedEvents;
-		return false;
-	}
-
-	repeatedEventTimes[key] = now;
-	return true;
 }
 
 void PlayerBotController::setStage(ScenarioStage stage, const Position& position)
@@ -252,10 +235,10 @@ void PlayerBotController::setStage(ScenarioStage stage, const Position& position
 	const ScenarioStage previousStage = scenarioStage;
 	scenarioStage = stage;
 	const std::string repeatKey = std::string("state:") + stageName(previousStage) + ':' + stageName(stage);
-	if (!shouldEmitRepeated(repeatKey)) {
+	if (!telemetry.shouldEmitRepeated(repeatKey)) {
 		return;
 	}
-	emit("state_transition", position, std::string("\"from\":") + jsonString(stageName(previousStage)) +
+	telemetry.emit("state_transition", position, std::string("\"from\":") + jsonString(stageName(previousStage)) +
 	     ",\"to\":" + jsonString(stageName(stage)));
 }
 
@@ -266,22 +249,12 @@ std::optional<PlayerBotTraversalTarget> PlayerBotController::clearTraversalTarge
 		return std::nullopt;
 	}
 
-	if (!shouldEmitRepeated(std::string("target:clear:") + reason)) {
+	if (!telemetry.shouldEmitRepeated(std::string("target:clear:") + reason)) {
 		return target;
 	}
-	emit("target_changed", position, "\"previous_target_id\":" + std::to_string(target->id) +
+	telemetry.emit("target_changed", position, "\"previous_target_id\":" + std::to_string(target->id) +
 	     ",\"target_id\":null,\"reason\":" + jsonString(reason));
 	return target;
-}
-
-void PlayerBotController::logActionFailure(const char* action, const char* reason, const Position& position)
-{
-	++counters.actionsFailed;
-	if (!shouldEmitRepeated(std::string("action:") + action + ':' + reason)) {
-		return;
-	}
-	emit("action_result", position, std::string("\"action\":") + jsonString(action) +
-	     ",\"result\":\"failed\",\"reason\":" + jsonString(reason));
 }
 
 Item* PlayerBotController::findActionableSlottedItem(const Player& player, uint16_t itemId, slots_t& slot) const
@@ -313,74 +286,32 @@ uint32_t PlayerBotController::getSaleItemCount(const Player& player, uint16_t it
 	return count;
 }
 
-void PlayerBotController::logSummary(const Position& position, bool final)
+playerbot::PlayerBotTelemetrySummary PlayerBotController::telemetrySummary() const
 {
-	const auto uptimeMs = std::chrono::duration_cast<std::chrono::milliseconds>(
-		std::chrono::steady_clock::now() - started).count();
-	uint64_t decisionTimeUs = counters.decisionTimeUs;
-	if (decisionActive) {
-		decisionTimeUs += std::chrono::duration_cast<std::chrono::microseconds>(
-			std::chrono::steady_clock::now() - decisionStarted).count();
+	playerbot::PlayerBotTelemetrySummary summary{stageName(scenarioStage), std::nullopt};
+	if (const auto activeTarget = targetingSession.activeTarget()) {
+		summary.target = playerbot::PlayerBotTelemetryTarget{activeTarget->id, activeTarget->position};
 	}
-	std::ostringstream fields;
-	const auto activeTarget = targetingSession.activeTarget();
-	fields << "\"final\":" << (final ? "true" : "false")
-	       << ",\"uptime_ms\":" << uptimeMs
-	       << ",\"state\":" << jsonString(stageName(scenarioStage))
-	       << ",\"target_id\":";
-	if (!activeTarget) {
-		fields << "null";
-	} else {
-		fields << activeTarget->id
-		       << ",\"target_position\":{\"x\":" << activeTarget->position.x << ",\"y\":" << activeTarget->position.y
-		       << ",\"z\":" << static_cast<uint16_t>(activeTarget->position.z) << '}';
-	}
-	fields << ",\"decisions\":" << counters.decisions
-	       << ",\"decision_time_us\":" << decisionTimeUs
-	       << ",\"pathfinding_calls\":" << counters.pathfindingCalls
-	       << ",\"pathfinding_failures\":" << counters.pathfindingFailures
-	       << ",\"pathfinding_time_us\":" << counters.pathfindingTimeUs
-	       << ",\"actions_attempted\":" << counters.actionsAttempted
-	       << ",\"actions_failed\":" << counters.actionsFailed
-	       << ",\"stuck_events\":" << counters.stuckEvents
-	       << ",\"suppressed_events\":" << counters.suppressedEvents;
-	emit("summary", position, fields.str());
-}
-
-void PlayerBotController::maybeLogSummary(const Position& position)
-{
-	const auto now = std::chrono::steady_clock::now();
-	if (now - lastSummary < summaryInterval) {
-		return;
-	}
-
-	logSummary(position, false);
-	lastSummary = now;
+	return summary;
 }
 
 void PlayerBotController::stop(const char* reason, const Position& position)
 {
-	if (terminalLogged) {
+	if (telemetry.terminalLogged()) {
 		return;
 	}
 
 	cancelHuntRegionPlanning();
 	setStage(ScenarioStage::Stopped, position);
-	logSummary(position, true);
-	emit("terminal", position, std::string("\"reason\":") + jsonString(reason));
-	terminalLogged = true;
+	telemetry.emitTerminal(reason, position, telemetrySummary());
 }
 
 bool PlayerBotController::findPath(Player* player, const Position& target, std::vector<Direction>& result, const FindPathParams& pathParams)
 {
-	++counters.pathfindingCalls;
 	const auto startedAt = std::chrono::steady_clock::now();
 	const bool found = player->getPathTo(target, result, pathParams);
-	counters.pathfindingTimeUs += std::chrono::duration_cast<std::chrono::microseconds>(
-		std::chrono::steady_clock::now() - startedAt).count();
-	if (!found) {
-		++counters.pathfindingFailures;
-	}
+	telemetry.recordPathfinding(std::chrono::duration_cast<std::chrono::microseconds>(
+		std::chrono::steady_clock::now() - startedAt), found);
 	return found;
 }
 
@@ -432,7 +363,7 @@ void PlayerBotController::onDeath(const Player& player, const Creature* killer, 
 	       << ",\"killer_type\":" << (killer ? jsonString(killer->getPlayer() ? "player" : killer->getMonster() ? "monster" : "other") : "null")
 	       << ",\"most_damage_id\":" << (mostDamageKiller ? std::to_string(mostDamageKiller->getID()) : "null")
 	       << ",\"most_damage_name\":" << (mostDamageKiller ? jsonString(mostDamageKiller->getName()) : "null");
-	emit("lifecycle", lastPosition, fields.str());
+	telemetry.emit("lifecycle", lastPosition, fields.str());
 }
 
 Item* PlayerBotController::findNavigationItem(const PlayerBotNavigationStep& step) const
@@ -456,7 +387,7 @@ Item* PlayerBotController::findNavigationItem(const PlayerBotNavigationStep& ste
 
 bool PlayerBotController::executeNavigationStep(Player* player, const PlayerBotNavigationStep& step)
 {
-	++counters.actionsAttempted;
+	telemetry.recordActionAttempt();
 	if (step.action == PlayerBotNavigationAction::Move) {
 		if (forcedNavigationStepFailuresRemaining > 0) {
 			--forcedNavigationStepFailuresRemaining;
@@ -545,8 +476,8 @@ bool PlayerBotController::processNavigation(Player* player, const Position& curr
 		       << ",\"position_b\":{\"x\":" << oscillation.previousPosition.x
 		       << ",\"y\":" << oscillation.previousPosition.y
 		       << ",\"z\":" << static_cast<uint16_t>(oscillation.previousPosition.z) << '}';
-		emit("navigation_progress", currentPosition, fields.str());
-		++counters.stuckEvents;
+		telemetry.emit("navigation_progress", currentPosition, fields.str());
+		telemetry.recordStuckEvent();
 		schedule(blockedRouteRetryInterval);
 		return false;
 	}
@@ -556,7 +487,7 @@ bool PlayerBotController::processNavigation(Player* player, const Position& curr
 		return false;
 	}
 	if (outcome.movementResult == PlayerBotPendingMovementResult::Mismatch) {
-		logActionFailure("navigate", "step_result_mismatch", currentPosition);
+		telemetry.logActionFailure("navigate", "step_result_mismatch", currentPosition);
 		if (outcome.stepFailureCount >= maximumRepeatedNavigationStepFailures) {
 			schedule(blockedRouteRetryInterval);
 			return false;
@@ -565,24 +496,22 @@ bool PlayerBotController::processNavigation(Player* player, const Position& curr
 	if (outcome.pendingWorldChange) {
 		if (Item* unchanged = findNavigationItem(*outcome.pendingWorldChange)) {
 			navigationRuntime.suppress(outcome.pendingWorldChange->target, now + navigationBlockSuppression);
-			logActionFailure("navigate", "transition_state_unchanged", currentPosition);
+			telemetry.logActionFailure("navigate", "transition_state_unchanged", currentPosition);
 		}
 	}
 	if (outcome.plan.attempted) {
-		++counters.pathfindingCalls;
-		counters.pathfindingTimeUs += outcome.plan.elapsed.count();
+		telemetry.recordPathfinding(outcome.plan.elapsed, !outcome.routeUnavailable);
 		if (outcome.routeUnavailable) {
 			lastNavigationRouteUnavailable = true;
 			lastNavigationExpandedNodes = outcome.plan.expandedNodes;
-			++counters.pathfindingFailures;
-			emit("navigation_progress", currentPosition,
+			telemetry.emit("navigation_progress", currentPosition,
 			     "\"result\":\"failed\",\"reason\":\"route_unavailable\",\"cycle_phase\":" +
 			         jsonString(cyclePhaseName()) + ",\"destination\":{\"x\":" + std::to_string(destination.x) +
 			         ",\"y\":" + std::to_string(destination.y) + ",\"z\":" +
 			         std::to_string(static_cast<uint16_t>(destination.z)) + "},\"plan_result\":" +
 			         std::to_string(static_cast<uint16_t>(outcome.plan.result)) + ",\"expanded_nodes\":" +
 			         std::to_string(outcome.plan.expandedNodes));
-			logActionFailure("navigate", "route_unavailable", currentPosition);
+			telemetry.logActionFailure("navigate", "route_unavailable", currentPosition);
 			if (outcome.blockedPositions.empty() && ++fixedTargetRouteFailureCount >= 20) {
 				stop("navigation_route_unavailable", currentPosition);
 			}
@@ -594,7 +523,7 @@ bool PlayerBotController::processNavigation(Player* player, const Position& curr
 		fields << "\"action\":\"plan\",\"result\":\"success\",\"steps\":" << outcome.plan.steps
 		       << ",\"expanded_nodes\":" << outcome.plan.expandedNodes << ",\"destination\":{\"x\":" << destination.x
 		       << ",\"y\":" << destination.y << ",\"z\":" << static_cast<uint16_t>(destination.z) << '}';
-		emit("action_result", currentPosition, fields.str());
+		telemetry.emit("action_result", currentPosition, fields.str());
 	}
 
 	if (!outcome.nextStep) {
@@ -605,7 +534,7 @@ bool PlayerBotController::processNavigation(Player* player, const Position& curr
 	const PlayerBotNavigationStep& step = *outcome.nextStep;
 	if (!executeNavigationStep(player, step)) {
 		navigationRuntime.rejectNextStep();
-		logActionFailure("navigate", "transition_unavailable", currentPosition);
+		telemetry.logActionFailure("navigate", "transition_unavailable", currentPosition);
 		schedule(blockedRouteRetryInterval);
 		return false;
 	}
@@ -617,7 +546,7 @@ bool PlayerBotController::processNavigation(Player* player, const Position& curr
 
 void PlayerBotController::navigate()
 {
-	DecisionTimer decisionTimer(*this);
+	auto decisionTimer = telemetry.recordDecision();
 	if (g_game.getGameState() == GAME_STATE_SHUTDOWN) {
 		return;
 	}
@@ -635,7 +564,7 @@ void PlayerBotController::navigate()
 		return;
 	}
 	if (player->isRemoved()) {
-		emit("lifecycle", lastPosition, "\"status\":\"removed\"");
+		telemetry.emit("lifecycle", lastPosition, "\"status\":\"removed\"");
 		stop("controlled_player_removed", lastPosition);
 		return;
 	}
@@ -680,7 +609,7 @@ void PlayerBotController::navigate()
 		schedule(navigationInterval);
 		return;
 	}
-	maybeLogSummary(currentPosition);
+	telemetry.maybeEmitSummary(currentPosition, telemetrySummary());
 	recordActiveHuntCombat(*player);
 	verifySpellCast(*player, currentPosition);
 	if (activeHuntRegion && cyclePhase == CyclePhase::Hunt) {

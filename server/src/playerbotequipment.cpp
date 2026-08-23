@@ -161,10 +161,10 @@ std::optional<PlayerBotController::EquipmentOfferEvaluation> PlayerBotController
 			++evaluatedApproaches;
 			std::deque<PlayerBotNavigationStep> steps;
 			uint64_t expandedNodes = 0;
-			++counters.pathfindingCalls;
 			const PlayerBotNavigationRoutePlan routePlan = approach == position ? PlayerBotNavigationRoutePlan{} :
 				navigationRuntime.plan(player, approach, {}, maximumEquipmentProviderPathNodes);
 			const PlayerBotNavigationResult result = approach == position ? PlayerBotNavigationResult::Reached : routePlan.metrics.result;
+			telemetry.recordPathfinding(std::chrono::microseconds::zero(), result == PlayerBotNavigationResult::Reached);
 			if (approach != position) {
 				steps = routePlan.steps;
 				expandedNodes = routePlan.metrics.expandedNodes;
@@ -175,7 +175,6 @@ std::optional<PlayerBotController::EquipmentOfferEvaluation> PlayerBotController
 			if (result == PlayerBotNavigationResult::NodeLimit) {
 				providerRouteNodeLimits.insert(npc.getID());
 			}
-			++counters.pathfindingFailures;
 		}
 		return providerRoutes.emplace(npc.getID(), std::nullopt).first->second;
 	};
@@ -407,7 +406,7 @@ void PlayerBotController::processEquipmentPurchase(Player* player, const Positio
 			finishEquipmentPurchase(player, position, "failed", "provider_moved");
 			return;
 		}
-		const PlayerBotNpcSessionResult sessionResult = npcSession.openShop(*player, *npc, counters.actionsAttempted,
+		const PlayerBotNpcSessionResult sessionResult = npcSession.openShop(*player, *npc, telemetry.actionsAttemptedForSession(),
 		                                                                    maximumServiceAttempts);
 		if (sessionResult != PlayerBotNpcSessionResult::Ready) {
 			if (sessionResult == PlayerBotNpcSessionResult::Failed) {
@@ -432,7 +431,7 @@ void PlayerBotController::processEquipmentPurchase(Player* player, const Positio
 			                                     player->getMoney(), player->getBankBalance()});
 		}
 		equipmentPurchaseSession.setStage(PlayerBotEquipmentPurchaseStage::VerifyPurchase);
-		++counters.actionsAttempted;
+		telemetry.recordActionAttempt();
 		if (!testPolicy.forceEquipmentPurchaseRejected) {
 			g_game.playerPurchaseItem(playerId, Item::items[purchase.itemId].clientId,
 			                          static_cast<uint8_t>(offer->subType), 1, false, false);
@@ -516,7 +515,7 @@ void PlayerBotController::processEquipmentPurchase(Player* player, const Positio
 			uint8_t displacedIndex = 0;
 			g_game.internalGetPosition(displaced, displacedPosition, displacedIndex);
 			equipmentPurchaseSession.incrementRetries();
-			++counters.actionsAttempted;
+			telemetry.recordActionAttempt();
 			emit("action_result", position,
 			     "\"action\":\"preserve_displaced_equipment\",\"result\":\"requested\",\"item_id\":" +
 			         std::to_string(displaced->getID()) + ",\"slot\":" + std::to_string(displacedSlot));
@@ -551,7 +550,7 @@ void PlayerBotController::processEquipmentPurchase(Player* player, const Positio
 				return;
 			}
 			equipmentPurchaseSession.incrementRetries();
-			++counters.actionsAttempted;
+			telemetry.recordActionAttempt();
 			g_game.playerUseItem(playerId, containerPosition, containerIndex, containerId, containerItem->getClientID());
 			emit("action_result", position,
 			     "\"action\":\"open_equipment_container\",\"result\":\"requested\",\"item_id\":" +
@@ -573,7 +572,7 @@ void PlayerBotController::processEquipmentPurchase(Player* player, const Positio
 				equipmentPurchaseSession.displacedItemCounts()[itemId] = inventoryPolicy.inventoryItemCount(*player, itemId);
 			}
 		}
-		++counters.actionsAttempted;
+		telemetry.recordActionAttempt();
 		emit("action_result", position,
 		     "\"action\":\"equip_equipment\",\"result\":\"requested\",\"item_id\":" +
 		         std::to_string(purchased->getID()) + ",\"slot\":" + std::to_string(purchase.slot) +
