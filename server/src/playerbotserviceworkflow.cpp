@@ -47,7 +47,7 @@ PlayerBotServiceVerification PlayerBotServiceWorkflow::verifyBankWithdrawal(uint
 	return serviceSession.verifyBankWithdrawal(money, balance, maximumRetries);
 }
 
-void PlayerBotServiceWorkflow::setProviders(std::vector<PlayerBotEconomyProvider> shops,
+void PlayerBotServiceWorkflow::observeProviders(std::vector<PlayerBotEconomyProvider> shops,
 	std::vector<PlayerBotEconomyProvider> bankers)
 {
 	shopProviders = std::move(shops);
@@ -63,10 +63,77 @@ const PlayerBotEconomyProvider* PlayerBotServiceWorkflow::provider(uint32_t id, 
 	return it == providers.end() ? nullptr : &*it;
 }
 
-const PlayerBotEconomyProvider* PlayerBotServiceWorkflow::rankedProvider(const PlayerBotEconomyCatalog& catalog,
-	uint16_t itemId, bool purchase, const Position& position) const
+const PlayerBotEconomyProvider* PlayerBotServiceWorkflow::nearestBanker(const Position& position) const
 {
-	return catalog.rankedProvider(shopProviders, itemId, purchase, position);
+	auto it = std::min_element(bankProviders.begin(), bankProviders.end(), [&position](const auto& left, const auto& right) {
+		const uint32_t leftDistance = std::max(Position::getDistanceX(position, left.position), Position::getDistanceY(position, left.position)) +
+		                              (position.z == left.position.z ? 0 : 32 * Position::getDistanceZ(position, left.position));
+		const uint32_t rightDistance = std::max(Position::getDistanceX(position, right.position), Position::getDistanceY(position, right.position)) +
+		                               (position.z == right.position.z ? 0 : 32 * Position::getDistanceZ(position, right.position));
+		return leftDistance < rightDistance;
+	});
+	return it == bankProviders.end() ? nullptr : &*it;
+}
+
+PlayerBotServiceCommand PlayerBotServiceWorkflow::advance(const PlayerBotServiceObservation& observation,
+	const PlayerBotEconomyCatalog& catalog, const PlayerBotDispositionPolicy& disposition)
+{
+	if (serviceStage == PlayerBotServiceStage::Failed) return {PlayerBotServiceCommandType::Fail, PlayerBotServiceOutcome::Rejected};
+	if (serviceStage == PlayerBotServiceStage::Complete) return {PlayerBotServiceCommandType::Complete, PlayerBotServiceOutcome::Success};
+	if (serviceSession.hasShopTransaction()) {
+		const PlayerBotServiceTransaction& transaction = *serviceSession.shopTransaction();
+		return {serviceStage == PlayerBotServiceStage::SellLoot ? PlayerBotServiceCommandType::Sell : PlayerBotServiceCommandType::Buy,
+		        PlayerBotServiceOutcome::Pending, npcSession.targetId(), transaction.itemId, transaction.amount};
+	}
+	if (serviceStage == PlayerBotServiceStage::Discover) {
+		if (!observation.discoveryObserved) return {PlayerBotServiceCommandType::RequestDiscoverySnapshot};
+		observeProviders(observation.shops, observation.bankers);
+		if (shopProviders.empty() || bankProviders.empty()) {
+			serviceStage = PlayerBotServiceStage::Failed;
+			return {PlayerBotServiceCommandType::Fail, PlayerBotServiceOutcome::Unavailable};
+		}
+		serviceStage = PlayerBotServiceStage::SellLoot;
+	}
+	if (serviceStage == PlayerBotServiceStage::SellLoot) {
+		const PlayerBotEconomyProvider* selected = nullptr;
+		uint16_t itemId = 0;
+		uint32_t price = 0;
+		for (const auto& provider : shopProviders) for (const auto& offer : provider.offers) {
+			auto count = observation.inventoryCounts.find(offer.itemId);
+			if (offer.sellPrice == 0 || count == observation.inventoryCounts.end() || count->second == 0) continue;
+			if (!selected || offer.sellPrice > price || (offer.sellPrice == price &&
+			    (std::max(Position::getDistanceX(observation.currentPosition, provider.position), Position::getDistanceY(observation.currentPosition, provider.position)) <
+			     std::max(Position::getDistanceX(observation.currentPosition, selected->position), Position::getDistanceY(observation.currentPosition, selected->position))))) {
+				selected = &provider; itemId = offer.itemId; price = offer.sellPrice;
+			}
+		}
+		if (!selected) { serviceStage = PlayerBotServiceStage::BuyPotions; return advance(observation, catalog, disposition); }
+		const uint32_t backpack = observation.backpackSaleCounts.count(itemId) ? observation.backpackSaleCounts.at(itemId) : 0;
+		return {backpack == 0 ? PlayerBotServiceCommandType::Wait : PlayerBotServiceCommandType::Sell,
+		        PlayerBotServiceOutcome::Pending, selected->id, itemId, std::min<uint32_t>(100, backpack)};
+	}
+	if (serviceStage == PlayerBotServiceStage::BuyPotions) {
+		const uint16_t itemId = PlayerBotDispositionPolicy::smallHealthPotionItemId;
+		const uint32_t count = observation.inventoryCounts.count(itemId) ? observation.inventoryCounts.at(itemId) : 0;
+		if (count >= PlayerBotDispositionPolicy::potionRestockTarget) { serviceStage = PlayerBotServiceStage::Bank; return advance(observation, catalog, disposition); }
+		const PlayerBotEconomyProvider* provider = catalog.rankedProvider(shopProviders, itemId, true, observation.currentPosition);
+		if (!provider) { serviceStage = PlayerBotServiceStage::Failed; return {PlayerBotServiceCommandType::Fail, PlayerBotServiceOutcome::Unavailable}; }
+		auto offer = std::find_if(provider->offers.begin(), provider->offers.end(), [itemId](const auto& candidate) { return candidate.itemId == itemId && candidate.buyPrice != 0; });
+		if (offer == provider->offers.end()) { serviceStage = PlayerBotServiceStage::Failed; return {PlayerBotServiceCommandType::Fail, PlayerBotServiceOutcome::Unavailable}; }
+		const auto restock = disposition.restock({count, observation.freeCapacity, observation.money, observation.bankBalance}, offer->buyPrice, Item::items[itemId].weight);
+		if (restock.insufficientFunds) { serviceStage = PlayerBotServiceStage::Failed; return {PlayerBotServiceCommandType::Fail, PlayerBotServiceOutcome::InsufficientFunds}; }
+		if (restock.amount == 0) { serviceStage = PlayerBotServiceStage::Bank; return advance(observation, catalog, disposition); }
+		return {PlayerBotServiceCommandType::Buy, PlayerBotServiceOutcome::Pending, provider->id, itemId, restock.amount};
+	}
+	const PlayerBotEconomyProvider* banker = nearestBanker(observation.currentPosition);
+	if (!banker) { serviceStage = PlayerBotServiceStage::Failed; return {PlayerBotServiceCommandType::Fail, PlayerBotServiceOutcome::Unavailable}; }
+	if (!serviceSession.bankDepositComplete()) return {PlayerBotServiceCommandType::DepositAll, PlayerBotServiceOutcome::Pending, banker->id};
+	if (!serviceSession.hasBankWithdrawal()) {
+		const uint32_t amount = disposition.bankWithdrawal({0, observation.freeCapacity, observation.money, observation.bankBalance}, Item::items[ITEM_GOLD_COIN].weight);
+		if (amount == 0) { serviceStage = PlayerBotServiceStage::Complete; return {PlayerBotServiceCommandType::Complete, PlayerBotServiceOutcome::Success}; }
+		return {PlayerBotServiceCommandType::Withdraw, PlayerBotServiceOutcome::Pending, banker->id, 0, amount};
+	}
+	return {PlayerBotServiceCommandType::Withdraw, PlayerBotServiceOutcome::Pending, banker->id};
 }
 
 bool PlayerBotServiceWorkflow::isApproachRejected(const Position& position) const

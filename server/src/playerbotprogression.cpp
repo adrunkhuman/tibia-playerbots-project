@@ -134,7 +134,7 @@ void PlayerBotController::processReadinessEquipment(Player* player, const Positi
 		pendingReadinessAttempts = 0;
 		if (readinessResumeService) {
 			readinessResumeService = false;
-			depotWorkflow.setStage(PlayerBotDepotStage::Deposit);
+			depotWorkflow.resumeDeposit();
 			schedule(SCHEDULER_MINTICKS);
 			return;
 		}
@@ -890,7 +890,7 @@ void PlayerBotController::finishProgressionObjective(Player* player, const Posit
 	}
 	progressionRuntime.finish();
 	clearNavigation();
-	serviceWorkflow.setStage(PlayerBotServiceStage::Discover);
+	serviceWorkflow.reset();
 	serviceWorkflow.resetNpc();
 	cyclePhase = CyclePhase::Service;
 	progressionRuntime.setCooldown(TopLevelGoal::PickupReward, std::strcmp(result, "success") == 0 ? pickupRewardSuccessCooldown :

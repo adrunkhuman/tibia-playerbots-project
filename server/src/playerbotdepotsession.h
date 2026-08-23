@@ -64,7 +64,10 @@ class PlayerBotDepotSession
 	void clearDiscovery();
 
 	PlayerBotDepotStage stage() const { return depotStage; }
-	void setStage(PlayerBotDepotStage stage) { depotStage = stage; }
+	void openLocker() { depotStage = PlayerBotDepotStage::OpenLocker; }
+	void openChest() { depotStage = PlayerBotDepotStage::OpenChest; }
+	void deposit() { depotStage = PlayerBotDepotStage::Deposit; }
+	void depart() { depotStage = PlayerBotDepotStage::Depart; }
 	uint32_t attempts() const { return depotAttempts; }
 	uint32_t incrementAttempts() { return ++depotAttempts; }
 	void resetAttempts() { depotAttempts = 0; }

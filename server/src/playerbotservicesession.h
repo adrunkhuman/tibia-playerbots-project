@@ -40,7 +40,7 @@ class PlayerBotServiceSession
 	                                                   bool purchase, uint32_t unitPrice, uint32_t maximumRetries);
 
 	bool bankDepositComplete() const { return depositComplete; }
-	void setBankDepositComplete(bool complete) { depositComplete = complete; depositPending = false; }
+	void markBankDepositComplete() { depositComplete = true; depositPending = false; }
 	bool hasBankDeposit() const { return depositPending; }
 	void beginBankDeposit(uint64_t money, uint64_t balance);
 	PlayerBotServiceVerification verifyBankDeposit(uint64_t money, uint64_t balance, uint32_t maximumRetries);
