@@ -12,6 +12,13 @@ APIs. Bot-facing `Player` methods must remain safe when `client` is null. Normal
 shutdown and death recovery use the existing player save path rather than a
 parallel persistence mechanism.
 
+The controller lifecycle is `Running`, `Paused`, or `Stopped`. `Running`
+evaluates one turn at a time. `Paused` suppresses future turns at a fixture
+restart checkpoint without emitting a terminal event. `Stopped` is terminal: it
+clears active planning and navigation, emits one `terminal` event, and performs
+no later turns. A restart creates a fresh `Running` controller from persisted
+player state.
+
 ## Provisioning
 
 The `playerbot-setup` Compose service runs before the server. It owns the
@@ -57,8 +64,15 @@ Utilities are deterministic arbitration scores, not probabilities:
 
 Service needs and reward value adjust these baselines, so candidates can cross
 nominal tiers. Equal scores keep declaration order: departure, service, pickup,
-spell training, equipment, magic training, then hunt. Successful pickup and spell-training families cool
-down for five minutes; failed or interrupted families cool down for 60 seconds.
+spell training, equipment, magic training, then hunt. Successful pickup and
+spell-training families cool down for five minutes; failed or interrupted
+families cool down for 60 seconds.
+
+Turn routing is independent of utility scores and uses fixed preemption order:
+progression, magic training, hunt start, hunt planning, suspended-loot retry,
+loot, hunt finish, service, depot return, depot deposit, traversal combat,
+target pursuit, then ordinary hunting. A paused or stopped controller returns
+no command.
 
 ## Navigation and hunting
 
@@ -80,6 +94,11 @@ observed performance. It validates suitable candidates incrementally through
 the navigator and selects the highest route-adjusted score. Navigation remains
 behind the destination/reachability interface so a later navigator can replace
 tile planning without changing hunt selection.
+
+Resetting navigation clears only the current route and recovery state. It does
+not cancel an active hunt-region plan. The controller cancels hunt planning when
+it leaves the hunt phase or when an explicit interruption, such as Oracle
+departure, replaces the hunt.
 
 One scan uses an immutable combat, recovery, resource, and frontier snapshot for
 every scoring batch. Position, level, stamina, cooldown exclusions, map revision,
@@ -344,6 +363,11 @@ corpse ownership. It opens the corpse through normal item use before inspecting
 contents. Empty and non-lootable corpses are skipped; skinning and other
 secondary corpse actions are outside this behavior.
 
+If an unchanged corpse route repeatedly fails, looting suspends navigation and
+retries the corpse after a bounded delay. It does not discard the loot objective
+or repeatedly replan the same route. A timeout ends the loot attempt with
+`corpse_inaccessible`.
+
 ## Rewards and departure
 
 Reward discovery is limited to loaded shared quest containers handled by action
@@ -412,6 +436,8 @@ docker compose -f server/compose.yaml logs --no-log-prefix --since 30m server | 
 Every record has `schema: 1`, UTC RFC 3339 `ts`, `component`, `event`, `bot`,
 persistent `player_id`, and `position`. Event-specific fields are conditional.
 States, actions, results, statuses, and reasons use stable lowercase values.
+A controller `terminal` event is final: no later state, action, or objective
+events are emitted by that controller.
 
 | Family | Events and purpose |
 | ------ | ------------------ |

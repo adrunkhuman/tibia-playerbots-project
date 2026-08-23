@@ -39,7 +39,7 @@ the changed behavior:
 | ------ | -------- |
 | `-FullNavigation` | Complete fixed A-B-C-B-A fixture route and temporary blockage recovery. |
 | `-TargetPursuit` | Visible-only last-seen pursuit, bounded reacquisition, and out-of-budget abandonment. |
-| `-CorpseLoot` | Non-corpse, empty, guaranteed-loot, and container death items; open-before-inspect ordering. |
+| `-CorpseLoot` | Non-corpse, empty, guaranteed-loot, and container death items; open-before-inspect ordering, suspended-route retry, and bounded inaccessible-corpse timeout. |
 | `-DeathTelemetry` | Death context, exponential relog, fresh controller state, abandonment, and removal. |
 | `-Healing` | Potion verification, threshold recovery, missing-stock service, purchase, and resume behavior. |
 | `-ValueLoot` | Value-per-weight replacement under constrained capacity plus generic food replacement and collection cap without mandatory food purchase. |
@@ -48,7 +48,7 @@ the changed behavior:
 | `-OracleDeparture` | Tagged Oracle route, dialogue, vocation/town/position verification, and restart persistence. |
 | `-StaminaProjection` | Premium bonus, low-stamina penalty, and ordinary stamina projections. |
 | `-HuntRegionPlanning` | Cached scanner batching, threat rejection, reachability, cooldowns, and observed correction. |
-| `-AdaptiveChallenge` | Synthetic frontier and planner-helper fixture covering idle and no-kill exclusion, sparse-combat escalation, hysteresis, recovery backoff, equipment/recovery prediction, lethal rejection, and local exhaustion. It does not validate real combat sampling or long-running hunt behavior. |
+| `-AdaptiveChallenge` | Synthetic frontier and planner-helper fixture covering idle and no-kill exclusion, sparse-combat escalation, hysteresis, recovery backoff, equipment/recovery prediction, lethal rejection, local exhaustion, terminal finality, and no post-terminal controller events. It does not validate real combat sampling or long-running hunt behavior. |
 | `-CombatReadiness` | Equipment, the one-potion return threshold and 10-potion restock target, optional-food hunting, generic food consumption and reclaimable capacity, low-wealth banking, carried-upgrade retention through service, and restart reconstruction. It does not cover the terminal case where total funds cannot buy enough potions to exceed the return threshold. |
 | `-EquipmentPurchases` | Justified purchase and equip verification, clean restart persistence, carried-upgrade recovery, displaced-item-space rejection, and rejected transactions. |
 | `-MainlandRewards` | Real Thais reward object from a teleported, high-capacity fixture; scale-armor claim and equip, displaced-item and bundle preservation, restart reconstruction, and non-null battle-axe rejection evidence. It does not prove normal traversal, realistic capacity limits, or a specific rejection reason. |

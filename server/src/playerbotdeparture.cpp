@@ -89,7 +89,7 @@ bool PlayerBotController::forceOracleDeparture(Player& player, const Position& p
 {
 	const TopLevelGoal previousGoal = progressionRuntime.activeGoal();
 	const uint64_t previousDecisionId = progressionRuntime.decisionId();
-	const bool interruptedHunt = previousGoal == TopLevelGoal::Hunt && cyclePhase == CyclePhase::Hunt;
+	const bool interruptedHunt = previousGoal == TopLevelGoal::Hunt && turnRouter.cyclePhase() == CyclePhase::Hunt;
 	if (interruptedHunt) {
 		finishHuntRegion(player, position, "level_eight_interrupt");
 		emit("goal_result", position,
@@ -101,7 +101,8 @@ bool PlayerBotController::forceOracleDeparture(Player& player, const Position& p
 		g_game.playerCancelAttackAndFollow(playerId);
 	}
 	clearTraversalTarget(position, "level_eight_interrupt");
-	clearNavigation();
+	huntRuntime.cancelPlanning();
+	resetNavigation();
 	lootWorkflow.reset();
 	player.closeContainer(corpseContainerId);
 	setStage(ScenarioStage::Traverse, position);
@@ -162,7 +163,7 @@ void PlayerBotController::finishOracleDeparture(Player* player, const Position& 
 	         ",\"goal\":\"oracle_departure\",\"result\":" + jsonString(result) +
 	         ",\"reason\":" + jsonString(reason));
 	progressionRuntime.finish();
-	clearNavigation();
+	resetNavigation();
 	if (std::strcmp(result, "success") == 0) {
 		if (player) {
 			say(*player, "Rookgaard departure complete. Starting mainland service.");
