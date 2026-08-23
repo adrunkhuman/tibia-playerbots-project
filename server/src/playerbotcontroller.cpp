@@ -15,10 +15,6 @@
 // Playerbot lifecycle, scheduling, navigation execution, and telemetry.
 using namespace playerbot;
 
-namespace {
-	constexpr uint32_t maximumSpellObservationValue = 10000;
-}
-
 const PlayerBotTestPolicy& playerbot::testPolicyFromEnvironment()
 {
 	static const PlayerBotTestPolicy policy = []() {
@@ -501,9 +497,7 @@ uint32_t PlayerBotController::navigationDecisionDelay(const Player& player) cons
 
 void PlayerBotController::onHealthDrain(const Player& player, uint32_t damage)
 {
-	if (player.getID() == playerId && !pendingSpellCast.name.empty()) {
-		pendingSpellCast.concurrentDamage = true;
-	}
+	spellRuntime.observeHealthDrain(player.getID() == playerId);
 	if (player.getID() == playerId && isActiveHuntCombat(player)) {
 		huntRegionDamageTaken += damage;
 		huntCombatEvidence.damageTaken += damage;
@@ -512,45 +506,12 @@ void PlayerBotController::onHealthDrain(const Player& player, uint32_t damage)
 
 void PlayerBotController::onCombatDamage(Creature* attacker, const Creature& target, uint32_t damage)
 {
-	if (pendingSpellCast.name.empty() || !spellCastExecuting) {
-		return;
-	}
-	if (!attacker || attacker->getID() != playerId) {
-		if (target.getID() == pendingSpellCast.targetId) {
-			pendingSpellCast.otherAttacker = true;
-		}
-		return;
-	}
-	for (uint8_t index = 0; index < pendingSpellCast.spellVictimCount; ++index) {
-		if (pendingSpellCast.spellVictimIds[index] == target.getID()) {
-			if (target.getID() == pendingSpellCast.targetId) {
-				pendingSpellCast.observedSpellDamage = std::min<uint32_t>(maximumSpellObservationValue,
-					pendingSpellCast.observedSpellDamage + damage);
-			}
-			return;
-		}
-	}
-	if (pendingSpellCast.spellVictimCount < pendingSpellCast.spellVictimIds.size()) {
-		pendingSpellCast.spellVictimIds[pendingSpellCast.spellVictimCount++] = target.getID();
-	} else {
-		pendingSpellCast.spellVictimOverflow = true;
-	}
-	if (target.getID() == pendingSpellCast.targetId) {
-		pendingSpellCast.observedSpellDamage = std::min<uint32_t>(maximumSpellObservationValue,
-			pendingSpellCast.observedSpellDamage + damage);
-	}
+	spellRuntime.observeCombatDamage(attacker ? attacker->getID() : 0, target.getID(), playerId, damage);
 }
 
 void PlayerBotController::onHealthGain(Creature* healer, const Creature& target, uint32_t gain)
 {
-	if (pendingSpellCast.name.empty() || target.getID() != playerId || pendingSpellCast.role != "healing") {
-		return;
-	}
-	if (healer && healer->getID() == playerId && spellCastExecuting) {
-		pendingSpellCast.observedSpellHealing = std::min<uint32_t>(maximumSpellObservationValue, pendingSpellCast.observedSpellHealing + gain);
-	} else {
-		pendingSpellCast.otherRecovery = true;
-	}
+	spellRuntime.observeHealthGain(healer && healer->getID() == playerId, target.getID() == playerId, gain);
 }
 
 bool PlayerBotController::processNavigation(Player* player, const Position& currentPosition, const Position& destination)

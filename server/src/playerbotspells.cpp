@@ -25,7 +25,6 @@ namespace {
 	constexpr uint32_t higherPriorityRecoveryManaReserve = 20;
 	constexpr uint32_t minimumHasteRouteSteps = 20;
 	constexpr int32_t smallHealthPotionMaximumHealing = 90;
-	constexpr int32_t maximumHasteObservationDelay = 2000;
 	constexpr uint32_t magicTrainingEmergencyReserve = 20;
 	constexpr auto magicTrainingRetryDelay = std::chrono::seconds(2);
 
@@ -114,7 +113,7 @@ namespace {
 
 void PlayerBotController::emitSpellCastEvent(const Position& position, const char* spellName, const char* words, const char* role,
                                              const char* need, const char* result, const char* engineResult, const char* reason,
-                                             const PendingSpellCast* pending, const Player* player, const char* fallback) const
+                                              const PlayerBotSpellPendingCast* pending, const Player* player, const char* fallback) const
 {
 	std::ostringstream fields;
 	fields << "\"action\":\"cast_spell\",\"result\":" << jsonString(result)
@@ -154,7 +153,7 @@ void PlayerBotController::emitSpellCastEvent(const Position& position, const cha
 			fields << ",\"spell_victim_count\":" << static_cast<uint16_t>(pending->spellVictimCount)
 			       << ",\"spell_victim_overflow\":" << (pending->spellVictimOverflow ? "true" : "false");
 		}
-		if (pending->role == "support") {
+		if (pending->role == PlayerBotSpellRole::Support) {
 			fields << ",\"haste_ticks_after_cast\":" << pending->hasteTicksAfterCast
 			       << ",\"haste_ticks_observed\":" << pending->hasteTicksObserved
 			       << ",\"haste_duration_measured\":" << pending->hasteDurationMeasured;
@@ -198,7 +197,7 @@ bool PlayerBotController::startSpellCast(Player& player, const Position& positio
 		}
 		return false;
 	}
-	if (!player.canDoAction() || !pendingSpellCast.name.empty()) {
+	if (!player.canDoAction() || spellRuntime.hasPending()) {
 		return false;
 	}
 	const bool healingGroup = descriptor->role == PlayerBotSpellRole::Healing || descriptor->role == PlayerBotSpellRole::Support;
@@ -237,32 +236,32 @@ bool PlayerBotController::startSpellCast(Player& player, const Position& positio
 	}
 
 	const PlayerBotSpellEnvelope envelope = playerBotSpellEnvelope(player, *descriptor);
-	pendingSpellCast = PendingSpellCast{};
-	pendingSpellCast.name = descriptor->name;
-	pendingSpellCast.role = playerBotSpellRoleName(descriptor->role);
-	pendingSpellCast.need = need;
-	pendingSpellCast.manaBefore = player.getMana();
-	pendingSpellCast.manaReserve = reserve;
-	pendingSpellCast.healthBefore = player.getHealth();
-	pendingSpellCast.targetId = target ? target->getID() : 0;
-	pendingSpellCast.targetHealthBefore = target ? target->getHealth() : 0;
-	pendingSpellCast.missingHealth = player.getMaxHealth() - player.getHealth();
-	pendingSpellCast.hasteTicksBefore = player.hasCondition(CONDITION_HASTE) ? player.getCondition(CONDITION_HASTE)->getTicks() : 0;
-	pendingSpellCast.envelope = envelope;
-	pendingSpellCast.targetClass = targetClass(target);
-	pendingSpellCast.otherRecovery = descriptor->role == PlayerBotSpellRole::Healing && player.hasCondition(CONDITION_REGENERATION);
-	pendingSpellCast.observedAt = std::chrono::steady_clock::now();
+	PlayerBotSpellPendingCast pending;
+	pending.name = descriptor->name;
+	pending.role = descriptor->role;
+	pending.need = need;
+	pending.manaBefore = player.getMana();
+	pending.manaReserve = reserve;
+	pending.healthBefore = player.getHealth();
+	pending.targetId = target ? target->getID() : 0;
+	pending.targetHealthBefore = target ? target->getHealth() : 0;
+	pending.missingHealth = player.getMaxHealth() - player.getHealth();
+	pending.hasteTicksBefore = player.hasCondition(CONDITION_HASTE) ? player.getCondition(CONDITION_HASTE)->getTicks() : 0;
+	pending.envelope = envelope;
+	pending.targetClass = targetClass(target);
+	pending.otherRecovery = descriptor->role == PlayerBotSpellRole::Healing && player.hasCondition(CONDITION_REGENERATION);
+	pending.observedAt = std::chrono::steady_clock::now();
+	spellRuntime.begin(std::move(pending));
 	++counters.actionsAttempted;
 	emitSpellCastEvent(position, descriptor->name, descriptor->words, playerBotSpellRoleName(descriptor->role), need, "requested", "unchecked",
-	                   nullptr, &pendingSpellCast, &player, nullptr);
+	                   nullptr, spellRuntime.pending(), &player, nullptr);
 	// Route through the normal player speech handler so the live spell engine owns legality and costs.
-	spellCastExecuting = true;
+	spellRuntime.beginEngineCast();
 	g_game.playerSay(playerId, 0, TALKTYPE_SAY, "", spell->getWords());
-	spellCastExecuting = false;
+	spellRuntime.endEngineCast();
 	if (descriptor->role == PlayerBotSpellRole::Support) {
 		if (Condition* haste = player.getCondition(CONDITION_HASTE)) {
-			pendingSpellCast.hasteTicksAfterCast = haste->getTicks();
-			pendingSpellCast.hasteEndTimeAfterCast = haste->getEndTime();
+			spellRuntime.observeHasteAfterCast(haste->getTicks(), haste->getEndTime());
 		}
 	}
 	return true;
@@ -270,65 +269,37 @@ bool PlayerBotController::startSpellCast(Player& player, const Position& positio
 
 void PlayerBotController::verifySpellCast(Player& player, const Position& position)
 {
-	if (pendingSpellCast.name.empty()) {
+	const PlayerBotSpellPendingCast* pending = spellRuntime.pending();
+	if (!pending) {
 		return;
 	}
-	const PlayerBotSpellDescriptor* descriptor = playerBotSpellDescriptor(pendingSpellCast.name.c_str());
-	const bool manaSpent = player.getMana() < pendingSpellCast.manaBefore;
-	PlayerBotSpellObservation observation;
-	observation.manaSpent = manaSpent;
-	observation.concurrentDamage = pendingSpellCast.concurrentDamage;
-	observation.otherRecovery = pendingSpellCast.otherRecovery;
-	observation.otherAttacker = pendingSpellCast.otherAttacker;
-	observation.meleeOrOtherBotDamage = pendingSpellCast.meleeOrOtherBotDamage;
-	bool observed = false;
-	if (pendingSpellCast.role == "healing") {
-		observation.value = pendingSpellCast.observedSpellHealing;
-		observed = player.getHealth() > pendingSpellCast.healthBefore;
-		if (!pendingSpellCast.concurrentDamage && player.getHealth() - pendingSpellCast.healthBefore !=
-		    static_cast<int32_t>(pendingSpellCast.observedSpellHealing)) {
-			observation.otherRecovery = true;
-		}
-	} else if (pendingSpellCast.role == "support") {
-		Condition* haste = player.getCondition(CONDITION_HASTE);
-		const int32_t elapsed = static_cast<int32_t>(std::clamp<int64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
-			std::chrono::steady_clock::now() - pendingSpellCast.observedAt).count(), 0, maximumHasteObservationDelay));
-		pendingSpellCast.hasteTicksObserved = haste ? haste->getTicks() : 0;
-		pendingSpellCast.hasteDurationMeasured = pendingSpellCast.hasteTicksObserved + elapsed;
-		const bool newlyApplied = haste && pendingSpellCast.hasteTicksBefore == 0 && pendingSpellCast.hasteTicksAfterCast > 0 &&
-		                          pendingSpellCast.hasteEndTimeAfterCast != 0 &&
-		                          haste->getEndTime() == pendingSpellCast.hasteEndTimeAfterCast;
-		observation.value = newlyApplied ? pendingSpellCast.hasteDurationMeasured : 0;
-		observed = observation.value > 0;
-	} else {
-		Creature* target = g_game.getCreatureByID(pendingSpellCast.targetId);
-		observation.targetStable = target && !target->isRemoved() && targetClass(target) == pendingSpellCast.targetClass;
-		observation.value = pendingSpellCast.observedSpellDamage;
-		observation.multiTarget = pendingSpellCast.spellVictimOverflow || pendingSpellCast.spellVictimCount > 1;
-		observed = observation.value > 0;
-	}
-	const PlayerBotSpellEvidence evidence = descriptor ? playerBotClassifySpellObservation(descriptor->role, observation,
-		pendingSpellCast.missingHealth, pendingSpellCast.envelope) : PlayerBotSpellEvidence::CastNotVerified;
-	spellCalibration.observe(pendingSpellCast.name, pendingSpellCast.targetClass, pendingSpellCast.envelope, evidence, observation.value);
+	const PlayerBotSpellDescriptor* descriptor = playerBotSpellDescriptor(pending->name.c_str());
+	Creature* target = g_game.getCreatureByID(pending->targetId);
+	Condition* haste = player.getCondition(CONDITION_HASTE);
+	const PlayerBotSpellVerificationInput input{
+		player.getMana(), player.getHealth(), haste ? haste->getTicks() : 0, haste ? haste->getEndTime() : 0,
+		target && !target->isRemoved() && targetClass(target) == pending->targetClass, std::chrono::steady_clock::now(),
+	};
+	const PlayerBotSpellVerification verification = *spellRuntime.verify(input);
+	spellCalibration.observe(verification.pending.name, verification.pending.targetClass, verification.pending.envelope,
+	                         verification.evidence, verification.observation.value);
 	if (std::optional<std::string> evicted = spellCalibration.takeEvictedProfile()) {
 		emit("spell_calibration_eviction", position, "\"evicted_profile\":" + jsonString(*evicted) +
-		     ",\"replacement_profile\":" + jsonString(pendingSpellCast.name + "\n" + pendingSpellCast.targetClass));
+		     ",\"replacement_profile\":" + jsonString(verification.pending.name + "\n" + verification.pending.targetClass));
 	}
-	const bool success = manaSpent && observed;
-	const char* reason = playerBotSpellEvidenceName(evidence);
-	const char* fallback = success ? nullptr : pendingSpellCast.role == "healing" ? "small_health_potion" :
-	                       pendingSpellCast.role == "support" ? "continue_route" : "normal_melee";
+	const char* reason = playerBotSpellEvidenceName(verification.evidence);
+	const char* fallback = verification.success ? nullptr : verification.pending.role == PlayerBotSpellRole::Healing ? "small_health_potion" :
+	                       verification.pending.role == PlayerBotSpellRole::Support ? "continue_route" : "normal_melee";
 	emitSpellCastEvent(position, descriptor ? descriptor->name : nullptr, descriptor ? descriptor->words : nullptr,
-	                   descriptor ? playerBotSpellRoleName(descriptor->role) : nullptr, pendingSpellCast.need.c_str(),
-	                   success ? "success" : "failed", manaSpent ? "accepted" : "rejected", reason,
-	                   &pendingSpellCast, &player, fallback);
-	if (!success) {
+	                   descriptor ? playerBotSpellRoleName(descriptor->role) : nullptr, verification.pending.need.c_str(),
+	                   verification.success ? "success" : "failed", verification.manaSpent ? "accepted" : "rejected", reason,
+	                   &verification.pending, &player, fallback);
+	if (!verification.success) {
 		++counters.actionsFailed;
-		spellRetryAfter = std::chrono::steady_clock::now() + healingRetryInterval;
-	} else if (pendingSpellCast.role == "healing" && evidence == PlayerBotSpellEvidence::Accepted) {
+		spellRuntime.deferRetry(input.observedAt, healingRetryInterval);
+	} else if (verification.pending.role == PlayerBotSpellRole::Healing && verification.evidence == PlayerBotSpellEvidence::Accepted) {
 		recordHuntRecovery(false);
 	}
-	pendingSpellCast = PendingSpellCast{};
 }
 
 const char* PlayerBotController::magicTrainingSafetyReason(const Player& player) const
@@ -338,7 +309,7 @@ const char* PlayerBotController::magicTrainingSafetyReason(const Player& player)
 	if (scenarioStage != ScenarioStage::Traverse || ratId != 0 || defensiveTargetId != 0 ||
 	    const_cast<Player&>(player).getAttackedCreature() != nullptr) return "combat_or_pursuit";
 	if (navigationSession.hasPendingWork()) return "pending_navigation";
-	if (!pendingSpellCast.name.empty() || pendingHeal || pendingEat || needsHealing(player)) return "defensive_work";
+	if (spellRuntime.hasPending() || recoverySession.hasPendingPotion() || recoverySession.hasPendingFood() || needsHealing(player)) return "defensive_work";
 	if (!player.canDoAction() || player.hasCondition(CONDITION_EXHAUST_HEAL)) return "spell_cooldown";
 	return nullptr;
 }
@@ -580,7 +551,7 @@ void PlayerBotController::runMagicTrainingFixture(Player& player, const Position
 
 bool PlayerBotController::handleSpellHealing(Player* player, const Position& currentPosition)
 {
-	if (!player || !pendingSpellCast.name.empty() || std::chrono::steady_clock::now() < spellRetryAfter) {
+	if (!player || spellRuntime.hasPending() || !spellRuntime.canRetry(std::chrono::steady_clock::now())) {
 		return false;
 	}
 	const int32_t missingHealth = player->getMaxHealth() - player->getHealth();
@@ -592,8 +563,8 @@ bool PlayerBotController::handleSpellHealing(Player* player, const Position& cur
 
 bool PlayerBotController::trySupportSpell(Player* player, const Position& currentPosition)
 {
-	if (!player || !pendingSpellCast.name.empty() || player->hasCondition(CONDITION_HASTE) ||
-		std::chrono::steady_clock::now() < spellRetryAfter || navigationSession.routeSize() < minimumHasteRouteSteps ||
+	if (!player || spellRuntime.hasPending() || player->hasCondition(CONDITION_HASTE) ||
+		!spellRuntime.canRetry(std::chrono::steady_clock::now()) || navigationSession.routeSize() < minimumHasteRouteSteps ||
 		needsHealing(*player)) {
 		return false;
 	}
@@ -602,7 +573,7 @@ bool PlayerBotController::trySupportSpell(Player* player, const Position& curren
 
 bool PlayerBotController::tryOffensiveSpell(Player* player, const Position& currentPosition)
 {
-	if (!player || !pendingSpellCast.name.empty() || std::chrono::steady_clock::now() < spellRetryAfter || needsHealing(*player)) {
+	if (!player || spellRuntime.hasPending() || !spellRuntime.canRetry(std::chrono::steady_clock::now()) || needsHealing(*player)) {
 		return false;
 	}
 	Creature* target = g_game.getCreatureByID(ratId);
