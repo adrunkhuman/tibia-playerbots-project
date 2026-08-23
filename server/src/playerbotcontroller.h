@@ -132,8 +132,6 @@ namespace playerbot {
 	inline constexpr uint32_t rookgaardTownId = 6;
 	inline constexpr Position rookgaardTemplePosition(32097, 32219, 7);
 	inline constexpr int32_t rookgaardRewardRadius = 180;
-	inline constexpr Position fakeDepotPosition(32105, 32195, 8);
-	inline constexpr Position fakeDepotTilePosition(32105, 32196, 8);
 	inline constexpr uint32_t maximumDepotAttempts = 3;
 	inline constexpr uint32_t maximumDepotDiscoveryAttempts = 4;
 	// A depot scan can see several lockers with eight adjacent approach tiles each.
@@ -424,7 +422,6 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		                                 const Position& currentPosition);
 		bool openContainer(Player& player, Container& container, uint8_t containerId, const Position& currentPosition);
 		uint8_t containerDestinationIndex(const Container& container, const Item& item) const;
-		void processFixtureDeposit(Player* player, const Position& currentPosition);
 
 		void emitHuntRegionCandidate(const PlayerBotHuntRegion& region, const Position& position) const;
 		bool isActiveHuntCombat(const Player& player) const;

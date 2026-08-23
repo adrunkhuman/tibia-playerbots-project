@@ -645,14 +645,14 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 	const uint32_t duration = static_cast<uint32_t>(std::max<int32_t>(1, g_config.getNumber(ConfigManager::PLAYERBOT_HUNT_DURATION_SECONDS)));
 	PlayerBotHuntRuntimeOutcome outcome = huntRuntime.advancePlanning(player, reason, now, duration);
 	if (outcome.routeWork) {
-		const PlayerBotFixtureRouteFailure fixtureFailure = fixtureDriver.nextHuntPlanningRouteFailure();
+		const PlayerBotFixtureRoutePlan fixturePlan = fixtureDriver.huntRoutePlan(playerBotNavigationMaximumExpandedNodes);
 		PlayerBotNavigationRoutePlan plan;
-		if (fixtureFailure == PlayerBotFixtureRouteFailure::Unreachable) {
+		if (fixturePlan.forceFailure) {
 			plan.metrics.attempted = false;
 			plan.metrics.result = PlayerBotNavigationResult::Unreachable;
 		} else {
 			plan = navigationRuntime.plan(player, outcome.routeWork->destination, navigationRuntime.activeBlockedPositions(now),
-				fixtureFailure == PlayerBotFixtureRouteFailure::NodeLimit ? 0 : playerBotNavigationMaximumExpandedNodes);
+				fixturePlan.maximumExpandedNodes);
 			telemetry.recordPathfinding(plan.metrics.elapsed, plan.metrics.result == PlayerBotNavigationResult::Reached);
 		}
 		huntRuntime.completeRouteWork(player, *outcome.routeWork, plan, duration);
@@ -696,7 +696,7 @@ void PlayerBotController::startHunt(Player* player, const Position& position, co
 	}
 	progressionRuntime.setActiveGoal(TopLevelGoal::Hunt);
 	setCyclePhase(CyclePhase::Hunt, position, reason);
-	if (!fixtureDriver.fixedRoute() && !huntRuntime.active()) {
+	if (fixtureDriver.huntObservation().selectRegion && !huntRuntime.active()) {
 		if (!selectHuntRegion(*player, position, "hunt_started")) {
 			schedule(SCHEDULER_MINTICKS);
 			return;
@@ -740,7 +740,7 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 	if (cyclePhase == CyclePhase::Hunt && !ensureCombatReady(player, currentPosition, "readiness_continuous_check")) {
 		return;
 	}
-	if (cyclePhase == CyclePhase::Hunt && !fixtureDriver.fixedRoute() && !huntRuntime.active() && !huntRuntime.planningActive()) {
+	if (cyclePhase == CyclePhase::Hunt && fixtureDriver.huntObservation().selectRegion && !huntRuntime.active() && !huntRuntime.planningActive()) {
 		startHunt(player, currentPosition, "hunt_region_restart");
 		return;
 	}
@@ -771,12 +771,7 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 		const uint32_t usableCapacity = inventoryPolicy.effectiveFreeCapacity(*player);
 		if (huntRuntime.deadlineReached(std::chrono::steady_clock::now()) || usableCapacity < returnCapacityThreshold) {
 			const char* reason = usableCapacity < returnCapacityThreshold ? "capacity" : "hunt_deadline";
-			if (fixtureDriver.progressionEnabled()) {
-				finishHuntAndSelectGoal(player, currentPosition, reason);
-			} else {
-				beginService(player, currentPosition, reason);
-				schedule(navigationInterval);
-			}
+			finishHuntAndSelectGoal(player, currentPosition, reason);
 			return;
 		}
 	}
@@ -787,14 +782,6 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 	}
 
 	if (cyclePhase == CyclePhase::ReturnToDepot) {
-		if (fixtureDriver.fixedRoute()) {
-			if (!processNavigation(player, currentPosition, fakeDepotPosition)) {
-				return;
-			}
-			setCyclePhase(CyclePhase::DepositLoot, currentPosition, "fixture_depot_reached");
-			processFixtureDeposit(player, currentPosition);
-			return;
-		}
 		if (!discoverDepot(*player, currentPosition)) {
 			return;
 		}
@@ -815,15 +802,6 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 	}
 
 	if (cyclePhase == CyclePhase::DepositLoot) {
-		if (fixtureDriver.fixedRoute()) {
-			if (currentPosition != fakeDepotPosition) {
-				setCyclePhase(CyclePhase::ReturnToDepot, currentPosition, "fixture_displaced_during_deposit");
-				clearNavigation();
-				return;
-			}
-			processFixtureDeposit(player, currentPosition);
-			return;
-		}
 		if (!discoverDepot(*player, currentPosition)) {
 			return;
 		}
@@ -856,7 +834,7 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 	const auto now = std::chrono::steady_clock::now();
 	PlayerBotNavigationRuntimeOutcome navigation;
 	if (!processNavigation(player, currentPosition, patrol.destination, &navigation)) {
-		if (fixtureDriver.forcedStepRecoveryPending() && navigation.routeUnavailable) navigationRuntime.clearBlockedPositions();
+		if (fixtureDriver.navigationRecovery(navigation.routeUnavailable).pause) navigationRuntime.clearBlockedPositions();
 		const PlayerBotHuntPatrolOutcome recovery = huntRuntime.observePatrolNavigation(navigation, now,
 			maximumRepeatedNavigationStepFailures, maximumPatrolRouteFailures);
 		if (recovery.command == PlayerBotHuntPatrolCommand::SkipWaypoint || recovery.command == PlayerBotHuntPatrolCommand::RegionExhausted) {

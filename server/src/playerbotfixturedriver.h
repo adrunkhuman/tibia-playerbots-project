@@ -3,17 +3,45 @@
 #define FS_PLAYERBOTFIXTUREDRIVER_H
 
 #include "playerbottestpolicy.h"
+#include "position.h"
 
 #include <string>
 #include <vector>
 
 class Player;
+class DepotChest;
 class PlayerBotHuntRuntime;
 class PlayerBotSurvivalRuntime;
 
 namespace playerbot {
 	enum class PlayerBotFixtureInitialization : uint8_t { NotPending, Waiting, Cancelled, Ready };
-	enum class PlayerBotFixtureRouteFailure : uint8_t { None, Unreachable, NodeLimit };
+	struct PlayerBotFixtureRoutePlan {
+		bool forceFailure = false;
+		uint64_t maximumExpandedNodes = 0;
+	};
+	struct PlayerBotFixtureEngineCommand {
+		bool dispatch = true;
+		uint8_t count = 0;
+	};
+	struct PlayerBotFixtureProviderObservation {
+		bool available = false;
+		uint32_t inventoryCount = 0;
+	};
+	struct PlayerBotFixtureStorageObservation {
+		bool pause = false;
+		bool selectGoal = false;
+	};
+	struct PlayerBotFixtureHuntObservation {
+		bool selectRegion = true;
+	};
+	struct PlayerBotFixtureDepotEndpoint {
+		bool synthetic = false;
+		Position lockerPosition;
+		Position approachPosition;
+		Position destinationPosition;
+		uint16_t depotId = 0;
+		uint16_t lockerItemId = 0;
+	};
 
 	struct PlayerBotFixtureEvent {
 		const char* name;
@@ -23,29 +51,32 @@ namespace playerbot {
 	class PlayerBotFixtureDriver {
 		public:
 			explicit PlayerBotFixtureDriver(const PlayerBotTestPolicy& policy);
-			bool progressionEnabled() const { return policy.progressionEnabled; }
+			PlayerBotFixtureStorageObservation goalLoop(bool engineSelectGoal) const;
+			PlayerBotFixtureHuntObservation huntObservation() const;
 			bool startInHunt() const { return policy.startInHunt; }
-			bool fixedRoute() const { return policy.fixedFixtureRoute; }
 			bool depotScenario() const { return policy.depotFixture; }
 			bool spellCalibrationScenario() const { return policy.spellCalibrationFixture; }
 			bool magicTrainingScenario() const { return policy.magicTrainingFixture; }
 			bool deferInitialization() const { return policy.deferProgressionFixtureInitialization; }
-			bool equipmentPurchasesEnabled() const { return policy.equipmentPurchasesEnabled; }
-			bool suppressSlottedLootSeller() const { return policy.suppressSlottedLootSeller; }
-			bool forceEquipmentPurchaseRejected() const { return policy.forceEquipmentPurchaseRejected; }
-			bool pauseAfterEquipmentStorageRejection() const { return policy.pauseAfterEquipmentStorageRejection; }
-			DepotMoveFixture depotMoveScenario() const { return policy.depotMoveFixture; }
-			bool consumeNavigationStepFailure();
-			bool forceNavigationPlanFailure() const;
+			PlayerBotFixtureProviderObservation observeProvider(bool engineAvailable, uint16_t itemId, bool buying,
+			                                                     uint32_t engineInventoryCount = 0) const;
+			PlayerBotFixtureProviderObservation observeEquipmentOffer(bool engineAvailable) const;
+			PlayerBotFixtureStorageObservation equipmentStorageObservation() const;
+			PlayerBotFixtureRoutePlan navigationPlan(uint64_t engineMaximumExpandedNodes) const;
+			PlayerBotFixtureEngineCommand navigationStepCommand();
 			void observeNavigationPlan(bool attempted);
-			bool forcedStepRecoveryPending() const;
+			PlayerBotFixtureStorageObservation navigationRecovery(bool routeUnavailable) const;
 			void resetHuntPlanningRouteFailures();
-			PlayerBotFixtureRouteFailure nextHuntPlanningRouteFailure();
+			PlayerBotFixtureRoutePlan huntRoutePlan(uint64_t engineMaximumExpandedNodes);
 			std::vector<PlayerBotFixtureEvent> applyHuntPlanningHooks(PlayerBotHuntRuntime& runtime);
 			void beginDelayedInitialization();
 			PlayerBotFixtureInitialization delayedInitializationStatus(Player& player);
-			bool consumeDepotRestartCheckpoint(Player& player, DepotRestartCheckpoint checkpoint);
-			bool completeEquipmentPurchase(Player& player) const;
+			PlayerBotFixtureStorageObservation depotRestartObservation(Player& player, DepotRestartCheckpoint checkpoint);
+			PlayerBotFixtureDepotEndpoint depotEndpoint() const;
+			PlayerBotFixtureEngineCommand depotMoveCommand(uint8_t requestedCount) const;
+			void prepareDepotMoveDestination(DepotChest& chest) const;
+			PlayerBotFixtureEngineCommand equipmentPurchaseCommand() const;
+			PlayerBotFixtureStorageObservation equipmentPurchaseCompletion(Player& player) const;
 			uint64_t observedMagicTrainingMana(uint64_t engineObservation) const;
 			std::vector<PlayerBotFixtureEvent> runAdaptiveChallenge(Player& player, PlayerBotHuntRuntime& runtime);
 			std::vector<PlayerBotFixtureEvent> runSpellCalibration(Player& player, PlayerBotSurvivalRuntime& runtime);

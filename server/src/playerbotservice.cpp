@@ -83,7 +83,7 @@ void PlayerBotController::onNpcReply(uint32_t replyingPlayerId, uint32_t npcId, 
 
 void PlayerBotController::beginService(Player* player, const Position& position, const char* reason)
 {
-	const bool interruptedHunt = fixtureDriver.progressionEnabled() && goalArbiter.activeGoal() == TopLevelGoal::Hunt &&
+	const bool interruptedHunt = fixtureDriver.goalLoop(true).selectGoal && goalArbiter.activeGoal() == TopLevelGoal::Hunt &&
 	                             !departurePlanner.hasCompleted(departureSnapshot(*player));
 	finishHuntRegion(*player, position, reason);
 	if (interruptedHunt) {
@@ -147,7 +147,8 @@ void PlayerBotController::discoverServices(const Position& position)
 		ServiceNpc provider{npc->getID(), npc->getPosition()};
 		for (const ShopInfo& offer : npc->getShopOffers()) {
 			const ItemType& type = Item::items[offer.itemId];
-			if (!type.isFluidContainer() && !type.isSplash()) {
+			if (!type.isFluidContainer() && !type.isSplash() &&
+			    fixtureDriver.observeProvider(true, offer.itemId, offer.sellPrice == 0).available) {
 				provider.offers.push_back({offer.itemId, offer.buyPrice, offer.sellPrice, static_cast<uint8_t>(offer.subType)});
 			}
 		}
@@ -255,7 +256,8 @@ void PlayerBotController::refreshItemValues()
 		PlayerBotEconomyProvider provider{npc->getID(), npc->getPosition()};
 		for (const ShopInfo& offer : npc->getShopOffers()) {
 			const ItemType& type = Item::items[offer.itemId];
-			if (offer.sellPrice != 0 && !type.isFluidContainer() && !type.isSplash()) {
+			if (offer.sellPrice != 0 && !type.isFluidContainer() && !type.isSplash() &&
+			    fixtureDriver.observeProvider(true, offer.itemId, false).available) {
 				provider.offers.push_back({offer.itemId, offer.buyPrice, offer.sellPrice, static_cast<uint8_t>(offer.subType)});
 			}
 		}
@@ -266,7 +268,7 @@ void PlayerBotController::refreshItemValues()
 
 const ShopInfo* PlayerBotController::findOffer(const ServiceNpc& service, uint16_t itemId, bool buying) const
 {
-	if (!buying && fixtureDriver.suppressSlottedLootSeller() && itemId == 2398) {
+	if (!fixtureDriver.observeProvider(true, itemId, buying).available) {
 		return nullptr;
 	}
 	Npc* npc = g_game.getNpcByID(service.id);
@@ -309,8 +311,7 @@ const PlayerBotController::ServiceNpc* PlayerBotController::findLootSeller(Playe
 			continue;
 		}
 		for (const ShopInfo& offer : npc->getShopOffers()) {
-			if (offer.sellPrice != 0 &&
-			    !(fixtureDriver.suppressSlottedLootSeller() && offer.itemId == 2398) &&
+			if (offer.sellPrice != 0 && fixtureDriver.observeProvider(true, offer.itemId, false).available &&
 			    getSaleItemCount(*player, offer.itemId) > 0 &&
 			    (!nearest || offer.sellPrice > selectedSellPrice ||
 			     (offer.sellPrice == selectedSellPrice && serviceDistance(position, service) < serviceDistance(position, *nearest)))) {
@@ -617,7 +618,9 @@ void PlayerBotController::processService(Player* player, const Position& current
 			observation.backpackSaleCounts.emplace(offer.itemId, inventoryPolicy.backpackSaleItemCount(*player, offer.itemId));
 		}
 	}
-	if (fixtureDriver.suppressSlottedLootSeller()) observation.inventoryCounts[2398] = 0;
+	if (const auto item = observation.inventoryCounts.find(2398); item != observation.inventoryCounts.end()) {
+		item->second = fixtureDriver.observeProvider(true, 2398, false, item->second).inventoryCount;
+	}
 	const PlayerBotServiceCommand command = serviceWorkflow.advance(observation, economyCatalog, dispositionPolicy);
 	if (command.type == PlayerBotServiceCommandType::RequestDiscoverySnapshot) {
 		discoverServices(currentPosition);
@@ -759,6 +762,14 @@ void PlayerBotController::clearDepotDiscovery()
 bool PlayerBotController::discoverDepot(Player& player, const Position& currentPosition)
 {
 	const auto now = std::chrono::steady_clock::now();
+	const PlayerBotFixtureDepotEndpoint fixtureDepot = fixtureDriver.depotEndpoint();
+	if (fixtureDepot.synthetic) {
+		if (!depotWorkflow.hasSelectedDepot()) {
+			depotWorkflow.select({fixtureDepot.depotId, fixtureDepot.lockerItemId, fixtureDepot.lockerPosition,
+			                     fixtureDepot.approachPosition, 0});
+		}
+		return true;
+	}
 	depotWorkflow.expireRejectedApproaches(now);
 	if (!depotWorkflow.hasSelectedDepot() && depotWorkflow.candidatesPrepared() &&
 	    depotWorkflow.discoveryAnchor() != currentPosition) {
@@ -960,6 +971,11 @@ bool PlayerBotController::openContainer(Player& player, Container& container, ui
 
 bool PlayerBotController::openDepotLocker(Player& player, const Position& currentPosition)
 {
+	if (fixtureDriver.depotEndpoint().synthetic) {
+		depotWorkflow.resetAttempts();
+		depotWorkflow.lockerOpened();
+		return true;
+	}
 	Container* opened = player.getContainerByID(depotLockerContainerId);
 	if (opened && opened->getDepotLocker() && opened->getDepotLocker()->getDepotId() == depotWorkflow.depotId()) {
 		depotWorkflow.resetAttempts();
@@ -1016,6 +1032,11 @@ bool PlayerBotController::openDepotLocker(Player& player, const Position& curren
 
 bool PlayerBotController::openDepotChest(Player& player, const Position& currentPosition)
 {
+	if (fixtureDriver.depotEndpoint().synthetic) {
+		depotWorkflow.resetAttempts();
+		depotWorkflow.chestOpened();
+		return true;
+	}
 	Container* locker = player.getContainerByID(depotLockerContainerId);
 	if (!locker || !locker->getDepotLocker() || locker->getDepotLocker()->getDepotId() != depotWorkflow.depotId()) {
 		depotWorkflow.reopenLocker();
@@ -1028,9 +1049,7 @@ bool PlayerBotController::openDepotChest(Player& player, const Position& current
 		stop("depot_chest_missing", currentPosition);
 		return false;
 	}
-	if (fixtureDriver.depotMoveScenario() == DepotMoveFixture::Rejected) {
-		chest->setMaxDepotItems(chest->getItemHoldingCount());
-	}
+	fixtureDriver.prepareDepotMoveDestination(*chest);
 	if (player.getContainerByID(depotChestContainerId) == chest) {
 		depotWorkflow.resetAttempts();
 		depotWorkflow.chestOpened();
@@ -1069,7 +1088,7 @@ bool PlayerBotController::openDepotChest(Player& player, const Position& current
 bool PlayerBotController::pauseDepotFixtureForRestart(Player& player, DepotRestartCheckpoint checkpoint,
                                                        const Position& currentPosition)
 {
-	if (!fixtureDriver.consumeDepotRestartCheckpoint(player, checkpoint)) {
+	if (!fixtureDriver.depotRestartObservation(player, checkpoint).pause) {
 		return false;
 	}
 	const char* phase = checkpoint == DepotRestartCheckpoint::Approach ? "approach" :
@@ -1095,94 +1114,14 @@ uint8_t PlayerBotController::containerDestinationIndex(const Container& containe
 	return static_cast<uint8_t>(std::min<size_t>(container.size(), UINT8_MAX));
 }
 
-void PlayerBotController::processFixtureDeposit(Player* player, const Position& currentPosition)
-{
-	Item* backpackItem = player->getInventoryItem(CONST_SLOT_BACKPACK);
-	Container* backpack = backpackItem ? backpackItem->getContainer() : nullptr;
-	Tile* destination = g_game.map.getTile(fakeDepotTilePosition);
-	if (!backpack || !destination) {
-		stop("fake_depot_unavailable", currentPosition);
-		return;
-	}
-	if (depotWorkflow.hasPendingMove()) {
-		const PlayerBotDepotMove pending = depotWorkflow.move();
-		const uint32_t destinationCount = destination->getItemTypeCount(pending.itemId);
-		if (destinationCount <= pending.destinationCount) {
-			logActionFailure("deposit", "fixture_item_move_failed", currentPosition);
-			stop("fake_depot_rejected_loot", currentPosition);
-			return;
-		}
-		emit("action_result", currentPosition, "\"action\":\"deposit\",\"result\":\"success\",\"fixture\":true,\"item_id\":" +
-		     std::to_string(pending.itemId) + ",\"count\":" + std::to_string(destinationCount - pending.destinationCount));
-		depotWorkflow.clearMove();
-	}
-	if (player->getContainerByID(backpackContainerId) != backpack) {
-		if (!player->canDoAction()) {
-			schedule(navigationDecisionDelay(*player));
-			return;
-		}
-		if (const int8_t existingContainerId = player->getContainerID(backpack); existingContainerId >= 0) {
-			player->closeContainer(static_cast<uint8_t>(existingContainerId));
-		}
-		telemetry.recordActionAttempt();
-		g_game.playerUseItem(playerId, Position(0xFFFF, CONST_SLOT_BACKPACK, 0), 0, backpackContainerId, backpack->getClientID());
-		schedule(navigationDecisionDelay(*player));
-		return;
-	}
-	Item* upgrade = nullptr;
-	EquipmentUpgrade upgradeInfo{};
-	if (equipmentPolicy.findCarriedUpgrade(*player, upgrade, upgradeInfo)) {
-		readinessResumeService = true;
-		if (!beginReadinessEquipment(player, currentPosition, "depot_carried_upgrade")) {
-			schedule(navigationDecisionDelay(*player));
-		}
-		return;
-	}
-	Container* source = nullptr;
-	Item* depositItem = nullptr;
-	for (Item* item : backpack->getItemList()) {
-		if (item->getContainer() || !inventoryPolicy.isProtectedInventoryItem(*item)) {
-			source = backpack;
-			depositItem = item;
-			break;
-		}
-	}
-	if (!depositItem) {
-		if (inventoryPolicy.effectiveFreeCapacity(*player) < returnCapacityThreshold) {
-			stop("depot_capacity_not_recovered", currentPosition);
-			return;
-		}
-		emit("action_result", currentPosition, "\"action\":\"deposit\",\"result\":\"complete\",\"fixture\":true,\"cycle\":" +
-	                     std::to_string(huntRuntime.completedCycles()));
-		if (fixtureDriver.progressionEnabled()) {
-			emit("goal_result", currentPosition,
-			     "\"decision_id\":" + std::to_string(goalArbiter.decisionId()) +
-			         ",\"goal\":\"service\",\"result\":\"success\",\"reason\":\"service_complete\"");
-			selectTopLevelGoal(*player, currentPosition, "service_complete");
-		} else {
-			startHunt(player, currentPosition, "fixture_deposit_complete");
-		}
-		schedule(navigationInterval);
-		return;
-	}
-	const ItemDeque& sourceItems = source->getItemList();
-	auto sourceItem = std::find(sourceItems.begin(), sourceItems.end(), depositItem);
-	if (sourceItem == sourceItems.end() || !player->canDoAction()) {
-		schedule(navigationDecisionDelay(*player));
-		return;
-	}
-	const uint8_t sourceIndex = static_cast<uint8_t>(std::distance(sourceItems.begin(), sourceItem));
-	depotWorkflow.beginMove({depositItem->getID(), destination->getItemTypeCount(depositItem->getID()),
-	                        inventoryPolicy.inventoryItemCount(*player, depositItem->getID()),
-	                        static_cast<uint8_t>(depositItem->getItemCount()), CONST_SLOT_WHEREEVER});
-	telemetry.recordActionAttempt();
-	g_game.playerMoveItem(player, Position(0xFFFF, 0x40 | backpackContainerId, sourceIndex), depositItem->getClientID(), sourceIndex,
-	                      fakeDepotTilePosition, static_cast<uint8_t>(depositItem->getItemCount()), depositItem, destination);
-	schedule(navigationDecisionDelay(*player));
-}
-
 void PlayerBotController::processDeposit(Player* player, const Position& currentPosition)
 {
+	const PlayerBotFixtureDepotEndpoint fixtureDepot = fixtureDriver.depotEndpoint();
+	Tile* fixtureDestination = fixtureDepot.synthetic ? g_game.map.getTile(fixtureDepot.destinationPosition) : nullptr;
+	if (fixtureDepot.synthetic && !fixtureDestination) {
+		stop("depot_destination_unavailable", currentPosition);
+		return;
+	}
 	Item* backpackItem = player->getInventoryItem(CONST_SLOT_BACKPACK);
 	Container* backpack = backpackItem ? backpackItem->getContainer() : nullptr;
 	if (!backpack) {
@@ -1191,14 +1130,15 @@ void PlayerBotController::processDeposit(Player* player, const Position& current
 	}
 	if (depotWorkflow.hasPendingMove()) {
 		Container* chest = player->getContainerByID(depotChestContainerId);
-		if (!chest) {
+		if (!chest && !fixtureDepot.synthetic) {
 			depotWorkflow.reopenChest();
 			schedule(navigationDecisionDelay(*player));
 			return;
 		}
 		const PlayerBotDepotMoveVerification verification = depotWorkflow.verifyMove(
 			inventoryPolicy.inventoryItemCount(*player, depotWorkflow.move().itemId),
-			chest->getItemTypeCount(depotWorkflow.move().itemId), maximumDepotAttempts);
+			fixtureDepot.synthetic ? fixtureDestination->getItemTypeCount(depotWorkflow.move().itemId) :
+			                         chest->getItemTypeCount(depotWorkflow.move().itemId), maximumDepotAttempts);
 		const PlayerBotDepotMove& move = verification.before;
 		if (verification.result == PlayerBotDepotMoveResult::Moved) {
 			std::ostringstream fields;
@@ -1255,9 +1195,9 @@ void PlayerBotController::processDeposit(Player* player, const Position& current
 	PlayerBotDepotObservation depotObservation;
 	depotObservation.currentPosition = currentPosition;
 	depotObservation.now = std::chrono::steady_clock::now();
-	depotObservation.atApproach = Position::areInRange<1, 1, 0>(currentPosition, depotWorkflow.lockerPosition());
-	depotObservation.lockerOpen = player->getContainerByID(depotLockerContainerId) != nullptr;
-	depotObservation.chestOpen = player->getContainerByID(depotChestContainerId) != nullptr;
+	depotObservation.atApproach = fixtureDepot.synthetic || Position::areInRange<1, 1, 0>(currentPosition, depotWorkflow.lockerPosition());
+	depotObservation.lockerOpen = fixtureDepot.synthetic || player->getContainerByID(depotLockerContainerId) != nullptr;
+	depotObservation.chestOpen = fixtureDepot.synthetic || player->getContainerByID(depotChestContainerId) != nullptr;
 	depotObservation.canDoAction = player->canDoAction();
 	// Selection remains an adapter concern because Item pointers are needed to build
 	// the normal move request. The workflow still owns the surrounding phases.
@@ -1273,7 +1213,7 @@ void PlayerBotController::processDeposit(Player* player, const Position& current
 		return;
 	}
 	Container* chest = player->getContainerByID(depotChestContainerId);
-	if (!chest || player->getDepotChest(depotWorkflow.depotId(), false) != chest) {
+	if (!fixtureDepot.synthetic && (!chest || player->getDepotChest(depotWorkflow.depotId(), false) != chest)) {
 		depotWorkflow.reopenChest();
 		schedule(blockedRouteRetryInterval);
 		return;
@@ -1324,7 +1264,7 @@ void PlayerBotController::processDeposit(Player* player, const Position& current
 		if (pauseDepotFixtureForRestart(*player, DepotRestartCheckpoint::Depart, currentPosition)) {
 			return;
 		}
-		if (fixtureDriver.progressionEnabled()) {
+		if (fixtureDriver.goalLoop(true).selectGoal) {
 			emit("goal_result", currentPosition,
 			     "\"decision_id\":" + std::to_string(goalArbiter.decisionId()) +
 			         ",\"goal\":\"service\",\"result\":\"success\",\"reason\":\"service_complete\"");
@@ -1366,13 +1306,15 @@ void PlayerBotController::processDeposit(Player* player, const Position& current
 		return;
 	}
 
-	depotWorkflow.beginMove({depositItem->getID(), chest->getItemTypeCount(depositItem->getID()),
+	depotWorkflow.beginMove({depositItem->getID(), fixtureDepot.synthetic ? fixtureDestination->getItemTypeCount(depositItem->getID()) : chest->getItemTypeCount(depositItem->getID()),
 	                        inventoryPolicy.inventoryItemCount(*player, depositItem->getID()), count, sourceSlot});
-	const uint8_t submittedCount = fixtureDriver.depotMoveScenario() == DepotMoveFixture::Partial && count > 1 ? count - 1 : count;
+	const PlayerBotFixtureEngineCommand moveCommand = fixtureDriver.depotMoveCommand(count);
+	const uint8_t submittedCount = moveCommand.count;
 	telemetry.recordActionAttempt();
-	g_game.playerMoveItem(player, sourcePosition, depositItem->getClientID(), sourceIndex,
-	                      Position(0xFFFF, 0x40 | depotChestContainerId, containerDestinationIndex(*chest, *depositItem)),
-	                      submittedCount, depositItem, chest);
+	if (moveCommand.dispatch) g_game.playerMoveItem(player, sourcePosition, depositItem->getClientID(), sourceIndex,
+		fixtureDepot.synthetic ? fixtureDepot.destinationPosition :
+		                          Position(0xFFFF, 0x40 | depotChestContainerId, containerDestinationIndex(*chest, *depositItem)),
+		submittedCount, depositItem, fixtureDepot.synthetic ? static_cast<Cylinder*>(fixtureDestination) : static_cast<Cylinder*>(chest));
 	emit("action_result", currentPosition, "\"action\":\"deposit\",\"result\":\"requested\",\"policy\":\"known_loot\",\"depot_id\":" +
 	     std::to_string(depotWorkflow.depotId()) + ",\"container_id\":" + std::to_string(depotChestContainerId) + ",\"item_id\":" +
 	     std::to_string(depotWorkflow.move().itemId) + ",\"requested\":" + std::to_string(count) + ",\"submitted\":" +

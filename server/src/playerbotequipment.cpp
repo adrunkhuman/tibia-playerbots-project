@@ -325,10 +325,10 @@ void PlayerBotController::finishEquipmentPurchase(Player* player, const Position
 	serviceWorkflow.resetTransactions();
 	clearNavigation();
 	cyclePhase = CyclePhase::Service;
-	if (succeeded && player && fixtureDriver.completeEquipmentPurchase(*player)) {
+	if (succeeded && player && fixtureDriver.equipmentPurchaseCompletion(*player).pause) {
 		return;
 	}
-	if (fixtureDriver.progressionEnabled() && player) {
+	if (player && fixtureDriver.goalLoop(true).selectGoal) {
 		selectTopLevelGoal(*player, position, succeeded ? "equipment_purchase_complete" : "equipment_purchase_failed");
 	} else {
 		progressionRuntime.setActiveGoal(TopLevelGoal::Service);
@@ -446,8 +446,9 @@ void PlayerBotController::processEquipmentPurchase(Player* player, const Positio
 		if (!serviceWorkflow.hasShopTransaction()) serviceWorkflow.beginShopTransaction({purchase.itemId, 1,
 			inventoryPolicy.inventoryItemCount(*player, purchase.itemId), player->getMoney(), player->getBankBalance()});
 		telemetry.recordActionAttempt();
-		if (!fixtureDriver.forceEquipmentPurchaseRejected()) g_game.playerPurchaseItem(playerId, Item::items[purchase.itemId].clientId,
-			static_cast<uint8_t>(offer->subType), 1, false, false);
+		const PlayerBotFixtureEngineCommand command = fixtureDriver.equipmentPurchaseCommand();
+		if (command.dispatch) g_game.playerPurchaseItem(playerId, Item::items[purchase.itemId].clientId,
+			static_cast<uint8_t>(offer->subType), command.count, false, false);
 	}
 	if (result.command.type == PlayerBotProgressionCommandType::Open) {
 		Item* purchased = g_game.findItemOfType(player, purchase.itemId, true);
