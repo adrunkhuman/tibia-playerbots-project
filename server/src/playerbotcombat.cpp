@@ -770,24 +770,25 @@ void PlayerBotController::cancelHuntRegionPlanning()
 	huntRegionPlanning.reset();
 }
 
-void PlayerBotController::emitHuntRegionPlanning(const HuntRegionPlanning& planning, const Position& position, const char* phase) const
+void PlayerBotController::emitHuntRegionPlanning(const PlayerBotHuntPlanningSession& planning, const Position& position,
+                                                 const char* phase) const
 {
 	const auto latencyUs = std::chrono::duration_cast<std::chrono::microseconds>(
-		std::chrono::steady_clock::now() - planning.started).count();
+		std::chrono::steady_clock::now() - planning.started()).count();
 	std::ostringstream fields;
 	fields << "\"phase\":" << jsonString(phase)
-	       << ",\"cache\":" << jsonString(planning.cacheHit ? "hit" : "build")
-	       << ",\"snapshot_time_us\":" << planning.snapshotTimeUs
-	       << ",\"clustering_time_us\":" << planning.clusteringTimeUs
-		       << ",\"scoring_time_us\":" << planning.scoringTimeUs
-		       << ",\"candidate_count\":" << planning.totalCandidates
-		       << ",\"scored_candidate_count\":" << planning.scoredCandidates
-		       << ",\"suitable_candidate_count\":" << planning.suitableCandidates
-		       << ",\"pathfinding_calls\":" << planning.pathfindingCalls
-		       << ",\"batch_pathfinding_calls\":" << planning.batchPathfindingCalls
-	       << ",\"expanded_nodes\":" << planning.expandedNodes
-	       << ",\"yields\":" << planning.yields
-	       << ",\"challenge_frontier\":" << planning.profile.challengeFrontier
+	       << ",\"cache\":" << jsonString(planning.cacheHit() ? "hit" : "build")
+	       << ",\"snapshot_time_us\":" << planning.snapshotTimeUs()
+	       << ",\"clustering_time_us\":" << planning.clusteringTimeUs()
+		       << ",\"scoring_time_us\":" << planning.scoringTimeUs()
+		       << ",\"candidate_count\":" << planning.totalCandidates()
+		       << ",\"scored_candidate_count\":" << planning.scoredCandidates()
+		       << ",\"suitable_candidate_count\":" << planning.suitableCandidates()
+		       << ",\"pathfinding_calls\":" << planning.pathfindingCalls()
+		       << ",\"batch_pathfinding_calls\":" << planning.batchPathfindingCalls()
+	       << ",\"expanded_nodes\":" << planning.expandedNodes()
+	       << ",\"yields\":" << planning.yields()
+	       << ",\"challenge_frontier\":" << planning.profile().challengeFrontier
 	       << ",\"decision_latency_us\":" << latencyUs;
 	emit("hunt_region_scan", position, fields.str());
 }
@@ -811,14 +812,12 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 	}
 	const uint32_t huntDurationSeconds = static_cast<uint32_t>(std::max<int32_t>(1,
 		g_config.getNumber(ConfigManager::PLAYERBOT_HUNT_DURATION_SECONDS)));
-	const bool staleRevision = huntRegionPlanning &&
-	                           huntRegionPlanning->cacheRevision != PlayerBotHuntRegionPlanner::getCacheRevision();
-	if (huntRegionPlanning &&
-	    (huntRegionPlanning->playerPosition != player.getPosition() || huntRegionPlanning->playerLevel != player.getLevel() ||
-	     player.getHealth() < huntRegionPlanning->profile.currentHealth ||
-	     huntRegionPlanning->staminaMinutes != player.getStaminaMinutes() ||
-	     huntRegionPlanning->excludedRegions != excludedRegions ||
-	     staleRevision)) {
+	const uint64_t cacheRevision = huntRegionPlanning ? PlayerBotHuntRegionPlanner::getCacheRevision() : 0;
+	const PlayerBotHuntPlanningSnapshot currentSnapshot{
+		player.getPosition(), player.getLevel(), player.getHealth(), player.getStaminaMinutes(), cacheRevision, excludedRegions,
+	};
+	const bool staleRevision = huntRegionPlanning && huntRegionPlanning->snapshot().cacheRevision != cacheRevision;
+	if (huntRegionPlanning && huntRegionPlanning->invalidated(currentSnapshot)) {
 		if (staleRevision) {
 			emitHuntRegionPlanning(*huntRegionPlanning, position, "stale_revision");
 		}
@@ -829,172 +828,130 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 			runAdaptiveChallengeFixture(player, position);
 		}
 		PlayerBotHuntRegionScan scan = huntRegionPlanner.beginScan(player);
-		HuntRegionPlanning planning;
-		planning.regions.reserve(scan.candidateCount);
-		planning.reason = reason;
-		planning.started = now;
-		planning.cacheHit = scan.cacheHit;
-		planning.snapshotTimeUs = scan.snapshotTimeUs;
-		planning.clusteringTimeUs = scan.clusteringTimeUs;
-		planning.cacheRevision = scan.revision;
-		planning.candidateIndices = std::move(scan.candidateIndices);
-		planning.totalCandidates = static_cast<uint32_t>(scan.candidateCount);
-		planning.playerPosition = player.getPosition();
-		planning.playerLevel = player.getLevel();
-		planning.staminaMinutes = player.getStaminaMinutes();
-		planning.excludedRegions = excludedRegions;
+		const uint64_t scanRevision = scan.revision;
 		const Item* weapon = player.getWeapon(true);
 		const PlayerBotCombatProfile combat{
 			player.getLevel(), player.getMaxHealth(), player.getArmor(), player.getDefense(), weapon ? weapon->getAttack() : 7,
 			weapon ? player.getWeaponSkill(weapon) : player.getSkillLevel(SKILL_FIST), player.getAttackFactor(),
 		};
-		planning.profile = playerBotHuntPlanningProfile(player, combat, huntPolicy.challengeFrontier());
-		huntRegionPlanning = std::move(planning);
+		huntRegionPlanning.emplace(PlayerBotHuntPlanningStart{
+			std::move(scan), playerBotHuntPlanningProfile(player, combat, huntPolicy.challengeFrontier()),
+			{player.getPosition(), player.getLevel(), player.getHealth(), player.getStaminaMinutes(),
+			 scanRevision, std::move(excludedRegions)},
+			reason, now,
+		});
+		huntPlanningFixtureForcedUnreachable = false;
+		huntPlanningFixtureForcedNodeLimit = false;
 		emitHuntRegionPlanning(*huntRegionPlanning, position, "scoring_started");
 		return false;
 	}
 
-	HuntRegionPlanning& planning = *huntRegionPlanning;
-	planning.batchPathfindingCalls = 0;
-	if (planning.phase == HuntRegionPlanning::Phase::Scoring) {
+	PlayerBotHuntPlanningSession& planning = *huntRegionPlanning;
+	planning.beginTurn();
+	if (planning.scoring()) {
 		const auto scoringStarted = std::chrono::steady_clock::now();
-		for (uint32_t scoredThisTurn = 0;
-		     scoredThisTurn < huntRegionScoringCandidatesPerTurn && planning.nextScoringCandidate < planning.totalCandidates;
-		     ++scoredThisTurn, ++planning.nextScoringCandidate) {
+		while (const auto work = planning.nextScoringWork(huntRegionScoringCandidatesPerTurn)) {
 			PlayerBotHuntRegion region;
-			if (!huntRegionPlanner.score(player, planning.profile, planning.cacheRevision,
-			                             planning.candidateIndices[planning.nextScoringCandidate], excludedRegions,
+			if (!huntRegionPlanner.score(player, planning.profile(), planning.snapshot().cacheRevision, work->candidateIndex,
+			                             planning.snapshot().excludedRegions,
 			                             huntPolicy.regionPerformance(), huntDurationSeconds, region)) {
 				emitHuntRegionPlanning(planning, position, "stale_revision");
 				cancelHuntRegionPlanning();
 				return false;
 			}
-			planning.regions.push_back(std::move(region));
-			++planning.scoredCandidates;
+			planning.scoreCompleted(std::move(region));
 		}
-		planning.scoringTimeUs += std::chrono::duration_cast<std::chrono::microseconds>(
-			std::chrono::steady_clock::now() - scoringStarted).count();
-		if (testPolicy.cancelHuntPlanningAtScoreBarrier && !huntPlanningFixtureCancelled && planning.scoredCandidates != 0) {
+		planning.addScoringTime(std::chrono::duration_cast<std::chrono::microseconds>(
+			std::chrono::steady_clock::now() - scoringStarted).count());
+		if (testPolicy.cancelHuntPlanningAtScoreBarrier && !huntPlanningFixtureCancelled && planning.scoredCandidates() != 0) {
 			huntPlanningFixtureCancelled = true;
 			emitHuntRegionPlanning(planning, position, "cancelled");
 			cancelHuntRegionPlanning();
 			return false;
 		}
-		if (testPolicy.cancelHuntPlanningAtScoreBarrier && !huntPlanningFixtureStaleRevisionTriggered && planning.scoredCandidates != 0) {
+		if (testPolicy.cancelHuntPlanningAtScoreBarrier && !huntPlanningFixtureStaleRevisionTriggered && planning.scoredCandidates() != 0) {
 			huntPlanningFixtureStaleRevisionTriggered = true;
 			PlayerBotHuntRegionPlanner::invalidateCache();
 			return false;
 		}
-		if (planning.nextScoringCandidate < planning.totalCandidates) {
-			++planning.yields;
+		if (planning.completeScoring() == PlayerBotHuntPlanningProgress::ScoringYield) {
 			emitHuntRegionPlanning(planning, position, "scoring_yield");
 			return false;
 		}
-		std::sort(planning.regions.begin(), planning.regions.end(), [](const PlayerBotHuntRegion& left, const PlayerBotHuntRegion& right) {
-			return playerBotPreferHuntRegion(left, right);
-		});
 		if (testPolicy.forceHuntScopeExhaustion) {
-			for (PlayerBotHuntRegion& region : planning.regions) {
+			for (PlayerBotHuntRegion& region : planning.regions()) {
 				region.suitable = false;
 				region.inChallengeBand = false;
 				region.rejectionReason = "fixture_scope_exhausted";
 			}
-			planning.suitableCandidates = 0;
+			planning.refreshSuitableCandidates();
 		}
-		uint32_t regionId = 1;
-		for (PlayerBotHuntRegion& region : planning.regions) {
-			region.id = regionId++;
-		}
-		planning.suitableCandidates = static_cast<uint32_t>(std::count_if(planning.regions.begin(), planning.regions.end(),
-			[](const PlayerBotHuntRegion& region) { return region.suitable; }));
-		planning.phase = HuntRegionPlanning::Phase::Reachability;
 		emitHuntRegionPlanning(planning, position, "scored");
 		return false;
 	}
 
-	for (uint32_t pathsThisTurn = 0; pathsThisTurn < huntRegionPathfindingCallsPerTurn;) {
-		while (planning.nextCandidate < planning.regions.size()) {
-			PlayerBotHuntRegion& candidate = planning.regions[planning.nextCandidate];
-			if (!candidate.suitable) {
-				++planning.nextCandidate;
-				continue;
-			}
-			const std::set<Position> blockedPositions = navigationSession.activeBlockedPositions(now);
-			std::deque<PlayerBotNavigationStep> route;
-			const bool forcedUnreachable = testPolicy.forceFirstHuntCandidateUnreachable && !planning.fixtureForcedUnreachable;
-			const bool forcedNodeLimit = testPolicy.forceSecondHuntCandidateNodeLimit && !planning.fixtureForcedNodeLimit &&
-			                             planning.fixtureForcedUnreachable && !forcedUnreachable;
-			planning.fixtureForcedUnreachable = planning.fixtureForcedUnreachable || forcedUnreachable;
-			planning.fixtureForcedNodeLimit = planning.fixtureForcedNodeLimit || forcedNodeLimit;
-			PlayerBotNavigationResult planResult = PlayerBotNavigationResult::Unreachable;
-			if (!forcedUnreachable) {
-				const auto pathStarted = std::chrono::steady_clock::now();
-				++counters.pathfindingCalls;
-				++planning.pathfindingCalls;
-				++planning.batchPathfindingCalls;
-				planResult = navigator.plan(player, candidate.destination, blockedPositions, route, candidate.expandedNodes,
-				                            forcedNodeLimit ? 0 : playerBotNavigationMaximumExpandedNodes);
-				counters.pathfindingTimeUs += std::chrono::duration_cast<std::chrono::microseconds>(
-					std::chrono::steady_clock::now() - pathStarted).count();
-			}
-			planning.expandedNodes += candidate.expandedNodes;
-			++pathsThisTurn;
-			++planning.nextCandidate;
-			if (planResult != PlayerBotNavigationResult::Reached) {
-				++counters.pathfindingFailures;
-				candidate.rejectionReason = planResult == PlayerBotNavigationResult::NodeLimit ?
-					"navigation_node_budget" : "unreachable";
-			} else {
-				candidate.reachable = true;
-				candidate.travelSteps = static_cast<uint32_t>(route.size());
-				candidate.estimatedTravelSeconds = 0;
-				for (const PlayerBotNavigationStep& step : route) {
-					candidate.estimatedTravelSeconds += step.action == PlayerBotNavigationAction::Move ?
-						player.getStepDuration(step.direction) / 1000.0 : 1.0;
-				}
-				candidate.availableHuntSeconds = std::max(0.0, huntDurationSeconds - candidate.estimatedTravelSeconds);
-				candidate.staminaExperienceMultiplier = projectedHuntStaminaMultiplier(player, candidate.availableHuntSeconds);
-				candidate.projectedExperience = candidate.experiencePerMinute * candidate.observedCorrection *
-					candidate.staminaExperienceMultiplier * candidate.availableHuntSeconds / 60.0;
-				candidate.score = candidate.projectedExperience;
-			}
-			++planning.yields;
-			emitHuntRegionPlanning(planning, position, "reachability_yield");
-			return false;
+	if (const auto work = planning.nextRouteValidationWork(huntRegionPathfindingCallsPerTurn)) {
+		PlayerBotHuntRegion& candidate = planning.regions()[work->regionIndex];
+		const std::set<Position> blockedPositions = navigationSession.activeBlockedPositions(now);
+		std::deque<PlayerBotNavigationStep> route;
+		const bool forcedUnreachable = testPolicy.forceFirstHuntCandidateUnreachable && !huntPlanningFixtureForcedUnreachable;
+		const bool forcedNodeLimit = testPolicy.forceSecondHuntCandidateNodeLimit && !huntPlanningFixtureForcedNodeLimit &&
+		                             huntPlanningFixtureForcedUnreachable && !forcedUnreachable;
+		huntPlanningFixtureForcedUnreachable = huntPlanningFixtureForcedUnreachable || forcedUnreachable;
+		huntPlanningFixtureForcedNodeLimit = huntPlanningFixtureForcedNodeLimit || forcedNodeLimit;
+		PlayerBotNavigationResult planResult = PlayerBotNavigationResult::Unreachable;
+		uint64_t expandedNodes = 0;
+		if (!forcedUnreachable) {
+			const auto pathStarted = std::chrono::steady_clock::now();
+			++counters.pathfindingCalls;
+			planResult = navigator.plan(player, candidate.destination, blockedPositions, route, expandedNodes,
+			                            forcedNodeLimit ? 0 : playerBotNavigationMaximumExpandedNodes);
+			counters.pathfindingTimeUs += std::chrono::duration_cast<std::chrono::microseconds>(
+				std::chrono::steady_clock::now() - pathStarted).count();
 		}
-		if (pathsThisTurn != 0) {
-			++planning.yields;
-			emitHuntRegionPlanning(planning, position, "reachability_yield");
-			return false;
+		if (planResult != PlayerBotNavigationResult::Reached) {
+			++counters.pathfindingFailures;
 		}
-		break;
+		double estimatedTravelSeconds = 0;
+		for (const PlayerBotNavigationStep& step : route) {
+			estimatedTravelSeconds += step.action == PlayerBotNavigationAction::Move ? player.getStepDuration(step.direction) / 1000.0 : 1.0;
+		}
+		const double availableHuntSeconds = std::max(0.0, huntDurationSeconds - estimatedTravelSeconds);
+		planning.routeValidationCompleted(work->regionIndex, !forcedUnreachable, planResult == PlayerBotNavigationResult::Reached,
+		                                 planResult == PlayerBotNavigationResult::NodeLimit, expandedNodes,
+		                                 static_cast<uint32_t>(route.size()), estimatedTravelSeconds,
+		                                 projectedHuntStaminaMultiplier(player, availableHuntSeconds), huntDurationSeconds);
+		planning.completeRouteValidation();
+		emitHuntRegionPlanning(planning, position, "reachability_yield");
+		return false;
 	}
 
-	auto selected = std::max_element(planning.regions.begin(), planning.regions.end(),
+	planning.completeRouteValidation();
+	auto selected = std::max_element(planning.regions().begin(), planning.regions().end(),
 	                                 [](const PlayerBotHuntRegion& left, const PlayerBotHuntRegion& right) {
 		                                 return playerBotPreferHuntRegion(right, left);
 	                                 });
-	for (const PlayerBotHuntRegion& region : planning.regions) {
+	for (const PlayerBotHuntRegion& region : planning.regions()) {
 		emitHuntRegionCandidate(region, position);
 	}
-	if (playerBotHuntScopeExhausted(planning.regions)) {
+	if (playerBotHuntScopeExhausted(planning.regions())) {
 		++consecutiveHuntScopeExhaustions;
 		const std::chrono::seconds retryDelay = testPolicy.forceHuntScopeExhaustion ? std::chrono::seconds(1) :
 		                                                                                huntScopeReevaluationDelay;
-		const bool validationBudgetExhausted = std::any_of(planning.regions.begin(), planning.regions.end(),
+		const bool validationBudgetExhausted = std::any_of(planning.regions().begin(), planning.regions().end(),
 			[](const PlayerBotHuntRegion& region) { return region.rejectionReason == "navigation_node_budget"; });
 		emitHuntRegionPlanning(planning, position, "exhausted");
 		emit("hunt_region_selection", position,
 		     "\"result\":\"failed\",\"reason\":" +
 		         jsonString(validationBudgetExhausted ? "route_validation_budget_exhausted" : "no_suitable_reachable_region"));
 		uint32_t reachableCandidates = 0;
-		for (const PlayerBotHuntRegion& region : planning.regions) {
+		for (const PlayerBotHuntRegion& region : planning.regions()) {
 			reachableCandidates += region.reachable ? 1 : 0;
 		}
 		emit("hunt_scope_exhausted", position,
-		     "\"candidate_count\":" + std::to_string(planning.totalCandidates) +
-		         ",\"scored_candidate_count\":" + std::to_string(planning.scoredCandidates) +
-		         ",\"suitable_candidate_count\":" + std::to_string(planning.suitableCandidates) +
+		     "\"candidate_count\":" + std::to_string(planning.totalCandidates()) +
+		         ",\"scored_candidate_count\":" + std::to_string(planning.scoredCandidates()) +
+		         ",\"suitable_candidate_count\":" + std::to_string(planning.suitableCandidates()) +
 		         ",\"reachable_candidate_count\":" + std::to_string(reachableCandidates) +
 		         ",\"frontier\":" + std::to_string(huntPolicy.challengeFrontier()) +
 		         ",\"attempt\":" + std::to_string(consecutiveHuntScopeExhaustions) +
