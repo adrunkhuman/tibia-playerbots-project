@@ -52,6 +52,13 @@ enum class PlayerBotHuntPlanningProgress : uint8_t {
 	ReadyForSelection,
 };
 
+// A session retains its start snapshot through scoring and then reachability.
+// For each batch, consume work until none remains and report each item exactly
+// once before calling the matching complete method. completeScoring sorts the
+// regions and advances the phase when all candidates are scored; otherwise it
+// resets the scoring budget for the next turn. beginTurn resets reachability
+// limits, and completeRouteValidation reports whether another turn is needed.
+// Discard the session when invalidated() reports that its snapshot is stale.
 class PlayerBotHuntPlanningSession
 {
 	public:
