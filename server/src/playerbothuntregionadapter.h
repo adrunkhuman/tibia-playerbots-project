@@ -4,6 +4,13 @@
 
 #include "playerbothuntregions.h"
 
+// The cache is shared across bots and is not synchronized; use this adapter
+// only from the server's serialized game execution context. Candidate indices
+// returned by beginScan() are valid only for that scan's revision. score()
+// returns valid=false when the revision changed or the index is no longer
+// valid, and the caller must discard and restart that plan. Spawn-generation
+// changes invalidate the cache lazily when its revision is queried or a score
+// is requested; beginScan() rebuilds a stale cache before returning candidates.
 class PlayerBotHuntRegionAdapter
 {
 	public:
