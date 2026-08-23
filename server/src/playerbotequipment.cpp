@@ -26,8 +26,8 @@ PlayerBotController::EquipmentHuntSummary PlayerBotController::equipmentHuntSumm
 {
 	PlayerBotHuntRegionPlanner planner;
 	const PlayerBotHuntRegionScan scan = planner.beginScan(player);
-	const PlayerBotHuntPlanningProfile planning = huntRuntime.planningProfile(playerBotHuntPlanningProfile(player, profile, 0));
-	const auto performance = huntRuntime.regionPerformance();
+	const PlayerBotHuntPlanningProfile planning = huntCoordinator.huntPlanningProfile(playerBotHuntPlanningProfile(player, profile, 0));
+	const auto performance = huntCoordinator.huntRegionPerformance();
 	const uint32_t duration = static_cast<uint32_t>(std::max<int32_t>(1, g_config.getNumber(ConfigManager::PLAYERBOT_HUNT_DURATION_SECONDS)));
 	std::vector<PlayerBotHuntRegion> regions;
 	regions.reserve(std::min(scan.candidateIndices.size(), maximumEquipmentHuntRegions));
@@ -42,7 +42,7 @@ PlayerBotController::EquipmentHuntSummary PlayerBotController::equipmentHuntSumm
 			regions.push_back(std::move(score.region));
 		}
 	}
-	return huntRuntime.summarizeEquipmentHunts(regions, truncated);
+	return huntCoordinator.summarizeEquipmentHunts(regions, truncated);
 }
 
 void PlayerBotController::emitEquipmentOffer(const Player& player, const EquipmentOfferEvaluation& evaluation,

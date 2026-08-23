@@ -77,7 +77,6 @@ void PlayerBotController::logLootSuccess(uint16_t itemId, uint32_t count, uint32
 
 void PlayerBotController::beginLoot(Player* player, const Position& currentPosition, const PlayerBotCombatDecision& defeatedTarget)
 {
-	if (huntRuntime.active()) huntRuntime.observeKill();
 	if (defeatedTarget.target.id == 0) {
 		setStage(ScenarioStage::Traverse, currentPosition);
 		return;
@@ -86,13 +85,11 @@ void PlayerBotController::beginLoot(Player* player, const Position& currentPosit
 		emit("target_changed", currentPosition, "\"previous_target_id\":" + std::to_string(defeatedTarget.target.id) +
 		     ",\"target_id\":null,\"reason\":\"target_defeated\"");
 	}
-	const PlayerBotLootCommand command = lootWorkflow.begin(defeatedTarget.target.id, defeatedTarget.target.position,
-	                                                        defeatedTarget.expectedCorpse, currentPosition,
-	                                                        std::chrono::steady_clock::now());
+	const PlayerBotLootCommand command = huntCoordinator.beginLoot(defeatedTarget, currentPosition, std::chrono::steady_clock::now());
 	if (command.outcome == PlayerBotLootOutcome::CorpseNotLootable) {
 		std::ostringstream fields;
 		fields << "\"action\":\"loot\",\"result\":\"skipped\",\"reason\":\"corpse_not_lootable\""
-		       << ",\"expected_corpse_item_id\":" << lootWorkflow.expectedCorpse().itemId;
+		       << ",\"expected_corpse_item_id\":" << huntCoordinator.expectedCorpse().itemId;
 		emit("action_result", currentPosition, fields.str());
 		finishLoot(player, currentPosition);
 		return;
@@ -104,27 +101,27 @@ void PlayerBotController::finishLoot(Player* player, const Position& currentPosi
 {
 	player->closeContainer(corpseContainerId);
 	resetNavigation();
-	lootWorkflow.reset();
+	huntCoordinator.resetLoot();
 	setStage(ScenarioStage::Traverse, currentPosition);
 }
 
 void PlayerBotController::finishLootFailure(Player* player, const Position& currentPosition, const char* reason)
 {
 	telemetry.recordActionFailure();
-	const auto elapsed = lootWorkflow.elapsedMilliseconds(std::chrono::steady_clock::now());
+	const auto elapsed = huntCoordinator.lootElapsedMilliseconds(std::chrono::steady_clock::now());
 	std::ostringstream fields;
 	fields << "\"action\":\"loot\",\"result\":\"failed\",\"reason\":" << jsonString(reason)
-	       << ",\"target_id\":" << lootWorkflow.targetId()
-	       << ",\"expected_corpse_item_id\":" << lootWorkflow.expectedCorpse().itemId
-	       << ",\"last_known_death_position\":{\"x\":" << lootWorkflow.deathPosition().x << ",\"y\":" << lootWorkflow.deathPosition().y
-	       << ",\"z\":" << static_cast<uint16_t>(lootWorkflow.deathPosition().z) << '}' << ",\"corpse_position\":";
-	if (lootWorkflow.corpseObserved()) {
-		fields << "{\"x\":" << lootWorkflow.corpsePosition().x << ",\"y\":" << lootWorkflow.corpsePosition().y
-		       << ",\"z\":" << static_cast<uint16_t>(lootWorkflow.corpsePosition().z) << '}';
+	       << ",\"target_id\":" << huntCoordinator.lootTargetId()
+	       << ",\"expected_corpse_item_id\":" << huntCoordinator.expectedCorpse().itemId
+	       << ",\"last_known_death_position\":{\"x\":" << huntCoordinator.lootDeathPosition().x << ",\"y\":" << huntCoordinator.lootDeathPosition().y
+	       << ",\"z\":" << static_cast<uint16_t>(huntCoordinator.lootDeathPosition().z) << '}' << ",\"corpse_position\":";
+	if (huntCoordinator.corpseObserved()) {
+		fields << "{\"x\":" << huntCoordinator.corpsePosition().x << ",\"y\":" << huntCoordinator.corpsePosition().y
+		       << ",\"z\":" << static_cast<uint16_t>(huntCoordinator.corpsePosition().z) << '}';
 	} else fields << "null";
-	fields << ",\"search_attempts\":" << lootWorkflow.searchAttempts()
-	       << ",\"navigation_failures\":" << lootWorkflow.navigationFailures()
-	       << ",\"navigation_suspensions\":" << lootWorkflow.navigationSuspensions()
+	fields << ",\"search_attempts\":" << huntCoordinator.lootSearchAttempts()
+	       << ",\"navigation_failures\":" << huntCoordinator.lootNavigationFailures()
+	       << ",\"navigation_suspensions\":" << huntCoordinator.lootNavigationSuspensions()
 	       << ",\"elapsed_ms\":" << elapsed;
 	emit("action_result", currentPosition, fields.str());
 	finishLoot(player, currentPosition);
@@ -133,18 +130,18 @@ void PlayerBotController::finishLootFailure(Player* player, const Position& curr
 void PlayerBotController::lootCorpse(Player* player, const Position& currentPosition)
 {
 	const auto now = std::chrono::steady_clock::now();
-	if (lootWorkflow.navigationSuspended()) {
-		if (lootWorkflow.timedOut(now)) {
+	if (huntCoordinator.lootNavigationSuspended()) {
+		if (huntCoordinator.lootTimedOut(now)) {
 			finishLootFailure(player, currentPosition, "corpse_inaccessible");
 			schedule(navigationInterval);
 			return;
 		}
-		if (lootWorkflow.resumeNavigation(currentPosition, now) == PlayerBotLootNavigationTransition::Resumed) {
+		if (huntCoordinator.resumeLootNavigation(currentPosition, now) == PlayerBotLootNavigationTransition::Resumed) {
 			resetNavigation();
 			emit("navigation_progress", currentPosition, "\"result\":\"resumed\",\"reason\":\"corpse_retry\",\"navigation_failures\":" +
-			     std::to_string(lootWorkflow.navigationFailures()));
+			     std::to_string(huntCoordinator.lootNavigationFailures()));
 		} else {
-			const auto delay = std::chrono::duration_cast<std::chrono::milliseconds>(lootWorkflow.navigationRetryAt() - now).count();
+			const auto delay = std::chrono::duration_cast<std::chrono::milliseconds>(huntCoordinator.lootNavigationRetryAt() - now).count();
 			schedule(static_cast<uint32_t>(std::max<int64_t>(SCHEDULER_MINTICKS, delay)));
 			return;
 		}
@@ -152,12 +149,12 @@ void PlayerBotController::lootCorpse(Player* player, const Position& currentPosi
 
 	Container* openedCorpse = player->getContainerByID(corpseContainerId);
 	Tile* openedCorpseTile = openedCorpse ? openedCorpse->getTile() : nullptr;
-	if (openedCorpse && (openedCorpse->getID() != lootWorkflow.expectedCorpse().itemId ||
+	if (openedCorpse && (openedCorpse->getID() != huntCoordinator.expectedCorpse().itemId ||
 	    Item::items[openedCorpse->getID()].corpseType == RACE_NONE || !openedCorpseTile ||
-	    !Position::areInRange<1, 1, 0>(openedCorpseTile->getPosition(), lootWorkflow.corpsePosition()))) openedCorpse = nullptr;
+	    !Position::areInRange<1, 1, 0>(openedCorpseTile->getPosition(), huntCoordinator.corpsePosition()))) openedCorpse = nullptr;
 	std::optional<CorpseDiscovery> discovery;
 	if (openedCorpse) discovery = {{openedCorpse, openedCorpseTile->getPosition()}};
-	else discovery = findOwnedCorpse(*player, lootWorkflow.corpsePosition(), lootWorkflow.expectedCorpse().itemId);
+	else discovery = findOwnedCorpse(*player, huntCoordinator.corpsePosition(), huntCoordinator.expectedCorpse().itemId);
 
 	PlayerBotLootWorkflowSnapshot snapshot;
 	snapshot.currentPosition = currentPosition;
@@ -202,7 +199,7 @@ void PlayerBotController::lootCorpse(Player* player, const Position& currentPosi
 		collectCargo(*backpack);
 	}
 
-	const PlayerBotLootDecision decision = lootWorkflow.advance(snapshot);
+	const PlayerBotLootDecision decision = huntCoordinator.advanceLoot(snapshot);
 	if (decision.lootVerification) {
 		if (decision.lootVerification->moved) logLootSuccess(decision.lootVerification->move.itemId,
 			decision.lootVerification->movedCount, decision.lootVerification->inventoryCount, currentPosition);
@@ -226,13 +223,13 @@ void PlayerBotController::lootCorpse(Player* player, const Position& currentPosi
 		PlayerBotNavigationRuntimeOutcome navigation;
 		processNavigation(player, currentPosition, command.destination, &navigation);
 		if (navigation.routeUnavailable || navigation.stepFailureCount > blockedStepsBefore) {
-			const auto transition = lootWorkflow.observeNavigationFailure(currentPosition, now);
+			const auto transition = huntCoordinator.observeLootNavigationFailure(currentPosition, now);
 			if (transition == PlayerBotLootNavigationTransition::Failed) {
 				finishLootFailure(player, currentPosition, "corpse_inaccessible");
 			} else if (transition == PlayerBotLootNavigationTransition::Suspended) {
 				resetNavigation();
 				emit("navigation_progress", currentPosition, "\"result\":\"suspended\",\"reason\":\"corpse_route_unchanged\",\"navigation_failures\":" +
-				     std::to_string(lootWorkflow.navigationFailures()));
+				     std::to_string(huntCoordinator.lootNavigationFailures()));
 			}
 		}
 		return;
@@ -255,7 +252,7 @@ void PlayerBotController::lootCorpse(Player* player, const Position& currentPosi
 		if (command.outcome == PlayerBotLootOutcome::OwnedCorpseUnavailable) logActionFailure("loot", "owned_corpse_unavailable", currentPosition);
 		if (command.outcome == PlayerBotLootOutcome::CorpseOpenFailed) logActionFailure("loot", "corpse_open_failed", currentPosition);
 		if (command.outcome == PlayerBotLootOutcome::BackpackUnavailable) logActionFailure("loot", "backpack_unavailable", currentPosition);
-		if (command.outcome == PlayerBotLootOutcome::CorpseEmpty && !lootWorkflow.lootedCurrentCorpse() && discovery) {
+		if (command.outcome == PlayerBotLootOutcome::CorpseEmpty && !huntCoordinator.lootedCurrentCorpse() && discovery) {
 			std::ostringstream fields;
 			fields << "\"action\":\"loot\",\"result\":\"skipped\",\"reason\":\"corpse_empty\",\"corpse_item_id\":"
 			       << discovery->corpse->getID() << ",\"corpse_owner_id\":" << discovery->corpse->getCorpseOwner()
@@ -263,12 +260,12 @@ void PlayerBotController::lootCorpse(Player* player, const Position& currentPosi
 			       << ",\"z\":" << static_cast<uint16_t>(discovery->position.z) << '}';
 			emit("action_result", currentPosition, fields.str());
 		}
-		if (command.outcome == PlayerBotLootOutcome::FoodPreferenceSatisfied && !lootWorkflow.lootedCurrentCorpse()) {
+		if (command.outcome == PlayerBotLootOutcome::FoodPreferenceSatisfied && !huntCoordinator.lootedCurrentCorpse()) {
 			emit("action_result", currentPosition, "\"action\":\"loot\",\"result\":\"skipped\",\"reason\":\"food_preference_satisfied\",\"item_id\":" +
 			     std::to_string(command.item.itemId) + ",\"carried\":" + std::to_string(snapshot.inventory.heldFood) +
 			     ",\"preferred\":" + std::to_string(preferredFoodCount));
 		}
-		if (command.outcome == PlayerBotLootOutcome::NoEligibleLoot && !lootWorkflow.lootedCurrentCorpse())
+		if (command.outcome == PlayerBotLootOutcome::NoEligibleLoot && !huntCoordinator.lootedCurrentCorpse())
 			emit("action_result", currentPosition, "\"action\":\"loot\",\"result\":\"skipped\",\"reason\":\"no_eligible_loot\"");
 		finishLoot(player, currentPosition);
 		return;

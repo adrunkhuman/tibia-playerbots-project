@@ -19,6 +19,13 @@ clears active planning and navigation, emits one `terminal` event, and performs
 no later turns. A restart creates a fresh `Running` controller from persisted
 player state.
 
+`PlayerBotController` owns scheduling, player lookup, lifecycle, turn routing,
+world-command execution, navigation, survival, service, depot, and progression.
+`PlayerBotHuntCoordinator` owns combat, corpse-loot, hunt planning and cycles,
+patrol, danger and death transitions, and shared hunt-region cooldown access.
+Service, depot, and progression remain in the controller because they share its
+navigation and lifecycle concerns.
+
 ## Provisioning
 
 The `playerbot-setup` Compose service runs before the server. It owns the

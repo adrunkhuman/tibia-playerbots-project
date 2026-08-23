@@ -14,14 +14,12 @@
 // Internal controller contract shared by the responsibility-specific playerbot implementation units.
 
 #include "playerbot.h"
-#include "playerbotcombatruntime.h"
+#include "playerbothuntcoordinator.h"
 #include "playerbotdepotworkflow.h"
 #include "playerboteconomy.h"
 #include "playerbotequipmentpolicy.h"
 #include "playerbotequipmentadapter.h"
-#include "playerbothuntruntime.h"
 #include "playerbotinventorypolicy.h"
-#include "playerbotlootworkflow.h"
 #include "playerbotnavigationruntime.h"
 #include "playerbotprogressionruntime.h"
 #include "playerbotprogressionplanners.h"
@@ -399,10 +397,6 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		                           const char* reason) const;
 		void emitFixtureEvents(const std::vector<playerbot::PlayerBotFixtureEvent>& events, const Position& position) const;
 		void emitHuntRegionPlanning(const PlayerBotHuntPlanningSession& planning, const Position& position, const char* phase) const;
-		std::set<Position> activeHuntCooldowns(std::chrono::steady_clock::time_point now);
-		void applyHuntCooldown(const std::optional<PlayerBotHuntRuntimeCooldownCommand>& cooldown,
-		                       std::chrono::steady_clock::time_point now);
-
 		void finishHuntRegion(const Player& player, const Position& position, const char* reason);
 
 		bool selectHuntRegion(Player& player, const Position& position, const char* reason,
@@ -439,16 +433,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		playerbot::PlayerBotInventoryPolicy inventoryPolicy;
 		PlayerBotSurvivalRuntime survivalRuntime;
 		PlayerBotDepotWorkflow depotWorkflow;
-		PlayerBotCombatRuntime combatRuntime{PlayerBotCombatRuntimeConfig{
-			playerbot::traversalCombatTimeout, playerbot::traversalTargetSuppression,
-			playerbot::lostTargetPursuitTimeout, playerbot::lostTargetSuppression,
-			playerbot::maximumLostTargetPursuitDistance, playerbot::maximumTargetReacquisitionDistance,
-		}};
-		PlayerBotLootWorkflow lootWorkflow{PlayerBotLootWorkflowConfig{
-			playerbot::maxCorpseSearchAttempts, playerbot::maximumCorpseNavigationFailures,
-			playerbot::corpseNavigationSuspendThreshold, std::chrono::milliseconds(playerbot::corpseNavigationRetryInterval),
-			playerbot::corpseLootTimeout, playerbot::preferredFoodCount,
-		}};
+		PlayerBotHuntCoordinator huntCoordinator;
 		PlayerBotProgressionRuntime progressionRuntime;
 		PlayerBotRewardPlanner rewardPlanner;
 		PlayerBotEquipmentProviderPlanner equipmentProviderPlanner;
@@ -457,8 +442,6 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		std::map<uint16_t, std::string> rewardInspectionFingerprints;
 		PlayerBotServiceWorkflow serviceWorkflow;
 		PlayerBotNavigationRuntime navigationRuntime;
-		std::map<Position, std::chrono::steady_clock::time_point>& huntRegionCooldowns;
-		PlayerBotHuntRuntime huntRuntime;
 		bool deathObserved = false;
 };
 
