@@ -63,6 +63,7 @@ set(tfs_SRC
 	${CMAKE_CURRENT_LIST_DIR}/playerbotrecoverysession.cpp
 	${CMAKE_CURRENT_LIST_DIR}/playerbotspellcalibration.cpp
 	${CMAKE_CURRENT_LIST_DIR}/playerbotspellruntime.cpp
+	${CMAKE_CURRENT_LIST_DIR}/playerbotsurvivalruntime.cpp
 	${CMAKE_CURRENT_LIST_DIR}/playerbotspells.cpp
 	${CMAKE_CURRENT_LIST_DIR}/playerbottelemetry.cpp
 	${CMAKE_CURRENT_LIST_DIR}/playerbottestpolicy.cpp

@@ -994,7 +994,7 @@ PlayerBotController::GoalCandidate PlayerBotController::serviceGoalCandidate(con
 	                                  smallHealthPotionRestockTarget - potionCount : 0;
 	const uint32_t sellable = saleableItemCount(player);
 	const bool lowCapacity = inventoryPolicy.effectiveFreeCapacity(player) < returnCapacityThreshold;
-	const bool criticalHealing = needsHealing(player) && missingPotions != 0;
+	const bool criticalHealing = survivalRuntime.needsHealing(survivalSnapshot(player)) && missingPotions != 0;
 	const bool cashAdjustment = player.getMoney() != inventoryPolicy.desiredCarriedGold(player);
 	const bool feasible = lowCapacity || missingPotions != 0 || sellable != 0 || cashAdjustment;
 	int32_t utility = feasible ? serviceGoalBaseUtility : 0;
@@ -1133,7 +1133,8 @@ bool PlayerBotController::selectTopLevelGoal(Player& player, const Position& pos
 	                                 !fixtureRuntime.equipmentPurchasesEnabled() ? "shadow_only" :
 	                                 equipmentFound ? PlayerBotEquipmentPolicy::decisionRuleName(equipment->rule) : "no_justified_offer"};
 	const bool magicTrainingCoolingDown = goalArbiter.isCoolingDown(TopLevelGoal::MagicTraining, now);
-	const char* magicTrainingReason = magicTrainingCoolingDown ? "cooldown" : magicTrainingCandidateReason(player);
+	const char* magicTrainingReason = magicTrainingCoolingDown ? "cooldown" :
+	                                  survivalRuntime.magicTrainingReason(player, survivalSnapshot(player));
 	const GoalCandidate magicTraining{TopLevelGoal::MagicTraining, !magicTrainingCoolingDown && magicTrainingReason == nullptr,
 	                                  !magicTrainingCoolingDown && magicTrainingReason == nullptr ? magicTrainingGoalUtility : 0,
 	                                  magicTrainingReason ? magicTrainingReason : "next_tick_overflow"};

@@ -46,7 +46,7 @@ void PlayerBotController::start(const Position& position, bool recovered, uint32
 	          << ",\"objective\":" << jsonString((fixtureRuntime.magicTrainingFixture() || fixtureRuntime.deferProgressionFixtureInitialization()) ? "fixture_pending" : useGoalSelector ? PlayerBotGoalArbiter::goalName(goalArbiter.activeGoal()) :
 	                                                    (startInHunt ? "hunt" : "service"))
 	          << ",\"step_speed\":" << (g_game.getPlayerByID(playerId) ? g_game.getPlayerByID(playerId)->getSpeed() : 0)
-		          << ",\"spell_calibration_profiles\":" << spellCalibration.size();
+		          << ",\"spell_calibration_profiles\":" << survivalRuntime.calibrationSize();
 	telemetry.emit("lifecycle", position, lifecycle.str());
 	if (fixtureRuntime.spellCalibrationFixture() && controlledPlayer) {
 		runSpellCalibrationFixture(*controlledPlayer, position);
@@ -304,7 +304,7 @@ uint32_t PlayerBotController::navigationDecisionDelay(const Player& player) cons
 
 void PlayerBotController::onHealthDrain(const Player& player, uint32_t damage)
 {
-	spellRuntime.observeHealthDrain(player.getID() == playerId);
+	survivalRuntime.observeHealthDrain(player.getID() == playerId);
 	if (player.getID() == playerId && isActiveHuntCombat(player)) {
 		huntPolicy.observeDamage(damage);
 	}
@@ -312,12 +312,12 @@ void PlayerBotController::onHealthDrain(const Player& player, uint32_t damage)
 
 void PlayerBotController::onCombatDamage(Creature* attacker, const Creature& target, uint32_t damage)
 {
-	spellRuntime.observeCombatDamage(attacker ? attacker->getID() : 0, target.getID(), playerId, damage);
+	survivalRuntime.observeCombatDamage(attacker ? attacker->getID() : 0, target.getID(), playerId, damage);
 }
 
 void PlayerBotController::onHealthGain(Creature* healer, const Creature& target, uint32_t gain)
 {
-	spellRuntime.observeHealthGain(healer && healer->getID() == playerId, target.getID() == playerId, gain);
+	survivalRuntime.observeHealthGain(healer && healer->getID() == playerId, target.getID() == playerId, gain);
 }
 
 bool PlayerBotController::processNavigation(Player* player, const Position& currentPosition, const Position& destination)
@@ -499,7 +499,7 @@ void PlayerBotController::navigate()
 		schedule(blockedRouteRetryInterval);
 		return;
 	}
-	const bool waitingForRecovery = cyclePhase == CyclePhase::Service && needsHealing(*player);
+	const bool waitingForRecovery = cyclePhase == CyclePhase::Service && survivalRuntime.needsHealing(survivalSnapshot(*player));
 	if (!accessingReward && !progressionSession.active(PlayerBotProgressionProcedure::OracleDeparture) &&
 	    requiresRookgaardDeparture(*player) && !waitingForRecovery) {
 		if (selectTopLevelGoal(*player, currentPosition, "level_eight_interrupt")) {
