@@ -59,8 +59,10 @@ PlayerBotHuntPlanningProgress PlayerBotHuntPlanningSession::completeScoring()
 		++yieldCount;
 		return PlayerBotHuntPlanningProgress::ScoringYield;
 	}
-	std::sort(scoredRegions.begin(), scoredRegions.end(), [](const PlayerBotHuntRegion& left, const PlayerBotHuntRegion& right) {
-		return playerBotPreferHuntRegion(left, right);
+	std::stable_sort(scoredRegions.begin(), scoredRegions.end(), [](const PlayerBotHuntRegion& left, const PlayerBotHuntRegion& right) {
+		if (left.suitable != right.suitable) return left.suitable;
+		if (left.inChallengeBand != right.inChallengeBand) return left.inChallengeBand;
+		return left.optimisticProjectedExperience > right.optimisticProjectedExperience;
 	});
 	uint32_t regionId = 1;
 	for (PlayerBotHuntRegion& region : scoredRegions) {
@@ -76,9 +78,13 @@ std::optional<PlayerBotHuntPlanningRouteWork> PlayerBotHuntPlanningSession::next
 	if (phase != Phase::Reachability || routeValidationsThisTurn >= maximumCalls) {
 		return std::nullopt;
 	}
+	if (canStopRouteValidation()) {
+		return std::nullopt;
+	}
 	while (nextCandidate < scoredRegions.size()) {
 		const size_t regionIndex = nextCandidate++;
 		if (scoredRegions[regionIndex].suitable) {
+			scoredRegions[regionIndex].routeValidationAttempted = true;
 			++routeValidationsThisTurn;
 			return PlayerBotHuntPlanningRouteWork{regionIndex};
 		}
@@ -125,4 +131,32 @@ void PlayerBotHuntPlanningSession::refreshSuitableCandidates()
 {
 	suitableCandidateCount = static_cast<uint32_t>(std::count_if(scoredRegions.begin(), scoredRegions.end(),
 		[](const PlayerBotHuntRegion& region) { return region.suitable; }));
+}
+
+bool PlayerBotHuntPlanningSession::canStopRouteValidation()
+{
+	if (routeBoundSatisfied) return true;
+	const auto incumbent = std::max_element(scoredRegions.begin(), scoredRegions.end(), [](const auto& left, const auto& right) {
+		return playerBotPreferHuntRegion(right, left);
+	});
+	if (incumbent == scoredRegions.end() || !incumbent->suitable || !incumbent->reachable) return false;
+
+	for (const PlayerBotHuntRegion& candidate : scoredRegions) {
+		if (!candidate.suitable || candidate.routeValidationAttempted) continue;
+		if (candidate.inChallengeBand != incumbent->inChallengeBand) {
+			if (candidate.inChallengeBand) return false;
+			continue;
+		}
+		if (!std::isfinite(candidate.optimisticProjectedExperience) ||
+		    candidate.optimisticProjectedExperience > incumbent->score) return false;
+	}
+
+	for (PlayerBotHuntRegion& candidate : scoredRegions) {
+		if (candidate.suitable && !candidate.routeValidationAttempted) {
+			candidate.routeValidationDeferredByBound = true;
+			++deferredRouteValidationCount;
+		}
+	}
+	routeBoundSatisfied = true;
+	return true;
 }

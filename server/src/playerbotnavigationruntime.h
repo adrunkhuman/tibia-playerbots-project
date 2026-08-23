@@ -20,6 +20,7 @@ struct PlayerBotNavigationPlanMetrics {
 	PlayerBotNavigationResult result = PlayerBotNavigationResult::Unreachable;
 	uint64_t expandedNodes = 0;
 	size_t steps = 0;
+	double estimatedTravelSeconds = 0;
 	std::chrono::microseconds elapsed = std::chrono::microseconds::zero();
 	bool attempted = false;
 };

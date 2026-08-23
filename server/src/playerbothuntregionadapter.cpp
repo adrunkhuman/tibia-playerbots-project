@@ -7,7 +7,6 @@
 #include "game.h"
 #include "monsters.h"
 #include "player.h"
-#include "playerbotarea.h"
 #include "playerbotspellcalibration.h"
 #include "spawn.h"
 #include "spells.h"
@@ -24,16 +23,9 @@ namespace {
 	constexpr int32_t heatRadius = 8;
 	constexpr int32_t maximumRegionRadius = 24;
 	constexpr uint16_t spawnBucketSize = heatRadius * 2 + 1;
-	constexpr uint32_t maximumRegionDistancePadding = maximumRegionRadius * 2;
-	constexpr uint32_t maximumHuntTravelDistance = 300;
 	constexpr size_t maximumModeledAttackers = 5;
 	constexpr double challengeBandWidth = 0.05;
 	constexpr uint16_t smallHealthPotionItemId = 8704;
-
-	bool isRookgaardSpawn(const Position& position)
-	{
-		return position.z >= 6 && position.z <= 15;
-	}
 
 	bool heatOverlaps(const Position& left, const Position& right)
 	{
@@ -131,7 +123,7 @@ namespace {
 				[](const auto& entry) {
 					return !entry.first || !entry.first->info.isHostile || !entry.first->info.isAttackable;
 				}), snapshot.monsterTypes.end());
-			if (isRookgaardSpawn(snapshot.position) && !snapshot.monsterTypes.empty()) {
+			if (!snapshot.monsterTypes.empty()) {
 				huntRegionCache.spawns.push_back({snapshot.position, snapshot.interval, std::move(snapshot.monsterTypes)});
 			}
 		}
@@ -276,8 +268,6 @@ namespace {
 		const uint32_t geometricDistance = Position::getDistanceX(player.getPosition(), region.destination) +
 		                                   Position::getDistanceY(player.getPosition(), region.destination) +
 		                                   Position::getDistanceZ(player.getPosition(), region.destination) * 20;
-		const Position& templePosition = player.getTemplePosition();
-		const uint32_t templeDistance = playerbot::localPlanningDistance(templePosition, region.destination);
 		region.predictedFightSeconds = worstFightSeconds;
 		region.currentHealth = planningProfile.currentHealth;
 		region.recovery = playerBotPredictRecovery(planningProfile, worstFightSeconds);
@@ -290,8 +280,7 @@ namespace {
 		region.inChallengeBand = region.threatRatio >= region.challengeBandMinimum &&
 		                         region.threatRatio <= region.challengeBandMaximum;
 		region.predictedLethal = playerBotPredictedLethal(planningProfile.currentHealth, worstFightDamage);
-		withinPlanningScope = playerbot::isInsideLocalPlanningArea(templePosition, region.destination) &&
-		                      geometricDistance <= maximumHuntTravelDistance;
+		withinPlanningScope = true;
 		region.suitable = !region.predictedLethal && region.threatRatio <= region.challengeBandMaximum && withinPlanningScope;
 		if (excludedRegions.find(region.center) != excludedRegions.end()) {
 			region.suitable = false;
@@ -314,6 +303,8 @@ namespace {
 		region.staminaExperienceMultiplier = projectedStaminaExperienceMultiplier(player, region.availableHuntSeconds);
 		region.projectedExperience = region.experiencePerMinute * region.observedCorrection *
 		                             region.staminaExperienceMultiplier * region.availableHuntSeconds / 60.0;
+		region.optimisticProjectedExperience = region.experiencePerMinute * region.observedCorrection *
+		                                       1.5 * huntDurationSeconds / 60.0;
 		region.score = region.projectedExperience;
 		return region;
 	}
@@ -337,17 +328,8 @@ PlayerBotHuntRegionScan PlayerBotHuntRegionAdapter::beginScan(const Player& play
 	scan.cacheHit = huntRegionCache.initialized && huntRegionCache.generation == g_game.map.spawns.getGeneration();
 	if (!scan.cacheHit) buildHuntRegionCache(scan.snapshotTimeUs, scan.clusteringTimeUs);
 	scan.revision = huntRegionCacheRevision;
-	const Position& templePosition = player.getTemplePosition();
 	for (size_t index = 0; index < huntRegionCache.regions.size(); ++index) {
-		const Position& center = huntRegionCache.regions[index].center;
-		const uint32_t templeDistance = playerbot::localPlanningDistance(templePosition, center);
-		const uint32_t travelDistance = Position::getDistanceX(player.getPosition(), center) +
-		                                Position::getDistanceY(player.getPosition(), center) +
-		                                Position::getDistanceZ(player.getPosition(), center) * 20;
-		if (templeDistance <= playerbot::maximumLocalPlanningDistance + maximumRegionDistancePadding &&
-		    travelDistance <= maximumHuntTravelDistance + maximumRegionDistancePadding) {
-			scan.candidateIndices.push_back(index);
-		}
+		scan.candidateIndices.push_back(index);
 	}
 	scan.candidateCount = scan.candidateIndices.size();
 	return scan;

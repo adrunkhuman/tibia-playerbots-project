@@ -81,6 +81,8 @@ class PlayerBotHuntPlanningSession
 		uint32_t batchPathfindingCalls() const { return routeValidationCallsThisTurn; }
 		uint64_t expandedNodes() const { return routeValidationExpandedNodes; }
 		uint32_t yields() const { return yieldCount; }
+		uint32_t deferredRouteValidations() const { return deferredRouteValidationCount; }
+		bool boundSatisfied() const { return routeBoundSatisfied; }
 
 		void beginTurn();
 		std::optional<PlayerBotHuntPlanningScoreWork> nextScoringWork(uint32_t maximumCandidates);
@@ -98,6 +100,7 @@ class PlayerBotHuntPlanningSession
 		const PlayerBotHuntRegion& region(size_t index) const { return scoredRegions.at(index); }
 	private:
 		void refreshSuitableCandidates();
+		bool canStopRouteValidation();
 
 		enum class Phase : uint8_t {
 			Scoring,
@@ -120,8 +123,10 @@ class PlayerBotHuntPlanningSession
 		uint32_t yieldCount = 0;
 		uint32_t suitableCandidateCount = 0;
 		uint32_t scoredCandidateCount = 0;
+		uint32_t deferredRouteValidationCount = 0;
 		uint32_t candidateCount = 0;
 		bool scanCacheHit = false;
+		bool routeBoundSatisfied = false;
 		uint64_t scanSnapshotTimeUs = 0;
 		uint64_t scanClusteringTimeUs = 0;
 		uint64_t totalScoringTimeUs = 0;

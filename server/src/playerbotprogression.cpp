@@ -11,12 +11,14 @@
 #include "otpch.h"
 
 #include "playerbotcontroller.h"
-#include "playerbotarea.h"
 
 // Goal arbitration and reward discovery, claiming, and equipment.
 using namespace playerbot;
 
 namespace {
+	constexpr uint64_t maximumRewardRouteNodes = 100000;
+	constexpr uint64_t maximumRewardRouteAttemptNodes = 10000;
+
 	std::string rewardItemSignature(const Item& item)
 	{
 		std::ostringstream signature;
@@ -384,15 +386,7 @@ void PlayerBotController::openRewardContainer(Player& player, const Position& po
 
 bool PlayerBotController::isRewardPosition(const Player& player, const Position& position) const
 {
-	if (position.z >= MAP_MAX_LAYERS || !player.getTown()) {
-		return false;
-	}
-	if (player.getTown()->getID() == rookgaardTownId) {
-		return Position::getDistanceX(position, rookgaardTemplePosition) <= rookgaardRewardRadius &&
-		       Position::getDistanceY(position, rookgaardTemplePosition) <= rookgaardRewardRadius;
-	}
-	return player.getTown()->getID() == oracleTownId &&
-	       playerbot::isInsideLocalPlanningArea(player.getTemplePosition(), position);
+	return position.z < MAP_MAX_LAYERS && player.getTown();
 }
 
 bool PlayerBotController::isRewardClaimed(const Player& player, uint16_t uniqueId) const
@@ -402,9 +396,11 @@ bool PlayerBotController::isRewardClaimed(const Player& player, uint16_t uniqueI
 }
 
 bool PlayerBotController::planSimpleRewardApproach(Player& player, const Position& rewardPosition, Position& approachPosition,
-                              std::deque<PlayerBotNavigationStep>& approachSteps, uint64_t& expandedNodes)
+                              std::deque<PlayerBotNavigationStep>& approachSteps, uint64_t& expandedNodes,
+	                          uint64_t maximumExpandedNodes)
 {
 	const Position currentPosition = player.getPosition();
+	expandedNodes = 0;
 	std::vector<Position> candidates;
 	candidates.reserve(8);
 	for (int32_t xOffset = -1; xOffset <= 1; ++xOffset) {
@@ -425,15 +421,18 @@ bool PlayerBotController::planSimpleRewardApproach(Player& player, const Positio
 		       Position::getDistanceX(currentPosition, right) + Position::getDistanceY(currentPosition, right);
 	});
 	for (const Position& candidate : candidates) {
+			if (expandedNodes >= maximumExpandedNodes) break;
 			std::deque<PlayerBotNavigationStep> steps;
 			uint64_t candidateExpandedNodes = 0;
 			const auto startedAt = std::chrono::steady_clock::now();
 			const PlayerBotNavigationRoutePlan routePlan = candidate == currentPosition ? PlayerBotNavigationRoutePlan{} :
-				planNavigationRoute(player, candidate);
+				planNavigationRoute(player, candidate, {}, std::min<uint64_t>(
+					maximumRewardRouteAttemptNodes, maximumExpandedNodes - expandedNodes));
 			const PlayerBotNavigationResult planResult = candidate == currentPosition ? PlayerBotNavigationResult::Reached : routePlan.metrics.result;
 			if (candidate != currentPosition) {
 				steps = routePlan.steps;
 				candidateExpandedNodes = routePlan.metrics.expandedNodes;
+				expandedNodes += candidateExpandedNodes;
 			}
 			const bool planned = planResult == PlayerBotNavigationResult::Reached;
 			telemetry.recordPathfindingAttempt(std::chrono::duration_cast<std::chrono::microseconds>(
@@ -444,14 +443,14 @@ bool PlayerBotController::planSimpleRewardApproach(Player& player, const Positio
 			const bool simple = std::none_of(steps.begin(), steps.end(), [](const PlayerBotNavigationStep& step) {
 				return step.action == PlayerBotNavigationAction::UseDoor ||
 				       step.action == PlayerBotNavigationAction::UseRope ||
-				       step.action == PlayerBotNavigationAction::UseShovel;
+				       step.action == PlayerBotNavigationAction::UseShovel ||
+				       step.action == PlayerBotNavigationAction::NpcTravel;
 			});
 			if (!simple || steps.size() > 120) {
 				continue;
 			}
 			approachPosition = candidate;
 			approachSteps = std::move(steps);
-			expandedNodes = candidateExpandedNodes;
 			return true;
 	}
 	return false;
@@ -684,13 +683,19 @@ bool PlayerBotController::findPickupReward(Player& player, const Position& posit
 	}
 
 	std::map<uint16_t, std::deque<PlayerBotNavigationStep>> plannedRoutes;
+	uint64_t rewardRouteNodes = 0;
 	const PlayerBotRewardPlannerSnapshot routeSnapshot{player.getFreeCapacity(), pickupRewardBaseUtility,
 	                                                    economicPickupBaseUtility, huntGoalUtility, candidates};
 	for (size_t candidateIndex : rewardPlanner.routeCandidates(routeSnapshot)) {
+		if (rewardRouteNodes >= maximumRewardRouteNodes) break;
 		PlayerBotRewardCandidateSnapshot& candidate = candidates[candidateIndex];
 		std::deque<PlayerBotNavigationStep> steps;
 		if (!planSimpleRewardApproach(player, candidate.plan.itemPosition, candidate.route.approachPosition, steps,
-		                               candidate.route.expandedNodes)) continue;
+		                               candidate.route.expandedNodes, maximumRewardRouteNodes - rewardRouteNodes)) {
+			rewardRouteNodes += candidate.route.expandedNodes;
+			continue;
+		}
+		rewardRouteNodes += candidate.route.expandedNodes;
 		candidate.route.reachable = true;
 		candidate.route.steps = static_cast<uint32_t>(steps.size());
 		plannedRoutes.emplace(candidate.plan.uniqueId, std::move(steps));

@@ -617,6 +617,7 @@ void PlayerBotController::emitHuntRegionCandidate(const PlayerBotHuntRegion& reg
 	       << ",\"stamina_minutes\":" << region.staminaMinutes
 	       << ",\"stamina_experience_multiplier\":" << region.staminaExperienceMultiplier
 	       << ",\"projected_experience\":" << region.projectedExperience
+	       << ",\"optimistic_projected_experience\":" << region.optimisticProjectedExperience
 	       << ",\"threat_ratio\":" << region.threatRatio
 	       << ",\"raw_threat_ratio\":" << region.rawThreatRatio
 	       << ",\"current_health\":" << region.currentHealth
@@ -641,6 +642,8 @@ void PlayerBotController::emitHuntRegionCandidate(const PlayerBotHuntRegion& reg
 	       << ",\"expanded_nodes\":" << region.expandedNodes
 	       << ",\"suitable\":" << (region.suitable ? "true" : "false")
 	       << ",\"reachable\":" << (region.reachable ? "true" : "false")
+	       << ",\"route_validation_attempted\":" << (region.routeValidationAttempted ? "true" : "false")
+	       << ",\"route_validation_deferred_by_bound\":" << (region.routeValidationDeferredByBound ? "true" : "false")
 	       << ",\"rejection_reason\":" << (region.rejectionReason.empty() ? "null" : jsonString(region.rejectionReason))
 	       << ",\"monsters\":[";
 	for (size_t index = 0; index < region.monsters.size(); ++index) {
@@ -671,6 +674,9 @@ void PlayerBotController::emitHuntRegionPlanning(const PlayerBotHuntPlanningSess
 	       << ",\"scored_candidate_count\":" << planning.scoredCandidates() << ",\"suitable_candidate_count\":" << planning.suitableCandidates()
 	       << ",\"pathfinding_calls\":" << planning.pathfindingCalls() << ",\"batch_pathfinding_calls\":" << planning.batchPathfindingCalls()
 	       << ",\"expanded_nodes\":" << planning.expandedNodes() << ",\"yields\":" << planning.yields()
+	       << ",\"route_validation_strategy\":\"optimistic_utility_bound\""
+	       << ",\"route_validation_deferred_count\":" << planning.deferredRouteValidations()
+	       << ",\"bound_satisfied\":" << (planning.boundSatisfied() ? "true" : "false")
 	       << ",\"challenge_frontier\":" << planning.profile().challengeFrontier << ",\"decision_latency_us\":" << latencyUs;
 	emit("hunt_region_scan", position, fields.str());
 }
@@ -772,13 +778,17 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 			telemetry.recordPathfinding(plan.metrics.elapsed, plan.metrics.result == PlayerBotNavigationResult::Reached);
 		}
 		double travelSeconds = 0;
-		for (const PlayerBotNavigationStep& step : plan.steps) {
-			travelSeconds += step.action == PlayerBotNavigationAction::Move ? player.getStepDuration(step.direction) / 1000.0 : 1.0;
+		if (plan.metrics.estimatedTravelSeconds > 0) {
+			travelSeconds = plan.metrics.estimatedTravelSeconds;
+		} else {
+			for (const PlayerBotNavigationStep& step : plan.steps) {
+				travelSeconds += step.action == PlayerBotNavigationAction::Move ? player.getStepDuration(step.direction) / 1000.0 : 1.0;
+			}
 		}
 		const double availableHuntSeconds = std::max(0.0, duration - travelSeconds);
 		huntCoordinator.completeRouteWork(*outcome.routeWork, {plan.metrics.attempted,
 			plan.metrics.result == PlayerBotNavigationResult::Reached, plan.metrics.result == PlayerBotNavigationResult::NodeLimit,
-			plan.metrics.expandedNodes, static_cast<uint32_t>(plan.steps.size()), travelSeconds,
+			plan.metrics.expandedNodes, static_cast<uint32_t>(plan.metrics.steps), travelSeconds,
 			projectedHuntStaminaMultiplier(player, availableHuntSeconds)});
 	}
 	if (const auto planning = huntCoordinator.planningSession();

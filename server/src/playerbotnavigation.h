@@ -15,6 +15,8 @@
 #include <deque>
 #include <ostream>
 #include <set>
+#include <string>
+#include <vector>
 
 #include "position.h"
 
@@ -34,6 +36,7 @@ enum class PlayerBotNavigationAction : uint8_t {
 	UseRope,
 	UseShovel,
 	UseDoor,
+	NpcTravel,
 };
 
 enum class PlayerBotNavigationResult : uint8_t {
@@ -48,6 +51,8 @@ struct PlayerBotNavigationStep {
 	Position target;
 	Position expectedPosition;
 	uint16_t itemId = 0;
+	uint32_t npcId = 0;
+	std::vector<std::string> dialogue;
 };
 
 class PlayerBotNavigator
@@ -57,6 +62,10 @@ class PlayerBotNavigator
 		                               std::deque<PlayerBotNavigationStep>& steps,
 		                               uint64_t& expandedNodes,
 		                               uint64_t maximumExpandedNodes = playerBotNavigationMaximumExpandedNodes) const;
+		PlayerBotNavigationResult planFrom(Player& player, const Position& start, const Position& destination,
+		                                   const std::set<Position>& blockedPositions,
+		                                   std::deque<PlayerBotNavigationStep>& steps, uint64_t& expandedNodes,
+		                                   uint64_t maximumExpandedNodes = playerBotNavigationMaximumExpandedNodes) const;
 };
 
 #endif

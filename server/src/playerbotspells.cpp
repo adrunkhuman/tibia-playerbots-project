@@ -21,7 +21,6 @@ using namespace playerbot;
 extern Spells* g_spells;
 
 namespace {
-	constexpr uint32_t maximumSpellTrainerDistanceFromTemple = 200;
 	constexpr uint32_t magicTrainingEmergencyReserve = 20;
 	constexpr auto magicTrainingRetryDelay = std::chrono::seconds(2);
 
@@ -327,8 +326,7 @@ bool PlayerBotController::findSpellTraining(Player& player, const Position& posi
 		if (!capability || *capability != "spell_trainer") {
 			continue;
 		}
-		const bool inScope = serviceDistance(player.getTemplePosition(), {npc->getID(), npc->getPosition()}) <=
-		                     maximumSpellTrainerDistanceFromTemple;
+		const bool inScope = true;
 		emit("spell_trainer_discovered", position, "\"npc_id\":" + std::to_string(npc->getID()) +
 		     ",\"npc_name\":" + jsonString(npc->getName()) + ",\"offers\":" +
 		     std::to_string(npc->getSpellOffers().size()) + ",\"in_scope\":" + (inScope ? "true" : "false"));
@@ -396,11 +394,16 @@ bool PlayerBotController::findSpellTraining(Player& player, const Position& posi
 			const bool vocationEligible = registryMatches &&
 			    std::find(offer.vocationIds.begin(), offer.vocationIds.end(), baseVocationId) != offer.vocationIds.end() &&
 			    spell->getVocMap().find(vocationId) != spell->getVocMap().end();
-			const bool routeReachable = findTrainerApproach();
+			const bool levelEligible = player.getLevel() >= offer.level;
+			const bool premiumEligible = !offer.premium || player.isPremium();
+			const bool alreadyLearned = player.hasLearnedInstantSpell(offer.spellName);
+			const bool affordable = reserve != std::numeric_limits<uint64_t>::max() &&
+			                        totalMoney >= reserve + offer.price;
+			const bool routeReachable = registryMatches && vocationEligible && levelEligible && premiumEligible &&
+			                            !alreadyLearned && suppliesReady && affordable && findTrainerApproach();
 			offers.push_back({npc->getID(), npc->getPosition(), npc->getName(), offer.spellName, offer.keyword,
 			                  offer.price, offer.level, offer.premium, inScope, registryMatches, vocationEligible,
-			                  player.getLevel() >= offer.level, !offer.premium || player.isPremium(),
-			                  player.hasLearnedInstantSpell(offer.spellName), suppliesReady,
+			                  levelEligible, premiumEligible, alreadyLearned, suppliesReady,
 			                  {routeReachable, false, trainerApproach, static_cast<uint32_t>(trainerSteps.size()), 0}});
 			routes.push_back(trainerSteps);
 		}

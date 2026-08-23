@@ -14,7 +14,6 @@
 using namespace playerbot;
 
 namespace {
-	constexpr uint32_t maximumEquipmentProviderDistance = 200;
 	constexpr size_t maximumEquipmentHuntRegions = 32;
 	constexpr size_t maximumEquipmentProviderRoutes = 4;
 	constexpr size_t maximumEquipmentProviderApproaches = 4;
@@ -166,8 +165,7 @@ std::optional<PlayerBotController::EquipmentOfferEvaluation> PlayerBotController
 		}
 		Npc* npc = entry.second;
 		const std::string* capability = npc && !npc->isRemoved() ? npc->getParameter("playerbot_service") : nullptr;
-		if (!npc || !capability || *capability != "shop" ||
-		    serviceDistance(player.getTemplePosition(), {npc->getID(), npc->getPosition()}) > maximumEquipmentProviderDistance) {
+		if (!npc || !capability || *capability != "shop") {
 			continue;
 		}
 		for (const ShopInfo& offer : npc->getShopOffers()) {

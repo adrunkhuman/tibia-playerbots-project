@@ -33,10 +33,11 @@ development account `bot-one`, character `Bot One`, and `player_bots` registry.
 Provisioning is idempotent: it does not restore spent money, replace occupied
 equipment slots, or take over an unrelated same-named or deleted character.
 
-A new Bot One starts as a level 8 Knight at the Thais temple with development
-hunt skills, plate equipment, sword, shield, backpack, rope, shovel, five small
-health potions, one meat, 100 gp bank balance, and two 100-gp backpack stacks.
-Global `freePremium` supplies premium access.
+On a clean schema, Bot One starts as a level 8 Knight at the Thais temple with
+sword and shielding skill 20, legion helmet, chain armor, studded legs, leather
+boots, Carlin sword, copper shield, backpack, rope, shovel, and 400 gp bank
+balance. It starts without carried money, food, or potions. Global `freePremium`
+supplies premium access.
 
 Inspect setup and startup with:
 
@@ -92,15 +93,17 @@ movement costs 10; diagonal movement costs 30. Failed steps are excluded for 10
 seconds. Repeated A-B oscillation
 suppresses the implicated transition for two minutes.
 
-Hunt regions come from all loaded hostile spawns on floors 6 through 15. The
-shared cache groups overlapping eight-tile spawn kernels through spatial
-buckets. Each controller considers regions within 200 weighted tiles of its
-town temple and 300 weighted tiles of its current position, then scores them in
-bounded batches using health, equipment, weapon, defense, skill, cooldowns, and
-observed performance. It validates suitable candidates incrementally through
-the navigator and selects the highest route-adjusted score. Navigation remains
-behind the destination/reachability interface so a later navigator can replace
-tile planning without changing hunt selection.
+Hunt regions come from all loaded hostile, attackable spawns. The shared cache
+groups overlapping eight-tile spawn kernels through spatial buckets. Each
+controller scores the global region set in bounded batches using health,
+equipment, weapon, defense, skill, cooldowns, observed performance, and an
+optimistic projected-XP bound. It validates suitable candidates incrementally
+through normal navigation. Once the best proven reachable candidate cannot be
+beaten by any unvalidated optimistic bound, remaining route checks are deferred.
+The selected region is therefore the best proven candidate under the bound; the
+planner does not calculate a complete route-adjusted ordering of every suitable
+region. Navigation remains behind the destination/reachability interface so a
+later navigator can replace tile planning without changing hunt selection.
 
 Resetting navigation clears only the current route and recovery state. It does
 not cancel an active hunt-region plan. The controller cancels hunt planning when
@@ -141,10 +144,10 @@ Taking one maximum health pool of active-combat damage within the first two
 minutes abandons the region for ten minutes. Completed hunts update a
 per-controller XP correction after at least 30 seconds and one kill; the sample
 is clamped to `0.25` through `2.0` and uses a 65/35 rolling blend. When all
-locally scanned candidates are unavailable, the controller emits
-`hunt_scope_exhausted` and retries the same bounded scope after 30 seconds. A
+globally scored candidates are unavailable, the controller emits
+`hunt_scope_exhausted` and retries after 30 seconds. A
 successful selection resets the counter; three consecutive exhausted scans stop
-the controller instead of rescanning an unchanged scope forever.
+the controller instead of rescanning an unchanged world snapshot forever.
 
 When an attacked monster leaves normal positional or creature visibility, or
 the attack association is lost, the bot clears chase and pursues a reachable
@@ -179,10 +182,13 @@ unverified uses.
 Service NPCs require an exact `playerbot_service` XML tag of `shop`, `banker`,
 `oracle`, or `spell_trainer`. Shops publish their loaded offers to the bot;
 trainers publish each spell registered through `addSpellKeyword`. Untagged
-providers and tagged providers without offers are ignored. Providers must remain
-within 200 weighted tiles of the registered town temple. The bot greets the
-selected NPC, treats a private reply as focus acknowledgement, and opens the
-normal trade window. Reply text is not interpreted.
+providers and tagged providers without offers are ignored. This metadata remains
+an incomplete service allowlist; native capability discovery is tracked in
+issue #33. The bot greets the selected NPC, treats a private reply as focus
+acknowledgement, and opens the normal trade window. Reply text is not interpreted.
+Provider selection is global, but route validation is bounded. Service validates
+one provider approach per scheduler decision and yields for 500 ms before
+continuing an unfinished provider search.
 
 Service goal selection counts sellable inventory only when a live tagged NPC
 currently publishes a matching offer. Selling chooses the highest live price,
@@ -191,16 +197,27 @@ registered offer, then revalidate the NPC and trade window before transacting.
 Missing required offers, unavailable NPCs, and failed shop verification stop
 with explicit service errors instead of completing an unverified transaction.
 
-Spell training currently considers tagged providers within the Thais temple
-scope; Gregor is the initial tag. It derives trainer offers from loaded NPC
-scripts and rejects offers with a registry mismatch, wrong vocation, level,
-premium status, learned state, missing supply reserve, insufficient funds after
-the 100 gp carried reserve plus the cost of the current stock gap to the
-10-potion restock target, or an unavailable route. A selected spell uses normal
-`hi`, keyword, and `yes`
+Spell training considers all tagged providers; Gregor is the initial tag. It
+derives trainer offers from loaded NPC scripts and rejects offers with a registry
+mismatch, wrong vocation, level, premium status, learned state, missing supply
+reserve, insufficient funds after the 100 gp carried reserve plus the cost of
+the current stock gap to the 10-potion restock target, or an unavailable route.
+A selected spell uses normal `hi`, keyword, and `yes`
 dialogue. Completion requires both learned state and the exact total-money
 delta. Learned-spell persistence reconstructs completion after restart and
 prevents a repurchase.
+
+Loaded `StdModule.travel` keyword trees publish static boat, carpet, and other
+NPC travel offers with their dialogue path, destination, fare, level, premium,
+and opaque-condition status. Route planning may combine multiple offers. Every
+walk to a provider and from an arrival point is validated through bounded normal
+navigation. A route must fit the bot's carried-plus-bank funds and is unavailable
+while the bot is PZ-locked. Offers with dynamic destinations, custom conditions,
+or custom actions are opaque and excluded rather than reimplemented in C++.
+Execution greets the selected NPC, follows the registered dialogue, relies on
+the normal script for payment and movement, and verifies the exact destination.
+A failed NPC/destination pair is suppressed for five minutes. The runtime
+executes one travel leg and replans from the observed arrival position.
 
 The casting policy has four audited descriptors: `healing`, `support`,
 `melee_offense`, and `ranged_offense`. It currently uses Light Healing for
@@ -326,16 +343,15 @@ effective free capacity. Effective capacity is physical free capacity plus the
 weight of carried standard food, because that cargo can be consumed or replaced
 without service. A backpack may therefore have no physical capacity and remain
 hunt-ready when its reclaimable food weight keeps effective capacity above the
-reserve. Remaining top-level backpack
-loot is moved through a reachable local depot locker into that player's real
-depot chest. Depot locality and locker identity are independent: discovery
-enumerates map-indexed lockers, keeps only lockers in the 200-tile weighted
-planning area anchored at the bot's current position, then validates the locker
-still has its indexed depot ID. It ranks all standable adjacent squares by
-weighted current-position distance, locker ID, locker position, and approach
-position. It validates at most two routes per scheduler decision and resumes
-the sorted queue on the next decision. A moved player rebuilds the queue from a
-new anchor. Failed approaches are suppressed for two seconds, then become
+reserve. Remaining top-level backpack loot is moved through a reachable depot
+locker into that player's real depot chest. Depot locality and locker identity
+are independent: discovery enumerates
+all map-indexed lockers, then validates that each candidate still has its indexed
+depot ID. It ranks all standable adjacent squares by weighted current-position
+distance, locker ID, locker position, and approach position. It validates at
+most two routes per scheduler decision and resumes the sorted queue on the next
+decision. A moved player rebuilds the queue from a new anchor. Failed approaches
+are suppressed for two seconds, then become
 eligible again; a scan containing only suppressed approaches waits for the
 earliest suppression expiry without consuming an attempt. Complete unavailable
 scans retry after one, two, and four seconds, then stop on the fourth failed
@@ -377,17 +393,17 @@ or repeatedly replan the same route. A timeout ends the loot attempt with
 
 ## Rewards and departure
 
-Reward discovery is limited to loaded shared quest containers handled by action
-ID `2000`. Rookgaard keeps its bounded reward area. Thais uses the same weighted
-200-tile temple boundary as hunt discovery. The bot traverses complete nested
-bundles, protects unknown items, and applies the same readiness, hunt-unlock,
-and Pareto rules used for NPC equipment offers. Equipment evaluation is limited
-to 16 unique item-and-weight simulations per scan; later equipment candidates
-are preserved and rejected with `unique_item_evaluation_budget_exhausted`. The
-bot verifies storage and inventory changes after normal use, preserves displaced
-items, and equips useful upgrades through normal item movement. Routes longer
-than 120 steps or requiring a door, rope, or shovel action are not simple pickup
-objectives. At most 14 nested reward ancestors can be opened.
+Reward discovery considers all loaded shared quest containers handled by action
+ID `2000`. The bot traverses complete nested bundles, protects unknown items,
+and applies the same readiness, hunt-unlock, and Pareto rules used for NPC
+equipment offers. Equipment evaluation is limited to 16 unique item-and-weight
+simulations per scan; later equipment candidates are preserved and rejected with
+`unique_item_evaluation_budget_exhausted`. The bot verifies storage and inventory
+changes after normal use, preserves displaced items, and equips useful upgrades
+through normal item movement. Routes longer than 120 steps or requiring a door,
+rope, shovel, or NPC travel action are not simple pickup objectives. Reward
+reachability uses a 100,000-node aggregate budget with at most 10,000 nodes per
+approach. At most 14 nested reward ancestors can be opened.
 
 Action ID `2001` is excluded except for the hard-coded doublet reward with unique
 ID `56002` and item ID `2485`. Dedicated quest scripts, levers, and other
@@ -456,8 +472,8 @@ events are emitted by that controller.
 | Spell casting | `action_result` with `action="cast_spell"` records the need, semantic `policy_candidate`, selected method, mana reserve, normal-path request, engine result, observed outcome, fallback, captured engine bounds, monotonic observation age, target class, distinct synchronous spell-victim count, measured Haste condition ticks, and controller-local calibration counts, range, conservative value, ranking estimate, confidence, and evidence reason. `spell_calibration` separates `classifier_helper` and `profile_math` fixture evidence; `spell_calibration_eviction` records bounded-profile replacement. `legal_candidates` contains only normal-path casts confirmed by resource evidence. |
 | Magic training | `goal_candidate`, `goal_selection`, and `goal_result` expose overflow arbitration. `action_result` with `action="magic_training"` emits a requested `engine_path` record and a success or failure `engine_verification` record with spell, reserve, current/maximum/predicted/lost mana, aggregated gain, aligned interval/remaining time, loaded cost, mana delta, and magic progression. `magic_training_fixture` with `source="authoritative_forecast"` is controlled fixture evidence, not a live cast. |
 | Actions | `action_result`, `target_changed`, `service_discovered`, `npc_reply`, `stuck` record externally relevant attempts and outcomes. |
-| Hunting | `hunt_region_candidate`, `hunt_region_scan`, `hunt_region_selection`, `hunt_region_outcome`, `hunt_challenge_frontier`, `hunt_scope_exhausted`, and `hunt_region_patrol` expose planner inputs, recovery assumptions, active-combat and kill evidence, frontier updates, and bounded local exhaustion. |
-| Navigation | `navigation_progress` records bounded recovery such as oscillation suppression. |
+| Hunting | `hunt_region_candidate`, `hunt_region_scan`, `hunt_region_selection`, `hunt_region_outcome`, `hunt_challenge_frontier`, `hunt_scope_exhausted`, and `hunt_region_patrol` expose planner inputs, recovery assumptions, optimistic-bound route deferral, active-combat and kill evidence, frontier updates, and bounded exhaustion. |
+| Navigation | `navigation_progress` records bounded recovery such as oscillation suppression; `npc_travel` records verified travel success or failure. Lifecycle records include registered and opaque travel-offer counts. |
 | Health | `summary` reports cumulative timing, action, failure, stuck, and suppression counters every 60 seconds. |
 
 `action_result` records with `action="item_disposition"` report moves of

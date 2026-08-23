@@ -49,13 +49,23 @@ void PlayerBotController::start(const Position& position, bool recovered, uint32
 		return;
 	}
 	std::ostringstream lifecycle;
+	size_t travelOfferCount = 0;
+	size_t opaqueTravelOfferCount = 0;
+	for (const auto& entry : g_game.getNpcs()) {
+		if (!entry.second) continue;
+		travelOfferCount += entry.second->getTravelOffers().size();
+		opaqueTravelOfferCount += std::count_if(entry.second->getTravelOffers().begin(), entry.second->getTravelOffers().end(),
+			[](const NpcTravelOffer& offer) { return offer.hasOpaqueCondition; });
+	}
 	lifecycle << "\"status\":\"online\",\"message\":\"Playerbot online\""
 	          << ",\"recovered\":" << (recovered ? "true" : "false")
 	          << ",\"recovery_count\":" << recoveryCount
 	          << ",\"objective\":" << jsonString((fixtureDriver.magicTrainingScenario() || fixtureDriver.deferInitialization()) ? "fixture_pending" : useGoalSelector ? PlayerBotGoalArbiter::goalName(progressionRuntime.activeGoal()) :
 	                                                    (startInHunt ? "hunt" : "service"))
 	          << ",\"step_speed\":" << (g_game.getPlayerByID(playerId) ? g_game.getPlayerByID(playerId)->getSpeed() : 0)
-		          << ",\"spell_calibration_profiles\":" << survivalRuntime.calibrationSize();
+		          << ",\"spell_calibration_profiles\":" << survivalRuntime.calibrationSize()
+		          << ",\"travel_offers\":" << travelOfferCount
+		          << ",\"opaque_travel_offers\":" << opaqueTravelOfferCount;
 	telemetry.emit("lifecycle", position, lifecycle.str());
 	if (controlledPlayer) {
 		emitFixtureEvents(fixtureDriver.runSpellCalibration(*controlledPlayer), position);
@@ -293,6 +303,29 @@ bool PlayerBotController::executeNavigationStep(Player* player, const PlayerBotN
 		g_game.playerMove(playerId, step.direction);
 		return true;
 	}
+	if (step.action == PlayerBotNavigationAction::NpcTravel) {
+		if (player->isPzLocked()) return false;
+		Npc* npc = g_game.getNpcByID(step.npcId);
+		if (!npc || npc->isRemoved() || npc->getPosition().z != player->getPosition().z ||
+		    std::max(Position::getDistanceX(npc->getPosition(), player->getPosition()),
+		             Position::getDistanceY(npc->getPosition(), player->getPosition())) > 3) return false;
+		npc->receiveSpeech(player, TALKTYPE_PRIVATE_PN, "hi");
+		for (const std::string& phrase : step.dialogue) {
+			npc->receiveSpeech(player, TALKTYPE_PRIVATE_PN, phrase);
+		}
+		const bool travelled = player->getPosition() == step.expectedPosition;
+		if (!travelled) {
+			unavailableTravelOffers[{step.npcId, step.expectedPosition}] =
+				std::chrono::steady_clock::now() + std::chrono::minutes(5);
+		}
+		telemetry.emit("npc_travel", player->getPosition(),
+		     std::string("\"result\":") + jsonString(travelled ? "success" : "failed") +
+		         ",\"npc_id\":" + std::to_string(step.npcId) +
+		         ",\"destination\":{\"x\":" + std::to_string(step.expectedPosition.x) +
+		         ",\"y\":" + std::to_string(step.expectedPosition.y) + ",\"z\":" +
+		         std::to_string(static_cast<uint16_t>(step.expectedPosition.z)) + "}");
+		return travelled;
+	}
 
 	Item* target = findNavigationItem(step);
 	Tile* tile = g_game.map.getTile(step.target);
@@ -344,12 +377,183 @@ PlayerBotNavigationRoutePlan PlayerBotController::planNavigationRoute(Player& pl
 	routePlan.metrics.attempted = true;
 	const auto startedAt = std::chrono::steady_clock::now();
 	const PlayerBotNavigator navigator;
+	const bool travelEligible = maximumExpandedNodes == playerBotNavigationMaximumExpandedNodes && !player.isPzLocked();
 	routePlan.metrics.result = navigator.plan(player, destination, blockedPositions, routePlan.steps,
 	                                          routePlan.metrics.expandedNodes, maximumExpandedNodes);
+	if (routePlan.metrics.result != PlayerBotNavigationResult::Reached && travelEligible) {
+		if (auto travelRoute = planNpcTravelRoute(player, destination, blockedPositions, maximumExpandedNodes)) {
+			travelRoute->metrics.elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
+				std::chrono::steady_clock::now() - startedAt);
+			travelRoute->metrics.attempted = true;
+			travelRoute->metrics.expandedNodes += routePlan.metrics.expandedNodes;
+			if (travelRoute->metrics.steps == 0) travelRoute->metrics.steps = travelRoute->steps.size();
+			return *travelRoute;
+		}
+	}
 	routePlan.metrics.elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
 		std::chrono::steady_clock::now() - startedAt);
 	routePlan.metrics.steps = routePlan.steps.size();
 	return routePlan;
+}
+
+std::optional<PlayerBotNavigationRoutePlan> PlayerBotController::planNpcTravelRoute(
+	Player& player, const Position& destination, const std::set<Position>& blockedPositions,
+	uint64_t maximumExpandedNodes) const
+{
+	if (player.isPzLocked()) return std::nullopt;
+
+	struct Edge {
+		Npc* npc = nullptr;
+		const NpcTravelOffer* offer = nullptr;
+	};
+	std::vector<Edge> edges;
+	std::vector<Position> states{player.getPosition()};
+	std::map<Position, size_t> stateIndices{{player.getPosition(), 0}};
+	const Position currentPosition = player.getPosition();
+	for (const auto& entry : g_game.getNpcs()) {
+		Npc* npc = entry.second;
+		if (!npc || npc->isRemoved()) continue;
+		for (const NpcTravelOffer& offer : npc->getTravelOffers()) {
+			if ((offer.level != 0 && player.getLevel() < offer.level) || (offer.premium && !player.isPremium()) ||
+			    offer.hasOpaqueCondition || offer.destination == currentPosition ||
+			    blockedPositions.find(npc->getPosition()) != blockedPositions.end()) continue;
+			const auto unavailable = unavailableTravelOffers.find({npc->getID(), offer.destination});
+			if (unavailable != unavailableTravelOffers.end() && unavailable->second > std::chrono::steady_clock::now()) continue;
+			edges.push_back({npc, &offer});
+			if (stateIndices.find(offer.destination) == stateIndices.end()) {
+				stateIndices[offer.destination] = states.size();
+				states.push_back(offer.destination);
+			}
+		}
+	}
+	if (edges.empty()) return std::nullopt;
+
+	struct QueueEntry {
+		uint64_t cost = 0;
+		uint64_t fare = 0;
+		uint32_t routeSteps = 0;
+		double travelSeconds = 0;
+		size_t state = 0;
+		size_t firstEdge = std::numeric_limits<size_t>::max();
+	};
+	struct SegmentEstimate {
+		uint32_t stepCount = 0;
+		double travelSeconds = 0;
+		std::deque<PlayerBotNavigationStep> steps;
+	};
+	auto worse = [](const QueueEntry& left, const QueueEntry& right) { return left.cost > right.cost; };
+	std::priority_queue<QueueEntry, std::vector<QueueEntry>, decltype(worse)> queue(worse);
+	std::vector<std::vector<std::pair<uint64_t, uint64_t>>> labels(states.size());
+	labels[0].push_back({0, 0});
+	queue.push({0, 0, 0, 0, 0, std::numeric_limits<size_t>::max()});
+	const uint64_t availableMoney = player.getMoney() + player.getBankBalance();
+	const PlayerBotNavigator navigator;
+	const uint64_t graphNodeBudget = maximumExpandedNodes;
+	constexpr uint64_t segmentNodeBudget = 10000;
+	uint64_t graphExpandedNodes = 0;
+	std::map<std::pair<size_t, uint32_t>, std::optional<SegmentEstimate>> connections;
+	auto travelSeconds = [&player](const std::deque<PlayerBotNavigationStep>& steps) {
+		double seconds = 0;
+		for (const PlayerBotNavigationStep& step : steps) {
+			seconds += step.action == PlayerBotNavigationAction::Move ? player.getStepDuration(step.direction) / 1000.0 : 1.0;
+		}
+		return seconds;
+	};
+	auto walkSegment = [&](size_t stateIndex, size_t edgeIndex) -> std::optional<SegmentEstimate> {
+		const Edge& edge = edges[edgeIndex];
+		const auto key = std::make_pair(stateIndex, edge.npc->getID());
+		if (auto cached = connections.find(key); cached != connections.end()) return cached->second;
+		for (int32_t xOffset = -1; xOffset <= 1; ++xOffset) {
+			for (int32_t yOffset = -1; yOffset <= 1; ++yOffset) {
+				if (graphExpandedNodes >= graphNodeBudget) return std::nullopt;
+				if (xOffset == 0 && yOffset == 0) continue;
+				const Position approach(edge.npc->getPosition().x + xOffset, edge.npc->getPosition().y + yOffset,
+				                        edge.npc->getPosition().z);
+				Tile* tile = g_game.map.getTile(approach);
+				if (!tile || tile->queryAdd(0, player, 1, FLAG_IGNOREBLOCKCREATURE) != RETURNVALUE_NOERROR) continue;
+				std::deque<PlayerBotNavigationStep> steps;
+				uint64_t expandedNodes = 0;
+				const PlayerBotNavigationResult result = navigator.planFrom(
+					player, states[stateIndex], approach, blockedPositions, steps, expandedNodes,
+					std::min(segmentNodeBudget, graphNodeBudget - graphExpandedNodes));
+				graphExpandedNodes += expandedNodes;
+				if (result == PlayerBotNavigationResult::Reached) {
+					SegmentEstimate estimate{static_cast<uint32_t>(steps.size()), travelSeconds(steps), std::move(steps)};
+					connections.emplace(key, estimate);
+					return estimate;
+				}
+			}
+		}
+		connections.emplace(key, std::nullopt);
+		return std::nullopt;
+	};
+	size_t selectedEdge = std::numeric_limits<size_t>::max();
+	uint32_t selectedRouteSteps = 0;
+	double selectedTravelSeconds = 0;
+	while (!queue.empty()) {
+		const QueueEntry current = queue.top();
+		queue.pop();
+		const auto& currentLabels = labels[current.state];
+		if (std::find(currentLabels.begin(), currentLabels.end(), std::pair{current.cost, current.fare}) == currentLabels.end()) continue;
+		if (current.state != 0 && graphExpandedNodes < graphNodeBudget &&
+		    playerBotNavigationDistance(states[current.state], destination) <= 512) {
+			std::deque<PlayerBotNavigationStep> finalSteps;
+			uint64_t expandedNodes = 0;
+			const PlayerBotNavigationResult result = navigator.planFrom(
+				player, states[current.state], destination, blockedPositions, finalSteps, expandedNodes,
+				std::min(segmentNodeBudget, graphNodeBudget - graphExpandedNodes));
+			graphExpandedNodes += expandedNodes;
+			if (result == PlayerBotNavigationResult::Reached) {
+				selectedEdge = current.firstEdge;
+				selectedRouteSteps = current.routeSteps + static_cast<uint32_t>(finalSteps.size());
+				selectedTravelSeconds = current.travelSeconds + travelSeconds(finalSteps);
+				break;
+			}
+		}
+		for (size_t edgeIndex = 0; edgeIndex < edges.size(); ++edgeIndex) {
+			const Edge& edge = edges[edgeIndex];
+			const uint32_t approachDistance = playerBotNavigationDistance(states[current.state], edge.npc->getPosition());
+			if (approachDistance > 512) continue;
+			const std::optional<SegmentEstimate> approach = walkSegment(current.state, edgeIndex);
+			if (!approach) continue;
+			const size_t nextState = stateIndices.at(edge.offer->destination);
+			const uint64_t nextFare = current.fare + edge.offer->price;
+			if (nextFare > availableMoney) continue;
+			const uint64_t nextCost = current.cost + approach->stepCount + 50 + edge.offer->price / 10;
+			const uint32_t nextRouteSteps = current.routeSteps + approach->stepCount + 1;
+			const double nextTravelSeconds = current.travelSeconds + approach->travelSeconds + 1.0;
+			const size_t firstEdge = current.firstEdge == std::numeric_limits<size_t>::max() ? edgeIndex : current.firstEdge;
+			auto& nextLabels = labels[nextState];
+			const bool dominated = std::any_of(nextLabels.begin(), nextLabels.end(), [nextCost, nextFare](const auto& label) {
+				return label.first <= nextCost && label.second <= nextFare;
+			});
+			if (dominated) continue;
+			nextLabels.erase(std::remove_if(nextLabels.begin(), nextLabels.end(), [nextCost, nextFare](const auto& label) {
+				return nextCost <= label.first && nextFare <= label.second;
+			}), nextLabels.end());
+			nextLabels.push_back({nextCost, nextFare});
+			queue.push({nextCost, nextFare, nextRouteSteps, nextTravelSeconds, nextState, firstEdge});
+		}
+	}
+	if (selectedEdge == std::numeric_limits<size_t>::max()) return std::nullopt;
+
+	const Edge& selected = edges[selectedEdge];
+	const auto firstConnection = connections.find({0, selected.npc->getID()});
+	if (firstConnection == connections.end() || !firstConnection->second) return std::nullopt;
+	PlayerBotNavigationRoutePlan route;
+	route.metrics.result = PlayerBotNavigationResult::Reached;
+	route.metrics.expandedNodes = graphExpandedNodes;
+	route.metrics.steps = selectedRouteSteps;
+	route.metrics.estimatedTravelSeconds = selectedTravelSeconds;
+	route.steps = firstConnection->second->steps;
+	PlayerBotNavigationStep travel;
+	travel.action = PlayerBotNavigationAction::NpcTravel;
+	travel.target = selected.npc->getPosition();
+	travel.expectedPosition = selected.offer->destination;
+	travel.npcId = selected.npc->getID();
+	travel.dialogue = selected.offer->dialogue;
+	route.steps.push_back(std::move(travel));
+	return route;
 }
 
 void PlayerBotController::onHealthGain(Creature* healer, const Creature& target, uint32_t gain)
