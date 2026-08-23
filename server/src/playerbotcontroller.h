@@ -22,8 +22,7 @@
 #include "playerbothuntpolicy.h"
 #include "playerbotinventorypolicy.h"
 #include "playerbotlootsession.h"
-#include "playerbotnavigation.h"
-#include "playerbotnavigationsession.h"
+#include "playerbotnavigationruntime.h"
 #include "playerbotnpcsession.h"
 #include "playerbotprogressionsession.h"
 #include "playerbotrecoverysession.h"
@@ -686,7 +685,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		size_t huntRouteIndex = 0;
 		uint32_t completedCycles = 0;
 		std::chrono::steady_clock::time_point huntDeadline;
-		PlayerBotNavigator navigator;
+		PlayerBotNavigationRuntime navigationRuntime;
 		PlayerBotHuntRegionPlanner huntRegionPlanner;
 		std::optional<PlayerBotHuntPlanningSession> huntRegionPlanning;
 		std::optional<PlayerBotHuntRegion> activeHuntRegion;
@@ -698,7 +697,6 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		uint64_t huntRegionStartExperience = 0;
 		uint32_t huntRegionStartLevel = 0;
 		bool adaptiveChallengeFixtureRun = false;
-		PlayerBotNavigationSession navigationSession;
 		bool huntPlanningFixtureCancelled = false;
 		bool huntPlanningFixtureStaleRevisionTriggered = false;
 		bool huntPlanningFixtureForcedUnreachable = false;

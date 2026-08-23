@@ -162,9 +162,13 @@ std::optional<PlayerBotController::EquipmentOfferEvaluation> PlayerBotController
 			std::deque<PlayerBotNavigationStep> steps;
 			uint64_t expandedNodes = 0;
 			++counters.pathfindingCalls;
-			const PlayerBotNavigationResult result = approach == position ? PlayerBotNavigationResult::Reached :
-			                                        navigator.plan(player, approach, {}, steps, expandedNodes,
-			                                                       maximumEquipmentProviderPathNodes);
+			const PlayerBotNavigationRoutePlan routePlan = approach == position ? PlayerBotNavigationRoutePlan{} :
+				navigationRuntime.plan(player, approach, {}, maximumEquipmentProviderPathNodes);
+			const PlayerBotNavigationResult result = approach == position ? PlayerBotNavigationResult::Reached : routePlan.metrics.result;
+			if (approach != position) {
+				steps = routePlan.steps;
+				expandedNodes = routePlan.metrics.expandedNodes;
+			}
 			if (result == PlayerBotNavigationResult::Reached) {
 				return providerRoutes.emplace(npc.getID(), std::make_pair(approach, static_cast<uint32_t>(steps.size()))).first->second;
 			}
@@ -387,7 +391,7 @@ void PlayerBotController::processEquipmentPurchase(Player* player, const Positio
 	if (equipmentPurchaseSession.stage() == PlayerBotEquipmentPurchaseStage::Travel) {
 		if (!processNavigation(player, position, purchase.approachPosition)) {
 			if (fixedTargetRouteFailureCount >= maximumProgressionAttempts ||
-			    navigationSession.stepFailureCount() >= maximumRepeatedNavigationStepFailures) {
+			    navigationRuntime.stepFailureCount() >= maximumRepeatedNavigationStepFailures) {
 				finishEquipmentPurchase(player, position, "failed", "route_unavailable");
 			}
 			return;

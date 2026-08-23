@@ -682,8 +682,13 @@ bool PlayerBotController::planSimpleRewardApproach(Player& player, const Positio
 			uint64_t candidateExpandedNodes = 0;
 			++counters.pathfindingCalls;
 			const auto startedAt = std::chrono::steady_clock::now();
-			const PlayerBotNavigationResult planResult = candidate == currentPosition ? PlayerBotNavigationResult::Reached :
-				navigator.plan(player, candidate, {}, steps, candidateExpandedNodes);
+			const PlayerBotNavigationRoutePlan routePlan = candidate == currentPosition ? PlayerBotNavigationRoutePlan{} :
+				navigationRuntime.plan(player, candidate);
+			const PlayerBotNavigationResult planResult = candidate == currentPosition ? PlayerBotNavigationResult::Reached : routePlan.metrics.result;
+			if (candidate != currentPosition) {
+				steps = routePlan.steps;
+				candidateExpandedNodes = routePlan.metrics.expandedNodes;
+			}
 			const bool planned = planResult == PlayerBotNavigationResult::Reached;
 			counters.pathfindingTimeUs += std::chrono::duration_cast<std::chrono::microseconds>(
 				std::chrono::steady_clock::now() - startedAt).count();
@@ -1070,7 +1075,7 @@ void PlayerBotController::beginPickupReward(Player& player, const Position& posi
 		}
 	}
 	if (!selected.resumeEquipment) {
-		navigationSession.adopt(selected.approachPosition, std::move(rewardSteps));
+		navigationRuntime.adopt(selected.approachPosition, std::move(rewardSteps));
 	}
 	std::ostringstream fields;
 	fields << "\"goal\":\"pickup_reward\",\"acquisition_source\":\"map_reward\",\"candidate_id\":" << selected.uniqueId

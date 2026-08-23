@@ -65,8 +65,13 @@ bool PlayerBotController::findOracleDeparture(Player& player, const Position& po
 		uint64_t expandedNodes = 0;
 		++counters.pathfindingCalls;
 		const auto startedAt = std::chrono::steady_clock::now();
-		const PlayerBotNavigationResult planResult = candidate == position ? PlayerBotNavigationResult::Reached :
-			navigator.plan(player, candidate, {}, steps, expandedNodes);
+		const PlayerBotNavigationRoutePlan routePlan = candidate == position ? PlayerBotNavigationRoutePlan{} :
+			navigationRuntime.plan(player, candidate);
+		const PlayerBotNavigationResult planResult = candidate == position ? PlayerBotNavigationResult::Reached : routePlan.metrics.result;
+		if (candidate != position) {
+			steps = routePlan.steps;
+			expandedNodes = routePlan.metrics.expandedNodes;
+		}
 		const bool planned = planResult == PlayerBotNavigationResult::Reached;
 		counters.pathfindingTimeUs += std::chrono::duration_cast<std::chrono::microseconds>(
 			std::chrono::steady_clock::now() - startedAt).count();
@@ -151,7 +156,7 @@ void PlayerBotController::beginOracleDeparture(Player& player, const Position& p
 	progressionSession.begin(PlayerBotProgressionProcedure::OracleDeparture);
 	const auto& departure = departureSession.plan();
 	npcSession.reset(departure.npcId);
-	navigationSession.adopt(departure.approachPosition, std::move(steps));
+	navigationRuntime.adopt(departure.approachPosition, std::move(steps));
 	emit("strategy_selection", position,
 	     "\"goal\":\"oracle_departure\",\"npc_id\":" + std::to_string(departure.npcId) +
 	         ",\"town\":\"thais\",\"town_id\":" + std::to_string(oracleTownId) +

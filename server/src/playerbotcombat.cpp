@@ -308,7 +308,7 @@ bool PlayerBotController::attackDefensiveThreat(Player* player, const Position& 
 	g_game.map.getSpectators(spectators, currentPosition);
 	const auto now = std::chrono::steady_clock::now();
 	auto isRouteCritical = [this, now](const Creature* creature) {
-		return navigationSession.isRouteCritical(creature->getPosition(), now);
+		return navigationRuntime.isRouteCritical(creature->getPosition(), now);
 	};
 	std::vector<PlayerBotDefensiveTarget> candidates;
 	for (Creature* creature : spectators) {
@@ -892,8 +892,7 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 
 	if (const auto work = planning.nextRouteValidationWork(huntRegionPathfindingCallsPerTurn)) {
 		PlayerBotHuntRegion& candidate = planning.regions()[work->regionIndex];
-		const std::set<Position> blockedPositions = navigationSession.activeBlockedPositions(now);
-		std::deque<PlayerBotNavigationStep> route;
+		const std::set<Position> blockedPositions = navigationRuntime.activeBlockedPositions(now);
 		const bool forcedUnreachable = testPolicy.forceFirstHuntCandidateUnreachable && !huntPlanningFixtureForcedUnreachable;
 		const bool forcedNodeLimit = testPolicy.forceSecondHuntCandidateNodeLimit && !huntPlanningFixtureForcedNodeLimit &&
 		                             huntPlanningFixtureForcedUnreachable && !forcedUnreachable;
@@ -901,11 +900,16 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 		huntPlanningFixtureForcedNodeLimit = huntPlanningFixtureForcedNodeLimit || forcedNodeLimit;
 		PlayerBotNavigationResult planResult = PlayerBotNavigationResult::Unreachable;
 		uint64_t expandedNodes = 0;
+		std::deque<PlayerBotNavigationStep> route;
 		if (!forcedUnreachable) {
 			const auto pathStarted = std::chrono::steady_clock::now();
 			++counters.pathfindingCalls;
-			planResult = navigator.plan(player, candidate.destination, blockedPositions, route, expandedNodes,
-			                            forcedNodeLimit ? 0 : playerBotNavigationMaximumExpandedNodes);
+			PlayerBotNavigationRoutePlan routePlan = navigationRuntime.plan(
+				player, candidate.destination, blockedPositions,
+				forcedNodeLimit ? 0 : playerBotNavigationMaximumExpandedNodes);
+			planResult = routePlan.metrics.result;
+			expandedNodes = routePlan.metrics.expandedNodes;
+			route = std::move(routePlan.steps);
 			counters.pathfindingTimeUs += std::chrono::duration_cast<std::chrono::microseconds>(
 				std::chrono::steady_clock::now() - pathStarted).count();
 		}
@@ -1185,8 +1189,8 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 		return;
 	}
 	const auto now = std::chrono::steady_clock::now();
-	if ((patrolRouteFailureCount != 0 || navigationSession.stepFailureCount() != 0 ||
-	     navigationSession.hasActiveRouteBlock(now)) &&
+	if ((patrolRouteFailureCount != 0 || navigationRuntime.stepFailureCount() != 0 ||
+	     navigationRuntime.hasActiveRouteBlock(now)) &&
 	    attackDefensiveThreat(player, currentPosition)) {
 		resetPatrolRouteFailures();
 		schedule(navigationInterval);
@@ -1212,7 +1216,7 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 		const bool forcedStepRecoveryPending = testPolicy.forceRepeatedNavigationStepFailures &&
 		                                       forcedNavigationStepFailuresRemaining != 0;
 		if (lastNavigationRouteUnavailable && forcedStepRecoveryPending) {
-			navigationSession.clearBlockedPositions();
+			navigationRuntime.clearBlockedPositions();
 		}
 		if (lastNavigationRouteUnavailable && !forcedStepRecoveryPending) {
 			if (patrolRouteFailureCount == 0) {
@@ -1221,10 +1225,10 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 			++patrolRouteFailureCount;
 			patrolRouteFailureExpandedNodes += lastNavigationExpandedNodes;
 		}
-		const bool repeatedStepFailure = navigationSession.stepFailureCount() >= maximumRepeatedNavigationStepFailures;
+		const bool repeatedStepFailure = navigationRuntime.stepFailureCount() >= maximumRepeatedNavigationStepFailures;
 		const bool repeatedRouteFailure = patrolRouteFailureCount >= maximumPatrolRouteFailures;
-		if (navigationSession.oscillationDetected() || repeatedStepFailure || repeatedRouteFailure) {
-			const char* reason = navigationSession.oscillationDetected() ? "position_oscillation" :
+		if (navigationRuntime.oscillationDetected() || repeatedStepFailure || repeatedRouteFailure) {
+			const char* reason = navigationRuntime.oscillationDetected() ? "position_oscillation" :
 			                     repeatedStepFailure ? "repeated_step_failure" : "route_unavailable";
 			const auto routeFailureElapsed = patrolRouteFailureStarted == std::chrono::steady_clock::time_point{} ? 0 :
 			                                 std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -1232,7 +1236,7 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 			emit("hunt_region_patrol", currentPosition,
 			     "\"result\":\"skipped\",\"reason\":" +
 			         jsonString(reason) +
-			         ",\"step_failures\":" + std::to_string(navigationSession.stepFailureCount()) +
+			         ",\"step_failures\":" + std::to_string(navigationRuntime.stepFailureCount()) +
 			         ",\"route_failures\":" + std::to_string(patrolRouteFailureCount) +
 			         ",\"elapsed_ms\":" + std::to_string(routeFailureElapsed) +
 			         ",\"expanded_nodes\":" + std::to_string(patrolRouteFailureExpandedNodes) +
@@ -1245,8 +1249,8 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 				++counters.stuckEvents;
 			}
 			resetPatrolRouteFailures();
-			navigationSession.clearBlockedPositions();
-			navigationSession.resetStepFailures();
+			navigationRuntime.clearBlockedPositions();
+			navigationRuntime.resetStepFailures();
 			clearNavigation();
 			if (activeHuntRegion) {
 				activeHuntRegion->patrolPoints.erase(activeHuntRegion->patrolPoints.begin() + huntRouteIndex);
