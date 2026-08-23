@@ -140,6 +140,7 @@ class PlayerBotServiceWorkflow
 		slots_t pendingSlottedSlot = CONST_SLOT_WHEREEVER;
 		uint32_t pendingSlottedBackpackItems = 0;
 		uint32_t slottedMoveAttempts = 0;
+		uint32_t shopOpenAttempts = 0;
 		std::map<std::pair<uint16_t, slots_t>, std::chrono::steady_clock::time_point> unavailableSlottedSales;
 		std::vector<PlayerBotServiceProviderObservation::Approach> providerApproaches;
 		std::optional<Position> pendingApproachRoute;

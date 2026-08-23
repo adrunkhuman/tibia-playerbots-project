@@ -796,11 +796,11 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 			plan.metrics.expandedNodes, static_cast<uint32_t>(plan.steps.size()), travelSeconds,
 			projectedHuntStaminaMultiplier(player, availableHuntSeconds)});
 	}
-	if (const auto planning = huntRuntime.planningSession()) {
+	if (const auto planning = huntRuntime.planningSession();
+	    planning && outcome.command != PlayerBotHuntRuntimeCommand::RegionSelected) {
 		const char* phase = outcome.command == PlayerBotHuntRuntimeCommand::PlanningStarted ? "scoring_started" :
 		                    outcome.command == PlayerBotHuntRuntimeCommand::PlanningYield ? "scoring_yield" :
 		                    outcome.command == PlayerBotHuntRuntimeCommand::PlanningScored ? "scored" :
-		                    outcome.command == PlayerBotHuntRuntimeCommand::RegionSelected ? "selected" :
 		                    outcome.routeWork ? "reachability_yield" : "planning_yield";
 		emitHuntRegionPlanning(*planning, position, phase);
 	}
@@ -814,6 +814,7 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 	if (!outcome.selectedRegion) return false;
 	const PlayerBotHuntRegion& selected = *outcome.selectedRegion;
 	emit("hunt_region_selection", position, "\"result\":\"selected\",\"region_id\":" + std::to_string(selected.id) + ",\"reason\":" + jsonString(reason) + ",\"center\":{\"x\":" + std::to_string(selected.center.x) + ",\"y\":" + std::to_string(selected.center.y) + ",\"z\":" + std::to_string(selected.center.z) + "}");
+	if (const auto planning = huntRuntime.planningSession()) emitHuntRegionPlanning(*planning, position, "selected");
 	std::ostringstream speech;
 	speech << "Going hunting. Expecting: ";
 	for (size_t index = 0; index < selected.monsters.size(); ++index) { if (index != 0) speech << ", "; speech << selected.monsters[index].name; }
@@ -998,11 +999,19 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 		processTargetPursuit(player, currentPosition);
 		return;
 	}
+	if (attackVisibleMonster(player, currentPosition)) {
+		schedule(navigationInterval);
+		return;
+	}
+	if (trySupportSpell(player, currentPosition)) {
+		schedule(navigationDecisionDelay(*player));
+		return;
+	}
 	const PlayerBotHuntPatrolOutcome patrol = huntRuntime.patrolTarget();
 	const auto now = std::chrono::steady_clock::now();
 	PlayerBotNavigationRuntimeOutcome navigation;
 	if (!processNavigation(player, currentPosition, patrol.destination, &navigation)) {
-		if (fixtureDriver.navigationRecovery(navigation.routeUnavailable).pause) navigationRuntime.resetPatrolRecovery();
+		if (fixtureDriver.navigationRecovery(navigation.routeUnavailable).pause) navigationRuntime.clearBlockedPositions();
 		const PlayerBotHuntPatrolOutcome recovery = huntRuntime.observePatrolNavigation(navigation, now,
 			maximumRepeatedNavigationStepFailures, maximumPatrolRouteFailures);
 		applyHuntCooldown(recovery.cooldown, now);
@@ -1010,7 +1019,9 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 			emit("hunt_region_patrol", currentPosition, "\"result\":\"skipped\",\"reason\":" + jsonString(recovery.reason) +
 				",\"step_failures\":" + std::to_string(recovery.stepFailures) + ",\"route_failures\":" + std::to_string(recovery.routeFailures) +
 				",\"elapsed_ms\":" + std::to_string(recovery.elapsedMs) + ",\"expanded_nodes\":" + std::to_string(recovery.expandedNodes) +
-				",\"region_id\":" + (recovery.regionId ? std::to_string(*recovery.regionId) : "null"));
+				",\"region_id\":" + (recovery.regionId ? std::to_string(*recovery.regionId) : "null") +
+				",\"destination\":{\"x\":" + std::to_string(recovery.destination.x) + ",\"y\":" +
+				std::to_string(recovery.destination.y) + ",\"z\":" + std::to_string(recovery.destination.z) + "}");
 			if (recovery.stepFailures != 0 || recovery.routeFailures != 0) telemetry.recordStuckEvent();
 			navigationRuntime.resetPatrolRecovery();
 			clearNavigation();

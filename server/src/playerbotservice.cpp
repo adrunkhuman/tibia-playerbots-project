@@ -370,7 +370,8 @@ void PlayerBotController::processService(Player* player, const Position& current
 	if (command.type == PlayerBotServiceCommandType::Complete) {
 		beginReturn(player, currentPosition, "service_complete");
 	} else {
-		schedule(SCHEDULER_MINTICKS);
+		schedule(command.outcome == PlayerBotServiceOutcome::Retry && command.cooldownMs != 0 ?
+		         command.cooldownMs : SCHEDULER_MINTICKS);
 	}
 }
 

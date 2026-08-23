@@ -37,10 +37,10 @@ void PlayerBotServiceSession::beginShopTransaction(PlayerBotServiceTransaction t
 }
 
 PlayerBotServiceVerification PlayerBotServiceSession::verifyShopTransaction(
-	uint32_t itemCount, uint64_t money, uint64_t balance, bool purchase, uint32_t unitPrice, uint32_t maximumRetries)
+	uint32_t itemCount, uint64_t money, uint64_t balance, bool purchase, uint32_t maximumRetries)
 {
 	const PlayerBotServiceTransaction before = shop;
-	const uint64_t moneyDelta = static_cast<uint64_t>(shop.amount) * unitPrice;
+	const uint64_t moneyDelta = static_cast<uint64_t>(shop.amount) * shop.unitPrice;
 	const bool itemChanged = purchase ? itemCount == shop.itemCount + shop.amount :
 	                                  itemCount + shop.amount == shop.itemCount;
 	const uint64_t expectedMoney = purchase ? (shop.money > moneyDelta ? shop.money - moneyDelta : 0) :

@@ -17,6 +17,7 @@ void PlayerBotServiceWorkflow::reset()
 	pendingSlottedSlot = CONST_SLOT_WHEREEVER;
 	pendingSlottedBackpackItems = 0;
 	slottedMoveAttempts = 0;
+	shopOpenAttempts = 0;
 	unavailableSlottedSales.clear();
 	providerApproaches.clear();
 	pendingApproachRoute.reset();
@@ -68,6 +69,7 @@ void PlayerBotServiceWorkflow::targetProvider(uint32_t id)
 	if (!npcSession.targets(id)) {
 		npcSession.reset(id);
 		serviceSession.reset();
+		shopOpenAttempts = 0;
 		providerApproaches.clear();
 		pendingApproachRoute.reset();
 		selectedApproach.reset();
@@ -146,8 +148,11 @@ PlayerBotServiceCommand PlayerBotServiceWorkflow::establishNpc(const PlayerBotSe
 				return {PlayerBotServiceCommandType::Fail, PlayerBotServiceOutcome::Rejected};
 			}
 			npcSession.setStep(PlayerBotNpcConversationStep::Greet);
-			return {PlayerBotServiceCommandType::Wait, PlayerBotServiceOutcome::Retry};
+			PlayerBotServiceCommand command{PlayerBotServiceCommandType::Wait, PlayerBotServiceOutcome::Retry};
+			command.cooldownMs = npcReplyDelay;
+			return command;
 		}
+		npcSession.resetRetries();
 		npcSession.setStep(shop ? PlayerBotNpcConversationStep::Confirm : PlayerBotNpcConversationStep::Ready);
 		if (!shop) return {PlayerBotServiceCommandType::Wait};
 		return {PlayerBotServiceCommandType::Speak, PlayerBotServiceOutcome::Pending, npcSession.targetId(), 0, 0,
@@ -155,14 +160,17 @@ PlayerBotServiceCommand PlayerBotServiceWorkflow::establishNpc(const PlayerBotSe
 	}
 	if (shop && npcSession.step() == PlayerBotNpcConversationStep::Confirm) {
 		if (!state->second.shopOpen) {
-			if (npcSession.retryLimitReached(observation.maximumAttempts)) {
+			if (++shopOpenAttempts >= observation.maximumAttempts) {
 				serviceStage = PlayerBotServiceStage::Failed;
 				return {PlayerBotServiceCommandType::Fail, PlayerBotServiceOutcome::Rejected};
 			}
 			npcSession.resetGreetingAcknowledgement();
 			npcSession.setStep(PlayerBotNpcConversationStep::Greet);
-			return {PlayerBotServiceCommandType::Wait, PlayerBotServiceOutcome::Retry};
+			PlayerBotServiceCommand command{PlayerBotServiceCommandType::Wait, PlayerBotServiceOutcome::Retry};
+			command.cooldownMs = npcReplyDelay;
+			return command;
 		}
+		shopOpenAttempts = 0;
 		npcSession.setStep(PlayerBotNpcConversationStep::Ready);
 		npcSession.resetRetries();
 	}
@@ -233,13 +241,9 @@ PlayerBotServiceCommand PlayerBotServiceWorkflow::verifyShop(const PlayerBotServ
 {
 	const PlayerBotServiceTransaction* transaction = serviceSession.shopTransaction();
 	if (!transaction) return {PlayerBotServiceCommandType::None};
-	const PlayerBotEconomyProvider* shop = provider(npcSession.targetId(), true);
-	if (!shop) { serviceStage = PlayerBotServiceStage::Failed; return {PlayerBotServiceCommandType::Fail, PlayerBotServiceOutcome::Unavailable}; }
-	auto offer = std::find_if(shop->offers.begin(), shop->offers.end(), [transaction](const auto& value) { return value.itemId == transaction->itemId; });
-	if (offer == shop->offers.end()) { serviceStage = PlayerBotServiceStage::Failed; return {PlayerBotServiceCommandType::Fail, PlayerBotServiceOutcome::Unavailable}; }
 	const uint32_t count = observation.inventoryCounts.count(transaction->itemId) ? observation.inventoryCounts.at(transaction->itemId) : 0;
 	const PlayerBotServiceVerification result = serviceSession.verifyShopTransaction(count, observation.money, observation.bankBalance,
-		purchase, purchase ? offer->buyPrice : offer->sellPrice, observation.maximumAttempts);
+		purchase, observation.maximumAttempts);
 	if (result.result == PlayerBotServiceVerificationResult::Success) {
 		npcSession.setStep(PlayerBotNpcConversationStep::Ready);
 		npcSession.resetRetries();
@@ -250,8 +254,11 @@ PlayerBotServiceCommand PlayerBotServiceWorkflow::verifyShop(const PlayerBotServ
 	}
 	if (result.result == PlayerBotServiceVerificationResult::Retry) return {PlayerBotServiceCommandType::Wait, PlayerBotServiceOutcome::Retry};
 	serviceStage = PlayerBotServiceStage::Failed;
-	return {PlayerBotServiceCommandType::Fail, result.result == PlayerBotServiceVerificationResult::Mismatch ?
-	        PlayerBotServiceOutcome::Rejected : PlayerBotServiceOutcome::Unavailable};
+	PlayerBotServiceCommand command{PlayerBotServiceCommandType::Fail,
+		result.result == PlayerBotServiceVerificationResult::Mismatch ? PlayerBotServiceOutcome::Rejected : PlayerBotServiceOutcome::Unavailable};
+	command.transaction = result.before;
+	command.verification = result;
+	return command;
 }
 
 PlayerBotServiceCommand PlayerBotServiceWorkflow::advanceBank(const PlayerBotServiceObservation& observation,
@@ -365,7 +372,8 @@ PlayerBotServiceCommand PlayerBotServiceWorkflow::advanceImpl(const PlayerBotSer
 			return value.itemId == itemId && value.sellPrice != 0;
 		});
 		if (offer == selected->offers.end()) { serviceStage = PlayerBotServiceStage::Failed; return {PlayerBotServiceCommandType::Fail, PlayerBotServiceOutcome::Unavailable}; }
-		const PlayerBotServiceTransaction transaction{itemId, std::min<uint32_t>(100, backpack), observation.inventoryCounts.at(itemId), observation.money, observation.bankBalance};
+		const PlayerBotServiceTransaction transaction{itemId, std::min<uint32_t>(100, backpack), observation.inventoryCounts.at(itemId),
+			observation.money, observation.bankBalance, offer->sellPrice, offer->subType};
 		serviceSession.beginShopTransaction(transaction);
 		PlayerBotServiceCommand command{PlayerBotServiceCommandType::Sell, PlayerBotServiceOutcome::Pending, selected->id, itemId, transaction.amount};
 		command.subType = offer->subType;
@@ -388,7 +396,8 @@ PlayerBotServiceCommand PlayerBotServiceWorkflow::advanceImpl(const PlayerBotSer
 		targetProvider(selected->id);
 		PlayerBotServiceCommand focus = establishNpc(observation, true);
 		if (focus.type != PlayerBotServiceCommandType::None) return focus;
-		const PlayerBotServiceTransaction transaction{itemId, restock.amount, count, observation.money, observation.bankBalance};
+		const PlayerBotServiceTransaction transaction{itemId, restock.amount, count, observation.money, observation.bankBalance,
+			offer->buyPrice, offer->subType};
 		serviceSession.beginShopTransaction(transaction);
 		PlayerBotServiceCommand command{PlayerBotServiceCommandType::Buy, PlayerBotServiceOutcome::Pending, selected->id, itemId, restock.amount};
 		command.subType = offer->subType;

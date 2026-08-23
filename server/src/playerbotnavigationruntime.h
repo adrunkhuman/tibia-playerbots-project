@@ -113,6 +113,7 @@ class PlayerBotNavigationRuntime
 
 		void reset() { session.clear(); fixedTargetRouteFailures = 0; }
 		void resetPatrolRecovery() { session.clearBlockedPositions(); session.resetStepFailures(); }
+		void clearBlockedPositions() { session.clearBlockedPositions(); }
 
 		size_t routeSize() const { return session.routeSize(); }
 		bool hasPendingWork() const { return session.hasPendingWork(); }

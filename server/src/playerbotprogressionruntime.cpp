@@ -39,19 +39,16 @@ void PlayerBotProgressionRuntime::enterHunt()
 void PlayerBotProgressionRuntime::completeReward(bool succeeded, std::chrono::steady_clock::duration cooldown)
 {
 	arbiter.setCooldown(PlayerBotGoalArbiter::TopLevelGoal::PickupReward, cooldown);
-	if (!succeeded) enterService();
 }
 
 void PlayerBotProgressionRuntime::completeSpellTraining(bool succeeded, std::chrono::steady_clock::duration cooldown)
 {
 	arbiter.setCooldown(PlayerBotGoalArbiter::TopLevelGoal::LearnSpell, cooldown);
-	if (!succeeded) enterService();
 }
 
 void PlayerBotProgressionRuntime::completeEquipmentPurchase(bool succeeded, std::chrono::steady_clock::duration cooldown)
 {
 	arbiter.setCooldown(PlayerBotGoalArbiter::TopLevelGoal::BuyEquipment, cooldown);
-	if (!succeeded) enterService();
 }
 
 void PlayerBotProgressionRuntime::completeMagicTraining(std::chrono::steady_clock::duration cooldown)
@@ -205,7 +202,7 @@ PlayerBotProgressionOutcome PlayerBotProgressionRuntime::advanceDeparture(const 
 		case PlayerBotOracleDepartureStage::Travel:
 			if (observation.navigationFailed) return outcome(PlayerBotProgressionCommandType::Finish, PlayerBotProgressionOutcomeType::Failed, "route_unavailable");
 			if (!observation.navigationReached) return outcome(PlayerBotProgressionCommandType::Navigate, PlayerBotProgressionOutcomeType::Pending, nullptr);
-			departureSession.setStage(PlayerBotOracleDepartureStage::Greet);
+			departureSession.setStage(PlayerBotOracleDepartureStage::ConfirmReady);
 			return outcome(PlayerBotProgressionCommandType::Speak, PlayerBotProgressionOutcomeType::Pending, "hi");
 		case PlayerBotOracleDepartureStage::Greet:
 			if (!observation.npcAvailable) return outcome(PlayerBotProgressionCommandType::Finish, PlayerBotProgressionOutcomeType::Failed, "oracle_unavailable");
@@ -215,7 +212,7 @@ PlayerBotProgressionOutcome PlayerBotProgressionRuntime::advanceDeparture(const 
 			if (!observation.npcAvailable) return outcome(PlayerBotProgressionCommandType::Finish, PlayerBotProgressionOutcomeType::Failed, "oracle_unavailable");
 			if (!observation.greetingAcknowledged) {
 				if (departureSession.incrementRetries() >= 3) return outcome(PlayerBotProgressionCommandType::Finish, PlayerBotProgressionOutcomeType::Failed, "oracle_focus_unconfirmed");
-				departureSession.setStage(PlayerBotOracleDepartureStage::Greet);
+				departureSession.setStage(PlayerBotOracleDepartureStage::ConfirmReady);
 				return outcome(PlayerBotProgressionCommandType::Speak, PlayerBotProgressionOutcomeType::Retry, "hi");
 			}
 			departureSession.setStage(PlayerBotOracleDepartureStage::ChooseTown);
@@ -247,7 +244,7 @@ PlayerBotProgressionOutcome PlayerBotProgressionRuntime::advanceSpellTraining(co
 		case PlayerBotSpellTrainingStage::Travel:
 			if (observation.navigationFailed) return outcome(PlayerBotProgressionCommandType::Finish, PlayerBotProgressionOutcomeType::Failed, "route_unavailable");
 			if (!observation.navigationReached) return outcome(PlayerBotProgressionCommandType::Navigate, PlayerBotProgressionOutcomeType::Pending, nullptr);
-			spellTrainingSession.setStage(PlayerBotSpellTrainingStage::Greet);
+			spellTrainingSession.setStage(PlayerBotSpellTrainingStage::Request);
 			return outcome(PlayerBotProgressionCommandType::Speak, PlayerBotProgressionOutcomeType::Pending, "hi");
 		case PlayerBotSpellTrainingStage::Greet:
 			if (!observation.npcAvailable) return outcome(PlayerBotProgressionCommandType::Finish, PlayerBotProgressionOutcomeType::Failed, "trainer_unavailable");
@@ -257,7 +254,7 @@ PlayerBotProgressionOutcome PlayerBotProgressionRuntime::advanceSpellTraining(co
 			if (!observation.npcAvailable) return outcome(PlayerBotProgressionCommandType::Finish, PlayerBotProgressionOutcomeType::Failed, "trainer_unavailable");
 			if (!observation.greetingAcknowledged) {
 				if (spellTrainingSession.incrementRetries() >= 3) return outcome(PlayerBotProgressionCommandType::Finish, PlayerBotProgressionOutcomeType::Failed, "trainer_focus_unconfirmed");
-				spellTrainingSession.setStage(PlayerBotSpellTrainingStage::Greet);
+				spellTrainingSession.setStage(PlayerBotSpellTrainingStage::Request);
 				return outcome(PlayerBotProgressionCommandType::Speak, PlayerBotProgressionOutcomeType::Retry, "hi");
 			}
 			spellTrainingSession.setStage(PlayerBotSpellTrainingStage::Confirm);
@@ -405,13 +402,13 @@ PlayerBotProgressionOutcome PlayerBotProgressionRuntime::advanceEquipmentPurchas
 			if (!observation.shopReady) return outcome(PlayerBotProgressionCommandType::Shop, PlayerBotProgressionOutcomeType::Pending, "open_shop");
 			if (!observation.fundingAvailable) return outcome(PlayerBotProgressionCommandType::Finish, PlayerBotProgressionOutcomeType::Failed, "reserve_changed");
 			equipmentTransaction.beginShopTransaction({equipmentPurchaseSession.plan().itemId, 1, observation.itemCount,
-			observation.money, observation.bankBalance});
+				observation.money, observation.bankBalance, equipmentPurchaseSession.plan().price, 0});
 			equipmentPurchaseSession.setStage(PlayerBotEquipmentPurchaseStage::VerifyPurchase);
 			return outcome(PlayerBotProgressionCommandType::Shop, PlayerBotProgressionOutcomeType::Pending, "purchase_equipment");
 		case PlayerBotEquipmentPurchaseStage::VerifyPurchase:
 			{
 				const PlayerBotServiceVerification verification = equipmentTransaction.verifyShopTransaction(observation.itemCount,
-					observation.money, observation.bankBalance, true, equipmentPurchaseSession.plan().price, maximumRetries);
+					observation.money, observation.bankBalance, true, maximumRetries);
 				if (verification.result == PlayerBotServiceVerificationResult::Mismatch) {
 					return outcome(PlayerBotProgressionCommandType::Finish, PlayerBotProgressionOutcomeType::Failed, "transaction_delta_mismatch");
 				}
@@ -424,9 +421,6 @@ PlayerBotProgressionOutcome PlayerBotProgressionRuntime::advanceEquipmentPurchas
 					return {command(PlayerBotProgressionCommandType::None), PlayerBotProgressionOutcomeType::Pending, 0, nullptr,
 					        verification.before};
 				}
-				equipmentPurchaseSession.incrementRetries();
-				equipmentPurchaseSession.setStage(PlayerBotEquipmentPurchaseStage::Purchase);
-				npcSession.setStep(PlayerBotNpcConversationStep::Ready);
 				return outcome(PlayerBotProgressionCommandType::None, PlayerBotProgressionOutcomeType::Retry, "purchase_equipment");
 			}
 		case PlayerBotEquipmentPurchaseStage::Equip:

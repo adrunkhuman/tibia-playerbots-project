@@ -355,9 +355,9 @@ bool PlayerBotController::processNavigation(Player* player, const Position& curr
 			routePlan = planNavigationRoute(*player, outcome.routeRequest->destination, outcome.routeRequest->blockedPositions,
 			                                outcome.routeRequest->maximumExpandedNodes);
 		}
-		const std::optional<PlayerBotNavigationStep> pendingWorldChange = outcome.pendingWorldChange;
+		const PlayerBotPendingMovementResult movementResult = outcome.movementResult;
 		outcome = navigationRuntime.observePlan({destination, std::move(routePlan), player->canDoAction(), false, now});
-		outcome.pendingWorldChange = pendingWorldChange;
+		outcome.movementResult = movementResult;
 	}
 	if (navigationOutcome) *navigationOutcome = outcome;
 	fixtureDriver.observeNavigationPlan(outcome.plan.attempted);

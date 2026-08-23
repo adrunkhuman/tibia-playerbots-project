@@ -40,6 +40,11 @@ PlayerBotNavigationRuntimeOutcome PlayerBotNavigationRuntime::process(const Play
 	}
 
 	outcome.pendingWorldChange = session.takeWorldChange();
+	if (outcome.pendingWorldChange) {
+		outcome.command = PlayerBotNavigationRuntimeCommand::Retry;
+		outcome.stepFailureCount = session.stepFailureCount();
+		return outcome;
+	}
 	session.prepareDestination(input.destination);
 	if (session.routeEmpty()) {
 		outcome.blockedPositions = session.activeBlockedPositions(input.timing.now);
