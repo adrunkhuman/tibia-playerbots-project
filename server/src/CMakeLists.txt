@@ -61,6 +61,7 @@ set(tfs_SRC
 	${CMAKE_CURRENT_LIST_DIR}/playerbotnavigation.cpp
 	${CMAKE_CURRENT_LIST_DIR}/playerbotnavigationsession.cpp
 	${CMAKE_CURRENT_LIST_DIR}/playerbotnpcsession.cpp
+	${CMAKE_CURRENT_LIST_DIR}/playerbottargetingsession.cpp
 	${CMAKE_CURRENT_LIST_DIR}/position.cpp
 	${CMAKE_CURRENT_LIST_DIR}/protocol.cpp
 	${CMAKE_CURRENT_LIST_DIR}/protocolgame.cpp

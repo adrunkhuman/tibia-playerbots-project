@@ -31,9 +31,14 @@ void PlayerBotController::beginLoot(Player* player, const Position& currentPosit
 	if (activeHuntRegion) {
 		++huntRegionKills;
 	}
-	lootTargetId = ratId;
-	corpseDeathPosition = ratPosition;
-	clearRatTarget(currentPosition, "target_defeated");
+	const auto defeatedTarget = clearTraversalTarget(currentPosition, "target_defeated");
+	if (!defeatedTarget) {
+		setStage(ScenarioStage::Traverse, currentPosition);
+		return;
+	}
+	lootTargetId = defeatedTarget->id;
+	corpseDeathPosition = defeatedTarget->position;
+	lootCorpseExpectation = defeatedTarget->expectedCorpse;
 	lootPosition = corpseDeathPosition;
 	corpseSearchAttempts = 0;
 	corpseOpenAttempts = 0;
@@ -49,10 +54,10 @@ void PlayerBotController::beginLoot(Player* player, const Position& currentPosit
 	corpseObserved = false;
 	corpseNavigationSuspended = false;
 	unavailableLootItemIds.clear();
-	if (!expectedCorpseLootable) {
+	if (!lootCorpseExpectation.lootable) {
 		std::ostringstream fields;
 		fields << "\"action\":\"loot\",\"result\":\"skipped\",\"reason\":\"corpse_not_lootable\""
-		       << ",\"expected_corpse_item_id\":" << expectedCorpseItemId;
+		       << ",\"expected_corpse_item_id\":" << lootCorpseExpectation.itemId;
 		emit("action_result", currentPosition, fields.str());
 		finishLoot(player, currentPosition);
 		return;
@@ -66,8 +71,7 @@ void PlayerBotController::finishLoot(Player* player, const Position& currentPosi
 	clearNavigation();
 	pendingLootItemId = 0;
 	pendingDiscardItemId = 0;
-	expectedCorpseItemId = 0;
-	expectedCorpseLootable = false;
+	lootCorpseExpectation = {};
 	lootTargetId = 0;
 	corpseNavigationSuspended = false;
 	corpseObserved = false;
@@ -82,7 +86,7 @@ void PlayerBotController::finishLootFailure(Player* player, const Position& curr
 	std::ostringstream fields;
 	fields << "\"action\":\"loot\",\"result\":\"failed\",\"reason\":" << jsonString(reason)
 	       << ",\"target_id\":" << lootTargetId
-	       << ",\"expected_corpse_item_id\":" << expectedCorpseItemId
+	       << ",\"expected_corpse_item_id\":" << lootCorpseExpectation.itemId
 	       << ",\"last_known_death_position\":{\"x\":" << corpseDeathPosition.x << ",\"y\":" << corpseDeathPosition.y
 	       << ",\"z\":" << static_cast<uint16_t>(corpseDeathPosition.z) << '}'
 	       << ",\"corpse_position\":";

@@ -22,6 +22,7 @@
 #include "playerbotrecoverysession.h"
 #include "playerbotspellcalibration.h"
 #include "playerbotspellruntime.h"
+#include "playerbottargetingsession.h"
 
 #include "container.h"
 #include "condition.h"
@@ -568,9 +569,8 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 
 		void setStage(ScenarioStage stage, const Position& position);
 
-		void setExpectedCorpse(const Creature& target);
-
-		void clearRatTarget(const Position& position, const char* reason);
+		PlayerBotExpectedCorpse expectedCorpseFor(const Creature& target) const;
+		std::optional<PlayerBotTraversalTarget> clearTraversalTarget(const Position& position, const char* reason);
 
 		void logActionFailure(const char* action, const char* reason, const Position& position);
 
@@ -900,11 +900,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		uint32_t playerGuid;
 		std::string playerName;
 		const playerbot::PlayerBotTestPolicy testPolicy;
-		uint32_t ratId = 0;
-		uint32_t defensiveTargetId = 0;
 		Position lastPosition;
-		Position ratPosition;
-		Position defensiveTargetPosition;
 		Position corpseDeathPosition;
 		Position lootPosition;
 		ScenarioStage scenarioStage = ScenarioStage::Traverse;
@@ -927,8 +923,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		std::chrono::steady_clock::time_point corpseNavigationRetryAt;
 		uint16_t pendingLootItemId = 0;
 		uint16_t pendingDiscardItemId = 0;
-		uint16_t expectedCorpseItemId = 0;
-		bool expectedCorpseLootable = false;
+		PlayerBotExpectedCorpse lootCorpseExpectation;
 		bool lootedCurrentCorpse = false;
 		bool corpseObserved = false;
 		bool corpseNavigationSuspended = false;
@@ -964,13 +959,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		PlayerBotRecoverySession recoverySession;
 		PlayerBotSpellRuntime spellRuntime;
 		PlayerBotSpellCalibration spellCalibration;
-		std::chrono::steady_clock::time_point combatStarted;
-		std::chrono::steady_clock::time_point defensiveCombatStarted;
-		bool defensiveTargetRouteCritical = false;
-		std::chrono::steady_clock::time_point targetPursuitStarted;
-		Position targetPursuitStartPosition;
-		Position targetPursuitDestination;
-		std::unordered_map<uint32_t, std::chrono::steady_clock::time_point> suppressedTraversalTargets;
+		PlayerBotTargetingSession targetingSession;
 		CyclePhase cyclePhase = CyclePhase::ReturnToDepot;
 		ServiceStage serviceStage = ServiceStage::Discover;
 		ProgressionObjective progressionObjective = ProgressionObjective::None;
