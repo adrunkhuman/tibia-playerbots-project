@@ -60,6 +60,7 @@ set(tfs_SRC
 	${CMAKE_CURRENT_LIST_DIR}/playerbotgoalplanner.cpp
 	${CMAKE_CURRENT_LIST_DIR}/playerbothuntpolicy.cpp
 	${CMAKE_CURRENT_LIST_DIR}/playerbothuntplanningsession.cpp
+	${CMAKE_CURRENT_LIST_DIR}/playerbothuntcoordinator.cpp
 	${CMAKE_CURRENT_LIST_DIR}/playerbothuntruntime.cpp
 	${CMAKE_CURRENT_LIST_DIR}/playerbotinventorypolicy.cpp
 	${CMAKE_CURRENT_LIST_DIR}/playerbotloot.cpp

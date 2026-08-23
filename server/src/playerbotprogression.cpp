@@ -174,7 +174,7 @@ void PlayerBotController::processReadinessEquipment(Player* player, const Positi
 	emitCombatReadiness(*player, position, readiness.ready ? "ready" : "recovery", readiness.recovery, readiness.terminalReason);
 	if (command.type == PlayerBotReadinessEquipmentCommandType::ResumeService) { schedule(SCHEDULER_MINTICKS); return; }
 	if (command.type == PlayerBotReadinessEquipmentCommandType::StartHunt) {
-		if (huntRuntime.active()) { schedule(SCHEDULER_MINTICKS); return; }
+		if (huntCoordinator.huntActive()) { schedule(SCHEDULER_MINTICKS); return; }
 		startHunt(player, position, "readiness_carried_upgrade");
 		return;
 	}

@@ -35,7 +35,7 @@ void PlayerBotController::setCyclePhase(CyclePhase phase, const Position& positi
 	}
 	const char* previous = cyclePhaseName();
 	if (turnRouter.cyclePhase() == CyclePhase::Hunt && phase != CyclePhase::Hunt) {
-		huntRuntime.cancelPlanning();
+		huntCoordinator.cancelPlanning();
 	}
 	turnRouter.setCyclePhase(phase);
 	std::ostringstream fields;
@@ -49,12 +49,12 @@ void PlayerBotController::setCyclePhase(CyclePhase phase, const Position& positi
 
 void PlayerBotController::beginReturn(Player* player, const Position& position, const char* reason)
 {
-	const auto traversalTarget = combatRuntime.traversalTarget();
+	const auto traversalTarget = huntCoordinator.traversalTarget();
 	const uint32_t previousTarget = traversalTarget ? traversalTarget->id : 0;
 	g_game.playerCancelAttackAndFollow(playerId);
 	clearTraversalTarget(position, reason);
 	resetNavigation();
-	lootWorkflow.reset();
+	huntCoordinator.resetLoot();
 	depotWorkflow.reset();
 	player->closeContainer(corpseContainerId);
 	setStage(ScenarioStage::Traverse, position);
@@ -98,7 +98,7 @@ void PlayerBotController::beginService(Player* player, const Position& position,
 	g_game.playerCancelAttackAndFollow(playerId);
 	clearTraversalTarget(position, reason);
 	resetNavigation();
-	lootWorkflow.reset();
+	huntCoordinator.resetLoot();
 	player->closeContainer(corpseContainerId);
 	setStage(ScenarioStage::Traverse, position);
 	serviceWorkflow.reset();
@@ -111,7 +111,7 @@ void PlayerBotController::finishHuntAndSelectGoal(Player* player, const Position
 	g_game.playerCancelAttackAndFollow(playerId);
 	clearTraversalTarget(position, reason);
 	resetNavigation();
-	lootWorkflow.reset();
+	huntCoordinator.resetLoot();
 	player->closeContainer(corpseContainerId);
 	setStage(ScenarioStage::Traverse, position);
 	setCyclePhase(CyclePhase::Idle, position, reason);
@@ -819,7 +819,7 @@ void PlayerBotController::processDeposit(Player* player, const Position& current
 	if (command.type == PlayerBotDepotCommandType::Depart) {
 		std::ostringstream fields;
 		fields << "\"action\":\"deposit\",\"result\":\"complete\",\"depot_id\":" << command.snapshot.selected.depotId
-		       << ",\"container_id\":" << static_cast<uint32_t>(depotChestContainerId) << ",\"cycle\":" << huntRuntime.completedCycles();
+		       << ",\"container_id\":" << static_cast<uint32_t>(depotChestContainerId) << ",\"cycle\":" << huntCoordinator.completedHuntCycles();
 		emit("action_result", currentPosition, fields.str());
 		player->closeContainer(depotChestContainerId);
 		player->closeContainer(depotLockerContainerId);

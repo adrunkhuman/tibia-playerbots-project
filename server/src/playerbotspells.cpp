@@ -261,7 +261,7 @@ bool PlayerBotController::trySupportSpell(Player* player, const Position& curren
 bool PlayerBotController::tryOffensiveSpell(Player* player, const Position& currentPosition)
 {
 	if (!player) return false;
-	const auto traversalTarget = combatRuntime.traversalTarget();
+	const auto traversalTarget = huntCoordinator.traversalTarget();
 	Creature* target = traversalTarget ? g_game.getCreatureByID(traversalTarget->id) : nullptr;
 	return dispatchSpellCommand(*player, currentPosition,
 	    survivalRuntime.decideOffensiveSpell(survivalSnapshot(*player, target), std::chrono::steady_clock::now()));

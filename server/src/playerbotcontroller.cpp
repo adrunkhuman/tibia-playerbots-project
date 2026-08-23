@@ -24,7 +24,13 @@ PlayerBotController::PlayerBotController(const Player& player,
 		return equipmentPolicy.evaluateUpgrade(PlayerBotEquipmentAdapter::player(candidatePlayer),
 		                                      PlayerBotEquipmentAdapter::loadout(candidatePlayer),
 		                                      PlayerBotEquipmentAdapter::item(item)).has_value();
-	}), huntRegionCooldowns(sharedHuntRegionCooldowns), huntRuntime({huntingLoop.begin(), huntingLoop.end()})
+	}), huntCoordinator({
+		{traversalCombatTimeout, traversalTargetSuppression, lostTargetPursuitTimeout, lostTargetSuppression,
+		 maximumLostTargetPursuitDistance, maximumTargetReacquisitionDistance},
+		{maxCorpseSearchAttempts, maximumCorpseNavigationFailures, corpseNavigationSuspendThreshold,
+		 std::chrono::milliseconds(corpseNavigationRetryInterval), corpseLootTimeout, preferredFoodCount},
+		{huntingLoop.begin(), huntingLoop.end()},
+	}, sharedHuntRegionCooldowns)
 {}
 
 void PlayerBotController::start(const Position& position, bool recovered, uint32_t recoveryCount)
@@ -119,7 +125,7 @@ void PlayerBotController::setStage(ScenarioStage stage, const Position& position
 
 std::optional<PlayerBotTraversalTarget> PlayerBotController::clearTraversalTarget(const Position& position, const char* reason)
 {
-	const auto target = combatRuntime.clearTraversalTarget();
+	const auto target = huntCoordinator.clearTraversalTarget();
 	if (!target) {
 		return std::nullopt;
 	}
@@ -159,7 +165,7 @@ uint32_t PlayerBotController::getSaleItemCount(const Player& player, uint16_t it
 playerbot::PlayerBotTelemetrySummary PlayerBotController::telemetrySummary() const
 {
 	playerbot::PlayerBotTelemetrySummary summary{turnRouter.stateName(), std::nullopt};
-	if (const auto activeTarget = combatRuntime.activeTarget()) {
+	if (const auto activeTarget = huntCoordinator.activeTarget()) {
 		summary.target = playerbot::PlayerBotTelemetryTarget{activeTarget->id, activeTarget->position};
 	}
 	return summary;
@@ -179,7 +185,7 @@ void PlayerBotController::stop(const char* reason, const Position& position)
 	const bool wasRunning = turnRouter.running();
 	const char* previous = turnRouter.stateName();
 	turnRouter.stop();
-	huntRuntime.cancelPlanning();
+	huntCoordinator.cancelPlanning();
 	resetNavigation();
 	if (wasRunning) {
 		const std::string repeatKey = std::string("state:") + previous + ':' + turnRouter.stateName();
@@ -233,14 +239,14 @@ void PlayerBotController::onDeath(const Player& player, const Creature* killer, 
 	}
 	deathObserved = true;
 	lastPosition = player.getPosition();
-	if (huntRuntime.active() && turnRouter.cyclePhase() == CyclePhase::Hunt &&
+	if (huntCoordinator.huntActive() && turnRouter.cyclePhase() == CyclePhase::Hunt &&
 	    (turnRouter.scenarioStage() == ScenarioStage::TraversalCombat ||
 	     turnRouter.scenarioStage() == ScenarioStage::TargetPursuit)) {
 		const auto now = std::chrono::steady_clock::now();
-		applyHuntCooldown(huntRuntime.observeDeath(true, huntRegionCooldown), now);
+		huntCoordinator.observeHuntDeath(true, now, huntRegionCooldown);
 	} else {
 		const auto now = std::chrono::steady_clock::now();
-		applyHuntCooldown(huntRuntime.observeDeath(false, huntRegionCooldown), now);
+		huntCoordinator.observeHuntDeath(false, now, huntRegionCooldown);
 	}
 	finishHuntRegion(player, lastPosition, "death");
 	std::ostringstream fields;
@@ -248,7 +254,7 @@ void PlayerBotController::onDeath(const Player& player, const Creature* killer, 
 	       << ",\"health\":" << player.getHealth() << ",\"objective\":" << jsonString(objectiveName())
 	       << ",\"state\":" << jsonString(turnRouter.stateName())
 	       << ",\"target_id\":";
-	const auto activeTarget = combatRuntime.activeTarget();
+	const auto activeTarget = huntCoordinator.activeTarget();
 	fields << (activeTarget ? std::to_string(activeTarget->id) : "null");
 	fields << ",\"killer_id\":" << (killer ? std::to_string(killer->getID()) : "null")
 	       << ",\"killer_name\":" << (killer ? jsonString(killer->getName()) : "null")
@@ -321,7 +327,7 @@ void PlayerBotController::onHealthDrain(const Player& player, uint32_t damage)
 {
 	survivalRuntime.observeHealthDrain(player.getID() == playerId);
 	if (player.getID() == playerId && isActiveHuntCombat(player)) {
-		huntRuntime.observeDamage(damage);
+		huntCoordinator.observeHuntDamage(damage);
 	}
 }
 
@@ -529,10 +535,9 @@ void PlayerBotController::navigate()
 	telemetry.maybeEmitSummary(currentPosition, telemetrySummary());
 	recordActiveHuntCombat(*player);
 	verifySpellCast(*player, currentPosition);
-	if (huntRuntime.active() && turnRouter.cyclePhase() == CyclePhase::Hunt) {
+	if (huntCoordinator.huntActive() && turnRouter.cyclePhase() == CyclePhase::Hunt) {
 		const auto now = std::chrono::steady_clock::now();
-		if (const auto cooldown = huntRuntime.dangerObserved(player->getMaxHealth(), now, huntRegionCooldown)) {
-			applyHuntCooldown(cooldown, now);
+		if (huntCoordinator.observeHuntDanger(player->getMaxHealth(), now, huntRegionCooldown)) {
 			beginService(player, currentPosition, "hunt_region_observed_danger");
 			schedule(navigationInterval);
 			return;
