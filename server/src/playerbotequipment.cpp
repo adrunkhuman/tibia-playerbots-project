@@ -301,11 +301,11 @@ void PlayerBotController::beginEquipmentPurchase(Player& player, const Position&
 	equipmentPurchaseSession.begin(std::move(evaluation));
 	progressionSession.begin(PlayerBotProgressionProcedure::BuyEquipment);
 	const auto& purchase = equipmentPurchaseSession.plan();
-	serviceSession.reset();
+	serviceWorkflow.resetTransactions();
 	if (!purchase.carried) {
-		npcSession.reset(purchase.npcId);
-		serviceApproachTarget = Position();
-		serviceRejectedApproaches.clear();
+		serviceWorkflow.resetNpc(purchase.npcId);
+		serviceWorkflow.clearApproach();
+		serviceWorkflow.clearRejectedApproaches();
 		clearNavigation();
 	}
 	std::ostringstream fields;
@@ -348,8 +348,8 @@ void PlayerBotController::finishEquipmentPurchase(Player* player, const Position
 	                       succeeded ? equipmentPurchaseSuccessCooldown : equipmentPurchaseFailureCooldown);
 	progressionSession.reset();
 	equipmentPurchaseSession.reset();
-	npcSession.reset();
-	serviceSession.reset();
+	serviceWorkflow.resetNpc();
+	serviceWorkflow.resetTransactions();
 	clearNavigation();
 	cyclePhase = CyclePhase::Service;
 	if (succeeded && fixtureRuntime.equipmentPurchaseFixture()) {
@@ -406,15 +406,17 @@ void PlayerBotController::processEquipmentPurchase(Player* player, const Positio
 			finishEquipmentPurchase(player, position, "failed", "provider_moved");
 			return;
 		}
-		const PlayerBotNpcSessionResult sessionResult = npcSession.openShop(*player, *npc, telemetry.actionsAttemptedForSession(),
-		                                                                    maximumServiceAttempts);
-		if (sessionResult != PlayerBotNpcSessionResult::Ready) {
-			if (sessionResult == PlayerBotNpcSessionResult::Failed) {
-				logActionFailure("shop", npcSession.step() == PlayerBotNpcConversationStep::Request ?
+		const PlayerBotNpcSessionOutcome sessionOutcome = serviceWorkflow.openNpcShop(*player, *npc, maximumServiceAttempts);
+		for (uint8_t action = 0; action < sessionOutcome.actionsIssued; ++action) {
+			telemetry.recordActionAttempt();
+		}
+		if (sessionOutcome.result != PlayerBotNpcSessionResult::Ready) {
+			if (sessionOutcome.result == PlayerBotNpcSessionResult::Failed) {
+				logActionFailure("shop", serviceWorkflow.npcStep() == PlayerBotNpcConversationStep::Request ?
 				                 "npc_focus_unconfirmed" : "shop_window_unavailable", position);
 				finishEquipmentPurchase(player, position, "failed", "shop_window_unavailable");
 			} else {
-				schedule(npcSession.nextDelay() == 0 ? SCHEDULER_MINTICKS : npcSession.nextDelay());
+			schedule(serviceWorkflow.npcNextDelay() == 0 ? SCHEDULER_MINTICKS : serviceWorkflow.npcNextDelay());
 			}
 			return;
 		}
@@ -425,8 +427,8 @@ void PlayerBotController::processEquipmentPurchase(Player* player, const Positio
 			finishEquipmentPurchase(player, position, "failed", "reserve_changed");
 			return;
 		}
-		if (!serviceSession.hasShopTransaction()) {
-			serviceSession.beginShopTransaction({purchase.itemId, 1,
+		if (!serviceWorkflow.hasShopTransaction()) {
+			serviceWorkflow.beginShopTransaction({purchase.itemId, 1,
 			                                     inventoryPolicy.inventoryItemCount(*player, purchase.itemId),
 			                                     player->getMoney(), player->getBankBalance()});
 		}
@@ -441,7 +443,7 @@ void PlayerBotController::processEquipmentPurchase(Player* player, const Positio
 	}
 
 	if (equipmentPurchaseSession.stage() == PlayerBotEquipmentPurchaseStage::VerifyPurchase) {
-		const PlayerBotServiceVerification verification = serviceSession.verifyShopTransaction(
+		const PlayerBotServiceVerification verification = serviceWorkflow.verifyShopTransaction(
 			inventoryPolicy.inventoryItemCount(*player, purchase.itemId), player->getMoney(), player->getBankBalance(),
 			true, purchase.price, maximumProgressionAttempts);
 		if (verification.result == PlayerBotServiceVerificationResult::Success) {
@@ -469,7 +471,7 @@ void PlayerBotController::processEquipmentPurchase(Player* player, const Positio
 		}
 		equipmentPurchaseSession.incrementRetries();
 		equipmentPurchaseSession.setStage(PlayerBotEquipmentPurchaseStage::Purchase);
-		npcSession.setStep(PlayerBotNpcConversationStep::Ready);
+		serviceWorkflow.setNpcStep(PlayerBotNpcConversationStep::Ready);
 		schedule(navigationDecisionDelay(*player));
 		return;
 	}

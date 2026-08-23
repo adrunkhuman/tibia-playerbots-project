@@ -134,7 +134,7 @@ void PlayerBotController::processReadinessEquipment(Player* player, const Positi
 		pendingReadinessAttempts = 0;
 		if (readinessResumeService) {
 			readinessResumeService = false;
-			depotSession.setStage(PlayerBotDepotStage::Deposit);
+			depotWorkflow.setStage(PlayerBotDepotStage::Deposit);
 			schedule(SCHEDULER_MINTICKS);
 			return;
 		}
@@ -322,12 +322,11 @@ void PlayerBotController::inspectRewardItem(Player& player, const Item& item, ui
 		inspected.classes.emplace_back("tool");
 		inspection.shovelCount += item.getItemCount();
 	}
-	const auto sellIt = itemSellValues.find(item.getID());
+	const uint32_t learnedSellValue = economyCatalog.sellValue(item.getID());
 	const ItemType& itemType = Item::items[item.getID()];
 	const bool unsupportedTwoHandedWeapon = (itemType.slotPosition & SLOTP_TWO_HAND) != 0 &&
 	                                      itemType.weaponType != WEAPON_NONE;
-	const uint32_t sellPrice = inspected.worth == 0 && !unsupportedTwoHandedWeapon &&
-	                           sellIt != itemSellValues.end() ? sellIt->second : 0;
+	const uint32_t sellPrice = inspected.worth == 0 && !unsupportedTwoHandedWeapon ? learnedSellValue : 0;
 	if (sellPrice != 0) {
 		inspected.classes.emplace_back("sellable");
 		inspected.sellValue = sellPrice * item.getItemCount();
@@ -979,7 +978,7 @@ bool PlayerBotController::findPickupReward(Player& player, const Position& posit
 uint32_t PlayerBotController::saleableItemCount(const Player& player) const
 {
 	uint32_t count = 0;
-	for (const auto& [itemId, value] : itemSellValues) {
+	for (const auto& [itemId, value] : economyCatalog.sellValues()) {
 		if (value != 0) {
 			count += getSaleItemCount(player, itemId);
 		}
@@ -1228,8 +1227,8 @@ void PlayerBotController::finishProgressionObjective(Player* player, const Posit
 	progressionSession.reset();
 	rewardSession.reset();
 	clearNavigation();
-	serviceStage = ServiceStage::Discover;
-	npcSession.reset();
+	serviceWorkflow.setStage(PlayerBotServiceStage::Discover);
+	serviceWorkflow.resetNpc();
 	cyclePhase = CyclePhase::Service;
 	goalArbiter.setCooldown(TopLevelGoal::PickupReward, std::strcmp(result, "success") == 0 ? pickupRewardSuccessCooldown :
 	                                                                                              pickupRewardFailureCooldown);

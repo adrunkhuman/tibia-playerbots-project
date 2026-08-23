@@ -79,16 +79,11 @@ class PlayerBotDepotSession
 	bool candidatesPrepared() const { return candidatesReady; }
 	void prepareCandidates(const Position& anchor);
 	const Position& discoveryAnchor() const { return anchorPosition; }
-	std::vector<PlayerBotDepotCandidate>& candidates() { return depotCandidates; }
 	const std::vector<PlayerBotDepotCandidate>& candidates() const { return depotCandidates; }
 	size_t nextCandidate() const { return nextCandidateIndex; }
 	void advanceCandidate() { ++nextCandidateIndex; }
 	void resetCandidates();
 
-	uint32_t& indexedCandidateCount() { return indexedCandidates; }
-	uint32_t& inScopeCandidateCount() { return inScopeCandidates; }
-	uint32_t& standableCandidateCount() { return standableCandidates; }
-	uint32_t& suppressedApproachCount() { return suppressedApproaches; }
 	uint32_t indexedCandidateCount() const { return indexedCandidates; }
 	uint32_t inScopeCandidateCount() const { return inScopeCandidates; }
 	uint32_t standableCandidateCount() const { return standableCandidates; }

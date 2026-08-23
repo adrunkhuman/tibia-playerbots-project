@@ -92,7 +92,7 @@ PlayerBotSurvivalSnapshot PlayerBotController::survivalSnapshot(const Player& pl
 		}
 	}
 	snapshot.canDoAction = player.canDoAction();
-	snapshot.buyingPotions = serviceStage == ServiceStage::BuyPotions;
+	snapshot.buyingPotions = serviceWorkflow.stage() == PlayerBotServiceStage::BuyPotions;
 	snapshot.lootMovePending = lootWorkflow.hasPendingLootMove();
 	snapshot.progressionActive = progressionSession.active() != PlayerBotProgressionProcedure::None;
 	snapshot.progressionDeparture = progressionSession.active(PlayerBotProgressionProcedure::OracleDeparture);
@@ -1099,9 +1099,9 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 		if (pauseDepotFixtureForRestart(*player, DepotRestartCheckpoint::Approach, currentPosition)) {
 			return;
 		}
-		if (!processNavigation(player, currentPosition, depotSession.approachPosition())) {
+		if (!processNavigation(player, currentPosition, depotWorkflow.approachPosition())) {
 			if (fixedTargetRouteFailureCount != 0) {
-				depotSession.rejectApproach(depotSession.approachPosition(), std::chrono::steady_clock::now() + depotApproachSuppression);
+				depotWorkflow.rejectApproach(depotWorkflow.approachPosition(), std::chrono::steady_clock::now() + depotApproachSuppression);
 				clearDepotDiscovery();
 				clearNavigation();
 			}
@@ -1125,12 +1125,12 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 		if (!discoverDepot(*player, currentPosition)) {
 			return;
 		}
-		if (!Position::areInRange<1, 1, 0>(currentPosition, depotSession.lockerPosition())) {
+		if (!Position::areInRange<1, 1, 0>(currentPosition, depotWorkflow.lockerPosition())) {
 			setCyclePhase(CyclePhase::ReturnToDepot, currentPosition, "displaced_during_deposit");
 			clearNavigation();
-			if (!processNavigation(player, currentPosition, depotSession.approachPosition())) {
+			if (!processNavigation(player, currentPosition, depotWorkflow.approachPosition())) {
 				if (fixedTargetRouteFailureCount != 0) {
-					depotSession.rejectApproach(depotSession.approachPosition(), std::chrono::steady_clock::now() + depotApproachSuppression);
+					depotWorkflow.rejectApproach(depotWorkflow.approachPosition(), std::chrono::steady_clock::now() + depotApproachSuppression);
 					clearDepotDiscovery();
 					clearNavigation();
 				}

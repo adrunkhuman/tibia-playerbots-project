@@ -20,7 +20,7 @@ PlayerBotController::PlayerBotController(const Player& player,
 	playerId(player.getID()), playerGuid(player.getGUID()), playerName(player.getName()), fixtureRuntime(playerBotTestPolicyFromEnvironment()),
 	telemetry(player.getName(), player.getGUID()),
 	equipmentPolicy(oracleVocationId),
-	inventoryPolicy(itemSellValues, [this](const Player& candidatePlayer, const Item& item) {
+	inventoryPolicy(economyCatalog.sellValues(), [this](const Player& candidatePlayer, const Item& item) {
 		return equipmentPolicy.evaluateUpgrade(candidatePlayer, item).has_value();
 	}), huntRegionCooldowns(sharedHuntRegionCooldowns)
 {}
@@ -143,8 +143,7 @@ Item* PlayerBotController::findActionableSlottedItem(const Player& player, uint1
 		if (!item || !inventoryPolicy.isActionableSlottedItem(player, *item, candidateSlot, itemId)) {
 			continue;
 		}
-		auto suppressed = unavailableSlottedSales.find({item->getID(), candidateSlot});
-		if (suppressed != unavailableSlottedSales.end() && suppressed->second > now) {
+		if (serviceWorkflow.slottedSaleUnavailable(item->getID(), candidateSlot, now)) {
 			continue;
 		}
 		slot = candidateSlot;

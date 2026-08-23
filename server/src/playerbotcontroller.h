@@ -15,7 +15,8 @@
 
 #include "playerbot.h"
 #include "playerbotcombatruntime.h"
-#include "playerbotdepotsession.h"
+#include "playerbotdepotworkflow.h"
+#include "playerboteconomy.h"
 #include "playerbotequipmentpolicy.h"
 #include "playerbotgoalarbiter.h"
 #include "playerbothuntregions.h"
@@ -24,12 +25,11 @@
 #include "playerbotinventorypolicy.h"
 #include "playerbotlootworkflow.h"
 #include "playerbotnavigationruntime.h"
-#include "playerbotnpcsession.h"
 #include "playerbotprogressionsession.h"
 #include "playerbotsurvivalruntime.h"
 #include "playerbottestpolicy.h"
 #include "playerbottelemetry.h"
-#include "playerbotservicesession.h"
+#include "playerbotserviceworkflow.h"
 
 #include "container.h"
 #include "condition.h"
@@ -176,16 +176,9 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 			Hunt,
 		};
 
-		enum class ServiceStage : uint8_t {
-			Discover,
-			SellLoot,
-			BuyPotions,
-			Bank,
-			Complete,
-		};
-
 		using TopLevelGoal = PlayerBotGoalArbiter::TopLevelGoal;
 		using GoalCandidate = PlayerBotGoalArbiter::GoalCandidate;
+		using ServiceStage = PlayerBotServiceStage;
 
 		using EquipmentUpgrade = PlayerBotEquipmentUpgrade;
 		using EquipmentLoadout = PlayerBotEquipmentLoadout;
@@ -232,10 +225,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 			int32_t knownUtility = 0;
 		};
 
-		struct ServiceNpc {
-			uint32_t id;
-			Position position;
-		};
+		using ServiceNpc = PlayerBotEconomyProvider;
 
 		enum class ScenarioStage : uint8_t {
 			LootCorpse,
@@ -454,7 +444,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 
 		void discoverServices(const Position& position);
 
-		bool approachServiceNpc(Player* player, ServiceNpc& service, const Position& currentPosition);
+		bool approachServiceNpc(Player* player, const ServiceNpc& service, const Position& currentPosition);
 
 		void refreshItemValues();
 
@@ -462,20 +452,20 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 
 		uint32_t serviceDistance(const Position& from, const ServiceNpc& service) const;
 
-		ServiceNpc* findNearestService(std::vector<ServiceNpc>& services, const Position& position);
+		const ServiceNpc* findNearestService(const std::vector<ServiceNpc>& services, const Position& position) const;
 
-		ServiceNpc* findShopFor(uint16_t itemId, bool buying, const Position& position);
+		const ServiceNpc* findShopFor(uint16_t itemId, bool buying, const Position& position) const;
 
-		ServiceNpc* findLootSeller(Player* player, const Position& position, uint16_t& itemId);
+		const ServiceNpc* findLootSeller(Player* player, const Position& position, uint16_t& itemId) const;
 		bool prepareSlottedSaleItem(Player* player, uint16_t itemId, const Position& position);
 
 		void completeServiceAction(Player* player, const char* action, const PlayerBotServiceTransaction& transaction,
 		                           const Position& position);
 
-		void processServiceShop(Player* player, const Position& currentPosition, ServiceNpc& service, const char* action,
+		void processServiceShop(Player* player, const Position& currentPosition, const ServiceNpc& service, const char* action,
 		                        uint16_t itemId, uint32_t amount, bool purchase);
 
-		void processBank(Player* player, const Position& currentPosition, ServiceNpc& banker);
+		void processBank(Player* player, const Position& currentPosition, const ServiceNpc& banker);
 
 		void processService(Player* player, const Position& currentPosition);
 
@@ -553,11 +543,12 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		std::chrono::steady_clock::time_point patrolRouteFailureStarted;
 		uint64_t lastNavigationExpandedNodes = 0;
 		PlayerBotNavigationResult lastNavigationPlanResult = PlayerBotNavigationResult::Reached;
-		std::map<uint16_t, uint32_t> itemSellValues;
+		PlayerBotEconomyCatalog economyCatalog;
+		PlayerBotDispositionPolicy dispositionPolicy;
 		PlayerBotEquipmentPolicy equipmentPolicy;
 		playerbot::PlayerBotInventoryPolicy inventoryPolicy;
 		PlayerBotSurvivalRuntime survivalRuntime;
-		PlayerBotDepotSession depotSession;
+		PlayerBotDepotWorkflow depotWorkflow;
 		PlayerBotCombatRuntime combatRuntime{PlayerBotCombatRuntimeConfig{
 			playerbot::traversalCombatTimeout, playerbot::traversalTargetSuppression,
 			playerbot::lostTargetPursuitTimeout, playerbot::lostTargetSuppression,
@@ -569,7 +560,6 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 			playerbot::corpseLootTimeout, playerbot::preferredFoodCount,
 		}};
 		CyclePhase cyclePhase = CyclePhase::ReturnToDepot;
-		ServiceStage serviceStage = ServiceStage::Discover;
 		PlayerBotProgressionSession progressionSession;
 		PlayerBotRewardSession rewardSession;
 		PlayerBotOracleDepartureSession departureSession;
@@ -582,17 +572,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		uint32_t pendingReadinessAttempts = 0;
 		bool readinessEquipmentPending = false;
 		bool readinessResumeService = false;
-		std::vector<ServiceNpc> serviceShops;
-		std::vector<ServiceNpc> serviceBankers;
-		Position serviceApproachTarget;
-		std::set<Position> serviceRejectedApproaches;
-		uint16_t pendingSlottedSaleItemId = 0;
-		slots_t pendingSlottedSaleSourceSlot = CONST_SLOT_WHEREEVER;
-		uint32_t pendingSlottedSaleBackpackCount = 0;
-		uint32_t slottedSaleMoveAttempts = 0;
-		std::map<std::pair<uint16_t, slots_t>, std::chrono::steady_clock::time_point> unavailableSlottedSales;
-		PlayerBotNpcSession npcSession;
-		PlayerBotServiceSession serviceSession;
+		PlayerBotServiceWorkflow serviceWorkflow;
 		size_t huntRouteIndex = 0;
 		uint32_t completedCycles = 0;
 		std::chrono::steady_clock::time_point huntDeadline;
@@ -609,4 +589,5 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		uint32_t huntRegionStartLevel = 0;
 		bool deathObserved = false;
 };
+
 #endif

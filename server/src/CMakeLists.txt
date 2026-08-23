@@ -48,10 +48,12 @@ set(tfs_SRC
 	${CMAKE_CURRENT_LIST_DIR}/playerbotcombat.cpp
 	${CMAKE_CURRENT_LIST_DIR}/playerbotcombatruntime.cpp
 	${CMAKE_CURRENT_LIST_DIR}/playerbotcontroller.cpp
+	${CMAKE_CURRENT_LIST_DIR}/playerbotdepotworkflow.cpp
 	${CMAKE_CURRENT_LIST_DIR}/playerbotdepotsession.cpp
 	${CMAKE_CURRENT_LIST_DIR}/playerbotdeparture.cpp
 	${CMAKE_CURRENT_LIST_DIR}/playerbotequipment.cpp
 	${CMAKE_CURRENT_LIST_DIR}/playerbotequipmentpolicy.cpp
+	${CMAKE_CURRENT_LIST_DIR}/playerboteconomy.cpp
 	${CMAKE_CURRENT_LIST_DIR}/playerbotgoalarbiter.cpp
 	${CMAKE_CURRENT_LIST_DIR}/playerbothuntpolicy.cpp
 	${CMAKE_CURRENT_LIST_DIR}/playerbothuntplanningsession.cpp
@@ -71,6 +73,7 @@ set(tfs_SRC
 	${CMAKE_CURRENT_LIST_DIR}/playerbottestpolicy.cpp
 	${CMAKE_CURRENT_LIST_DIR}/playerbotservice.cpp
 	${CMAKE_CURRENT_LIST_DIR}/playerbotservicesession.cpp
+	${CMAKE_CURRENT_LIST_DIR}/playerbotserviceworkflow.cpp
 	${CMAKE_CURRENT_LIST_DIR}/playerbothuntregions.cpp
 	${CMAKE_CURRENT_LIST_DIR}/playerbotnavigation.cpp
 	${CMAKE_CURRENT_LIST_DIR}/playerbotnavigationruntime.cpp
