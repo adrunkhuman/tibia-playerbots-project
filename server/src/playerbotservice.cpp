@@ -1178,7 +1178,7 @@ void PlayerBotController::processFixtureDeposit(Player* player, const Position& 
 	}
 	Item* upgrade = nullptr;
 	EquipmentUpgrade upgradeInfo{};
-	if (findCarriedEquipmentUpgrade(*player, upgrade, upgradeInfo)) {
+	if (equipmentPolicy.findCarriedUpgrade(*player, upgrade, upgradeInfo)) {
 		readinessResumeService = true;
 		if (!beginReadinessEquipment(player, currentPosition, "depot_carried_upgrade")) {
 			schedule(navigationDecisionDelay(*player));
@@ -1330,7 +1330,7 @@ void PlayerBotController::processDeposit(Player* player, const Position& current
 	refreshItemValues();
 	Item* upgrade = nullptr;
 	EquipmentUpgrade upgradeInfo{};
-	if (findCarriedEquipmentUpgrade(*player, upgrade, upgradeInfo)) {
+	if (equipmentPolicy.findCarriedUpgrade(*player, upgrade, upgradeInfo)) {
 		readinessResumeService = true;
 		if (!beginReadinessEquipment(player, currentPosition, "depot_carried_upgrade")) {
 			schedule(navigationDecisionDelay(*player));

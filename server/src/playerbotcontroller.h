@@ -14,6 +14,7 @@
 // Internal controller contract shared by the responsibility-specific playerbot implementation units.
 
 #include "playerbot.h"
+#include "playerbotequipmentpolicy.h"
 #include "playerbotgoalarbiter.h"
 #include "playerbothuntregions.h"
 #include "playerbothuntplanningsession.h"
@@ -263,53 +264,10 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 			Verify,
 		};
 
-		struct EquipmentUpgrade {
-			slots_t slot;
-			int32_t benefit;
-			const char* metric;
-			int32_t currentValue;
-			int32_t candidateValue;
-		};
-
-		struct EquipmentLoadout {
-			std::array<uint16_t, CONST_SLOT_LAST + 1> itemIds{};
-		};
-
-		struct EquipmentHuntSummary {
-			uint32_t suitableRegions = 0;
-			double bestProjectedExperience = 0;
-			double lowestThreatRatio = 0;
-			uint32_t evaluatedRegions = 0;
-			bool truncated = false;
-		};
-
-		enum class EquipmentDecisionRule : uint8_t {
-			None,
-			ParetoImprovement,
-			UnlocksHunt,
-			ReadinessRepair,
-		};
-
-		struct EquipmentOfferEvaluation {
-			uint32_t npcId = 0;
-			Position npcPosition;
-			Position approachPosition;
-			uint16_t itemId = 0;
-			uint32_t price = 0;
-			slots_t slot = CONST_SLOT_WHEREEVER;
-			uint16_t replacedItemId = 0;
-			uint16_t displacedLeftItemId = 0;
-			uint16_t displacedRightItemId = 0;
-			PlayerBotCombatProfile profile;
-			EquipmentHuntSummary hunts;
-			bool currentReady = false;
-			bool candidateReady = false;
-			bool carried = false;
-			bool simulated = false;
-			std::string rejection;
-			EquipmentDecisionRule rule = EquipmentDecisionRule::None;
-			uint32_t travelSteps = 0;
-		};
+		using EquipmentUpgrade = PlayerBotEquipmentUpgrade;
+		using EquipmentLoadout = PlayerBotEquipmentLoadout;
+		using EquipmentHuntSummary = PlayerBotEquipmentHuntSummary;
+		using EquipmentOfferEvaluation = PlayerBotEquipmentOfferEvaluation;
 
 		enum class EquipmentPurchaseStage : uint8_t {
 			Travel,
@@ -513,15 +471,9 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		bool canEatCheese(const Player& player) const;
 
 		bool needsHealing(const Player& player) const;
-		bool requiresKnightCombatReadiness(const Player& player) const;
-		bool isLegalEquipmentType(const Player& player, const ItemType& type) const;
-		bool isLegalEquipmentItem(const Player& player, const Item& item) const;
-		bool isKnightMeleeWeapon(const Player& player, const Item& item) const;
-		bool isCombatEquipment(const Item& item) const;
-		bool isCombatReady(const Player& player, std::string& recovery, std::string& terminalReason) const;
 		void emitCombatReadiness(const Player& player, const Position& position, const char* result,
 		                         const std::string& recovery, const std::string& terminalReason) const;
-		bool findCarriedEquipmentUpgrade(Player& player, Item*& item, EquipmentUpgrade& upgrade) const;
+		PlayerBotEquipmentReadinessInput equipmentReadinessInput(const Player& player) const;
 		bool beginReadinessEquipment(Player* player, const Position& position, const char* reason);
 		void processReadinessEquipment(Player* player, const Position& position);
 		bool ensureCombatReady(Player* player, const Position& position, const char* reason);
@@ -569,23 +521,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		void finishTargetPursuit(const Position& currentPosition, const char* reason);
 		void processTargetPursuit(Player* player, const Position& currentPosition);
 
-		std::optional<EquipmentUpgrade> evaluateEquipmentUpgrade(const Player& player, const Item& candidate) const;
-		EquipmentLoadout equipmentLoadout(const Player& player) const;
-		bool applyEquipmentOffer(const Player& player, EquipmentLoadout& loadout, uint16_t itemId, slots_t& slot,
-		                         uint16_t& replacedItemId, uint16_t& displacedLeftItemId, uint16_t& displacedRightItemId,
-		                         std::string& rejection) const;
-		PlayerBotCombatProfile equipmentCombatProfile(const Player& player, const EquipmentLoadout& loadout) const;
-		bool equipmentLoadoutReady(const Player& player, const EquipmentLoadout& loadout,
-		                           uint32_t additionalWeight = 0) const;
 		EquipmentHuntSummary equipmentHuntSummary(Player& player, const PlayerBotCombatProfile& profile) const;
-		EquipmentOfferEvaluation evaluateEquipmentCandidate(Player& player, uint16_t itemId,
-		                                                    const EquipmentLoadout& currentLoadout,
-		                                                    const PlayerBotCombatProfile& currentProfile,
-		                                                    const EquipmentHuntSummary& currentHunts,
-		                                                    bool currentReady,
-		                                                    uint32_t additionalWeight = 0,
-		                                                    bool allowSimulation = true) const;
-		const char* equipmentDecisionRuleName(EquipmentDecisionRule rule) const;
 		void emitEquipmentOffer(const Player& player, const EquipmentOfferEvaluation& evaluation,
 		                       const PlayerBotCombatProfile& currentProfile, const EquipmentHuntSummary& currentHunts,
 		                       uint64_t reserve, const Position& position, const char* result, const char* reason) const;
@@ -879,6 +815,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		DepotStage depotStage = DepotStage::Discover;
 		std::set<uint16_t> unavailableLootItemIds;
 		std::map<uint16_t, uint32_t> itemSellValues;
+		PlayerBotEquipmentPolicy equipmentPolicy;
 		playerbot::PlayerBotInventoryPolicy inventoryPolicy;
 		PlayerBotRecoverySession recoverySession;
 		PlayerBotSpellRuntime spellRuntime;

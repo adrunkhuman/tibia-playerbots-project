@@ -12,147 +12,9 @@
 
 #include "playerbotcontroller.h"
 #include "playerbotarea.h"
-#include "weapons.h"
 
 // Goal arbitration and reward discovery, claiming, and equipment.
 using namespace playerbot;
-
-std::optional<PlayerBotController::EquipmentUpgrade> PlayerBotController::evaluateEquipmentUpgrade(const Player& player, const Item& candidate) const
-{
-	const ItemType& type = Item::items[candidate.getID()];
-	if (!isLegalEquipmentItem(player, candidate)) {
-		return std::nullopt;
-	}
-	slots_t slot = CONST_SLOT_WHEREEVER;
-	const char* metric = nullptr;
-	int32_t candidateValue = 0;
-	if (type.slotPosition & SLOTP_HEAD) {
-		slot = CONST_SLOT_HEAD;
-		metric = "armor";
-		candidateValue = candidate.getArmor();
-	} else if (type.slotPosition & SLOTP_ARMOR) {
-		slot = CONST_SLOT_ARMOR;
-		metric = "armor";
-		candidateValue = candidate.getArmor();
-	} else if (type.slotPosition & SLOTP_LEGS) {
-		slot = CONST_SLOT_LEGS;
-		metric = "armor";
-		candidateValue = candidate.getArmor();
-	} else if (type.slotPosition & SLOTP_FEET) {
-		slot = CONST_SLOT_FEET;
-		metric = "armor";
-		candidateValue = candidate.getArmor();
-	} else if (candidate.getWeaponType() == WEAPON_SHIELD) {
-		slot = CONST_SLOT_RIGHT;
-		metric = "defense";
-		candidateValue = candidate.getDefense();
-	} else if (!(type.slotPosition & SLOTP_TWO_HAND) && candidate.getWeaponType() != WEAPON_NONE &&
-	           candidate.getWeaponType() != WEAPON_AMMO) {
-		slot = CONST_SLOT_LEFT;
-		metric = "attack";
-		candidateValue = candidate.getAttack();
-	}
-	if (slot == CONST_SLOT_WHEREEVER || candidateValue <= 0) {
-		return std::nullopt;
-	}
-
-	const Item* equipped = player.getInventoryItem(slot);
-	int32_t currentValue = 0;
-	if (equipped) {
-		if (std::strcmp(metric, "armor") == 0) {
-			currentValue = equipped->getArmor();
-		} else if (std::strcmp(metric, "defense") == 0) {
-			currentValue = equipped->getDefense();
-		} else {
-			currentValue = equipped->getAttack();
-			const int32_t candidateMaximumDamage = Weapons::getMaxWeaponDamage(
-				player.getLevel(), player.getWeaponSkill(&candidate), candidate.getAttack(), player.getAttackFactor());
-			const int32_t currentMaximumDamage = Weapons::getMaxWeaponDamage(
-				player.getLevel(), player.getWeaponSkill(equipped), equipped->getAttack(), player.getAttackFactor());
-			if (candidateMaximumDamage <= currentMaximumDamage) {
-				return std::nullopt;
-			}
-		}
-	}
-	if (candidateValue <= currentValue) {
-		return std::nullopt;
-	}
-	return EquipmentUpgrade{slot, candidateValue - currentValue, metric, currentValue, candidateValue};
-}
-
-bool PlayerBotController::requiresKnightCombatReadiness(const Player& player) const
-{
-	return player.getVocationId() == oracleVocationId;
-}
-
-bool PlayerBotController::isLegalEquipmentType(const Player& player, const ItemType& type) const
-{
-	if (!type.isPickupable() || player.getLevel() < type.minReqLevel ||
-	    player.getMagicLevel() < type.minReqMagicLevel ||
-	    ((type.wieldInfo & WIELDINFO_PREMIUM) != 0 && !player.isPremium())) {
-		return false;
-	}
-	return type.vocationIds.empty() || type.vocationIds.find(player.getVocationId()) != type.vocationIds.end();
-}
-
-bool PlayerBotController::isLegalEquipmentItem(const Player& player, const Item& item) const
-{
-	return !item.isRemoved() && isLegalEquipmentType(player, Item::items[item.getID()]);
-}
-
-bool PlayerBotController::isKnightMeleeWeapon(const Player& player, const Item& item) const
-{
-	const WeaponType_t weaponType = item.getWeaponType();
-	const int32_t slots = item.getSlotPosition();
-	return isLegalEquipmentItem(player, item) && item.getAttack() > 0 &&
-	       (weaponType == WEAPON_SWORD || weaponType == WEAPON_CLUB || weaponType == WEAPON_AXE) &&
-	       (slots & (SLOTP_LEFT | SLOTP_RIGHT)) != 0;
-}
-
-bool PlayerBotController::isCombatEquipment(const Item& item) const
-{
-	const ItemType& type = Item::items[item.getID()];
-	return (type.slotPosition & (SLOTP_HEAD | SLOTP_ARMOR | SLOTP_LEGS | SLOTP_FEET)) != 0 ||
-	       type.weaponType != WEAPON_NONE || item.getArmor() > 0 || item.getDefense() > 0;
-}
-
-bool PlayerBotController::isCombatReady(const Player& player, std::string& recovery, std::string& terminalReason) const
-{
-	recovery.clear();
-	terminalReason.clear();
-	if (!requiresKnightCombatReadiness(player)) {
-		return true;
-	}
-	Item* left = player.getInventoryItem(CONST_SLOT_LEFT);
-	Item* right = player.getInventoryItem(CONST_SLOT_RIGHT);
-	Item* armor = player.getInventoryItem(CONST_SLOT_ARMOR);
-	Item* backpack = player.getInventoryItem(CONST_SLOT_BACKPACK);
-	const bool weaponReady = (left && isKnightMeleeWeapon(player, *left)) || (right && isKnightMeleeWeapon(player, *right));
-	const bool armorReady = armor && isLegalEquipmentItem(player, *armor) &&
-	                        (armor->getSlotPosition() & SLOTP_ARMOR) != 0 && armor->getArmor() > 0;
-	const bool loadoutReady = backpack && backpack->getContainer();
-	const bool suppliesReady = inventoryPolicy.inventoryItemCount(player, smallHealthPotionItemId) > smallHealthPotionReturnThreshold;
-	const bool capacityReady = inventoryPolicy.effectiveFreeCapacity(player) >= returnCapacityThreshold;
-	Item* upgrade = nullptr;
-	EquipmentUpgrade upgradeInfo{};
-	if (findCarriedEquipmentUpgrade(const_cast<Player&>(player), upgrade, upgradeInfo)) {
-		recovery = "equip_carried";
-		return false;
-	}
-	if (weaponReady && armorReady && loadoutReady && suppliesReady && capacityReady) {
-		return true;
-	}
-	if (!weaponReady) {
-		terminalReason = "missing_legal_melee_weapon";
-	} else if (!armorReady) {
-		terminalReason = "missing_legal_armor";
-	} else if (!loadoutReady) {
-		terminalReason = "missing_backpack";
-	} else {
-		recovery = "service";
-	}
-	return false;
-}
 
 void PlayerBotController::emitCombatReadiness(const Player& player, const Position& position, const char* result,
                                               const std::string& recovery, const std::string& terminalReason) const
@@ -163,8 +25,9 @@ void PlayerBotController::emitCombatReadiness(const Player& player, const Positi
 	Item* backpack = player.getInventoryItem(CONST_SLOT_BACKPACK);
 	const PlayerBotFoodInventory food = inventoryPolicy.foodInventory(player);
 	const uint32_t usableCapacity = inventoryPolicy.effectiveFreeCapacity(player);
-	const bool weaponReady = (left && isKnightMeleeWeapon(player, *left)) || (right && isKnightMeleeWeapon(player, *right));
-	const bool armorReady = armor && isLegalEquipmentItem(player, *armor) && armor->getArmor() > 0;
+	const bool weaponReady = (left && equipmentPolicy.isKnightMeleeWeapon(player, *left)) ||
+	                         (right && equipmentPolicy.isKnightMeleeWeapon(player, *right));
+	const bool armorReady = armor && equipmentPolicy.isLegalEquipmentItem(player, *armor) && armor->getArmor() > 0;
 	std::ostringstream fields;
 	fields << "\"result\":" << jsonString(result)
 	       << ",\"vocation_id\":" << player.getVocationId()
@@ -193,41 +56,19 @@ void PlayerBotController::emitCombatReadiness(const Player& player, const Positi
 	emit("combat_readiness", position, fields.str());
 }
 
-bool PlayerBotController::findCarriedEquipmentUpgrade(Player& player, Item*& selectedItem, EquipmentUpgrade& selectedUpgrade) const
+PlayerBotEquipmentReadinessInput PlayerBotController::equipmentReadinessInput(const Player& player) const
 {
-	selectedItem = nullptr;
-	for (int32_t slot = CONST_SLOT_FIRST; slot <= CONST_SLOT_LAST; ++slot) {
-		Item* root = player.getInventoryItem(static_cast<slots_t>(slot));
-		Container* container = root ? root->getContainer() : nullptr;
-		if (!container) {
-			continue;
-		}
-		for (ContainerIterator it = container->iterator(); it.hasNext(); it.advance()) {
-			Item* candidate = *it;
-			std::optional<EquipmentUpgrade> upgrade = evaluateEquipmentUpgrade(player, *candidate);
-			if (!upgrade || (requiresKnightCombatReadiness(player) &&
-			                 candidate->getWeaponType() != WEAPON_NONE && !isKnightMeleeWeapon(player, *candidate))) {
-				continue;
-			}
-			Position source;
-			uint8_t index = 0;
-			g_game.internalGetPosition(candidate, source, index);
-			if (source.x != 0xFFFF || (source.y & 0x40) == 0 ||
-			    (selectedItem && upgrade->benefit <= selectedUpgrade.benefit)) {
-				continue;
-			}
-			selectedItem = candidate;
-			selectedUpgrade = *upgrade;
-		}
-	}
-	return selectedItem != nullptr;
+	const Item* backpack = player.getInventoryItem(CONST_SLOT_BACKPACK);
+	return {backpack && backpack->getContainer(),
+	        inventoryPolicy.inventoryItemCount(player, smallHealthPotionItemId) > smallHealthPotionReturnThreshold,
+	        inventoryPolicy.effectiveFreeCapacity(player), returnCapacityThreshold};
 }
 
 bool PlayerBotController::beginReadinessEquipment(Player* player, const Position& position, const char* reason)
 {
 	Item* item = nullptr;
 	EquipmentUpgrade upgrade{};
-	if (!player || !findCarriedEquipmentUpgrade(*player, item, upgrade) || !player->canDoAction()) {
+	if (!player || !equipmentPolicy.findCarriedUpgrade(*player, item, upgrade) || !player->canDoAction()) {
 		return false;
 	}
 	Position source;
@@ -280,12 +121,15 @@ void PlayerBotController::processReadinessEquipment(Player* player, const Positi
 {
 	Item* equipped = pendingReadinessSlot == CONST_SLOT_WHEREEVER ? nullptr : player->getInventoryItem(pendingReadinessSlot);
 	if (equipped && equipped->getID() == pendingReadinessItemId) {
-		std::string recovery;
-		std::string terminalReason;
-		const bool ready = isCombatReady(*player, recovery, terminalReason);
+		Item* carriedUpgrade = nullptr;
+		EquipmentUpgrade upgrade{};
+		const bool hasCarriedUpgrade = equipmentPolicy.findCarriedUpgrade(*player, carriedUpgrade, upgrade);
+		const PlayerBotEquipmentReadiness readiness = equipmentPolicy.combatReadiness(
+			*player, hasCarriedUpgrade, equipmentReadinessInput(*player));
+		const bool ready = readiness.ready;
 		emit("action_result", position, "\"action\":\"equip_readiness\",\"result\":\"success\",\"item_id\":" +
 		     std::to_string(pendingReadinessItemId) + ",\"slot\":" + std::to_string(pendingReadinessSlot));
-		emitCombatReadiness(*player, position, ready ? "ready" : "recovery", recovery, terminalReason);
+		emitCombatReadiness(*player, position, ready ? "ready" : "recovery", readiness.recovery, readiness.terminalReason);
 		readinessEquipmentPending = false;
 		pendingReadinessAttempts = 0;
 		if (readinessResumeService) {
@@ -306,15 +150,16 @@ void PlayerBotController::processReadinessEquipment(Player* player, const Positi
 		return;
 	}
 	if (++pendingReadinessAttempts >= maximumProgressionAttempts) {
-		std::string recovery;
-		std::string terminalReason;
-		isCombatReady(*player, recovery, terminalReason);
+		Item* carriedUpgrade = nullptr;
+		EquipmentUpgrade upgrade{};
+		const PlayerBotEquipmentReadiness readiness = equipmentPolicy.combatReadiness(
+			*player, equipmentPolicy.findCarriedUpgrade(*player, carriedUpgrade, upgrade), equipmentReadinessInput(*player));
 		readinessEquipmentPending = false;
 		readinessResumeService = false;
 		emit("action_result", position, "\"action\":\"equip_readiness\",\"result\":\"failed\",\"reason\":\"move_not_verified\"");
-		emitCombatReadiness(*player, position, "failed", recovery, terminalReason);
-		if (!terminalReason.empty()) {
-			stop(("combat_readiness_" + terminalReason).c_str(), position);
+		emitCombatReadiness(*player, position, "failed", readiness.recovery, readiness.terminalReason);
+		if (!readiness.terminalReason.empty()) {
+			stop(("combat_readiness_" + readiness.terminalReason).c_str(), position);
 		} else {
 			beginService(player, position, "readiness_equipment_move_failed");
 			schedule(navigationInterval);
@@ -337,19 +182,21 @@ void PlayerBotController::processReadinessEquipment(Player* player, const Positi
 
 bool PlayerBotController::ensureCombatReady(Player* player, const Position& position, const char* reason)
 {
-	if (!player || !requiresKnightCombatReadiness(*player)) {
+	if (!player || !equipmentPolicy.requiresKnightCombatReadiness(*player)) {
 		return true;
 	}
-	std::string recovery;
-	std::string terminalReason;
-	if (isCombatReady(*player, recovery, terminalReason)) {
+	Item* carriedUpgrade = nullptr;
+	EquipmentUpgrade upgrade{};
+	const PlayerBotEquipmentReadiness readiness = equipmentPolicy.combatReadiness(
+		*player, equipmentPolicy.findCarriedUpgrade(*player, carriedUpgrade, upgrade), equipmentReadinessInput(*player));
+	if (readiness.ready) {
 		if (std::strcmp(reason, "readiness_continuous_check") != 0) {
 			emitCombatReadiness(*player, position, "ready", {}, {});
 		}
 		return true;
 	}
-	emitCombatReadiness(*player, position, "recovery", recovery, terminalReason);
-	if (recovery == "equip_carried") {
+	emitCombatReadiness(*player, position, "recovery", readiness.recovery, readiness.terminalReason);
+	if (readiness.recovery == "equip_carried") {
 		if (!beginReadinessEquipment(player, position, reason)) {
 			if (pendingReadinessAttempts >= maximumProgressionAttempts) {
 				emit("action_result", position,
@@ -363,12 +210,12 @@ bool PlayerBotController::ensureCombatReady(Player* player, const Position& posi
 		}
 		return false;
 	}
-	if (recovery == "service") {
+	if (readiness.recovery == "service") {
 		beginService(player, position, "combat_readiness_service");
 		schedule(navigationInterval);
 		return false;
 	}
-	stop(("combat_readiness_" + terminalReason).c_str(), position);
+	stop(("combat_readiness_" + readiness.terminalReason).c_str(), position);
 	return false;
 }
 
@@ -409,15 +256,19 @@ void PlayerBotController::inspectRewardItem(Player& player, const Item& item, ui
 	}
 	EquipmentOfferEvaluation equipment;
 	bool evaluatedEquipment = false;
-	if (isCombatEquipment(item)) {
+	if (equipmentPolicy.isCombatEquipment(item)) {
 		evaluatedEquipment = true;
 		const auto cacheKey = std::make_pair(item.getID(), additionalWeight);
 		if (auto cached = equipmentEvaluations.find(cacheKey); cached != equipmentEvaluations.end()) {
 			equipment = cached->second;
 		} else {
-			equipment = evaluateEquipmentCandidate(
+			equipment = equipmentPolicy.evaluateCandidate(
 				player, item.getID(), currentLoadout, currentProfile, currentHunts, currentReady,
-				additionalWeight, simulatedItems < maximumEquipmentCandidateSimulations);
+				equipmentReadinessInput(player), additionalWeight,
+				simulatedItems < maximumEquipmentCandidateSimulations,
+				[this](Player& candidate, const PlayerBotCombatProfile& profile) {
+					return equipmentHuntSummary(candidate, profile);
+				});
 			if (equipment.simulated) {
 				++simulatedItems;
 			}
@@ -901,7 +752,7 @@ void PlayerBotController::emitRewardInspection(uint16_t uniqueId, const Position
 	       << ",\"sell_value\":" << inspection.sellValue
 	       << ",\"equipment_upgrade_count\":" << inspection.equipmentUpgradeCount
 	       << ",\"equipment_rule\":" << (inspection.bestEquipment ?
-	              jsonString(equipmentDecisionRuleName(inspection.bestEquipment->rule)) : "null")
+	              jsonString(PlayerBotEquipmentPolicy::decisionRuleName(inspection.bestEquipment->rule)) : "null")
 	       << ",\"equipment_rejection\":" << (inspection.equipmentRejection.empty() ?
 	              "null" : jsonString(inspection.equipmentRejection))
 	       << ",\"destination\":{\"x\":" << rewardPosition.x << ",\"y\":" << rewardPosition.y
@@ -922,10 +773,10 @@ bool PlayerBotController::findPickupReward(Player& player, const Position& posit
 	std::optional<PickupReward> claimedUpgrade;
 	std::vector<PickupReward> unclaimedCandidates;
 	std::deque<PlayerBotNavigationStep> selectedSteps;
-	const EquipmentLoadout currentLoadout = equipmentLoadout(player);
-	const PlayerBotCombatProfile currentProfile = equipmentCombatProfile(player, currentLoadout);
+	const EquipmentLoadout currentLoadout = equipmentPolicy.loadout(player);
+	const PlayerBotCombatProfile currentProfile = equipmentPolicy.combatProfile(player, currentLoadout);
 	const EquipmentHuntSummary currentHunts = equipmentHuntSummary(player, currentProfile);
-	const bool currentReady = equipmentLoadoutReady(player, currentLoadout);
+	const bool currentReady = equipmentPolicy.loadoutReady(player, currentLoadout, equipmentReadinessInput(player));
 	std::map<std::pair<uint16_t, uint32_t>, EquipmentOfferEvaluation> equipmentEvaluations;
 	size_t simulatedItems = 0;
 	for (const auto& entry : g_game.getUniqueItems()) {
@@ -1192,7 +1043,7 @@ void PlayerBotController::emitGoalCandidate(const Player& player, const GoalCand
 	if (equipment) {
 		fields << ",\"npc_id\":" << equipment->npcId << ",\"item_id\":" << equipment->itemId
 		       << ",\"price\":" << equipment->price << ",\"rule\":"
-		       << jsonString(equipmentDecisionRuleName(equipment->rule))
+	       << jsonString(PlayerBotEquipmentPolicy::decisionRuleName(equipment->rule))
 		       << ",\"travel_steps\":" << equipment->travelSteps;
 	}
 	if (candidate.goal == TopLevelGoal::MagicTraining) {
@@ -1280,7 +1131,7 @@ bool PlayerBotController::selectTopLevelGoal(Player& player, const Position& pos
 	                                 equipmentFound ? equipmentPurchaseGoalUtility : 0,
 	                                 equipmentPurchaseCoolingDown ? "cooldown" :
 	                                 !testPolicy.equipmentPurchasesEnabled ? "shadow_only" :
-	                                 equipmentFound ? equipmentDecisionRuleName(equipment->rule) : "no_justified_offer"};
+	                                 equipmentFound ? PlayerBotEquipmentPolicy::decisionRuleName(equipment->rule) : "no_justified_offer"};
 	const bool magicTrainingCoolingDown = goalArbiter.isCoolingDown(TopLevelGoal::MagicTraining, now);
 	const char* magicTrainingReason = magicTrainingCoolingDown ? "cooldown" : magicTrainingCandidateReason(player);
 	const GoalCandidate magicTraining{TopLevelGoal::MagicTraining, !magicTrainingCoolingDown && magicTrainingReason == nullptr,
@@ -1328,7 +1179,7 @@ bool PlayerBotController::selectTopLevelGoal(Player& player, const Position& pos
 	} else if (selected.goal == TopLevelGoal::BuyEquipment) {
 		fields << ",\"npc_id\":" << equipment->npcId << ",\"item_id\":" << equipment->itemId
 		       << ",\"price\":" << equipment->price << ",\"rule\":"
-		       << jsonString(equipmentDecisionRuleName(equipment->rule));
+	       << jsonString(PlayerBotEquipmentPolicy::decisionRuleName(equipment->rule));
 	}
 	emit("goal_selection", position, fields.str());
 	if (selected.goal == TopLevelGoal::Departure) {
