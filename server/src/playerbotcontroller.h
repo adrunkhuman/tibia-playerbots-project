@@ -14,6 +14,7 @@
 // Internal controller contract shared by the responsibility-specific playerbot implementation units.
 
 #include "playerbot.h"
+#include "playerbotcombatruntime.h"
 #include "playerbotdepotsession.h"
 #include "playerbotequipmentpolicy.h"
 #include "playerbotgoalarbiter.h"
@@ -31,7 +32,6 @@
 #include "playerbottestpolicy.h"
 #include "playerbottelemetry.h"
 #include "playerbotservicesession.h"
-#include "playerbottargetingsession.h"
 
 #include "container.h"
 #include "condition.h"
@@ -311,8 +311,6 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 
 		bool findPath(Player* player, const Position& target, std::vector<Direction>& result, const FindPathParams& pathParams);
 
-		void setTraversalTarget(Creature* target, const Position& position);
-
 		bool attackVisibleMonster(Player* player, const Position& currentPosition);
 
 		bool attackDefensiveThreat(Player* player, const Position& currentPosition);
@@ -543,7 +541,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 
 		void navigate();
 
-		void beginLoot(Player* player, const Position& currentPosition);
+		void beginLoot(Player* player, const Position& currentPosition, const PlayerBotCombatDecision& defeatedTarget);
 
 		void finishLoot(Player* player, const Position& currentPosition);
 		void finishLootFailure(Player* player, const Position& currentPosition, const char* reason);
@@ -574,7 +572,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		Position patrolRouteFailureTarget;
 		std::chrono::steady_clock::time_point patrolRouteFailureStarted;
 		uint64_t lastNavigationExpandedNodes = 0;
-		bool lastNavigationRouteUnavailable = false;
+		PlayerBotNavigationResult lastNavigationPlanResult = PlayerBotNavigationResult::Reached;
 		std::map<uint16_t, uint32_t> itemSellValues;
 		PlayerBotEquipmentPolicy equipmentPolicy;
 		playerbot::PlayerBotInventoryPolicy inventoryPolicy;
@@ -582,7 +580,11 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		PlayerBotDepotSession depotSession;
 		PlayerBotSpellRuntime spellRuntime;
 		PlayerBotSpellCalibration spellCalibration;
-		PlayerBotTargetingSession targetingSession;
+		PlayerBotCombatRuntime combatRuntime{PlayerBotCombatRuntimeConfig{
+			playerbot::traversalCombatTimeout, playerbot::traversalTargetSuppression,
+			playerbot::lostTargetPursuitTimeout, playerbot::lostTargetSuppression,
+			playerbot::maximumLostTargetPursuitDistance, playerbot::maximumTargetReacquisitionDistance,
+		}};
 		PlayerBotLootSession lootSession;
 		CyclePhase cyclePhase = CyclePhase::ReturnToDepot;
 		ServiceStage serviceStage = ServiceStage::Discover;

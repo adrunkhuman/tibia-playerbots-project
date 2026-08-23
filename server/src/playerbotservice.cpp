@@ -53,7 +53,7 @@ void PlayerBotController::setCyclePhase(CyclePhase phase, const Position& positi
 
 void PlayerBotController::beginReturn(Player* player, const Position& position, const char* reason)
 {
-	const auto traversalTarget = targetingSession.traversalTarget();
+	const auto traversalTarget = combatRuntime.traversalTarget();
 	const uint32_t previousTarget = traversalTarget ? traversalTarget->id : 0;
 	g_game.playerCancelAttackAndFollow(playerId);
 	clearTraversalTarget(position, reason);

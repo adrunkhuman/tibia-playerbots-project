@@ -18,28 +18,9 @@
 #include <unordered_map>
 #include <vector>
 
-#include "position.h"
+#include "playerbotcombattarget.h"
 
-struct PlayerBotExpectedCorpse {
-	uint16_t itemId = 0;
-	bool lootable = false;
-};
-
-struct PlayerBotTarget {
-	uint32_t id = 0;
-	Position position;
-	std::string name;
-};
-
-struct PlayerBotTraversalTarget : PlayerBotTarget {
-	PlayerBotExpectedCorpse expectedCorpse;
-};
-
-struct PlayerBotDefensiveTarget : PlayerBotTarget {
-	bool routeCritical = false;
-};
-
-// The controller supplies only candidates that are valid under its current policy.
+// The combat runtime supplies only candidates that are valid under controller policy.
 class PlayerBotTargetingSession
 {
 	public:

@@ -306,7 +306,7 @@ const char* PlayerBotController::magicTrainingSafetyReason(const Player& player)
 {
 	if (cyclePhase == CyclePhase::Hunt) return "hunting";
 	if (progressionSession.active() != PlayerBotProgressionProcedure::None) return "progression_objective";
-	if (scenarioStage != ScenarioStage::Traverse || targetingSession.traversalTarget() || targetingSession.defensiveTarget() ||
+	if (scenarioStage != ScenarioStage::Traverse || combatRuntime.hasActiveCombat() ||
 	    const_cast<Player&>(player).getAttackedCreature() != nullptr) return "combat_or_pursuit";
 	if (navigationRuntime.hasPendingWork()) return "pending_navigation";
 	if (spellRuntime.hasPending() || recoverySession.hasPendingPotion() || recoverySession.hasPendingFood() || needsHealing(player)) return "defensive_work";
@@ -576,7 +576,7 @@ bool PlayerBotController::tryOffensiveSpell(Player* player, const Position& curr
 	if (!player || spellRuntime.hasPending() || !spellRuntime.canRetry(std::chrono::steady_clock::now()) || needsHealing(*player)) {
 		return false;
 	}
-	const auto& traversalTarget = targetingSession.traversalTarget();
+	const auto traversalTarget = combatRuntime.traversalTarget();
 	Creature* target = traversalTarget ? g_game.getCreatureByID(traversalTarget->id) : nullptr;
 	if (player->hasLearnedInstantSpell("Berserk") && player->getLevel() >= 35) {
 		const PlayerBotSpellDescriptor* ranged = playerBotSpellDescriptor("Whirlwind Throw");
