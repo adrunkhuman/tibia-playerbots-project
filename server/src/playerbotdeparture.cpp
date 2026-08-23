@@ -108,7 +108,7 @@ bool PlayerBotController::forceOracleDeparture(Player& player, const Position& p
 	lootWorkflow.reset();
 	player.closeContainer(corpseContainerId);
 	setStage(ScenarioStage::Traverse, position);
-	progressionSession.reset();
+	progressionRuntime.finish();
 	serviceWorkflow.setStage(PlayerBotServiceStage::Discover);
 
 	PlayerBotOracleDeparturePlan plan;
@@ -118,7 +118,7 @@ bool PlayerBotController::forceOracleDeparture(Player& player, const Position& p
 	const GoalCandidate candidate{TopLevelGoal::Departure, found, found ? oracleDepartureUtility : 0,
 	                              !withinOracleLevelRange ? "above_maximum_level" :
 	                              found ? "oracle_reachable" : "oracle_unreachable"};
-	const PlayerBotGoalArbiter::GoalDecision decision = goalArbiter.force(candidate);
+	const PlayerBotGoalArbiter::GoalDecision decision = progressionRuntime.force(candidate);
 	emitGoalCandidate(player, decision.candidate(TopLevelGoal::Departure), decision.id, position, decisionReason, nullptr,
 	                  found ? &plan : nullptr);
 	if (!found) {
@@ -133,7 +133,7 @@ bool PlayerBotController::forceOracleDeparture(Player& player, const Position& p
 		return false;
 	}
 
-	goalArbiter.apply(decision);
+	progressionRuntime.apply(decision);
 	emit("goal_selection", position,
 	     "\"decision_id\":" + std::to_string(decision.id) + ",\"decision_reason\":" +
 	         jsonString(decisionReason) + ",\"from_goal\":" + jsonString(PlayerBotGoalArbiter::goalName(previousGoal)) +
@@ -150,8 +150,7 @@ bool PlayerBotController::forceOracleDeparture(Player& player, const Position& p
 void PlayerBotController::beginOracleDeparture(Player& player, const Position& position, PlayerBotOracleDeparturePlan plan,
 	                                            std::deque<PlayerBotNavigationStep> steps)
 {
-	departureSession.begin(std::move(plan));
-	progressionSession.begin(PlayerBotProgressionProcedure::OracleDeparture);
+	progressionRuntime.beginDeparture(std::move(plan));
 	const auto& departure = departureSession.plan();
 	serviceWorkflow.resetNpc(departure.npcId);
 	navigationRuntime.adopt(departure.approachPosition, std::move(steps));
@@ -169,8 +168,7 @@ void PlayerBotController::finishOracleDeparture(Player* player, const Position& 
 	     "\"decision_id\":" + std::to_string(goalArbiter.decisionId()) +
 	         ",\"goal\":\"oracle_departure\",\"result\":" + jsonString(result) +
 	         ",\"reason\":" + jsonString(reason));
-	progressionSession.reset();
-	departureSession.reset();
+	progressionRuntime.finish();
 	serviceWorkflow.resetNpc();
 	clearNavigation();
 	if (std::strcmp(result, "success") == 0) {
@@ -191,83 +189,34 @@ void PlayerBotController::finishOracleDeparture(Player* player, const Position& 
 void PlayerBotController::processOracleDeparture(Player* player, const Position& currentPosition)
 {
 	const auto& departure = departureSession.plan();
+	PlayerBotDepartureObservation observation;
+	Npc* oracle = g_game.getNpcByID(departure.npcId);
 	if (departureSession.stage() == PlayerBotOracleDepartureStage::Travel) {
-		if (!processNavigation(player, currentPosition, departure.approachPosition)) {
-			if (navigationRuntime.fixedTargetRouteFailureCount() >= maximumProgressionAttempts) {
-				finishOracleDeparture(player, currentPosition, "failed", "route_unavailable");
-			}
-			return;
-		}
-		departureSession.setStage(PlayerBotOracleDepartureStage::Greet);
-		schedule(SCHEDULER_MINTICKS);
-		return;
-	}
-
-	if (departureSession.stage() == PlayerBotOracleDepartureStage::Verify) {
+		observation.navigationReached = processNavigation(player, currentPosition, departure.approachPosition);
+		observation.navigationFailed = navigationRuntime.fixedTargetRouteFailureCount() >= maximumProgressionAttempts;
+	} else {
+		observation.npcAvailable = oracle && !oracle->isRemoved() && Position::areInRange<3, 3, 0>(currentPosition, oracle->getPosition());
+		observation.greetingAcknowledged = serviceWorkflow.isGreetingAcknowledged();
 		const bool correctVocation = player->getVocation()->getId() == oracleVocationId;
 		const bool correctTown = player->getTown() && player->getTown()->getID() == oracleTownId;
-		const bool teleported = correctTown && currentPosition == player->getTown()->getTemplePosition();
-		if (!correctVocation || !correctTown || !teleported) {
-			finishOracleDeparture(player, currentPosition, "failed", "departure_not_verified");
-			return;
+		observation.departureVerified = correctVocation && correctTown && currentPosition == player->getTown()->getTemplePosition();
+	}
+	const PlayerBotProgressionOutcome result = progressionRuntime.advanceDeparture(observation);
+	if (result.type == PlayerBotProgressionOutcomeType::Failed || result.type == PlayerBotProgressionOutcomeType::Succeeded) {
+		if (result.type == PlayerBotProgressionOutcomeType::Succeeded) {
+			emit("action_result", currentPosition,
+			     "\"action\":\"oracle_departure\",\"result\":\"success\",\"town\":\"thais\",\"town_id\":" +
+			         std::to_string(oracleTownId) + ",\"vocation\":\"knight\",\"vocation_id\":" +
+			         std::to_string(oracleVocationId) + ",\"teleported\":true");
 		}
-		emit("action_result", currentPosition,
-		     "\"action\":\"oracle_departure\",\"result\":\"success\",\"town\":\"thais\",\"town_id\":" +
-		         std::to_string(oracleTownId) + ",\"vocation\":\"knight\",\"vocation_id\":" +
-		         std::to_string(oracleVocationId) + ",\"teleported\":true");
-		finishOracleDeparture(player, currentPosition, "success", "vocation_town_and_teleport_verified");
+		finishOracleDeparture(player, currentPosition, result.type == PlayerBotProgressionOutcomeType::Succeeded ? "success" : "failed", result.reason);
 		return;
 	}
-
-	Npc* oracle = g_game.getNpcByID(departure.npcId);
-	if (!oracle || oracle->isRemoved() || !Position::areInRange<3, 3, 0>(currentPosition, oracle->getPosition())) {
-		finishOracleDeparture(player, currentPosition, "failed", "oracle_unavailable");
-		return;
-	}
-
-	if (departureSession.stage() == PlayerBotOracleDepartureStage::Greet) {
-		serviceWorkflow.resetGreetingAcknowledgement();
+	if (result.command.type == PlayerBotProgressionCommandType::Speak) {
+		if (!oracle || oracle->isRemoved()) return;
+		if (std::strcmp(result.command.reason, "hi") == 0) serviceWorkflow.resetGreetingAcknowledgement();
 		telemetry.recordActionAttempt();
-		oracle->receiveSpeech(player, TALKTYPE_PRIVATE_PN, "hi");
-		departureSession.setStage(PlayerBotOracleDepartureStage::ConfirmReady);
-		schedule(1000);
-		return;
+		oracle->receiveSpeech(player, TALKTYPE_PRIVATE_PN, result.command.reason);
 	}
-	if (departureSession.stage() == PlayerBotOracleDepartureStage::ConfirmReady) {
-		if (!serviceWorkflow.isGreetingAcknowledged()) {
-			if (departureSession.incrementRetries() >= maximumProgressionAttempts) {
-				finishOracleDeparture(player, currentPosition, "failed", "oracle_focus_unconfirmed");
-				return;
-			}
-			departureSession.setStage(PlayerBotOracleDepartureStage::Greet);
-			schedule(1000);
-			return;
-		}
-		telemetry.recordActionAttempt();
-		oracle->receiveSpeech(player, TALKTYPE_PRIVATE_PN, "yes");
-		departureSession.setStage(PlayerBotOracleDepartureStage::ChooseTown);
-		schedule(1000);
-		return;
-	}
-	if (departureSession.stage() == PlayerBotOracleDepartureStage::ChooseTown) {
-		telemetry.recordActionAttempt();
-		oracle->receiveSpeech(player, TALKTYPE_PRIVATE_PN, "thais");
-		departureSession.setStage(PlayerBotOracleDepartureStage::ChooseVocation);
-		schedule(1000);
-		return;
-	}
-	if (departureSession.stage() == PlayerBotOracleDepartureStage::ChooseVocation) {
-		telemetry.recordActionAttempt();
-		oracle->receiveSpeech(player, TALKTYPE_PRIVATE_PN, "knight");
-		departureSession.setStage(PlayerBotOracleDepartureStage::ConfirmVocation);
-		schedule(1000);
-		return;
-	}
-	if (departureSession.stage() == PlayerBotOracleDepartureStage::ConfirmVocation) {
-		telemetry.recordActionAttempt();
-		departureSession.setStage(PlayerBotOracleDepartureStage::Verify);
-		oracle->receiveSpeech(player, TALKTYPE_PRIVATE_PN, "yes");
-		schedule(1000);
-		return;
-	}
+	if (result.command.type != PlayerBotProgressionCommandType::Navigate) schedule(result.command.type == PlayerBotProgressionCommandType::Speak ? 1000 : SCHEDULER_MINTICKS);
 }
