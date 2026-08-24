@@ -19,6 +19,8 @@ using namespace playerbot;
 extern Spells* g_spells;
 
 namespace {
+	constexpr size_t maximumHuntCandidateTelemetry = 64;
+
 	Position nearestTargetApproach(Player& player, const Position& currentPosition, const Position& targetPosition)
 	{
 		std::vector<Direction> route;
@@ -799,7 +801,16 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 		                    outcome.routeWork ? "reachability_yield" : "planning_yield";
 		emitHuntRegionPlanning(*planning, position, phase);
 	}
-	for (const PlayerBotHuntRegion& candidate : outcome.candidates) emitHuntRegionCandidate(candidate, position);
+	const size_t telemetryCandidates = std::min(outcome.candidates.size(), maximumHuntCandidateTelemetry);
+	for (size_t index = 0; index < telemetryCandidates; ++index) {
+		emitHuntRegionCandidate(outcome.candidates[index], position);
+	}
+	if (outcome.selectedRegion && std::none_of(outcome.candidates.begin(), outcome.candidates.begin() + telemetryCandidates,
+	                                         [&outcome](const PlayerBotHuntRegion& candidate) {
+		                                         return candidate.id == outcome.selectedRegion->id;
+	                                         })) {
+		emitHuntRegionCandidate(*outcome.selectedRegion, position);
+	}
 	if (outcome.command == PlayerBotHuntRuntimeCommand::ScopeExhausted) {
 		emit("hunt_region_selection", position, "\"result\":\"failed\",\"reason\":\"no_suitable_reachable_region\"");
 		emit("hunt_scope_exhausted", position, "\"reason\":\"local_scope_exhausted\",\"attempt\":" + std::to_string(outcome.scopeExhaustionAttempt) + ",\"maximum_attempts\":3,\"retry_delay_ms\":" + std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(outcome.retryAfter).count()));

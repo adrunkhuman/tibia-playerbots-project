@@ -152,6 +152,7 @@ struct PlayerBotSpellTrainingPlan {
 	std::string keyword;
 	uint32_t price = 0;
 	uint32_t level = 0;
+	bool premium = false;
 	uint32_t travelSteps = 0;
 	uint64_t reserve = 0;
 };

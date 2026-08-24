@@ -11,10 +11,12 @@
 #include "otpch.h"
 
 #include "playerbotcontroller.h"
+#include "playerbotnpccapabilities.h"
 using namespace playerbot;
 
 namespace {
 	constexpr size_t maximumEquipmentHuntRegions = 32;
+	constexpr size_t maximumEquipmentCatalogProviders = 16;
 	constexpr size_t maximumEquipmentProviderRoutes = 4;
 	constexpr size_t maximumEquipmentProviderApproaches = 4;
 	constexpr uint64_t maximumEquipmentProviderPathNodes = 5000;
@@ -159,23 +161,76 @@ std::optional<PlayerBotController::EquipmentOfferEvaluation> PlayerBotController
 		}
 		return providerRoutes.emplace(npc.getID(), std::nullopt).first->second;
 	};
-	for (const auto& entry : g_game.getNpcs()) {
-		if (catalogTruncated) {
-			break;
-		}
-		Npc* npc = entry.second;
-		const std::string* capability = npc && !npc->isRemoved() ? npc->getParameter("playerbot_service") : nullptr;
-		if (!npc || !capability || *capability != "shop") {
-			continue;
-		}
+	struct CatalogOffer {
+		Npc* npc;
+		const ShopInfo* offer;
+	};
+	struct ProviderCatalog {
+		Npc* npc;
+		std::vector<const ShopInfo*> offers;
+	};
+	std::vector<Npc*> shopProviders = playerBotNpcProviders(g_game.getNpcs(), PlayerBotNpcCapability::Shop, position);
+	if (!shopProviders.empty()) {
+		const size_t offset = equipmentProviderScanOffset % shopProviders.size();
+		std::rotate(shopProviders.begin(), shopProviders.begin() + offset, shopProviders.end());
+		equipmentProviderScanOffset = (offset + std::min(maximumEquipmentCatalogProviders, shopProviders.size())) % shopProviders.size();
+	}
+	const bool providersTruncated = shopProviders.size() > maximumEquipmentCatalogProviders;
+	if (providersTruncated) {
+		shopProviders.resize(maximumEquipmentCatalogProviders);
+	}
+	std::vector<ProviderCatalog> providerCatalogs;
+	std::vector<CatalogOffer> allCatalogOffers;
+	std::vector<CatalogOffer> catalog;
+	size_t loadedCatalogOffers = 0;
+	for (Npc* npc : shopProviders) {
+		ProviderCatalog provider{npc, {}};
 		for (const ShopInfo& offer : npc->getShopOffers()) {
-			if (catalogOffers >= maximumEquipmentCatalogOffers) {
-				catalogTruncated = true;
-				break;
+			const PlayerBotEquipmentItemSnapshot item = PlayerBotEquipmentAdapter::item(offer.itemId);
+			if (item.head || item.armorSlot || item.legs || item.feet || item.left || item.right) {
+				provider.offers.push_back(&offer);
 			}
+		}
+		loadedCatalogOffers += provider.offers.size();
+		if (!provider.offers.empty()) providerCatalogs.push_back(std::move(provider));
+	}
+	for (size_t offerIndex = 0;; ++offerIndex) {
+		bool found = false;
+		for (const ProviderCatalog& provider : providerCatalogs) {
+			if (offerIndex >= provider.offers.size()) continue;
+			found = true;
+			allCatalogOffers.push_back({provider.npc, provider.offers[offerIndex]});
+		}
+		if (!found) break;
+	}
+	std::set<uint16_t> checkedCarriedItems;
+	std::set<uint16_t> carriedCatalogItems;
+	for (const CatalogOffer& candidate : allCatalogOffers) {
+		if (checkedCarriedItems.insert(candidate.offer->itemId).second &&
+		    g_game.findItemOfType(&player, candidate.offer->itemId, true)) {
+			carriedCatalogItems.insert(candidate.offer->itemId);
+		}
+	}
+	if (!allCatalogOffers.empty()) {
+		const size_t offset = equipmentOfferScanOffset % allCatalogOffers.size();
+		std::rotate(allCatalogOffers.begin(), allCatalogOffers.begin() + offset, allCatalogOffers.end());
+		std::stable_partition(allCatalogOffers.begin(), allCatalogOffers.end(), [&carriedCatalogItems, totalMoney, reserve](const CatalogOffer& candidate) {
+			const uint64_t price = candidate.offer->buyPrice;
+			return carriedCatalogItems.find(candidate.offer->itemId) != carriedCatalogItems.end() ||
+			       (price != 0 && reserve != std::numeric_limits<uint64_t>::max() &&
+			        totalMoney >= reserve && price <= totalMoney - reserve);
+		});
+		const size_t count = std::min(maximumEquipmentCatalogOffers, allCatalogOffers.size());
+		catalog.assign(allCatalogOffers.begin(), allCatalogOffers.begin() + count);
+		equipmentOfferScanOffset = (offset + count) % allCatalogOffers.size();
+	}
+	catalogTruncated = providersTruncated || loadedCatalogOffers > catalog.size();
+	for (const CatalogOffer& catalogOffer : catalog) {
+		Npc* npc = catalogOffer.npc;
+		const ShopInfo& offer = *catalogOffer.offer;
 			++catalogOffers;
 			EquipmentOfferEvaluation evaluation;
-			const bool carried = g_game.findItemOfType(&player, offer.itemId, true) != nullptr;
+			const bool carried = carriedCatalogItems.find(offer.itemId) != carriedCatalogItems.end();
 			if (auto item = evaluatedItems.find(offer.itemId); item != evaluatedItems.end()) {
 				evaluation = item->second;
 			} else {
@@ -215,7 +270,8 @@ std::optional<PlayerBotController::EquipmentOfferEvaluation> PlayerBotController
 				                         true, false, {true, false, Position(), 0, 0}});
 				continue;
 			}
-			const std::optional<std::pair<Position, uint32_t>> route = providerRoute(*npc);
+			const std::optional<std::pair<Position, uint32_t>> route = evaluation.rejection.empty() ?
+				providerRoute(*npc) : std::nullopt;
 			if (route) {
 				evaluation.approachPosition = route->first;
 				evaluation.travelSteps = route->second;
@@ -224,7 +280,6 @@ std::optional<PlayerBotController::EquipmentOfferEvaluation> PlayerBotController
 			                         offer.buyPrice != 0, providerRouteBudgetExhausted,
 			                         {route.has_value(), providerRouteNodeLimits.find(npc->getID()) != providerRouteNodeLimits.end(),
 			                          route ? route->first : Position(), route ? route->second : 0, 0}});
-		}
 	}
 	const PlayerBotEquipmentProviderPlannerSnapshot plannerSnapshot{equipmentPolicy.requiresKnightCombatReadiness(playerFacts), reserve,
 	    totalMoney, reserve != std::numeric_limits<uint64_t>::max(), player.getFreeCapacity(), plannerOffers};
@@ -319,7 +374,6 @@ void PlayerBotController::processEquipmentPurchase(Player* player, const Positio
 {
 	const auto& purchase = progressionRuntime.equipmentPurchase().plan();
 	Npc* npc = purchase.carried ? nullptr : g_game.getNpcByID(purchase.npcId);
-	const std::string* capability = npc && !npc->isRemoved() ? npc->getParameter("playerbot_service") : nullptr;
 	const ServiceNpc provider{purchase.npcId, npc ? npc->getPosition() : Position()};
 	const ShopInfo* offer = purchase.carried || !npc ? nullptr : findOffer(provider, purchase.itemId, true);
 	int32_t onBuy = 0;
@@ -328,7 +382,7 @@ void PlayerBotController::processEquipmentPurchase(Player* player, const Positio
 	PlayerBotEquipmentPurchaseObservation observation;
 	observation.actionAvailable = player->canDoAction();
 	if (!purchase.carried) {
-		observation.providerAvailable = capability && *capability == "shop";
+		observation.providerAvailable = npc && playerBotNpcHasCapability(*npc, PlayerBotNpcCapability::Shop);
 		observation.offerAvailable = offer && offer->buyPrice == purchase.price;
 		observation.providerInRange = npc && Position::areInRange<3, 3, 0>(position, npc->getPosition());
 		observation.shopReady = shopOwner == npc && !player->getShopItemList().empty();

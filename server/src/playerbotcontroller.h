@@ -439,7 +439,10 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		PlayerBotProgressionRuntime progressionRuntime;
 		PlayerBotRewardPlanner rewardPlanner;
 		PlayerBotEquipmentProviderPlanner equipmentProviderPlanner;
+		size_t equipmentProviderScanOffset = 0;
+		size_t equipmentOfferScanOffset = 0;
 		PlayerBotSpellTrainingPlanner spellTrainingPlanner;
+		size_t spellTrainerScanOffset = 0;
 		PlayerBotDeparturePlanner departurePlanner;
 		std::map<uint16_t, std::string> rewardInspectionFingerprints;
 		PlayerBotServiceWorkflow serviceWorkflow;

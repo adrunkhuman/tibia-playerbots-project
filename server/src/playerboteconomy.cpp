@@ -10,8 +10,16 @@ namespace {
 	}
 }
 
+int64_t PlayerBotProviderUtilityPolicy::score(uint64_t serviceValue, uint32_t estimatedRouteCost,
+	const PlayerBotProviderUtilityProfile& profile) const
+{
+	return static_cast<int64_t>(serviceValue) * profile.serviceValueWeight -
+	       static_cast<int64_t>(estimatedRouteCost) * profile.routeCostWeight;
+}
+
 void PlayerBotEconomyCatalog::learn(const std::vector<PlayerBotEconomyProvider>& providers)
 {
+	learnedSellValues.clear();
 	for (const PlayerBotEconomyProvider& provider : providers) {
 		for (const PlayerBotEconomyOffer& offer : provider.offers) {
 			if (offer.sellPrice != 0) {

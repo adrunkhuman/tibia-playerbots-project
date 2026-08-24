@@ -35,7 +35,7 @@ function F.login.onLogin(player)
         local currentRight = player:getSlotItem(CONST_SLOT_RIGHT)
         if mode == "equipment_buy" and ((currentLeft and currentLeft:getId() == F.equipmentPurchaseItemId) or
             (currentRight and currentRight:getId() == F.equipmentPurchaseItemId)) then
-            assert(player:getItemCount(F.starterWeaponId) == 1 and player:getMoney() + player:getBankBalance() == 205,
+            assert(player:getItemCount(F.starterWeaponId) == 1 and player:getMoney() + player:getBankBalance() == 100,
                 "equipment purchase restart did not preserve equipment and economy")
             assert(player:setStorageValue(F.fixtureReadyStorage, 2), "equipment restart fixture could not signal completion")
             print("PLAYERBOT_GAMEPLAY_TEST EQUIPMENT_BUY_RESTART_PASS")
@@ -58,6 +58,8 @@ function F.login.onLogin(player)
         end
         assert(player:addItem(F.starterWeaponId, 1, false, 1, CONST_SLOT_LEFT),
             "equipment fixture could not equip the starter weapon")
+        F.removeAll(player, F.potionItemId)
+        assert(player:addItem(F.potionItemId, 10), "equipment fixture could not normalize healing supplies")
         if mode == "equipment_buy_space" then
             for _, slot in ipairs({CONST_SLOT_HEAD, CONST_SLOT_ARMOR, CONST_SLOT_RIGHT, CONST_SLOT_LEGS, CONST_SLOT_FEET}) do
                 local item = player:getSlotItem(slot)
@@ -83,13 +85,13 @@ function F.login.onLogin(player)
             F.removeAll(player, F.equipmentPurchaseItemId)
             F.removeAll(player, ITEM_GOLD_COIN)
             local backpack = player:getSlotItem(CONST_SLOT_BACKPACK)
-            assert(player:getBankBalance() == 100 and backpack and backpack:addItem(ITEM_GOLD_COIN, 105) and
-                backpack:addItem(F.equipmentPurchaseItemId, 1), "equipment resume fixture could not set persisted purchase state")
+            assert(player:getBankBalance() == 100 and backpack and backpack:addItem(F.equipmentPurchaseItemId, 1),
+                "equipment resume fixture could not set persisted purchase state")
         else
             F.removeAll(player, F.equipmentPurchaseItemId)
             F.removeAll(player, ITEM_GOLD_COIN)
             local backpack = player:getSlotItem(CONST_SLOT_BACKPACK)
-            assert(player:getBankBalance() == 100 and backpack and backpack:addItem(ITEM_GOLD_COIN, 110),
+            assert(player:getBankBalance() == 100 and backpack and backpack:addItem(ITEM_GOLD_COIN, 5),
                 "equipment purchase fixture could not set the bounded surplus")
             if mode == "equipment_buy_space" then
                 player:setCapacity(100000)
@@ -119,8 +121,8 @@ function F.login.onLogin(player)
         local town = player:getTown()
         assert(player:getLevel() == 8 and player:getVocation():getId() == 4 and town and town:getId() == F.thaisTownId,
             "mainland fixture did not load the level-8 Thais Knight")
-        assert(player:getSlotItem(CONST_SLOT_ARMOR) and player:getSlotItem(CONST_SLOT_ARMOR):getId() == 2463,
-            "mainland fixture did not load plate armor")
+        assert(player:getSlotItem(CONST_SLOT_ARMOR) and player:getSlotItem(CONST_SLOT_ARMOR):getId() == F.seedArmorId,
+            "mainland fixture did not load the seeded armor")
         local backpack = player:getSlotItem(CONST_SLOT_BACKPACK)
         local capacity = player:getCapacity()
         player:setCapacity(100000)
@@ -249,10 +251,12 @@ function F.login.onLogin(player)
         print("PLAYERBOT_GAMEPLAY_TEST " .. string.upper(mode) .. "_START")
         return true
     end
-    F.restoreRookgaardBaseline(player)
+    F.restoreRookgaardBaseline(player, mode ~= "cycle")
     if mode == "readiness_ready" or mode == "readiness_upgrade" or mode == "readiness_missing_weapon" or mode == "readiness_supplies" or mode == "readiness_no_food" or mode == "readiness_low_wealth" or mode == "readiness_food_capacity" or mode == "readiness_retention" then
         assert(player:setVocation(4), "readiness fixture could not select Knight vocation")
         assert(player:teleportTo(F.depotPosition), "readiness fixture could not reach the depot")
+        F.removeAll(player, F.potionItemId)
+        assert(player:addItem(F.potionItemId, 10), "readiness fixture could not normalize healing supplies")
         F.suppressNearbyMonsters(player:getId())
         if mode == "readiness_upgrade" then
             local backpack = player:getSlotItem(CONST_SLOT_BACKPACK)
@@ -322,6 +326,16 @@ function F.login.onLogin(player)
         assert(player:addCondition(food), "depot fixture could not fill the food timer")
         local fixtureState = player:getStorageValue(F.depotFixtureStorage)
         if fixtureState == -1 then
+            for _, slot in ipairs({CONST_SLOT_HEAD, CONST_SLOT_ARMOR, CONST_SLOT_RIGHT, CONST_SLOT_LEFT, CONST_SLOT_LEGS, CONST_SLOT_FEET}) do
+                local item = player:getSlotItem(slot)
+                if item then assert(item:remove(), "depot fixture could not clear equipment slot " .. slot) end
+            end
+            assert(player:addItem(F.starterArmorId, 1, false, 1, CONST_SLOT_ARMOR),
+                "depot fixture could not equip starter armor")
+            assert(player:addItem(F.starterWeaponId, 1, false, 1, CONST_SLOT_LEFT),
+                "depot fixture could not equip starter weapon")
+            local fixtureBackpack = player:getSlotItem(CONST_SLOT_BACKPACK)
+            assert(fixtureBackpack and fixtureBackpack:addItem(F.potionItemId, 10), "depot fixture could not add potion reserve")
             local thais = Town(F.thaisTownId)
             assert(thais and player:setTown(thais), "depot fixture could not select Thais")
             assert(player:teleportTo(Position(32345, 32225, 7)), "depot fixture could not reach Naji")
@@ -331,7 +345,7 @@ function F.login.onLogin(player)
             local outer = backpack and backpack:addItem(ITEM_BAG, 1)
             local nested = outer and outer:addItem(ITEM_BAG, 1)
             assert(nested and nested:addItem(F.depotLootItemId, 1) and nested:addItem(F.depotLootItemId, 1) and nested:addItem(F.depotLootItemId, 1) and nested:addItem(F.depotLootItemId, 1), "depot fixture could not seed nested loot")
-            assert(nested:addItem(2380, 1) and nested:addItem(2389, 1) and nested:addItem(2461, 1) and nested:addItem(2643, 1), "depot fixture could not seed surplus equipment")
+            assert(nested:addItem(2380, 1) and nested:addItem(F.seedWeaponId, 1) and nested:addItem(2461, 1) and nested:addItem(2643, 1), "depot fixture could not seed surplus equipment")
             assert(backpack:addItem(2050, 1), "depot fixture could not seed an unknown retained item")
             local restartPhase = os.getenv("PLAYERBOT_DEPOT_RESTART_PHASE") or ""
             assert(player:setStorageValue(F.depotFixtureStorage, restartPhase == "" and 0 or 2), "depot fixture state could not persist")
@@ -440,7 +454,11 @@ function F.login.onLogin(player)
         local requiredExperience = Game.getExperienceForLevel(8) - player:getExperience()
         if requiredExperience > 0 then player:addExperience(requiredExperience) end
         assert(player:getLevel() == 8, "spell training fixture could not select level 8")
-        assert(player:teleportTo(thais:getTemplePosition()), "spell training fixture could not reach the Thais temple")
+		local trainer = Npc("Gregor")
+		assert(trainer, "spell training fixture could not find Gregor")
+		local trainerPosition = trainer:getPosition()
+		assert(player:teleportTo(Position(trainerPosition.x - 1, trainerPosition.y, trainerPosition.z)),
+			"spell training fixture could not approach Gregor")
         for _, spellName in ipairs({"Find Person", "Light", "Light Healing", "Cure Poison", "Great Light"}) do player:forgetSpell(spellName) end
         F.removeAll(player, F.potionItemId)
         F.removeAll(player, F.meatItemId)
@@ -493,6 +511,9 @@ function F.login.onLogin(player)
             print("PLAYERBOT_GAMEPLAY_TEST PICKUP_PROGRESSION_SPACE_START")
             return true
         elseif player:getStorageValue(F.pickupRewardStorage) == -1 then
+            local backpack = player:getSlotItem(CONST_SLOT_BACKPACK)
+            assert(backpack and backpack:addItem(F.potionItemId, 10) and backpack:addItem(ITEM_GOLD_COIN, 100),
+                "pickup progression fixture could not add service reserves")
             assert(position.x == 32097 and position.y == 32219 and position.z == 7, "pickup progression fixture did not start at the Rookgaard temple")
             assert(player:getSlotItem(CONST_SLOT_ARMOR):getId() == F.starterArmorId, "pickup progression fixture expected starter armor")
             assert(player:getSlotItem(CONST_SLOT_LEFT):getId() == F.starterWeaponId, "pickup progression fixture expected starter weapon")
@@ -581,8 +602,8 @@ function F.login.onLogin(player)
         print("PLAYERBOT_GAMEPLAY_TEST VALUE_START")
         return true
     end
-    assert(player:getMoney() == 200, "Bot One initial backpack purse was not 200 gp")
-    assert(player:getBankBalance() == 100, "Bot One initial bank balance was not 100 gp")
+    assert(player:getMoney() == 0, "Bot One initial backpack purse was not empty")
+    assert(player:getBankBalance() == 400, "Bot One initial bank balance was not 400 gp")
     local backpack = player:getSlotItem(CONST_SLOT_BACKPACK)
     local potions = player:getItemCount(F.potionItemId)
     if potions > 0 then assert(player:removeItem(F.potionItemId, potions), "cycle fixture could not remove starter potions") end

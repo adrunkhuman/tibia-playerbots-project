@@ -31,6 +31,7 @@ struct PlayerBotServiceProviderObservation {
 	bool available = false;
 	bool inRange = false;
 	bool shopOpen = false;
+	bool approachesObserved = false;
 	struct Approach {
 		Position position;
 		uint32_t distance = 0;
@@ -107,6 +108,7 @@ class PlayerBotServiceWorkflow
 		void reset();
 		PlayerBotServiceStage stage() const { return serviceStage; }
 		PlayerBotServiceSnapshot snapshot() const { return {serviceStage, npcSession.targetId()}; }
+		void setProviderUtilityProfile(PlayerBotProviderUtilityProfile profile) { providerUtilityProfile = profile; }
 		bool reportNpcReply(uint32_t playerId, uint32_t replyingPlayerId, uint32_t npcId, uint8_t type);
 		PlayerBotServiceCommand advance(const PlayerBotServiceObservation& observation,
 		                               const PlayerBotEconomyCatalog& catalog,
@@ -119,6 +121,7 @@ class PlayerBotServiceWorkflow
 		const PlayerBotEconomyProvider* offerProvider(uint16_t itemId, bool purchase, const Position& position,
 		                                             const PlayerBotEconomyCatalog& catalog) const;
 		void targetProvider(uint32_t id);
+		PlayerBotServiceCommand rejectCurrentProvider();
 		PlayerBotServiceCommand establishNpc(const PlayerBotServiceObservation& observation, bool shop);
 		PlayerBotServiceCommand verifyShop(const PlayerBotServiceObservation& observation, bool purchase);
 		PlayerBotServiceCommand advanceImpl(const PlayerBotServiceObservation& observation,
@@ -133,6 +136,8 @@ class PlayerBotServiceWorkflow
 
 		PlayerBotNpcSession npcSession;
 		PlayerBotServiceSession serviceSession;
+		PlayerBotProviderUtilityPolicy providerUtilityPolicy;
+		PlayerBotProviderUtilityProfile providerUtilityProfile;
 		PlayerBotServiceStage serviceStage = PlayerBotServiceStage::Discover;
 		std::vector<PlayerBotEconomyProvider> shopProviders;
 		std::vector<PlayerBotEconomyProvider> bankProviders;
@@ -146,6 +151,8 @@ class PlayerBotServiceWorkflow
 		std::optional<Position> pendingApproachRoute;
 		std::optional<Position> selectedApproach;
 		std::set<Position> rejectedApproaches;
+		std::set<uint32_t> unavailableProviderIds;
+		std::map<uint32_t, uint32_t> providerRouteCosts;
 };
 
 #endif

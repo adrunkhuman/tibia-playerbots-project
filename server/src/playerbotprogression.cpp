@@ -803,6 +803,7 @@ bool PlayerBotController::selectTopLevelGoal(Player& player, const Position& pos
 	if (departurePlanner.required(departureSnapshot(player))) {
 		return forceOracleDeparture(player, position, decisionReason);
 	}
+	refreshItemValues();
 	PlayerBotOracleDeparturePlan departure;
 	std::deque<PlayerBotNavigationStep> departureRoute;
 	const bool departureEligible = player.getLevel() >= oracleMinimumLevel && player.getLevel() <= oracleMaximumLevel &&

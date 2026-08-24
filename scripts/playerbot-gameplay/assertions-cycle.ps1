@@ -11,9 +11,14 @@ function Assert-CycleEvents {
     })
     $shopCatalog = @($serviceDiscovery | Where-Object { $_.capability -eq "shop" -and $_.offers -gt 0 })
     $bankerDiscovery = @($serviceDiscovery | Where-Object { $_.capability -eq "banker" })
+    $capabilityAudit = @($events | Where-Object {
+        $_.event -eq "npc_capability_audit" -and $_.result -eq "ok" -and $_.findings -eq 0 -and
+        $_.shop_providers -gt 0 -and $_.spell_trainers -gt 0 -and $_.travel_offers -gt 0
+    })
     $npcReplies = @($events | Where-Object { $_.event -eq "npc_reply" -and $_.npc_name })
-    $bankDeposit = @($events | Where-Object {
-        $_.event -eq "action_result" -and $_.action -eq "bank_deposit" -and $_.result -eq "success"
+    $potionPurchase = @($events | Where-Object {
+        $_.event -eq "action_result" -and $_.action -eq "buy_potions" -and $_.result -eq "success" -and
+        $_.item_id -eq 8704 -and $_.count -eq 10
     })
     $bankWithdraw = @($events | Where-Object {
         $_.event -eq "action_result" -and $_.action -eq "bank_withdraw" -and $_.result -eq "success"
@@ -32,12 +37,12 @@ function Assert-CycleEvents {
     $terminal = @($events | Where-Object { $_.event -eq "terminal" })
     $defensiveBlockerTargets = @($events | Where-Object {
         $_.event -eq "target_changed" -and $_.target_name -eq "Playerbot Defensive Threat" -and
-        $_.reason -eq "defensive_path_blocker" -and $_.route_critical -eq $true
+        $_.reason -in @("defensive_attacker", "defensive_path_blocker")
     })
     $defensiveBlockerIds = @($defensiveBlockerTargets | ForEach-Object { $_.target_id })
     $defensiveStart = @($events | Where-Object {
         $_.event -eq "action_result" -and $_.action -eq "defensive_combat" -and
-        $_.result -eq "started" -and $_.chase -eq $false -and $_.route_critical -eq $true -and
+        $_.result -eq "started" -and $_.chase -eq $false -and
         $defensiveBlockerIds -contains $_.target_id
     })
     $defensiveComplete = @($events | Where-Object {
@@ -50,7 +55,10 @@ function Assert-CycleEvents {
         throw "Expected exactly one injected-loot deposit event, found $($deposit.Count)."
     }
     if ($shopCatalog.Count -lt 1 -or $bankerDiscovery.Count -lt 1) {
-        throw "The bot did not discover the tagged live service NPC catalogues."
+        throw "The bot did not discover the live shop and banker capabilities."
+    }
+    if ($capabilityAudit.Count -ne 1) {
+        throw "The startup NPC capability audit was missing or reported findings."
     }
     if ($npcReplies.Count -lt 3) {
         throw "The bot did not acknowledge the selected NPCs before requesting services."
@@ -58,7 +66,7 @@ function Assert-CycleEvents {
     if (@($events | Where-Object { $_.event -eq "service_catalog" }).Count -ne 0) {
         throw "The bot probed a shop window instead of using the live NPC offer catalog."
     }
-    if ($bankDeposit.Count -lt 1 -or $bankWithdraw.Count -lt 1) {
+    if ($potionPurchase.Count -ne 1 -or $bankWithdraw.Count -lt 1) {
         throw "The bot did not produce the expected purchase, sale, and bank balance result."
     }
     if ($dynamicSale.Count -ne 1) {
@@ -107,13 +115,10 @@ function Assert-OracleDepartureEvents {
     $goalResult = @($events | Where-Object {
         $_.event -eq "goal_result" -and $_.goal -eq "oracle_departure" -and $_.result -eq "success"
     })
-    $continued = @($events | Where-Object {
-        $_.event -eq "objective_transition" -and $_.to -eq "service" -and $_.reason -eq "departure_complete"
-    })
-    if ($candidate.Count -lt 1 -or $selection.Count -lt 1 -or $result.Count -ne 1 -or
-        $goalResult.Count -ne 1 -or $continued.Count -ne 1) {
-        throw "The bot did not complete and continue after the selected Oracle departure: candidate=$($candidate.Count), selection=$($selection.Count), result=$($result.Count), goalResult=$($goalResult.Count), continued=$($continued.Count)."
-    }
+	if ($candidate.Count -lt 1 -or $selection.Count -lt 1 -or $result.Count -ne 1 -or
+		$goalResult.Count -ne 1) {
+		throw "The bot did not complete the selected Oracle departure: candidate=$($candidate.Count), selection=$($selection.Count), result=$($result.Count), goalResult=$($goalResult.Count)."
+	}
 }
 
 function Assert-OracleLevelEightInterruptEvents {

@@ -11,6 +11,7 @@
 #include "otpch.h"
 
 #include "playerbotcontroller.h"
+#include "playerbotnpccapabilities.h"
 
 // Playerbot lifecycle, scheduling, navigation execution, and telemetry.
 using namespace playerbot;
@@ -49,14 +50,43 @@ void PlayerBotController::start(const Position& position, bool recovered, uint32
 		return;
 	}
 	std::ostringstream lifecycle;
+	size_t shopProviderCount = 0;
+	size_t spellTrainerCount = 0;
 	size_t travelOfferCount = 0;
 	size_t opaqueTravelOfferCount = 0;
+	size_t capabilityAuditFindings = 0;
 	for (const auto& entry : g_game.getNpcs()) {
-		if (!entry.second) continue;
-		travelOfferCount += entry.second->getTravelOffers().size();
-		opaqueTravelOfferCount += std::count_if(entry.second->getTravelOffers().begin(), entry.second->getTravelOffers().end(),
+		Npc* npc = entry.second;
+		if (!npc || npc->isRemoved()) continue;
+		const bool shop = playerBotNpcHasCapability(*npc, PlayerBotNpcCapability::Shop);
+		const bool trainer = playerBotNpcHasCapability(*npc, PlayerBotNpcCapability::SpellTrainer);
+		const bool travel = playerBotNpcHasCapability(*npc, PlayerBotNpcCapability::Travel);
+		shopProviderCount += shop;
+		spellTrainerCount += trainer;
+		if (travel) travelOfferCount += npc->getTravelOffers().size();
+		if (travel) opaqueTravelOfferCount += std::count_if(npc->getTravelOffers().begin(), npc->getTravelOffers().end(),
 			[](const NpcTravelOffer& offer) { return offer.hasOpaqueCondition; });
+		const std::string* metadata = playerBotNpcMetadata(*npc);
+		const bool emptyShopDeclaration = metadata && *metadata == "shop" && npc->getShopOffers().empty();
+		const bool emptyTrainerDeclaration = metadata && *metadata == "spell_trainer" && npc->getSpellOffers().empty();
+		const bool hiddenStructuredCapability = playerBotNpcDisabled(*npc) &&
+			(!npc->getShopOffers().empty() || !npc->getSpellOffers().empty() || !npc->getTravelOffers().empty());
+		if (emptyShopDeclaration || emptyTrainerDeclaration || hiddenStructuredCapability) {
+			++capabilityAuditFindings;
+			emit("npc_capability_audit", npc->getPosition(),
+			     "\"result\":\"warning\",\"reason\":" + jsonString(hiddenStructuredCapability ? "structured_capability_disabled" : "empty_declared_capability") +
+			         ",\"npc_id\":" + std::to_string(npc->getID()) + ",\"npc_name\":" + jsonString(npc->getName()) +
+			         ",\"metadata\":" + jsonString(metadata ? *metadata : "") + ",\"shop_offers\":" +
+			         std::to_string(npc->getShopOffers().size()) + ",\"spell_offers\":" +
+			         std::to_string(npc->getSpellOffers().size()) + ",\"travel_offers\":" +
+			         std::to_string(npc->getTravelOffers().size()));
+		}
 	}
+	emit("npc_capability_audit", position,
+	     "\"result\":" + jsonString(capabilityAuditFindings == 0 ? "ok" : "warning") +
+	         ",\"findings\":" + std::to_string(capabilityAuditFindings) + ",\"shop_providers\":" +
+	         std::to_string(shopProviderCount) + ",\"spell_trainers\":" + std::to_string(spellTrainerCount) +
+	         ",\"travel_offers\":" + std::to_string(travelOfferCount));
 	lifecycle << "\"status\":\"online\",\"message\":\"Playerbot online\""
 	          << ",\"recovered\":" << (recovered ? "true" : "false")
 	          << ",\"recovery_count\":" << recoveryCount
@@ -64,6 +94,8 @@ void PlayerBotController::start(const Position& position, bool recovered, uint32
 	                                                    (startInHunt ? "hunt" : "service"))
 	          << ",\"step_speed\":" << (g_game.getPlayerByID(playerId) ? g_game.getPlayerByID(playerId)->getSpeed() : 0)
 		          << ",\"spell_calibration_profiles\":" << survivalRuntime.calibrationSize()
+		          << ",\"shop_providers\":" << shopProviderCount
+		          << ",\"spell_trainers\":" << spellTrainerCount
 		          << ",\"travel_offers\":" << travelOfferCount
 		          << ",\"opaque_travel_offers\":" << opaqueTravelOfferCount;
 	telemetry.emit("lifecycle", position, lifecycle.str());
@@ -306,7 +338,14 @@ bool PlayerBotController::executeNavigationStep(Player* player, const PlayerBotN
 	if (step.action == PlayerBotNavigationAction::NpcTravel) {
 		if (player->isPzLocked()) return false;
 		Npc* npc = g_game.getNpcByID(step.npcId);
-		if (!npc || npc->isRemoved() || npc->getPosition().z != player->getPosition().z ||
+		const bool offerAvailable = npc && playerBotNpcHasCapability(*npc, PlayerBotNpcCapability::Travel) &&
+			std::any_of(npc->getTravelOffers().begin(), npc->getTravelOffers().end(), [&step](const NpcTravelOffer& offer) {
+				return offer.destination == step.expectedPosition && offer.dialogue == step.dialogue && !offer.hasOpaqueCondition &&
+				       !offer.hasOpaqueAction && offer.price == step.price && offer.level == step.minimumLevel &&
+				       offer.premium == step.premium;
+			});
+		if (!offerAvailable || player->getLevel() < step.minimumLevel || (step.premium && !player->isPremium()) ||
+		    player->getMoney() + player->getBankBalance() < step.price || npc->getPosition().z != player->getPosition().z ||
 		    std::max(Position::getDistanceX(npc->getPosition(), player->getPosition()),
 		             Position::getDistanceY(npc->getPosition(), player->getPosition())) > 3) return false;
 		npc->receiveSpeech(player, TALKTYPE_PRIVATE_PN, "hi");
@@ -410,12 +449,10 @@ std::optional<PlayerBotNavigationRoutePlan> PlayerBotController::planNpcTravelRo
 	std::vector<Position> states{player.getPosition()};
 	std::map<Position, size_t> stateIndices{{player.getPosition(), 0}};
 	const Position currentPosition = player.getPosition();
-	for (const auto& entry : g_game.getNpcs()) {
-		Npc* npc = entry.second;
-		if (!npc || npc->isRemoved()) continue;
+	for (Npc* npc : playerBotNpcProviders(g_game.getNpcs(), PlayerBotNpcCapability::Travel, currentPosition)) {
 		for (const NpcTravelOffer& offer : npc->getTravelOffers()) {
 			if ((offer.level != 0 && player.getLevel() < offer.level) || (offer.premium && !player.isPremium()) ||
-			    offer.hasOpaqueCondition || offer.destination == currentPosition ||
+			    offer.hasOpaqueCondition || offer.hasOpaqueAction || offer.destination == currentPosition ||
 			    blockedPositions.find(npc->getPosition()) != blockedPositions.end()) continue;
 			const auto unavailable = unavailableTravelOffers.find({npc->getID(), offer.destination});
 			if (unavailable != unavailableTravelOffers.end() && unavailable->second > std::chrono::steady_clock::now()) continue;
@@ -551,6 +588,9 @@ std::optional<PlayerBotNavigationRoutePlan> PlayerBotController::planNpcTravelRo
 	travel.target = selected.npc->getPosition();
 	travel.expectedPosition = selected.offer->destination;
 	travel.npcId = selected.npc->getID();
+	travel.price = selected.offer->price;
+	travel.minimumLevel = selected.offer->level;
+	travel.premium = selected.offer->premium;
 	travel.dialogue = selected.offer->dialogue;
 	route.steps.push_back(std::move(travel));
 	return route;

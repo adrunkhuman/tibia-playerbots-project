@@ -23,6 +23,8 @@ void PlayerBotServiceWorkflow::reset()
 	pendingApproachRoute.reset();
 	selectedApproach.reset();
 	rejectedApproaches.clear();
+	unavailableProviderIds.clear();
+	providerRouteCosts.clear();
 }
 
 bool PlayerBotServiceWorkflow::reportNpcReply(uint32_t playerId, uint32_t replyingPlayerId, uint32_t npcId, uint8_t type)
@@ -48,20 +50,37 @@ const PlayerBotEconomyProvider* PlayerBotServiceWorkflow::provider(uint32_t id, 
 
 const PlayerBotEconomyProvider* PlayerBotServiceWorkflow::nearestBanker(const Position& position) const
 {
-	auto it = std::min_element(bankProviders.begin(), bankProviders.end(), [&position](const auto& left, const auto& right) {
+	const PlayerBotEconomyProvider* selected = nullptr;
+	for (const PlayerBotEconomyProvider& banker : bankProviders) {
+		if (unavailableProviderIds.find(banker.id) != unavailableProviderIds.end()) continue;
+		if (!selected) {
+			selected = &banker;
+			continue;
+		}
+		const auto& left = banker;
+		const auto& right = *selected;
 		const uint32_t leftDistance = std::max(Position::getDistanceX(position, left.position), Position::getDistanceY(position, left.position)) +
 		                              (position.z == left.position.z ? 0 : 32 * Position::getDistanceZ(position, left.position));
 		const uint32_t rightDistance = std::max(Position::getDistanceX(position, right.position), Position::getDistanceY(position, right.position)) +
 		                               (position.z == right.position.z ? 0 : 32 * Position::getDistanceZ(position, right.position));
-		return leftDistance < rightDistance;
-	});
-	return it == bankProviders.end() ? nullptr : &*it;
+		if (leftDistance < rightDistance) selected = &banker;
+	}
+	return selected;
 }
 
 const PlayerBotEconomyProvider* PlayerBotServiceWorkflow::offerProvider(uint16_t itemId, bool purchase, const Position& position,
 	const PlayerBotEconomyCatalog& catalog) const
 {
-	return catalog.rankedProvider(shopProviders, itemId, purchase, position);
+	std::vector<PlayerBotEconomyProvider> available;
+	for (const PlayerBotEconomyProvider& provider : shopProviders) {
+		if (unavailableProviderIds.find(provider.id) == unavailableProviderIds.end()) available.push_back(provider);
+	}
+	const PlayerBotEconomyProvider* selected = catalog.rankedProvider(available, itemId, purchase, position);
+	if (!selected) return nullptr;
+	const auto original = std::find_if(shopProviders.begin(), shopProviders.end(), [selected](const auto& provider) {
+		return provider.id == selected->id;
+	});
+	return original == shopProviders.end() ? nullptr : &*original;
 }
 
 void PlayerBotServiceWorkflow::targetProvider(uint32_t id)
@@ -77,10 +96,25 @@ void PlayerBotServiceWorkflow::targetProvider(uint32_t id)
 	}
 }
 
+PlayerBotServiceCommand PlayerBotServiceWorkflow::rejectCurrentProvider()
+{
+	const uint32_t providerId = npcSession.targetId();
+	unavailableProviderIds.insert(providerId);
+	npcSession.reset();
+	providerApproaches.clear();
+	pendingApproachRoute.reset();
+	selectedApproach.reset();
+	rejectedApproaches.clear();
+	PlayerBotServiceCommand command{PlayerBotServiceCommandType::Wait, PlayerBotServiceOutcome::Retry, providerId};
+	command.cooldownMs = npcReplyDelay;
+	return command;
+}
+
 PlayerBotServiceCommand PlayerBotServiceWorkflow::approachProvider(const PlayerBotServiceObservation& observation,
 	const PlayerBotServiceProviderObservation& provider)
 {
 	if (provider.inRange) {
+		providerRouteCosts[npcSession.targetId()] = 0;
 		pendingApproachRoute.reset();
 		selectedApproach.reset();
 		return {};
@@ -92,6 +126,9 @@ PlayerBotServiceCommand PlayerBotServiceWorkflow::approachProvider(const PlayerB
 		return command;
 	}
 	if (providerApproaches.empty()) {
+		if (!provider.approachesObserved) {
+			return {PlayerBotServiceCommandType::Wait, PlayerBotServiceOutcome::Pending};
+		}
 		providerApproaches = provider.approaches;
 	}
 	if (pendingApproachRoute) {
@@ -104,12 +141,10 @@ PlayerBotServiceCommand PlayerBotServiceWorkflow::approachProvider(const PlayerB
 			return command;
 		}
 		if (observation.approachRoute.result == PlayerBotServiceRouteResult::Reached) {
+			providerRouteCosts[npcSession.targetId()] = observation.approachRoute.steps;
 			selectedApproach = *pendingApproachRoute;
 			pendingApproachRoute.reset();
-			PlayerBotServiceCommand command{PlayerBotServiceCommandType::NavigateProvider, PlayerBotServiceOutcome::Pending,
-			                                npcSession.targetId()};
-			command.destination = *selectedApproach;
-			return command;
+			return {PlayerBotServiceCommandType::Wait, PlayerBotServiceOutcome::Success};
 		}
 		rejectedApproaches.insert(*pendingApproachRoute);
 		pendingApproachRoute.reset();
@@ -122,16 +157,14 @@ PlayerBotServiceCommand PlayerBotServiceWorkflow::approachProvider(const PlayerB
 		command.destination = candidate.position;
 		return command;
 	}
-	serviceStage = PlayerBotServiceStage::Failed;
-	return {PlayerBotServiceCommandType::Fail, PlayerBotServiceOutcome::Unavailable};
+	return rejectCurrentProvider();
 }
 
 PlayerBotServiceCommand PlayerBotServiceWorkflow::establishNpc(const PlayerBotServiceObservation& observation, bool shop)
 {
 	const auto state = observation.providers.find(npcSession.targetId());
 	if (state == observation.providers.end() || !state->second.available) {
-		serviceStage = PlayerBotServiceStage::Failed;
-		return {PlayerBotServiceCommandType::Fail, PlayerBotServiceOutcome::Unavailable};
+		return rejectCurrentProvider();
 	}
 	if (PlayerBotServiceCommand approach = approachProvider(observation, state->second); approach.type != PlayerBotServiceCommandType::None) {
 		return approach;
@@ -349,7 +382,10 @@ PlayerBotServiceCommand PlayerBotServiceWorkflow::advanceImpl(const PlayerBotSer
 		const PlayerBotEconomyProvider* selected = nullptr;
 		uint16_t itemId = 0;
 		uint32_t price = 0;
+		uint32_t selectedDistance = std::numeric_limits<uint32_t>::max();
+		int64_t selectedUtility = std::numeric_limits<int64_t>::min();
 		for (const auto& shop : shopProviders) for (const auto& offer : shop.offers) {
+			if (unavailableProviderIds.find(shop.id) != unavailableProviderIds.end()) continue;
 			auto count = observation.inventoryCounts.find(offer.itemId);
 			if (offer.sellPrice == 0 || count == observation.inventoryCounts.end() || count->second == 0) continue;
 			const uint32_t backpackCount = observation.backpackSaleCounts.count(offer.itemId) ?
@@ -359,7 +395,23 @@ PlayerBotServiceCommand PlayerBotServiceWorkflow::advanceImpl(const PlayerBotSer
 				    return item.itemId == offer.itemId && item.count != 0;
 			    });
 			if (backpackCount == 0 && !slotted) continue;
-			if (!selected || offer.sellPrice > price) { selected = &shop; itemId = offer.itemId; price = offer.sellPrice; }
+			const uint32_t geometricDistance = std::max(Position::getDistanceX(observation.currentPosition, shop.position),
+			                                   Position::getDistanceY(observation.currentPosition, shop.position)) +
+				(observation.currentPosition.z == shop.position.z ? 0 :
+				 32 * Position::getDistanceZ(observation.currentPosition, shop.position));
+			const auto validatedRoute = providerRouteCosts.find(shop.id);
+			const uint32_t distance = validatedRoute == providerRouteCosts.end() ? geometricDistance : validatedRoute->second;
+			const int64_t utility = providerUtilityPolicy.score(
+				static_cast<uint64_t>(offer.sellPrice) * count->second, distance, providerUtilityProfile);
+			if (!selected || utility > selectedUtility ||
+			    (utility == selectedUtility && (distance < selectedDistance ||
+			     (distance == selectedDistance && offer.sellPrice > price)))) {
+				selected = &shop;
+				itemId = offer.itemId;
+				price = offer.sellPrice;
+				selectedDistance = distance;
+				selectedUtility = utility;
+			}
 		}
 		if (!selected) { serviceStage = PlayerBotServiceStage::BuyPotions; return advanceImpl(observation, catalog, disposition); }
 		targetProvider(selected->id);

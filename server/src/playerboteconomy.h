@@ -33,6 +33,18 @@ struct PlayerBotEconomyRestockDecision {
 	bool insufficientFunds = false;
 };
 
+struct PlayerBotProviderUtilityProfile {
+	uint32_t serviceValueWeight = 10;
+	uint32_t routeCostWeight = 1;
+};
+
+class PlayerBotProviderUtilityPolicy
+{
+	public:
+		int64_t score(uint64_t serviceValue, uint32_t estimatedRouteCost,
+		              const PlayerBotProviderUtilityProfile& profile) const;
+};
+
 class PlayerBotEconomyCatalog
 {
 	public:

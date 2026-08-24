@@ -11,6 +11,7 @@
 #include "otpch.h"
 
 #include "playerbotcontroller.h"
+#include "playerbotnpccapabilities.h"
 #include "playerbotspellcalibration.h"
 #include "condition.h"
 #include "spells.h"
@@ -23,6 +24,10 @@ extern Spells* g_spells;
 namespace {
 	constexpr uint32_t magicTrainingEmergencyReserve = 20;
 	constexpr auto magicTrainingRetryDelay = std::chrono::seconds(2);
+	constexpr size_t maximumSpellTrainerRoutes = 4;
+	constexpr size_t maximumSpellTrainerApproaches = 8;
+	constexpr uint64_t maximumSpellTrainerPathNodes = 20000;
+	constexpr uint64_t maximumSpellTrainerPathNodesPerApproach = 5000;
 
 	const char* fallbackForRole(PlayerBotSpellRole role)
 	{
@@ -269,12 +274,7 @@ bool PlayerBotController::tryOffensiveSpell(Player* player, const Position& curr
 uint64_t PlayerBotController::spellTrainingReserve(const Player& player) const
 {
 	uint32_t potionPrice = std::numeric_limits<uint32_t>::max();
-	for (const auto& entry : g_game.getNpcs()) {
-		Npc* npc = entry.second;
-		const std::string* capability = npc && !npc->isRemoved() ? npc->getParameter("playerbot_service") : nullptr;
-		if (!capability || *capability != "shop") {
-			continue;
-		}
+	for (Npc* npc : playerBotNpcProviders(g_game.getNpcs(), PlayerBotNpcCapability::Shop, player.getPosition())) {
 		for (const ShopInfo& offer : npc->getShopOffers()) {
 			if (offer.itemId == smallHealthPotionItemId && offer.buyPrice != 0) {
 				potionPrice = std::min(potionPrice, offer.buyPrice);
@@ -319,13 +319,18 @@ bool PlayerBotController::findSpellTraining(Player& player, const Position& posi
 	const bool suppliesReady = inventoryPolicy.inventoryItemCount(player, smallHealthPotionItemId) > smallHealthPotionReturnThreshold;
 	std::vector<PlayerBotSpellOfferSnapshot> offers;
 	std::vector<std::deque<PlayerBotNavigationStep>> routes;
+	uint64_t remainingPathNodes = maximumSpellTrainerPathNodes;
+	std::vector<Npc*> trainers = playerBotNpcProviders(g_game.getNpcs(), PlayerBotNpcCapability::SpellTrainer, position);
+	if (!trainers.empty()) {
+		const size_t offset = spellTrainerScanOffset % trainers.size();
+		std::rotate(trainers.begin(), trainers.begin() + offset, trainers.end());
+		spellTrainerScanOffset = (offset + std::min(maximumSpellTrainerRoutes, trainers.size())) % trainers.size();
+	}
+	if (trainers.size() > maximumSpellTrainerRoutes) {
+		trainers.resize(maximumSpellTrainerRoutes);
+	}
 
-	for (const auto& entry : g_game.getNpcs()) {
-		Npc* npc = entry.second;
-		const std::string* capability = npc && !npc->isRemoved() ? npc->getParameter("playerbot_service") : nullptr;
-		if (!capability || *capability != "spell_trainer") {
-			continue;
-		}
+	for (Npc* npc : trainers) {
 		const bool inScope = true;
 		emit("spell_trainer_discovered", position, "\"npc_id\":" + std::to_string(npc->getID()) +
 		     ",\"npc_name\":" + jsonString(npc->getName()) + ",\"offers\":" +
@@ -354,26 +359,39 @@ bool PlayerBotController::findSpellTraining(Player& player, const Position& posi
 				const int32_t rightNpcDistance = std::max(Position::getDistanceX(npc->getPosition(), right),
 				                                              Position::getDistanceY(npc->getPosition(), right));
 				if (leftNpcDistance != rightNpcDistance) {
-					return leftNpcDistance < rightNpcDistance;
+					return leftNpcDistance > rightNpcDistance;
 				}
 				const int32_t leftDistance = std::max(Position::getDistanceX(position, left), Position::getDistanceY(position, left));
 				const int32_t rightDistance = std::max(Position::getDistanceX(position, right), Position::getDistanceY(position, right));
 				return leftDistance == rightDistance ? left < right : leftDistance < rightDistance;
 			});
+			std::array<bool, 9> evaluatedDirections{};
+			size_t evaluatedApproaches = 0;
 			for (const Position& approach : approaches) {
+				if (evaluatedApproaches >= maximumSpellTrainerApproaches || remainingPathNodes == 0) {
+					break;
+				}
+				const int32_t xDirection = approach.x < npc->getPosition().x ? 0 : approach.x > npc->getPosition().x ? 2 : 1;
+				const int32_t yDirection = approach.y < npc->getPosition().y ? 0 : approach.y > npc->getPosition().y ? 2 : 1;
+				const int32_t direction = xDirection * 3 + yDirection;
+				if (evaluatedDirections[direction]) continue;
 				Tile* tile = g_game.map.getTile(approach);
 				if (!tile || tile->queryAdd(0, player, 1, 0) != RETURNVALUE_NOERROR) {
 					continue;
 				}
+				evaluatedDirections[direction] = true;
+				++evaluatedApproaches;
 				std::deque<PlayerBotNavigationStep> steps;
 				uint64_t expandedNodes = 0;
 				const auto startedAt = std::chrono::steady_clock::now();
-			const PlayerBotNavigationRoutePlan routePlan = approach == position ? PlayerBotNavigationRoutePlan{} :
-				planNavigationRoute(player, approach);
+				const PlayerBotNavigationRoutePlan routePlan = approach == position ? PlayerBotNavigationRoutePlan{} :
+					planNavigationRoute(player, approach, {},
+					                    std::min(remainingPathNodes, maximumSpellTrainerPathNodesPerApproach));
 				const PlayerBotNavigationResult result = approach == position ? PlayerBotNavigationResult::Reached : routePlan.metrics.result;
 				if (approach != position) {
 					steps = routePlan.steps;
 					expandedNodes = routePlan.metrics.expandedNodes;
+					remainingPathNodes -= std::min(remainingPathNodes, expandedNodes);
 				}
 				telemetry.recordPathfinding(std::chrono::duration_cast<std::chrono::microseconds>(
 					std::chrono::steady_clock::now() - startedAt), result == PlayerBotNavigationResult::Reached);
@@ -466,13 +484,23 @@ void PlayerBotController::processSpellTraining(Player* player, const Position& c
 {
 	const auto& training = progressionRuntime.spellTraining().plan();
 	Npc* trainer = g_game.getNpcByID(training.npcId);
+	const uint16_t vocationId = player->getVocationId();
+	const uint16_t baseVocationId = player->getVocation()->getFromVocation() == 0 ? vocationId :
+		player->getVocation()->getFromVocation();
+	const bool offerAvailable = trainer && playerBotNpcHasCapability(*trainer, PlayerBotNpcCapability::SpellTrainer) &&
+		std::any_of(trainer->getSpellOffers().begin(), trainer->getSpellOffers().end(), [&training, player, baseVocationId](const NpcSpellOffer& offer) {
+			return offer.spellName == training.spellName && offer.keyword == training.keyword && offer.price == training.price &&
+			       offer.level == training.level && offer.premium == training.premium && player->getLevel() >= offer.level &&
+			       (!offer.premium || player->isPremium()) &&
+			       std::find(offer.vocationIds.begin(), offer.vocationIds.end(), baseVocationId) != offer.vocationIds.end();
+		});
 	PlayerBotSpellTrainingObservation observation;
 	observation.totalMoney = player->getMoney() + player->getBankBalance();
 	if (progressionRuntime.spellTraining().stage() == PlayerBotSpellTrainingStage::Travel) {
 		observation.navigationReached = processNavigation(player, currentPosition, training.approachPosition);
 		observation.navigationFailed = navigationRuntime.fixedTargetRouteFailureCount() >= maximumProgressionAttempts;
 	} else {
-		observation.npcAvailable = trainer && !trainer->isRemoved() && Position::areInRange<3, 3, 0>(currentPosition, trainer->getPosition());
+		observation.npcAvailable = offerAvailable && Position::areInRange<3, 3, 0>(currentPosition, trainer->getPosition());
 		observation.greetingAcknowledged = progressionRuntime.greetingAcknowledged();
 		observation.learned = player->hasLearnedInstantSpell(training.spellName);
 	}
@@ -490,7 +518,7 @@ void PlayerBotController::processSpellTraining(Player* player, const Position& c
 		return;
 	}
 	if (result.command.type == PlayerBotProgressionCommandType::Speak) {
-		if (!trainer || trainer->isRemoved()) return;
+		if (!offerAvailable) return;
 		const char* words = std::strcmp(result.command.reason, "request") == 0 ? training.keyword.c_str() : result.command.reason;
 		if (std::strcmp(words, "hi") == 0) progressionRuntime.clearGreetingAcknowledgement();
 		telemetry.recordActionAttempt();

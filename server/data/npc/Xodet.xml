@@ -3,7 +3,6 @@
 	<health now="100" max="100" />
 	<look type="130" head="19" body="86" legs="87" feet="95" addons="0" />
 	<parameters>
-		<parameter key="playerbot_service" value="shop" />
 		<parameter key="module_shop" value="1" />
 		<parameter key="shop_buyable" value="
 			blank rune,2260,10;			

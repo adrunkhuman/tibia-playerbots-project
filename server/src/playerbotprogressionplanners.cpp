@@ -44,7 +44,7 @@ PlayerBotSpellTrainingDecision PlayerBotSpellTrainingPlanner::select(const Playe
 			continue;
 		}
 		PlayerBotSpellTrainingPlan candidate{offer.npcId, offer.npcPosition, offer.route.approachPosition, offer.spellName,
-		                                    offer.keyword, offer.price, offer.level, offer.route.steps, snapshot.reserve};
+		                                    offer.keyword, offer.price, offer.level, offer.premium, offer.route.steps, snapshot.reserve};
 		if (!decision.selected || candidate.price < decision.selected->price ||
 		    (candidate.price == decision.selected->price && (candidate.travelSteps < decision.selected->travelSteps ||
 		     (candidate.travelSteps == decision.selected->travelSteps && candidate.spellName < decision.selected->spellName)))) {

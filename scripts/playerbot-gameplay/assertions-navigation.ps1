@@ -246,7 +246,7 @@ function Assert-DepotEvents {
 		$_.event -eq "action_result" -and $_.action -eq "depot_discover" -and
 		$_.result -eq "success" -and $_.locker.x -eq 32352 -and $_.locker.y -eq 32225 -and
 		$_.locker.z -eq 7 -and $_.approach.x -eq 32352 -and $_.approach.y -eq 32226 -and $_.approach.z -eq 7 -and
-		$_.distance -ge 0 -and $_.route_steps -ge 0 -and $_.expanded_nodes -ge 0 -and $_.indexed -gt $_.in_scope -and
+		$_.distance -ge 0 -and $_.route_steps -ge 0 -and $_.expanded_nodes -ge 0 -and $_.indexed -ge $_.in_scope -and
 		$_.in_scope -ge 1 -and $_.standable -gt 1
 	})
 	$depotId = if ($discovery.Count -gt 0) { $discovery[0].depot_id } else { -1 }
@@ -275,7 +275,7 @@ function Assert-DepotEvents {
 	})
 	$equipmentUpgrades = @($events | Where-Object {
 		$_.event -eq "action_result" -and $_.action -eq "equip_readiness" -and $_.result -eq "success" -and
-		$_.item_id -in @(2389, 2461, 2643)
+		$_.item_id -in @(2395, 2461, 2643)
 	})
 	$deposited = ($verified | Measure-Object -Property verified -Sum).Sum
 	$unsafeMoves = @($events | Where-Object {

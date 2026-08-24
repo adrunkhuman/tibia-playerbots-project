@@ -179,25 +179,43 @@ hunt or select service. The current soft preference collects up to two standard
 respects the normal fullness limit, and backs off for five minutes after three
 unverified uses.
 
-Service NPCs require an exact `playerbot_service` XML tag of `shop`, `banker`,
-`oracle`, or `spell_trainer`. Shops publish their loaded offers to the bot;
-trainers publish each spell registered through `addSpellKeyword`. Untagged
-providers and tagged providers without offers are ignored. This metadata remains
-an incomplete service allowlist; native capability discovery is tracked in
-issue #33. The bot greets the selected NPC, treats a private reply as focus
-acknowledgement, and opens the normal trade window. Reply text is not interpreted.
-Provider selection is global, but route validation is bounded. Service validates
-one provider approach per scheduler decision and yields for 500 ms before
-continuing an unfinished provider search.
+Loaded NPC state is the source of truth for structured capabilities. Every live
+NPC with non-empty `getShopOffers()`, `getSpellOffers()`, or registered
+`getTravelOffers()` is a shop, spell trainer, or travel provider respectively;
+these capabilities do not require duplicate XML labels. The exact
+`playerbot_service` roles `banker` and `oracle` remain explicit because their
+bespoke dialogue has no structured native interface. `disabled` is the explicit
+override for suppressing an NPC's otherwise discoverable structured offers.
+The bot greets the selected NPC, treats a private reply as focus acknowledgement,
+and opens the normal trade window. Reply text is not interpreted. Provider
+selection is global, but route validation is bounded. Cost-ordered provider
+scans apply their route and catalog budgets only after discovery, rather than
+letting NPC registration order decide which providers are considered. Service
+validates one provider approach per scheduler decision and yields for 500 ms
+before continuing an unfinished provider search. Each provider is limited to
+eight diverse approach tiles; an unreachable provider is suppressed for the
+current workflow and selection continues with the next matching provider.
+Equipment discovery examines at most 16 providers and 64 catalog offers per goal
+scan, validates at most four provider routes, and resumes from later providers on
+the next scan.
 
-Service goal selection counts sellable inventory only when a live tagged NPC
-currently publishes a matching offer. Selling chooses the highest live price,
-then the nearer provider on a tie. Required purchases choose the nearest
-registered offer, then revalidate the NPC and trade window before transacting.
+Service goal selection counts sellable inventory only when a live shop NPC
+currently publishes a matching offer. Selling uses a pure provider utility over
+expected sale value and route cost. It starts with a geometric estimate and
+reranks after each bounded route validation using the resulting path length.
+The default profile values one gp
+as ten route steps, which favors local service unless a remote provider's total
+proceeds justify the trip. The weights are isolated so later personality policy
+can vary thrift and travel aversion without weakening reachability, eligibility,
+or survival constraints. Required purchases choose the nearest loaded offer,
+then revalidate the NPC capability, offer, and trade window before transacting.
 Missing required offers, unavailable NPCs, and failed shop verification stop
 with explicit service errors instead of completing an unverified transaction.
 
-Spell training considers all tagged providers; Gregor is the initial tag. It
+Spell training considers every live NPC with loaded spell offers through
+round-robin scans of at most four trainers. Each scan evaluates up to eight
+approach tiles per trainer with a 5,000-node limit per approach and a 20,000-node
+aggregate route budget; later trainers are evaluated on subsequent scans. It
 derives trainer offers from loaded NPC scripts and rejects offers with a registry
 mismatch, wrong vocation, level, premium status, learned state, missing supply
 reserve, insufficient funds after the 100 gp carried reserve plus the cost of
@@ -218,6 +236,12 @@ Execution greets the selected NPC, follows the registered dialogue, relies on
 the normal script for payment and movement, and verifies the exact destination.
 A failed NPC/destination pair is suppressed for five minutes. The runtime
 executes one travel leg and replans from the observed arrival position.
+
+At controller startup, `npc_capability_audit` reports loaded provider totals and
+warns about empty legacy `shop` or `spell_trainer` declarations and `disabled`
+metadata that hides structured offers. Names and coordinates appear only in
+telemetry; capability and provider decisions use loaded offers, requirements,
+prices, and route/service costs.
 
 The casting policy has four audited descriptors: `healing`, `support`,
 `melee_offense`, and `ranged_offense`. It currently uses Light Healing for
@@ -369,7 +393,7 @@ attack alone does not justify switching weapon classes. Two-handed weapons are
 outside the current loadout evaluator and remain protected from automatic sale,
 depot deposit, and cargo replacement until two-handed tradeoffs are supported.
 
-Item value comes from tagged shop offers. Currency uses intrinsic value; other
+Item value comes from loaded shop offers. Currency uses intrinsic value; other
 loot must have a known buyer. Corpse contents are ranked by value per weight,
 and more valuable loot may replace lower-density sellable cargo. Once two food
 items are carried, further food is skipped. Any food remains replaceable by a
@@ -467,13 +491,13 @@ events are emitted by that controller.
 | Lifecycle | `lifecycle`, `state_transition`, `objective_transition`, `terminal` record ownership and controller state. |
 | Goals | `goal_candidate`, `goal_selection`, `goal_result` expose arbitration evidence and decision IDs. |
 | Rewards | `strategy_candidate`, `reward_inspection`, `strategy_selection`, `strategy_objective_result` expose bundle selection and verification. |
-| Equipment | `equipment_offer_candidate` and `equipment_offer_shadow` expose loaded tagged-shop offers, loadout and hunt deltas, reserve and route checks, and non-mutating `would_buy` or `would_equip` decisions. Live `buy_equipment` goals use `strategy_selection`, `action_result`, `strategy_objective_result`, and `goal_result` to record purchase, carried-item recovery, displacement, equip verification, and fallback. |
+| Equipment | `equipment_offer_candidate` and `equipment_offer_shadow` expose loaded shop offers, loadout and hunt deltas, reserve and route checks, and non-mutating `would_buy` or `would_equip` decisions. Live `buy_equipment` goals use `strategy_selection`, `action_result`, `strategy_objective_result`, and `goal_result` to record purchase, carried-item recovery, displacement, equip verification, and fallback. |
 | Spell training | `spell_trainer_discovered`, `spell_candidate`, `strategy_selection`, `action_result`, and `goal_result` expose loaded offers, eligibility rejections, provider/route choice, and exact payment verification. |
 | Spell casting | `action_result` with `action="cast_spell"` records the need, semantic `policy_candidate`, selected method, mana reserve, normal-path request, engine result, observed outcome, fallback, captured engine bounds, monotonic observation age, target class, distinct synchronous spell-victim count, measured Haste condition ticks, and controller-local calibration counts, range, conservative value, ranking estimate, confidence, and evidence reason. `spell_calibration` separates `classifier_helper` and `profile_math` fixture evidence; `spell_calibration_eviction` records bounded-profile replacement. `legal_candidates` contains only normal-path casts confirmed by resource evidence. |
 | Magic training | `goal_candidate`, `goal_selection`, and `goal_result` expose overflow arbitration. `action_result` with `action="magic_training"` emits a requested `engine_path` record and a success or failure `engine_verification` record with spell, reserve, current/maximum/predicted/lost mana, aggregated gain, aligned interval/remaining time, loaded cost, mana delta, and magic progression. `magic_training_fixture` with `source="authoritative_forecast"` is controlled fixture evidence, not a live cast. |
-| Actions | `action_result`, `target_changed`, `service_discovered`, `npc_reply`, `stuck` record externally relevant attempts and outcomes. |
+| Actions | `action_result`, `target_changed`, `service_discovered`, `service_provider_rejected`, `npc_reply`, `npc_capability_audit`, and `stuck` record externally relevant attempts, discovery health, provider fallback, and outcomes. |
 | Hunting | `hunt_region_candidate`, `hunt_region_scan`, `hunt_region_selection`, `hunt_region_outcome`, `hunt_challenge_frontier`, `hunt_scope_exhausted`, and `hunt_region_patrol` expose planner inputs, recovery assumptions, optimistic-bound route deferral, active-combat and kill evidence, frontier updates, and bounded exhaustion. |
-| Navigation | `navigation_progress` records bounded recovery such as oscillation suppression; `npc_travel` records verified travel success or failure. Lifecycle records include registered and opaque travel-offer counts. |
+| Navigation | `navigation_progress` records bounded recovery such as oscillation suppression; `npc_travel` records verified travel success or failure. Lifecycle records include loaded shop-provider, spell-trainer, travel-offer, and opaque travel-offer counts. |
 | Health | `summary` reports cumulative timing, action, failure, stuck, and suppression counters every 60 seconds. |
 
 `action_result` records with `action="item_disposition"` report moves of
