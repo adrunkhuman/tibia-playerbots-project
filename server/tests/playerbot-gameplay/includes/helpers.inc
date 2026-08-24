@@ -20,9 +20,10 @@ function F.removeAll(player, itemId)
     end
 end
 
-function F.restoreRookgaardBaseline(player)
+function F.restoreRookgaardBaseline(player, acceptSeedBaseline)
     local armor = player:getSlotItem(CONST_SLOT_ARMOR)
-    if player:getLevel() ~= 8 or player:getVocation():getId() ~= 4 or not armor or armor:getId() ~= 2463 then
+    local baselineArmor = armor and (armor:getId() == 2463 or acceptSeedBaseline and armor:getId() == F.seedArmorId)
+    if player:getLevel() ~= 8 or player:getVocation():getId() ~= 4 or not baselineArmor then
         return
     end
 

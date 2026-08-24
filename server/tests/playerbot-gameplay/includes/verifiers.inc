@@ -60,9 +60,9 @@ function F.verifyEquipmentPurchase(playerId, rejected, resumed, attempts)
         right and right:getId() == F.equipmentPurchaseItemId and F.equipmentPurchaseItemId or 0
     local totalMoney = player:getMoney() + player:getBankBalance()
     local complete = rejected and equippedId == 0 and left and left:getId() == F.starterWeaponId and
-        player:getItemCount(F.equipmentPurchaseItemId) == 0 and totalMoney == 210 or
+        player:getItemCount(F.equipmentPurchaseItemId) == 0 and totalMoney == 105 or
         not rejected and equippedId == F.equipmentPurchaseItemId and player:getItemCount(F.starterWeaponId) == 1 and
-        totalMoney == 205
+        totalMoney == 100
     if not complete and attempts > 0 then
         addEvent(F.verifyEquipmentPurchase, 500, playerId, rejected, resumed, attempts - 1)
         return
@@ -76,7 +76,7 @@ function F.verifyEquipmentPurchaseSpace(playerId)
     assert(player and not player:isRemoved(), "Bot One disappeared during equipment storage fixture")
     local left = player:getSlotItem(CONST_SLOT_LEFT)
     assert(left and left:getId() == F.starterWeaponId and player:getItemCount(F.equipmentPurchaseItemId) == 0 and
-        player:getMoney() + player:getBankBalance() == 210,
+        player:getMoney() + player:getBankBalance() == 105,
         "equipment storage rejection mutated equipment or money")
     print("PLAYERBOT_GAMEPLAY_TEST EQUIPMENT_BUY_SPACE_PASS")
 end
@@ -290,7 +290,7 @@ function F.verifyService(playerId, initialDepotBagCount, attempts)
     assert(depotTile, "fake depot tile is unavailable")
     local depositedBags = depotTile:getItemCountById(ITEM_BAG) - initialDepotBagCount
     local complete = depositedBags == 1 and player:getItemCount(F.saleItemId) == 0 and
-        player:getItemCount(F.potionItemId) >= 10 and player:getMoney() == 100 and player:getBankBalance() == 39
+        player:getItemCount(F.potionItemId) >= 10 and player:getMoney() == 100 and player:getBankBalance() == 139
     if not complete and attempts > 0 then
         addEvent(F.verifyService, 500, playerId, initialDepotBagCount, attempts - 1)
         return
@@ -300,14 +300,12 @@ function F.verifyService(playerId, initialDepotBagCount, attempts)
     assert(player:getItemCount(F.saleItemId) == 0, "policy-approved loot was not sold")
     assert(player:getItemCount(F.potionItemId) >= 10, "small health potion restock target was not purchased")
     assert(player:getMoney() == 100, "banker did not leave the carried gold reserve")
-    assert(player:getBankBalance() == 39, "shop purchases and bank transactions produced the wrong balance")
-    assert(player:getSlotItem(CONST_SLOT_ARMOR):getId() == F.starterArmorId, "starter jacket was deposited")
+    assert(player:getBankBalance() == 139, "shop purchases and bank transactions produced the wrong balance")
+    assert(player:getSlotItem(CONST_SLOT_ARMOR):getId() == F.seedArmorId, "seeded chain armor was deposited")
     local right = player:getSlotItem(CONST_SLOT_RIGHT)
-    assert(not right or right:getId() == F.meatItemId or right:getId() == ITEM_PLATINUM_COIN,
-        "unexpected item appeared in the starter shield slot: " .. (right and right:getId() or 0))
-    assert(player:getSlotItem(CONST_SLOT_LEFT):getId() == F.starterWeaponId, "starter club was deposited")
-    local feet = player:getSlotItem(CONST_SLOT_FEET)
-    assert(not feet or feet:getId() == F.potionItemId, "unexpected item appeared in the starter feet slot")
+    assert(right and right:getId() == F.seedShieldId, "seeded dwarven shield was deposited")
+    assert(player:getSlotItem(CONST_SLOT_LEFT):getId() == F.seedWeaponId, "seeded carlin sword was deposited")
+    assert(player:getSlotItem(CONST_SLOT_FEET):getId() == F.seedBootsId, "seeded leather boots were deposited")
     assert(player:getItemCount(2120) == 1, "rope was deposited")
     assert(player:getItemCount(2554) == 1, "shovel was deposited")
     print("PLAYERBOT_GAMEPLAY_TEST SERVICE_PASS")
@@ -339,7 +337,7 @@ function F.verifyDepot(playerId, attempts)
     assert(player:getItemCount(2380) == 0 and player:getItemCount(F.starterWeaponId) == 0,
         "inferior or displaced equipment remained carried")
     assert(player:getSlotItem(CONST_SLOT_ARMOR):getId() == F.starterArmorId, "equipped armor was deposited")
-    assert(player:getSlotItem(CONST_SLOT_LEFT):getId() == 2389, "carried weapon upgrade was not equipped")
+    assert(player:getSlotItem(CONST_SLOT_LEFT):getId() == F.seedWeaponId, "carried weapon upgrade was not equipped")
     assert(player:getSlotItem(CONST_SLOT_HEAD):getId() == 2461, "carried helmet upgrade was not equipped")
     assert(player:getSlotItem(CONST_SLOT_FEET):getId() == 2643, "carried boot upgrade was not equipped")
     assert(player:getItemCount(2120) == 1 and player:getItemCount(2554) == 1, "navigation tools were deposited")

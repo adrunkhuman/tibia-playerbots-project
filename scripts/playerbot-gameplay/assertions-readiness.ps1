@@ -152,7 +152,7 @@ function Assert-EquipmentPurchaseEvents {
 	})
 	if ($selections.Count -ne 1 -or $purchases.Count -ne 1 -or $equips.Count -ne 1 -or
 		$results.Count -ne 1 -or $results[0].result -ne "success" -or
-		$purchases[0].carried_before -ne 110 -or $purchases[0].carried_after -ne 105 -or
+		$purchases[0].carried_before -ne 5 -or $purchases[0].carried_after -ne 0 -or
 		$purchases[0].bank_before -ne 100 -or $purchases[0].bank_after -ne 100 -or
 		-not $equips[0].combat_ready -or -not $equips[0].displaced_items_preserved -or $terminal.Count -ne 0) {
 		$purchase = $purchases | Select-Object -First 1

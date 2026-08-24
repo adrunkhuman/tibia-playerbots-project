@@ -52,6 +52,9 @@ struct PlayerBotNavigationStep {
 	Position expectedPosition;
 	uint16_t itemId = 0;
 	uint32_t npcId = 0;
+	uint32_t price = 0;
+	uint32_t minimumLevel = 0;
+	bool premium = false;
 	std::vector<std::string> dialogue;
 };
 

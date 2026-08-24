@@ -3,7 +3,6 @@
 	<health now="100" max="100" />
 	<look type="131" head="19" body="63" legs="96" feet="38" addons="0" />
 	<parameters>
-		<parameter key="playerbot_service" value="shop" />
 		<parameter key="module_shop" value="1" />
 		<parameter key="shop_buyable" value="
 		machete,2420,30;

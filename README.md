@@ -19,10 +19,11 @@ rewards and equips upgrades it finds, recovers from death, and eventually talks
 to the Oracle and leaves for the mainland.
 
 Normal hunting and Oracle navigation derive destinations from loaded map and
-spawn data rather than following an ordered route. The planner is deliberately
-bounded to Rookgaard while the behavior model is still being established;
-service allowlists, progression bounds, and the depot location remain
-configured.
+spawn data rather than following an ordered route. Shops, spell trainers, and
+travel providers are discovered from loaded NPC offers; bespoke banker and
+Oracle roles remain explicit. The planner is deliberately bounded to Rookgaard
+while the behavior model is still being established; progression bounds and the
+depot location remain configured.
 
 ## Design constraints
 
