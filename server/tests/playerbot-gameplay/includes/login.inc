@@ -568,7 +568,7 @@ function F.login.onLogin(player)
         local potions = player:getItemCount(F.potionItemId)
         if potions > 0 then assert(player:removeItem(F.potionItemId, potions), "healing fixture could not remove starter potions") end
         assert(player:getItemCount(F.potionItemId) == 0, "healing fixture expected no seeded potions")
-        assert(player:addItem(F.potionItemId, F.healingPotionCount), "healing fixture could not add small health potions")
+        assert(player:addItem(F.potionItemId, F.healingPotionCount), "healing fixture could not add recovery potions")
         assert(player:setHealth(math.floor(player:getMaxHealth() * 0.5)), "healing fixture could not lower Bot One's health")
         addEvent(F.verifyHealing, 250, player:getId(), 40)
         print("PLAYERBOT_GAMEPLAY_TEST HEALING_START")

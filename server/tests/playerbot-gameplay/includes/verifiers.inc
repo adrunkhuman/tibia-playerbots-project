@@ -192,7 +192,7 @@ function F.verifyHealing(playerId, attempts)
         return
     end
     assert(recovered, "Bot One did not heal above the configured health threshold")
-    assert(consumed, "Bot One did not consume a small health potion")
+    assert(consumed, "Bot One did not consume the selected recovery potion")
     print("PLAYERBOT_GAMEPLAY_TEST HEALING_STATE_PASS")
 end
 
@@ -298,7 +298,7 @@ function F.verifyService(playerId, initialDepotBagCount, attempts)
 
     assert(depositedBags == 1, "unexpected deposited loot-bag count: " .. depositedBags)
     assert(player:getItemCount(F.saleItemId) == 0, "policy-approved loot was not sold")
-    assert(player:getItemCount(F.potionItemId) >= 10, "small health potion restock target was not purchased")
+    assert(player:getItemCount(F.potionItemId) >= 10, "selected recovery potion restock target was not purchased")
     assert(player:getMoney() == 100, "banker did not leave the carried gold reserve")
     assert(player:getBankBalance() == 139, "shop purchases and bank transactions produced the wrong balance")
     assert(player:getSlotItem(CONST_SLOT_ARMOR):getId() == F.seedArmorId, "seeded chain armor was deposited")
