@@ -175,7 +175,8 @@ void PlayerBotController::processService(Player* player, const Position& current
 	observation.money = player->getMoney();
 	observation.bankBalance = player->getBankBalance();
 	observation.goldCoinWeight = Item::items[ITEM_GOLD_COIN].weight;
-	observation.smallHealthPotionWeight = Item::items[PlayerBotDispositionPolicy::smallHealthPotionItemId].weight;
+	observation.healthPotionItemId = recoveryPotionItemId(player->getVocationId());
+	observation.healthPotionWeight = Item::items[observation.healthPotionItemId].weight;
 	Item* serviceBackpackItem = player->getInventoryItem(CONST_SLOT_BACKPACK);
 	Container* serviceBackpack = serviceBackpackItem ? serviceBackpackItem->getContainer() : nullptr;
 	observation.actionAvailable = player->canDoAction();
@@ -184,7 +185,7 @@ void PlayerBotController::processService(Player* player, const Position& current
 	observation.maximumAttempts = maximumServiceAttempts;
 	observation.slottedSaleCooldownMs = static_cast<uint32_t>(
 		std::chrono::duration_cast<std::chrono::milliseconds>(unavailableDispositionCooldown).count());
-	std::set<uint16_t> relevantItemIds{PlayerBotDispositionPolicy::smallHealthPotionItemId};
+	std::set<uint16_t> relevantItemIds{observation.healthPotionItemId};
 	for (const auto& [itemId, value] : economyCatalog.sellValues()) {
 		if (value == 0) continue;
 		const uint32_t inventoryCount = inventoryPolicy.inventoryItemCount(*player, itemId);
@@ -193,10 +194,10 @@ void PlayerBotController::processService(Player* player, const Position& current
 		observation.backpackSaleCounts.emplace(itemId, backpackSaleCount);
 		if (inventoryCount != 0 || backpackSaleCount != 0) relevantItemIds.insert(itemId);
 	}
-	observation.inventoryCounts.emplace(PlayerBotDispositionPolicy::smallHealthPotionItemId,
-		inventoryPolicy.inventoryItemCount(*player, PlayerBotDispositionPolicy::smallHealthPotionItemId));
-	observation.backpackSaleCounts.emplace(PlayerBotDispositionPolicy::smallHealthPotionItemId,
-		inventoryPolicy.backpackSaleItemCount(*player, PlayerBotDispositionPolicy::smallHealthPotionItemId));
+	observation.inventoryCounts.emplace(observation.healthPotionItemId,
+		inventoryPolicy.inventoryItemCount(*player, observation.healthPotionItemId));
+	observation.backpackSaleCounts.emplace(observation.healthPotionItemId,
+		inventoryPolicy.backpackSaleItemCount(*player, observation.healthPotionItemId));
 	std::vector<Npc*> serviceNpcs = playerBotNpcProviders(g_game.getNpcs(), PlayerBotNpcCapability::Shop, currentPosition);
 	for (const auto& entry : g_game.getNpcs()) {
 		Npc* npc = entry.second;
@@ -458,7 +459,7 @@ bool PlayerBotController::findDepositableItem(const Player& player, Container* c
 			continue;
 		}
 		const uint32_t carried = inventoryPolicy.inventoryItemCount(player, item->getID());
-		const uint32_t reserve = inventoryPolicy.protectedItemReserve(item->getID());
+		const uint32_t reserve = inventoryPolicy.protectedItemReserve(player, item->getID());
 		const uint32_t movable = item->isStackable() && carried > reserve ?
 			std::min<uint32_t>(item->getItemCount(), carried - reserve) : (carried > reserve ? 1 : 0);
 		if (movable != 0 && movable <= UINT8_MAX) {
@@ -933,7 +934,7 @@ void PlayerBotController::processDeposit(Player* player, const Position& current
 		depositItem = findActionableSlottedItem(*player, 0, sourceSlot);
 		if (depositItem) {
 			const uint32_t carried = inventoryPolicy.inventoryItemCount(*player, depositItem->getID());
-			const uint32_t reserve = inventoryPolicy.protectedItemReserve(depositItem->getID());
+			const uint32_t reserve = inventoryPolicy.protectedItemReserve(*player, depositItem->getID());
 			const uint32_t movable = depositItem->isStackable() && carried > reserve ?
 				std::min<uint32_t>(depositItem->getItemCount(), carried - reserve) : (carried > reserve ? 1 : 0);
 			count = static_cast<uint8_t>(std::min<uint32_t>(movable, UINT8_MAX));

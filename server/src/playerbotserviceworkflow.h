@@ -88,7 +88,8 @@ struct PlayerBotServiceObservation {
 	uint64_t money = 0;
 	uint64_t bankBalance = 0;
 	uint32_t goldCoinWeight = 0;
-	uint32_t smallHealthPotionWeight = 0;
+	uint16_t healthPotionItemId = 0;
+	uint32_t healthPotionWeight = 0;
 	std::map<uint32_t, PlayerBotServiceProviderObservation> providers;
 	std::vector<PlayerBotServiceDiscovery> discoveries;
 	uint32_t maximumAttempts = 0;

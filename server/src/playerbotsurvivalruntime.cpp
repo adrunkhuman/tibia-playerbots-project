@@ -16,7 +16,6 @@ namespace {
 	constexpr int32_t meatFoodTicks = 108000;
 	constexpr int32_t maximumFoodSeconds = 1200;
 	constexpr uint32_t maximumEatFailures = 3;
-	constexpr int32_t smallHealthPotionMaximumHealing = 90;
 	constexpr uint32_t higherPriorityRecoveryManaReserve = 20;
 	constexpr uint32_t minimumHasteRouteSteps = 20;
 	constexpr uint32_t magicTrainingEmergencyReserve = 20;
@@ -61,7 +60,7 @@ PlayerBotSurvivalCommand PlayerBotSurvivalRuntime::decideHealing(const PlayerBot
 		command.type = PlayerBotSurvivalCommandType::Wait;
 		return command;
 	}
-	if (snapshot.healthMaximum - snapshot.health <= smallHealthPotionMaximumHealing || snapshot.potionCount == 0) {
+	if (snapshot.healthMaximum - snapshot.health <= snapshot.potionMaximumHealing || snapshot.potionCount == 0) {
 		spellAttempt = decideSpell(snapshot, "Light Healing", "recovery", now);
 		if (spellAttempt.type == PlayerBotSurvivalCommandType::CastSpell) return spellAttempt;
 	}
@@ -71,7 +70,7 @@ PlayerBotSurvivalCommand PlayerBotSurvivalRuntime::decideHealing(const PlayerBot
 		return command;
 	}
 	command.type = PlayerBotSurvivalCommandType::UsePotion;
-	command.itemId = playerbot::smallHealthPotionItemId;
+	command.itemId = snapshot.potionItemId;
 	command.candidateName = spellAttempt.candidateName;
 	command.need = spellAttempt.need;
 	command.reason = spellAttempt.reason;

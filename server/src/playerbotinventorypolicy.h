@@ -21,11 +21,27 @@ enum slots_t : uint8_t;
 
 namespace playerbot {
 	inline constexpr uint16_t smallHealthPotionItemId = 8704;
-	inline constexpr uint32_t smallHealthPotionReturnThreshold = 1;
-	inline constexpr uint32_t smallHealthPotionRestockTarget = 10;
+	inline constexpr uint16_t healthPotionItemId = 7618;
+	inline constexpr uint32_t healthPotionReturnThreshold = 1;
+	inline constexpr uint32_t healthPotionRestockTarget = 10;
 	inline constexpr uint32_t preferredFoodCount = 2;
 	inline constexpr uint16_t ropeItemId = 2120;
 	inline constexpr uint32_t carriedGoldReserve = 100;
+
+	constexpr uint16_t recoveryPotionItemId(uint16_t vocationId)
+	{
+		return vocationId == 0 ? smallHealthPotionItemId : healthPotionItemId;
+	}
+
+	constexpr int32_t recoveryPotionMinimumHealing(uint16_t vocationId)
+	{
+		return vocationId == 0 ? 60 : 125;
+	}
+
+	constexpr int32_t recoveryPotionMaximumHealing(uint16_t vocationId)
+	{
+		return vocationId == 0 ? 90 : 175;
+	}
 
 	struct PlayerBotFoodInventory {
 		uint32_t count = 0;
@@ -47,7 +63,7 @@ namespace playerbot {
 			PlayerBotFoodInventory foodInventory(const Player& player) const;
 			uint32_t effectiveFreeCapacity(const Player& player) const;
 			uint32_t itemUnitValue(uint16_t itemId) const;
-			uint32_t protectedItemReserve(uint16_t itemId) const;
+			uint32_t protectedItemReserve(const Player& player, uint16_t itemId) const;
 			bool isProtectedInventoryItem(const Item& item) const;
 			bool isProtectedDepositItem(const Player& player, const Item& item) const;
 			uint32_t backpackSaleItemCount(const Player& player, uint16_t itemId) const;

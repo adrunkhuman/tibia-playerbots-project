@@ -61,12 +61,11 @@ class PlayerBotEconomyCatalog
 class PlayerBotDispositionPolicy
 {
 	public:
-		static constexpr uint16_t smallHealthPotionItemId = 8704;
 		static constexpr uint32_t potionReturnThreshold = 1;
 		static constexpr uint32_t potionRestockTarget = 10;
 		static constexpr uint32_t carriedGoldReserve = 100;
 
-		uint32_t protectedReserve(uint16_t itemId, bool food) const;
+		uint32_t protectedReserve(uint16_t itemId, bool food, uint16_t potionItemId) const;
 		uint32_t sellQuantity(const PlayerBotEconomyInventorySnapshot& inventory, uint16_t reserve) const;
 		PlayerBotEconomyRestockDecision restock(const PlayerBotEconomyInventorySnapshot& inventory,
 		                                         uint32_t unitPrice, uint32_t unitWeight) const;

@@ -39,6 +39,8 @@ struct PlayerBotSurvivalSnapshot {
 	uint64_t manaSpent = 0;
 	uint32_t level = 0;
 	uint32_t magicLevel = 0;
+	uint16_t potionItemId = 0;
+	int32_t potionMaximumHealing = 0;
 	uint32_t potionCount = 0;
 	uint32_t foodCount = 0;
 	uint32_t foodInventoryCount = 0;

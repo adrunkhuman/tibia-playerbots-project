@@ -20,6 +20,15 @@ function F.removeAll(player, itemId)
     end
 end
 
+function F.selectHealthPotion(player)
+    F.potionItemId = player:getVocation():getId() == 0 and F.smallHealthPotionItemId or F.healthPotionItemId
+end
+
+function F.removeAllHealthPotions(player)
+    F.removeAll(player, F.smallHealthPotionItemId)
+    F.removeAll(player, F.healthPotionItemId)
+end
+
 function F.restoreRookgaardBaseline(player, acceptSeedBaseline)
     local armor = player:getSlotItem(CONST_SLOT_ARMOR)
     local baselineArmor = armor and (armor:getId() == 2463 or acceptSeedBaseline and armor:getId() == F.seedArmorId)

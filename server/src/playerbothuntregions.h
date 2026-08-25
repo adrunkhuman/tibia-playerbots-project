@@ -41,6 +41,7 @@ struct PlayerBotHuntPlanningProfile {
 	uint32_t mana = 0;
 	uint32_t magicLevel = 0;
 	uint32_t potionCount = 0;
+	int32_t potionMinimumHealing = 0;
 	uint32_t lightHealingManaCost = 0;
 	uint32_t lightHealingCooldown = 0;
 	int32_t lightHealingMinimum = 0;

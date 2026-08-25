@@ -7,7 +7,8 @@ function F.login.onLogin(player)
         return true
     end
 
-    local mode = os.getenv("PLAYERBOT_GAMEPLAY_MODE") or "cycle"
+	local mode = os.getenv("PLAYERBOT_GAMEPLAY_MODE") or "cycle"
+	F.selectHealthPotion(player)
     assert(mode == "mainland" or mode == "cycle" or mode == "depot" or mode == "slotted_loot_seller" or mode == "slotted_loot_no_seller" or mode == "navigation" or mode == "navigation_recovery" or mode == "patrol_recovery" or mode == "target_pursuit" or mode == "target_pursuit_abandon" or mode == "corpse" or mode == "corpse_inaccessible" or mode == "death" or mode == "healing" or mode == "spell_use" or
         mode == "healing_resupply" or mode == "value" or mode == "progression" or mode == "progression_bundle" or
         mode == "progression_nested" or mode == "progression_resume" or mode == "progression_nested_resume" or
@@ -161,6 +162,9 @@ function F.login.onLogin(player)
     end
     if mode == "spell_use" or mode == "spell_calibration" then
         assert(player:setVocation(4), "spell-use fixture could not select Knight")
+        F.removeAll(player, F.smallHealthPotionItemId)
+        F.removeAll(player, F.healthPotionItemId)
+        assert(player:addItem(F.healthPotionItemId, 5), "spell-use fixture could not add health potions")
         F.spellCalibrationFixture = mode == "spell_calibration"
         local requiredLevel = F.spellCalibrationFixture and 35 or 20
         local requiredExperience = Game.getExperienceForLevel(requiredLevel) - player:getExperience()
@@ -239,9 +243,13 @@ function F.login.onLogin(player)
             F.removeAll(player, F.potionItemId)
             F.removeAll(player, F.meatItemId)
             assert(player:addItem(F.potionItemId, 5) and player:addItem(F.meatItemId, 1), "magic training progression fixture could not prepare service reserves")
-            assert(player:removeMoney(player:getMoney()) and player:addMoney(100) and player:setBankBalance(200), "magic training progression fixture could not normalize spell training funds")
-            assert(player:getMoney() == 100 and player:getBankBalance() == 200, "magic training progression fixture has the wrong service and spell-training reserves")
-            assert(player:teleportTo(Position(32356, 32130, 9)), "magic training progression fixture could not choose a reachable non-PZ trainer route")
+            assert(player:removeMoney(player:getMoney()) and player:addMoney(100) and player:setBankBalance(305), "magic training progression fixture could not normalize spell training funds")
+            assert(player:getMoney() == 100 and player:getBankBalance() == 305, "magic training progression fixture has the wrong service and spell-training reserves")
+            local trainer = Npc("Gregor")
+            assert(trainer, "magic training progression fixture could not find Gregor")
+            local trainerPosition = trainer:getPosition()
+            assert(player:teleportTo(Position(trainerPosition.x - 1, trainerPosition.y, trainerPosition.z)),
+                "magic training progression fixture could not approach Gregor")
         end
         if mode == "magic_training_post_hunt" or mode == "magic_training_post_hunt_no_overflow" then
             if not player:hasLearnedSpell("Find Person") then assert(player:learnSpell("Find Person"), "magic training post-hunt fixture could not remove spell-learning work") end
@@ -251,9 +259,11 @@ function F.login.onLogin(player)
         print("PLAYERBOT_GAMEPLAY_TEST " .. string.upper(mode) .. "_START")
         return true
     end
-    F.restoreRookgaardBaseline(player, mode ~= "cycle")
+	F.restoreRookgaardBaseline(player, mode ~= "cycle")
+	F.selectHealthPotion(player)
     if mode == "readiness_ready" or mode == "readiness_upgrade" or mode == "readiness_missing_weapon" or mode == "readiness_supplies" or mode == "readiness_no_food" or mode == "readiness_low_wealth" or mode == "readiness_food_capacity" or mode == "readiness_retention" then
         assert(player:setVocation(4), "readiness fixture could not select Knight vocation")
+		F.selectHealthPotion(player)
         assert(player:teleportTo(F.depotPosition), "readiness fixture could not reach the depot")
         F.removeAll(player, F.potionItemId)
         assert(player:addItem(F.potionItemId, 10), "readiness fixture could not normalize healing supplies")
@@ -267,9 +277,14 @@ function F.login.onLogin(player)
             F.removeAll(player, F.pickupRewardId)
             print("PLAYERBOT_GAMEPLAY_TEST READINESS_MISSING_WEAPON_START")
         elseif mode == "readiness_supplies" then
+			local thais = Town(F.thaisTownId)
+			assert(thais and player:setTown(thais) and player:teleportTo(Position(32398, 32222, 7)),
+				"readiness supplies fixture could not reach Xodet")
             F.removeAll(player, F.potionItemId)
             F.removeAll(player, F.meatItemId)
             assert(player:addItem(F.potionItemId, 1), "readiness supplies fixture could not seed the return threshold")
+            assert(player:removeMoney(player:getMoney()) and player:addMoney(100) and player:setBankBalance(405),
+                "readiness supplies fixture could not fund the restock target")
             addEvent(F.verifyReadiness, 500, player:getId(), "supplies", 240)
         elseif mode == "readiness_no_food" then
             F.removeAll(player, F.meatItemId)
@@ -311,6 +326,7 @@ function F.login.onLogin(player)
     if mode == "hunt_planning" then print("PLAYERBOT_GAMEPLAY_TEST HUNT_PLANNING_START"); return true end
     if mode == "adaptive_challenge" then
         assert(player:setVocation(4), "adaptive challenge fixture could not select Knight")
+		F.selectHealthPotion(player)
         local requiredExperience = Game.getExperienceForLevel(9) - player:getExperience()
         if requiredExperience > 0 then player:addExperience(requiredExperience) end
         assert(player:getLevel() == 9 and player:learnSpell("Light Healing"), "adaptive challenge fixture could not prepare learned Light Healing")
@@ -451,6 +467,7 @@ function F.login.onLogin(player)
         local thais = Town(F.thaisTownId)
         assert(thais and player:setTown(thais), "spell training fixture could not select Thais")
         assert(player:setVocation(4), "spell training fixture could not select Knight")
+		F.selectHealthPotion(player)
         local requiredExperience = Game.getExperienceForLevel(8) - player:getExperience()
         if requiredExperience > 0 then player:addExperience(requiredExperience) end
         assert(player:getLevel() == 8, "spell training fixture could not select level 8")

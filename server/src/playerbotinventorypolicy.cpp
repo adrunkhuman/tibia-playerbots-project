@@ -87,7 +87,7 @@ uint32_t PlayerBotInventoryPolicy::itemUnitValue(uint16_t itemId) const
 	return it == sellValues.end() ? 0 : it->second;
 }
 
-uint32_t PlayerBotInventoryPolicy::protectedItemReserve(uint16_t itemId) const
+uint32_t PlayerBotInventoryPolicy::protectedItemReserve(const Player& player, uint16_t itemId) const
 {
 	if (itemId == ropeItemId || itemId == 2554) {
 		return 1;
@@ -95,8 +95,8 @@ uint32_t PlayerBotInventoryPolicy::protectedItemReserve(uint16_t itemId) const
 	if (isFoodItem(itemId)) {
 		return preferredFoodCount;
 	}
-	if (itemId == smallHealthPotionItemId) {
-		return smallHealthPotionRestockTarget;
+	if (itemId == recoveryPotionItemId(player.getVocationId())) {
+		return healthPotionRestockTarget;
 	}
 	return 0;
 }
@@ -106,12 +106,15 @@ bool PlayerBotInventoryPolicy::isProtectedInventoryItem(const Item& item) const
 	const ItemType& type = Item::items[item.getID()];
 	return type.isContainer() || item.getID() == ropeItemId || item.getID() == 2554 ||
 	       ((type.slotPosition & SLOTP_TWO_HAND) != 0 && type.weaponType != WEAPON_NONE) ||
-	       isFoodItem(item.getID()) || item.getID() == smallHealthPotionItemId || item.getWorth() != 0 ||
+	       isFoodItem(item.getID()) || item.getID() == smallHealthPotionItemId || item.getID() == healthPotionItemId || item.getWorth() != 0 ||
 	       sellValues.find(item.getID()) == sellValues.end();
 }
 
 bool PlayerBotInventoryPolicy::isProtectedDepositItem(const Player& player, const Item& item) const
 {
+	if (item.getID() == smallHealthPotionItemId || item.getID() == healthPotionItemId) {
+		return false;
+	}
 	const ItemType& type = Item::items[item.getID()];
 	return (type.isContainer() && type.corpseType == RACE_NONE) || item.getID() == ropeItemId || item.getID() == 2554 ||
 	       ((type.slotPosition & SLOTP_TWO_HAND) != 0 && type.weaponType != WEAPON_NONE) ||
@@ -168,7 +171,7 @@ uint32_t PlayerBotInventoryPolicy::backpackSaleItemCount(const Player& player, u
 	if (removableCount != count) {
 		return 0;
 	}
-	const uint32_t reserve = protectedItemReserve(itemId);
+	const uint32_t reserve = protectedItemReserve(player, itemId);
 	return count > reserve ? count - reserve : 0;
 }
 

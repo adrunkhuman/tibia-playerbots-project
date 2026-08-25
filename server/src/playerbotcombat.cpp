@@ -93,7 +93,9 @@ PlayerBotSurvivalSnapshot PlayerBotController::survivalSnapshot(const Player& pl
 	snapshot.manaSpent = player.getSpentMana();
 	snapshot.level = player.getLevel();
 	snapshot.magicLevel = player.getBaseMagicLevel();
-	snapshot.potionCount = inventoryPolicy.inventoryItemCount(player, smallHealthPotionItemId);
+	snapshot.potionItemId = recoveryPotionItemId(player.getVocationId());
+	snapshot.potionMaximumHealing = recoveryPotionMaximumHealing(player.getVocationId());
+	snapshot.potionCount = inventoryPolicy.inventoryItemCount(player, snapshot.potionItemId);
 	snapshot.foodInventoryCount = inventoryPolicy.foodInventory(player).count;
 	if (const uint16_t pendingFoodId = survivalRuntime.pendingFoodItemId()) {
 		snapshot.pendingFoodCount = inventoryPolicy.inventoryItemCount(player, pendingFoodId);
@@ -177,12 +179,13 @@ PlayerBotSurvivalSnapshot PlayerBotController::survivalSnapshot(const Player& pl
 	return snapshot;
 }
 
-void PlayerBotController::logHealResult(const char* result, const char* reason, const PlayerBotPotionAttempt& before,
+void PlayerBotController::logHealResult(uint16_t itemId, const char* result, const char* reason, const PlayerBotPotionAttempt& before,
 					const PlayerBotPotionAttempt& after, const Position& position)
 {
 	std::ostringstream fields;
 	fields << "\"action\":\"heal\",\"result\":" << jsonString(result)
-	       << ",\"method\":\"small_health_potion\",\"item_id\":" << smallHealthPotionItemId
+	       << ",\"method\":" << jsonString(itemId == smallHealthPotionItemId ? "small_health_potion" : "health_potion")
+	       << ",\"item_id\":" << itemId
 	       << ",\"trigger\":\"health_threshold\",\"objective\":" << jsonString(objectiveName())
 	       << ",\"state\":" << jsonString(turnRouter.stateName())
 	       << ",\"health_before\":" << before.health
@@ -199,15 +202,16 @@ void PlayerBotController::logHealResult(const char* result, const char* reason, 
 bool PlayerBotController::handleHealing(Player* player, const Position& currentPosition)
 {
 	const auto now = std::chrono::steady_clock::now();
-	const PlayerBotSurvivalCommand command = survivalRuntime.decideHealing(survivalSnapshot(*player), now);
+	const PlayerBotSurvivalSnapshot snapshot = survivalSnapshot(*player);
+	const PlayerBotSurvivalCommand command = survivalRuntime.decideHealing(snapshot, now);
 	if (command.potionVerification) {
 		const auto& verification = *command.potionVerification;
 		if (verification.result == PlayerBotPotionVerificationResult::Success) {
-			logHealResult("success", nullptr, verification.before, verification.after, currentPosition);
+			logHealResult(snapshot.potionItemId, "success", nullptr, verification.before, verification.after, currentPosition);
 			recordHuntRecovery(true);
 		} else {
 			telemetry.recordActionFailure();
-			logHealResult("failed", verification.result == PlayerBotPotionVerificationResult::IneffectiveRecovery ?
+			logHealResult(snapshot.potionItemId, "failed", verification.result == PlayerBotPotionVerificationResult::IneffectiveRecovery ?
 			              "ineffective_recovery" : "use_not_verified", verification.before, verification.after, currentPosition);
 		}
 	}
@@ -221,7 +225,8 @@ bool PlayerBotController::handleHealing(Player* player, const Position& currentP
 		if (shouldEmitRepeated("heal:missing_supply")) {
 			std::ostringstream fields;
 			fields << "\"action\":\"heal\",\"result\":\"skipped\",\"reason\":\"missing_supply\""
-			       << ",\"method\":\"small_health_potion\",\"item_id\":" << smallHealthPotionItemId
+			       << ",\"method\":" << jsonString(snapshot.potionItemId == smallHealthPotionItemId ? "small_health_potion" : "health_potion")
+			       << ",\"item_id\":" << snapshot.potionItemId
 			       << ",\"trigger\":\"health_threshold\",\"objective\":" << jsonString(objectiveName())
 			       << ",\"state\":" << jsonString(turnRouter.stateName())
 			       << ",\"health_before\":" << player->getHealth()
