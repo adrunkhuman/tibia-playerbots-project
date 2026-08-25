@@ -51,11 +51,11 @@ function Assert-SpellUseEvents {
 	$unlearned = @($events | Where-Object {
 		$_.event -eq "action_result" -and $_.action -eq "cast_spell" -and $_.result -eq "skipped" -and
 		$_.policy_candidate.spell -eq "Light Healing" -and $_.reason -eq "unlearned" -and $_.engine_result -eq "not_attempted" -and
-		$_.fallback -eq "small_health_potion" -and @($_.legal_candidates).Count -eq 0
+		$_.fallback -eq "health_potion" -and @($_.legal_candidates).Count -eq 0
 	})
 	$fallbackPotion = @($events | Where-Object {
 		$_.event -eq "action_result" -and $_.action -eq "heal" -and $_.result -eq "success" -and
-		$_.method -eq "small_health_potion" -and $_.resource_before -eq 6 -and $_.resource_after -eq 5
+		$_.method -eq "health_potion" -and $_.item_id -eq 7618 -and $_.resource_before -eq 6 -and $_.resource_after -eq 5
 	})
 	$manaFallback = @($events | Where-Object {
 		$_.event -eq "action_result" -and $_.action -eq "cast_spell" -and $_.result -eq "skipped" -and

@@ -6,7 +6,6 @@
 #include "playerbothuntregionadapter.h"
 
 namespace {
-	constexpr double smallHealthPotionMinimumHealing = 60;
 	constexpr uint32_t recoveryManaReserve = 20;
 }
 
@@ -21,7 +20,7 @@ PlayerBotRecoveryPrediction playerBotPredictRecovery(const PlayerBotHuntPlanning
 {
 	PlayerBotRecoveryPrediction prediction;
 	prediction.potionUses = std::min<uint32_t>(1, profile.potionCount);
-	prediction.potionMinimumHealing = prediction.potionUses * smallHealthPotionMinimumHealing;
+	prediction.potionMinimumHealing = prediction.potionUses * profile.potionMinimumHealing;
 	prediction.lightHealingLegal = profile.lightHealingLegal;
 	prediction.spellManaCost = profile.lightHealingManaCost;
 	prediction.spellCooldown = profile.lightHealingCooldown;

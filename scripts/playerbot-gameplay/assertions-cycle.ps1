@@ -18,7 +18,7 @@ function Assert-CycleEvents {
     $npcReplies = @($events | Where-Object { $_.event -eq "npc_reply" -and $_.npc_name })
     $potionPurchase = @($events | Where-Object {
         $_.event -eq "action_result" -and $_.action -eq "buy_potions" -and $_.result -eq "success" -and
-        $_.item_id -eq 8704 -and $_.count -eq 10
+		$_.item_id -eq 8704 -and $_.count -eq 10
     })
     $bankWithdraw = @($events | Where-Object {
         $_.event -eq "action_result" -and $_.action -eq "bank_withdraw" -and $_.result -eq "success"

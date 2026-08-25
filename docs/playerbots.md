@@ -171,13 +171,16 @@ dynamic planning or pursuit.
 
 ## Survival, service, and loot
 
-At or below 60% health, the bot uses one small health potion through normal
-use-with-creature handling and verifies consumption and net healing. Missing
-stock redirects it to service. Food is optional: its absence does not block a
-hunt or select service. The current soft preference collects up to two standard
-8.60 food items. The bot can consume any item classified as standard food,
-respects the normal fullness limit, and backs off for five minutes after three
-unverified uses.
+At or below 60% health, the bot uses one recovery potion through normal
+use-with-creature handling and verifies consumption and net healing. Vocationless
+bots use small health potions (`8704`, 60-90 healing); bots with a non-zero
+vocation use health potions (`7618`, 125-175 healing). The selected potion drives
+readiness, restocking, recovery estimates, spell fallback, reserves, and
+telemetry. Missing stock redirects the bot to service. Food is optional: its
+absence does not block a hunt or select service. The current soft preference
+collects up to two standard 8.60 food items. The bot can consume any item
+classified as standard food, respects the normal fullness limit, and backs off
+for five minutes after three unverified uses.
 
 Loaded NPC state is the source of truth for structured capabilities. Every live
 NPC with non-empty `getShopOffers()`, `getSpellOffers()`, or registered
@@ -251,10 +254,11 @@ target. Casts use the normal player speech spell path. The live spell
 engine remains authoritative for eligibility, costs, targeting, line of sight,
 weapon requirements, aggression, cooldowns, and action constraints. Support
 and offense retain 20 mana for recovery. Recovery runs before discretionary
-casting; when missing at most 90 health, Light Healing avoids a potentially
-wasteful small health potion. If potions are unavailable, it also attempts
-Light Healing for larger deficits. Each cast verifies mana plus health, haste
-condition, or target damage before falling back to a potion or normal melee.
+casting; when missing no more than the selected potion's maximum healing (90 or
+175), Light Healing avoids a potentially wasteful potion. If potions are
+unavailable, it also attempts Light Healing for larger deficits. Each cast
+verifies mana plus health, haste condition, or target damage before falling back
+to a potion or normal melee.
 
 ### Spell calibration
 
@@ -354,14 +358,16 @@ All scenarios use controlled Lua setup. They prove forecast arithmetic,
 arbitration, and normal engine casts under those conditions, not frequency or
 utility on an ordinary long-running server.
 
-The service cycle sells known surplus and returns for small health potions when
-the carried count reaches one. It buys enough to carry at least two and targets
-10. A complete restock takes priority when total carried and bank gold can pay
-for it; an optional partial restock preserves the carried-gold reserve. If total
-gold cannot raise stock above the return threshold, service stops with
-`insufficient_potion_funds` without buying an unusable partial reserve. The
-cycle deposits carried money and withdraws up to 100 gp without exceeding the
-bot's total available gold. It does not buy food merely because none is carried.
+The service cycle sells known surplus and returns for the selected recovery
+potion when the carried count reaches one. It buys enough to carry at least two
+and targets 10. Only the selected potion is reserved toward that target; other
+health potions may be deposited. A complete restock takes priority when total
+carried and bank gold can pay for it; an optional partial restock preserves the
+carried-gold reserve. If total gold cannot raise stock above the return
+threshold, service stops with `insufficient_potion_funds` without buying an
+unusable partial reserve. The cycle deposits carried money and withdraws up to
+100 gp without exceeding the bot's total available gold. It does not buy food
+merely because none is carried.
 Hunting ends after the configured duration or below 30 oz
 effective free capacity. Effective capacity is physical free capacity plus the
 weight of carried standard food, because that cargo can be consumed or replaced

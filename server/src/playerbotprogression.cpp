@@ -47,6 +47,7 @@ void PlayerBotController::emitCombatReadiness(const Player& player, const Positi
 	const PlayerBotEquipmentPlayerSnapshot playerFacts = PlayerBotEquipmentAdapter::player(player);
 	const EquipmentLoadout loadout = PlayerBotEquipmentAdapter::loadout(player);
 	const PlayerBotFoodInventory food = inventoryPolicy.foodInventory(player);
+	const uint16_t potionItemId = recoveryPotionItemId(player.getVocationId());
 	const uint32_t usableCapacity = inventoryPolicy.effectiveFreeCapacity(player);
 	const bool weaponReady = equipmentPolicy.isKnightMeleeWeapon(playerFacts, loadout.items[CONST_SLOT_LEFT]) ||
 	                         equipmentPolicy.isKnightMeleeWeapon(playerFacts, loadout.items[CONST_SLOT_RIGHT]);
@@ -60,11 +61,12 @@ void PlayerBotController::emitCombatReadiness(const Player& player, const Positi
 	       << ",{\"name\":\"armor_loadout\",\"ready\":" << (armorReady && backpack && backpack->getContainer() ? "true" : "false")
 	       << ",\"armor_item_id\":" << (armor ? std::to_string(armor->getID()) : "null")
 	       << ",\"armor\":" << (armor ? armor->getArmor() : 0) << '}'
-	       << ",{\"name\":\"small_health_potions\",\"ready\":" <<
-	          (inventoryPolicy.inventoryItemCount(player, smallHealthPotionItemId) > smallHealthPotionReturnThreshold ? "true" : "false")
-	       << ",\"count\":" << inventoryPolicy.inventoryItemCount(player, smallHealthPotionItemId)
-	       << ",\"return_threshold\":" << smallHealthPotionReturnThreshold
-	       << ",\"restock_target\":" << smallHealthPotionRestockTarget << '}'
+	       << ",{\"name\":\"health_potions\",\"ready\":" <<
+	          (inventoryPolicy.inventoryItemCount(player, potionItemId) > healthPotionReturnThreshold ? "true" : "false")
+	       << ",\"item_id\":" << potionItemId
+	       << ",\"count\":" << inventoryPolicy.inventoryItemCount(player, potionItemId)
+	       << ",\"return_threshold\":" << healthPotionReturnThreshold
+	       << ",\"restock_target\":" << healthPotionRestockTarget << '}'
 	       << ",{\"name\":\"food\",\"required\":false,\"ready\":true"
 	       << ",\"count\":" << food.count << ",\"preferred\":" << preferredFoodCount
 	       << ",\"reclaimable_weight\":" << food.weight
@@ -82,8 +84,9 @@ void PlayerBotController::emitCombatReadiness(const Player& player, const Positi
 PlayerBotEquipmentReadinessInput PlayerBotController::equipmentReadinessInput(const Player& player) const
 {
 	const Item* backpack = player.getInventoryItem(CONST_SLOT_BACKPACK);
+	const uint16_t potionItemId = recoveryPotionItemId(player.getVocationId());
 	return {backpack && backpack->getContainer(),
-	        inventoryPolicy.inventoryItemCount(player, smallHealthPotionItemId) > smallHealthPotionReturnThreshold,
+	        inventoryPolicy.inventoryItemCount(player, potionItemId) > healthPotionReturnThreshold,
 	        inventoryPolicy.effectiveFreeCapacity(player), returnCapacityThreshold};
 }
 
@@ -525,6 +528,7 @@ bool PlayerBotController::findPickupReward(Player& player, const Position& posit
 	const PlayerBotCombatProfile currentProfile = equipmentPolicy.combatProfile(playerFacts, currentLoadout);
 	const EquipmentHuntSummary currentHunts = equipmentHuntSummary(player, currentProfile);
 	const bool currentReady = equipmentPolicy.loadoutReady(playerFacts, currentLoadout, equipmentReadinessInput(player));
+	const uint16_t potionItemId = recoveryPotionItemId(player.getVocationId());
 	std::map<std::pair<uint16_t, uint32_t>, EquipmentOfferEvaluation> equipmentEvaluations;
 	size_t simulatedItems = 0;
 	auto inspect = [&](const std::vector<Item*>& roots, uint32_t additionalWeight) {
@@ -540,7 +544,7 @@ bool PlayerBotController::findPickupReward(Player& player, const Position& posit
 			observed.rootSignature = rootSignature;
 			observed.worth = item.getWorth();
 			observed.container = item.getContainer() != nullptr;
-			observed.potion = item.getID() == smallHealthPotionItemId;
+			observed.potion = item.getID() == potionItemId;
 			observed.food = playerbot::PlayerBotInventoryPolicy::isFoodItem(item.getID());
 			observed.rope = item.getID() == ropeItemId;
 			observed.shovel = item.getID() == 2554;
@@ -594,9 +598,9 @@ bool PlayerBotController::findPickupReward(Player& player, const Position& posit
 			inspectItem(root, rootOrdinal, path, signature);
 		}
 		const PlayerBotRewardInspectionContext context{currentLoadout,
-			inventoryPolicy.inventoryItemCount(player, smallHealthPotionItemId), inventoryPolicy.foodInventory(player).count,
+			inventoryPolicy.inventoryItemCount(player, potionItemId), inventoryPolicy.foodInventory(player).count,
 			g_game.findItemOfType(&player, ropeItemId, true) != nullptr, g_game.findItemOfType(&player, 2554, true) != nullptr,
-			smallHealthPotionItemId, smallHealthPotionRestockTarget, preferredFoodCount, ropeItemId, 2554,
+			potionItemId, healthPotionRestockTarget, preferredFoodCount, ropeItemId, 2554,
 			missingPotionUtility, foodPreferenceUtility};
 		return rewardPlanner.inspect(snapshot, context);
 	};
@@ -739,10 +743,12 @@ void PlayerBotController::emitGoalCandidate(const Player& player, const GoalCand
 	       << ",\"utility\":" << candidate.utility << ",\"reason\":" << jsonString(candidate.reason);
 	if (candidate.goal == TopLevelGoal::Service) {
 		const PlayerBotFoodInventory food = inventoryPolicy.foodInventory(player);
+		const uint16_t potionItemId = recoveryPotionItemId(player.getVocationId());
 		const uint32_t foodGap = food.count < preferredFoodCount ? preferredFoodCount - food.count : 0;
-		fields << ",\"potion_count\":" << inventoryPolicy.inventoryItemCount(player, smallHealthPotionItemId)
-		       << ",\"potion_return_threshold\":" << smallHealthPotionReturnThreshold
-		       << ",\"potion_restock_target\":" << smallHealthPotionRestockTarget
+		fields << ",\"potion_item_id\":" << potionItemId
+		       << ",\"potion_count\":" << inventoryPolicy.inventoryItemCount(player, potionItemId)
+		       << ",\"potion_return_threshold\":" << healthPotionReturnThreshold
+		       << ",\"potion_restock_target\":" << healthPotionRestockTarget
 		       << ",\"food_count\":" << food.count << ",\"food_weight\":" << food.weight
 		       << ",\"food_preferred\":" << preferredFoodCount << ",\"food_gap\":" << foodGap
 		       << ",\"food_utility\":" << foodGap * foodPreferenceUtility
@@ -829,9 +835,10 @@ bool PlayerBotController::selectTopLevelGoal(Player& player, const Position& pos
 	const bool magicTrainingCoolingDown = progressionRuntime.isCoolingDown(TopLevelGoal::MagicTraining, now);
 	const char* magicTrainingReason = magicTrainingCoolingDown ? "cooldown" :
 	                                  survivalRuntime.magicTrainingReason(survivalSnapshot(player));
-	const uint32_t potionCount = inventoryPolicy.inventoryItemCount(player, smallHealthPotionItemId);
-	const uint32_t missingPotions = potionCount <= smallHealthPotionReturnThreshold ?
-	                                  smallHealthPotionRestockTarget - potionCount : 0;
+	const uint16_t potionItemId = recoveryPotionItemId(player.getVocationId());
+	const uint32_t potionCount = inventoryPolicy.inventoryItemCount(player, potionItemId);
+	const uint32_t missingPotions = potionCount <= healthPotionReturnThreshold ?
+	                                  healthPotionRestockTarget - potionCount : 0;
 	const uint32_t sellable = saleableItemCount(player);
 	const bool lowCapacity = inventoryPolicy.effectiveFreeCapacity(player) < returnCapacityThreshold;
 	const bool criticalHealing = survivalRuntime.needsHealing(survivalSnapshot(player)) && missingPotions != 0;

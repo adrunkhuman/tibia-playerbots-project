@@ -2,6 +2,8 @@
 
 #include "playerboteconomy.h"
 
+#include "playerbotinventorypolicy.h"
+
 namespace {
 	uint32_t providerDistance(const Position& from, const Position& to)
 	{
@@ -60,7 +62,7 @@ const PlayerBotEconomyProvider* PlayerBotEconomyCatalog::rankedProvider(const st
 	return selected;
 }
 
-uint32_t PlayerBotDispositionPolicy::protectedReserve(uint16_t itemId, bool food) const
+uint32_t PlayerBotDispositionPolicy::protectedReserve(uint16_t itemId, bool food, uint16_t potionItemId) const
 {
 	if (itemId == 2120 || itemId == 2554) {
 		return 1;
@@ -68,7 +70,7 @@ uint32_t PlayerBotDispositionPolicy::protectedReserve(uint16_t itemId, bool food
 	if (food) {
 		return 2;
 	}
-	return itemId == smallHealthPotionItemId ? potionRestockTarget : 0;
+	return itemId == potionItemId ? potionRestockTarget : 0;
 }
 
 uint32_t PlayerBotDispositionPolicy::sellQuantity(const PlayerBotEconomyInventorySnapshot& inventory, uint16_t reserve) const

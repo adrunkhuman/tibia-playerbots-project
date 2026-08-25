@@ -209,7 +209,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		void processReadinessEquipment(Player* player, const Position& position);
 		bool ensureCombatReady(Player* player, const Position& position, const char* reason);
 
-		void logHealResult(const char* result, const char* reason, const PlayerBotPotionAttempt& before,
+		void logHealResult(uint16_t itemId, const char* result, const char* reason, const PlayerBotPotionAttempt& before,
 		                   const PlayerBotPotionAttempt& after, const Position& position);
 
 		bool handleHealing(Player* player, const Position& currentPosition);

@@ -165,10 +165,9 @@
         }
 		Invoke-Scenario -Name "combat_readiness_supplies" -DefaultTimeoutSeconds 120 -Body {
             Invoke-Compose down --volumes --remove-orphans
-            $env:PLAYERBOT_GAMEPLAY_MODE = "readiness_supplies"
+			$env:PLAYERBOT_GAMEPLAY_MODE = "readiness_supplies"
 			Invoke-Compose up --detach
-			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST READINESS_SUPPLIES_PASS' | Out-Null
-			$supplyLogs = Wait-ForLog -Pattern '"action":"buy_potions".*"result":"success"'
+			$supplyLogs = Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST READINESS_SUPPLIES_PASS'
 			Assert-CombatReadinessEvents -Logs $supplyLogs -Mode "supplies"
 		}
 		Invoke-Scenario -Name "combat_readiness_no_food" -DefaultTimeoutSeconds 60 -Body {

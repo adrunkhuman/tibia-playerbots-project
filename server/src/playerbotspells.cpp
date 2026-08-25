@@ -29,15 +29,20 @@ namespace {
 	constexpr uint64_t maximumSpellTrainerPathNodes = 20000;
 	constexpr uint64_t maximumSpellTrainerPathNodesPerApproach = 5000;
 
-	const char* fallbackForRole(PlayerBotSpellRole role)
+	const char* healthPotionFallback(uint16_t itemId)
 	{
-		return role == PlayerBotSpellRole::Healing ? "small_health_potion" :
+		return itemId == smallHealthPotionItemId ? "small_health_potion" : "health_potion";
+	}
+
+	const char* fallbackForRole(PlayerBotSpellRole role, uint16_t potionItemId)
+	{
+		return role == PlayerBotSpellRole::Healing ? healthPotionFallback(potionItemId) :
 		       role == PlayerBotSpellRole::Support ? "continue_route" : "normal_melee";
 	}
 
-	const char* fallbackForNeed(const char* need)
+	const char* fallbackForNeed(const char* need, uint16_t potionItemId)
 	{
-		return std::strcmp(need, "recovery") == 0 ? "small_health_potion" :
+		return std::strcmp(need, "recovery") == 0 ? healthPotionFallback(potionItemId) :
 		       std::strcmp(need, "safe_route") == 0 ? "continue_route" : "normal_melee";
 	}
 
@@ -118,6 +123,7 @@ void PlayerBotController::emitSpellCastEvent(const Position& position, const cha
 
 bool PlayerBotController::dispatchSpellCommand(Player& player, const Position& position, PlayerBotSurvivalCommand command)
 {
+	const uint16_t potionItemId = recoveryPotionItemId(player.getVocationId());
 	if (command.type != PlayerBotSurvivalCommandType::CastSpell || !command.spell) {
 		if (command.reason.empty()) return false;
 		const PlayerBotSpellDescriptor* descriptor = command.candidateName.empty() ? nullptr :
@@ -127,7 +133,7 @@ bool PlayerBotController::dispatchSpellCommand(Player& player, const Position& p
 			emitSpellCastEvent(position, descriptor ? descriptor->name : nullptr, descriptor ? descriptor->words : nullptr,
 			                   descriptor ? playerBotSpellRoleName(descriptor->role) : nullptr, command.need.empty() ? "unknown" : command.need.c_str(),
 			                   "skipped", "not_attempted", command.reason.c_str(), nullptr, &player,
-			                   descriptor ? fallbackForRole(descriptor->role) : fallbackForNeed(command.need.c_str()));
+			                   descriptor ? fallbackForRole(descriptor->role, potionItemId) : fallbackForNeed(command.need.c_str(), potionItemId));
 		}
 		return false;
 	}
@@ -137,7 +143,7 @@ bool PlayerBotController::dispatchSpellCommand(Player& player, const Position& p
 		telemetry.recordActionFailure();
 		emitSpellCastEvent(position, cast.name.c_str(), cast.words.c_str(), playerBotSpellRoleName(cast.role),
 		                   cast.pending.need.c_str(), "failed", "rejected", "unsupported_metadata", &cast.pending, &player,
-		                   fallbackForRole(cast.role));
+		                   fallbackForRole(cast.role, potionItemId));
 		return false;
 	}
 	telemetry.recordActionAttempt();
@@ -172,7 +178,8 @@ void PlayerBotController::verifySpellCast(Player& player, const Position& positi
 		     ",\"replacement_profile\":" + jsonString(verification.pending.name + "\n" + verification.pending.targetClass));
 	}
 	const char* reason = playerBotSpellEvidenceName(verification.evidence);
-	const char* fallback = verification.success ? nullptr : verification.pending.role == PlayerBotSpellRole::Healing ? "small_health_potion" :
+	const char* fallback = verification.success ? nullptr : verification.pending.role == PlayerBotSpellRole::Healing ?
+	                       healthPotionFallback(recoveryPotionItemId(player.getVocationId())) :
 	                       verification.pending.role == PlayerBotSpellRole::Support ? "continue_route" : "normal_melee";
 	emitSpellCastEvent(position, descriptor ? descriptor->name : nullptr, descriptor ? descriptor->words : nullptr,
 	                   descriptor ? playerBotSpellRoleName(descriptor->role) : nullptr, verification.pending.need.c_str(),
@@ -273,10 +280,11 @@ bool PlayerBotController::tryOffensiveSpell(Player* player, const Position& curr
 
 uint64_t PlayerBotController::spellTrainingReserve(const Player& player) const
 {
+	const uint16_t potionItemId = recoveryPotionItemId(player.getVocationId());
 	uint32_t potionPrice = std::numeric_limits<uint32_t>::max();
 	for (Npc* npc : playerBotNpcProviders(g_game.getNpcs(), PlayerBotNpcCapability::Shop, player.getPosition())) {
 		for (const ShopInfo& offer : npc->getShopOffers()) {
-			if (offer.itemId == smallHealthPotionItemId && offer.buyPrice != 0) {
+			if (offer.itemId == potionItemId && offer.buyPrice != 0) {
 				potionPrice = std::min(potionPrice, offer.buyPrice);
 			}
 		}
@@ -284,9 +292,9 @@ uint64_t PlayerBotController::spellTrainingReserve(const Player& player) const
 	if (potionPrice == std::numeric_limits<uint32_t>::max()) {
 		return std::numeric_limits<uint64_t>::max();
 	}
-	const uint32_t potionCount = inventoryPolicy.inventoryItemCount(player, smallHealthPotionItemId);
-	const uint32_t potionGap = potionCount < smallHealthPotionRestockTarget ?
-	                               smallHealthPotionRestockTarget - potionCount : 0;
+	const uint32_t potionCount = inventoryPolicy.inventoryItemCount(player, potionItemId);
+	const uint32_t potionGap = potionCount < healthPotionRestockTarget ?
+	                               healthPotionRestockTarget - potionCount : 0;
 	return carriedGoldReserve + static_cast<uint64_t>(potionGap) * potionPrice;
 }
 
@@ -316,7 +324,7 @@ bool PlayerBotController::findSpellTraining(Player& player, const Position& posi
 	const uint16_t vocationId = player.getVocationId();
 	const uint16_t baseVocationId = player.getVocation()->getFromVocation() == 0 ? vocationId :
 	                               player.getVocation()->getFromVocation();
-	const bool suppliesReady = inventoryPolicy.inventoryItemCount(player, smallHealthPotionItemId) > smallHealthPotionReturnThreshold;
+	const bool suppliesReady = inventoryPolicy.inventoryItemCount(player, recoveryPotionItemId(vocationId)) > healthPotionReturnThreshold;
 	std::vector<PlayerBotSpellOfferSnapshot> offers;
 	std::vector<std::deque<PlayerBotNavigationStep>> routes;
 	uint64_t remainingPathNodes = maximumSpellTrainerPathNodes;

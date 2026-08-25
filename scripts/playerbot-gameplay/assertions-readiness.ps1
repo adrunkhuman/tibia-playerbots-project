@@ -14,7 +14,7 @@ function Assert-CombatReadinessEvents {
 	if ($Mode -eq "supplies") {
 		$service = @($events | Where-Object { $_.event -eq "combat_readiness" -and $_.selected_recovery -eq "service" })
 		$potions = @($events | Where-Object {
-			$_.action -eq "buy_potions" -and $_.result -eq "success" -and $_.count -eq 9
+			$_.action -eq "buy_potions" -and $_.result -eq "success" -and $_.item_id -eq 7618 -and $_.count -eq 9
 		})
 		$food = @($events | Where-Object { $_.action -eq "buy_meat" -and $_.result -eq "success" })
 		if ($service.Count -lt 1 -or $potions.Count -lt 1 -or $food.Count -ne 0) { throw "Missing healing supplies did not select potion-only service recovery." }
@@ -27,6 +27,10 @@ function Assert-CombatReadinessEvents {
         throw "Combat readiness emitted no complete Knight requirement evidence for $Mode."
     }
     $latest = $readiness[-1]
+	$healthPotions = @($latest.requirements | Where-Object {
+		$_.name -eq "health_potions" -and $_.item_id -eq 7618
+	})
+	if ($healthPotions.Count -ne 1) { throw "Knight readiness did not select regular health potions." }
     if ($Mode -eq "missing_weapon") {
         $terminal = @($events | Where-Object {
             $_.event -eq "terminal" -and $_.reason -eq "combat_readiness_missing_legal_melee_weapon"

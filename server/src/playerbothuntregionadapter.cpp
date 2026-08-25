@@ -7,6 +7,7 @@
 #include "game.h"
 #include "monsters.h"
 #include "player.h"
+#include "playerbotinventorypolicy.h"
 #include "playerbotspellcalibration.h"
 #include "spawn.h"
 #include "spells.h"
@@ -25,7 +26,6 @@ namespace {
 	constexpr uint16_t spawnBucketSize = heatRadius * 2 + 1;
 	constexpr size_t maximumModeledAttackers = 5;
 	constexpr double challengeBandWidth = 0.05;
-	constexpr uint16_t smallHealthPotionItemId = 8704;
 
 	bool heatOverlaps(const Position& left, const Position& right)
 	{
@@ -356,7 +356,9 @@ PlayerBotHuntPlanningProfile PlayerBotHuntRegionAdapter::planningProfile(const P
 	profile.currentHealth = player.getHealth();
 	profile.mana = player.getMana();
 	profile.magicLevel = player.getMagicLevel();
-	profile.potionCount = static_cast<const Cylinder&>(player).getItemTypeCount(smallHealthPotionItemId);
+	profile.potionCount = static_cast<const Cylinder&>(player).getItemTypeCount(
+	    playerbot::recoveryPotionItemId(player.getVocationId()));
+	profile.potionMinimumHealing = playerbot::recoveryPotionMinimumHealing(player.getVocationId());
 	profile.challengeFrontier = challengeFrontier;
 	InstantSpell* spell = g_spells ? g_spells->getInstantSpellByName("Light Healing") : nullptr;
 	if (!spell || spell->getWords() != "exura" || !spell->isLearnable() || !spell->isEnabled() ||
