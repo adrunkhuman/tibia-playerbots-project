@@ -12,6 +12,7 @@
 
 #include "playerbotcontroller.h"
 #include "playerbotnpccapabilities.h"
+#include "playerbottopology.h"
 
 #include "depotchest.h"
 #include "depotlocker.h"
@@ -21,6 +22,8 @@ using namespace playerbot;
 
 namespace {
 	constexpr size_t maximumServiceProviderApproaches = 8;
+	constexpr size_t maximumServiceProvidersPerItem = 4;
+	constexpr size_t maximumServiceBankers = 2;
 
 	int32_t approachDirection(const Position& provider, const Position& approach)
 	{
@@ -169,6 +172,17 @@ uint32_t PlayerBotController::serviceDistance(const Position& from, const Servic
 
 void PlayerBotController::processService(Player* player, const Position& currentPosition)
 {
+	const PlayerBotServiceSnapshot service = serviceWorkflow.snapshot();
+	if (service.npcId != 0) {
+		Npc* npc = g_game.getNpcByID(service.npcId);
+		const PlayerBotNpcCapability capability = service.stage == PlayerBotServiceStage::Bank ?
+			PlayerBotNpcCapability::Banker : PlayerBotNpcCapability::Shop;
+		if (!npc || npc->isRemoved() || !playerBotNpcHasCapability(*npc, capability)) {
+			stop("service_provider_unavailable", currentPosition);
+			return;
+		}
+	}
+
 	PlayerBotServiceObservation observation;
 	observation.currentPosition = currentPosition;
 	observation.freeCapacity = player->getFreeCapacity();
@@ -201,7 +215,7 @@ void PlayerBotController::processService(Player* player, const Position& current
 	std::vector<Npc*> serviceNpcs = playerBotNpcProviders(g_game.getNpcs(), PlayerBotNpcCapability::Shop, currentPosition);
 	for (const auto& entry : g_game.getNpcs()) {
 		Npc* npc = entry.second;
-		if (npc && playerBotNpcHasRole(*npc, "banker") &&
+		if (npc && playerBotNpcHasCapability(*npc, PlayerBotNpcCapability::Banker) &&
 		    std::find(serviceNpcs.begin(), serviceNpcs.end(), npc) == serviceNpcs.end()) serviceNpcs.push_back(npc);
 	}
 	std::sort(serviceNpcs.begin(), serviceNpcs.end(), [&currentPosition](const Npc* left, const Npc* right) {
@@ -210,9 +224,60 @@ void PlayerBotController::processService(Player* player, const Position& current
 		return leftDistance != rightDistance ? leftDistance < rightDistance : left->getID() < right->getID();
 	});
 	const uint32_t approachProviderId = serviceWorkflow.snapshot().npcId;
+	const std::set<uint32_t>& unavailableProviderIds = serviceWorkflow.unavailableProviders();
+	const PlayerBotTopology& topology = PlayerBotTopology::instance();
+	const bool canUseRope = g_game.findItemOfType(player, playerbot::ropeItemId, true) != nullptr;
+	const bool canUseShovel = g_game.findItemOfType(player, 2554, true) != nullptr;
+	if (!serviceTopologyDistances || !topology.sameWalkNode(serviceTopologyOrigin, currentPosition) ||
+	    serviceTopologyCanUseRope != canUseRope || serviceTopologyCanUseShovel != canUseShovel ||
+	    serviceTopologyLevel != player->getLevel() || serviceTopologyGeneration != topology.generation()) {
+		serviceTopologyDistances = topology.distancesFrom(currentPosition, canUseRope, canUseShovel, player->getLevel());
+		serviceTopologyOrigin = currentPosition;
+		serviceTopologyCanUseRope = canUseRope;
+		serviceTopologyCanUseShovel = canUseShovel;
+		serviceTopologyLevel = player->getLevel();
+		serviceTopologyGeneration = topology.generation();
+	}
+	const PlayerBotTopologyDistances& coarseDistances = *serviceTopologyDistances;
+	std::stable_sort(serviceNpcs.begin(), serviceNpcs.end(), [&topology, &coarseDistances](const Npc* left, const Npc* right) {
+		const std::optional<uint32_t> leftCost = topology.distanceTo(
+		    coarseDistances, PlayerBotNavigationGoal::withinRange(left->getPosition(), 3, 3));
+		const std::optional<uint32_t> rightCost = topology.distanceTo(
+		    coarseDistances, PlayerBotNavigationGoal::withinRange(right->getPosition(), 3, 3));
+		if (leftCost.has_value() != rightCost.has_value()) return leftCost.has_value();
+		return leftCost && rightCost && *leftCost != *rightCost && *leftCost < *rightCost;
+	});
+	std::map<uint16_t, size_t> retainedProviders;
+	size_t retainedBankers = 0;
+	std::vector<Npc*> matchingNpcs;
+	for (Npc* npc : serviceNpcs) {
+		if (unavailableProviderIds.find(npc->getID()) != unavailableProviderIds.end()) continue;
+		const bool active = npc->getID() == approachProviderId || Position::areInRange<3, 3, 0>(currentPosition, npc->getPosition());
+		const bool banker = playerBotNpcHasCapability(*npc, PlayerBotNpcCapability::Banker);
+		bool retain = active || (banker && retainedBankers < maximumServiceBankers);
+		std::set<uint16_t> matchedItems;
+		for (const ShopInfo& offer : npc->getShopOffers()) {
+			const bool neededPurchase = offer.itemId == observation.healthPotionItemId && offer.buyPrice != 0;
+			const auto inventoryCount = observation.inventoryCounts.find(offer.itemId);
+			const auto backpackSaleCount = observation.backpackSaleCounts.find(offer.itemId);
+			const bool neededSale = offer.sellPrice != 0 &&
+			                        ((inventoryCount != observation.inventoryCounts.end() && inventoryCount->second != 0) ||
+			                         (backpackSaleCount != observation.backpackSaleCounts.end() && backpackSaleCount->second != 0));
+			if ((neededPurchase || neededSale) && relevantItemIds.find(offer.itemId) != relevantItemIds.end() &&
+			    retainedProviders[offer.itemId] < maximumServiceProvidersPerItem) {
+				retain = true;
+				matchedItems.insert(offer.itemId);
+			}
+		}
+		if (!retain) continue;
+		matchingNpcs.push_back(npc);
+		if (banker && retainedBankers < maximumServiceBankers) ++retainedBankers;
+		for (uint16_t itemId : matchedItems) ++retainedProviders[itemId];
+	}
+	serviceNpcs = std::move(matchingNpcs);
 	for (Npc* npc : serviceNpcs) {
 		const bool shop = playerBotNpcHasCapability(*npc, PlayerBotNpcCapability::Shop);
-		const bool banker = playerBotNpcHasRole(*npc, "banker");
+		const bool banker = playerBotNpcHasCapability(*npc, PlayerBotNpcCapability::Banker);
 		PlayerBotEconomyProvider provider{npc->getID(), npc->getPosition()};
 		for (const ShopInfo& offer : npc->getShopOffers()) {
 			if (relevantItemIds.find(offer.itemId) == relevantItemIds.end()) continue;
@@ -282,6 +347,8 @@ void PlayerBotController::processService(Player* player, const Position& current
 	const std::vector<PlayerBotServiceDiscovery> discoveries = command.discoveries;
 	std::deque<PlayerBotNavigationStep> approachSteps;
 	uint32_t routeValidations = 0;
+	PlayerBotNavigationResult lastRouteResult = PlayerBotNavigationResult::Unreachable;
+	uint64_t lastRouteExpandedNodes = 0;
 	while (command.type == PlayerBotServiceCommandType::ValidateProviderRoute && routeValidations < 1) {
 		++routeValidations;
 		PlayerBotServiceObservation routeObservation = observation;
@@ -290,6 +357,8 @@ void PlayerBotController::processService(Player* player, const Position& current
 		const auto startedAt = std::chrono::steady_clock::now();
 		PlayerBotNavigationRoutePlan routePlan;
 		if (command.destination != currentPosition) routePlan = planNavigationRoute(*player, command.destination);
+		lastRouteResult = routePlan.metrics.result;
+		lastRouteExpandedNodes = routePlan.metrics.expandedNodes;
 		const bool reached = command.destination == currentPosition ||
 		                     (routePlan.metrics.result == PlayerBotNavigationResult::Reached && !routePlan.steps.empty());
 		telemetry.recordPathfinding(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - startedAt), reached);
@@ -360,9 +429,13 @@ void PlayerBotController::processService(Player* player, const Position& current
 	}
 	if (command.type == PlayerBotServiceCommandType::Wait && command.outcome == PlayerBotServiceOutcome::Retry &&
 	    command.providerId != 0) {
+		npcApproach = {};
 		Npc* rejected = g_game.getNpcByID(command.providerId);
 		emit("service_provider_rejected", currentPosition,
 		     "\"reason\":\"route_unreachable\",\"npc_id\":" + std::to_string(command.providerId) +
+		         ",\"route_result\":" + jsonString(lastRouteResult == PlayerBotNavigationResult::NodeLimit ? "node_limit" :
+		                                                lastRouteResult == PlayerBotNavigationResult::Reached ? "reached" : "unreachable") +
+		         ",\"expanded_nodes\":" + std::to_string(lastRouteExpandedNodes) +
 		         ",\"npc_name\":" + jsonString(rejected ? rejected->getName() : "") +
 		         ",\"provider_position\":{" +
 		         "\"x\":" + std::to_string(rejected ? rejected->getPosition().x : 0) +
@@ -372,7 +445,19 @@ void PlayerBotController::processService(Player* player, const Position& current
 	Npc* provider = command.providerId == 0 ? nullptr : g_game.getNpcByID(command.providerId);
 	if (command.type == PlayerBotServiceCommandType::NavigateProvider && provider) {
 		if (!approachSteps.empty()) observeNavigationPlan(command.destination, std::move(approachSteps));
-		if (processNavigation(player, currentPosition, command.destination)) schedule(SCHEDULER_MINTICKS);
+		bool approachUnavailable = false;
+		if (processNpcApproach(player, currentPosition, provider, command.destination, approachUnavailable)) {
+			schedule(SCHEDULER_MINTICKS);
+		} else if (approachUnavailable) {
+			if (const std::optional<Position> rejected = serviceWorkflow.rejectSelectedApproach()) {
+				emit("service_provider_approach_rejected", currentPosition,
+				     "\"reason\":\"route_unavailable\",\"npc_id\":" + std::to_string(command.providerId) +
+				         ",\"destination\":{\"x\":" + std::to_string(rejected->x) +
+				         ",\"y\":" + std::to_string(rejected->y) + ",\"z\":" +
+				         std::to_string(static_cast<uint16_t>(rejected->z)) + "}");
+				resetNavigation();
+			}
+		}
 		return;
 	}
 	if (command.type == PlayerBotServiceCommandType::Speak && provider) {

@@ -12,11 +12,13 @@
 
 #include "playerbotnavigation.h"
 
+#include "actions.h"
 #include "container.h"
 #include "game.h"
 #include "house.h"
 #include "item.h"
 #include "player.h"
+#include "teleport.h"
 #include "tile.h"
 
 #include <array>
@@ -25,12 +27,13 @@
 #include <unordered_map>
 
 extern Game g_game;
+extern Actions* g_actions;
 
 namespace {
 	constexpr uint32_t cardinalCost = 10;
-	constexpr uint32_t diagonalCost = 30;
+	constexpr uint32_t diagonalCost = cardinalCost * 3;
 	constexpr uint32_t transitionCost = 20;
-	constexpr int32_t searchMargin = 192;
+	constexpr int32_t searchMargin = 1024;
 	constexpr uint16_t ropeItemId = 2120;
 	constexpr uint16_t shovelItemId = 2554;
 
@@ -55,12 +58,27 @@ namespace {
 		       (static_cast<uint64_t>(position.x) << 16) | position.y;
 	}
 
-	bool isInsideSearchBounds(const Position& position, const Position& start, const Position& destination)
+	bool isInsideSearchBounds(const Position& position, const Position& start, const PlayerBotNavigationGoal& goal)
 	{
-		const int32_t minimumX = std::min<int32_t>(start.x, destination.x) - searchMargin;
-		const int32_t maximumX = std::max<int32_t>(start.x, destination.x) + searchMargin;
-		const int32_t minimumY = std::min<int32_t>(start.y, destination.y) - searchMargin;
-		const int32_t maximumY = std::max<int32_t>(start.y, destination.y) + searchMargin;
+		int32_t minimumX = start.x;
+		int32_t maximumX = start.x;
+		int32_t minimumY = start.y;
+		int32_t maximumY = start.y;
+		auto include = [&](const Position& candidate, uint8_t rangeX = 0, uint8_t rangeY = 0) {
+			minimumX = std::min(minimumX, static_cast<int32_t>(candidate.x) - rangeX);
+			maximumX = std::max(maximumX, static_cast<int32_t>(candidate.x) + rangeX);
+			minimumY = std::min(minimumY, static_cast<int32_t>(candidate.y) - rangeY);
+			maximumY = std::max(maximumY, static_cast<int32_t>(candidate.y) + rangeY);
+		};
+		if (goal.type == PlayerBotNavigationGoalType::AnyOf) {
+			for (const Position& candidate : goal.positions) include(candidate);
+		} else {
+			include(goal.position, goal.rangeX, goal.rangeY);
+		}
+		minimumX -= searchMargin;
+		maximumX += searchMargin;
+		minimumY -= searchMargin;
+		maximumY += searchMargin;
 		return position.x >= minimumX && position.x <= maximumX &&
 		       position.y >= minimumY && position.y <= maximumY;
 	}
@@ -73,64 +91,18 @@ namespace {
 	bool resolveWalk(Player& player, const Position& from, Direction direction,
 	                 const std::set<Position>& blockedPositions, Position& destination)
 	{
-		Tile* fromTile = g_game.map.getTile(from);
-		if (!fromTile) {
-			return false;
-		}
-
-		destination = getNextPosition(direction, from);
-		if (blockedPositions.find(destination) != blockedPositions.end()) {
-			return false;
-		}
+		PlayerBotWalkTransition transition;
+		if (!playerBotResolveWalkTransition(from, direction, transition) ||
+		    blockedPositions.find(transition.target) != blockedPositions.end() ||
+		    blockedPositions.find(transition.destination) != blockedPositions.end()) return false;
 		uint32_t flags = FLAG_IGNOREBLOCKCREATURE;
-		const bool diagonal = (direction & DIRECTION_DIAGONAL_MASK) != 0;
-		if (!diagonal) {
-			if (from.z != 8 && fromTile->hasHeight(3)) {
-				Tile* upperCurrent = g_game.map.getTile(from.x, from.y, from.z - 1);
-				if (!upperCurrent || (!upperCurrent->getGround() && !upperCurrent->hasFlag(TILESTATE_BLOCKSOLID))) {
-					Tile* upperDestination = g_game.map.getTile(destination.x, destination.y, destination.z - 1);
-					if (upperDestination && upperDestination->getGround() &&
-					    !upperDestination->hasFlag(TILESTATE_IMMOVABLEBLOCKSOLID) &&
-					    !upperDestination->hasFlag(TILESTATE_FLOORCHANGE)) {
-						destination.z--;
-						flags |= FLAG_IGNOREBLOCKITEM;
-					}
-				}
-			}
-
-			if (from.z != 7 && from.z == destination.z) {
-				Tile* sameFloor = g_game.map.getTile(destination);
-				if (!sameFloor || (!sameFloor->getGround() && !sameFloor->hasFlag(TILESTATE_BLOCKSOLID))) {
-					Tile* lowerDestination = g_game.map.getTile(destination.x, destination.y, destination.z + 1);
-					if (lowerDestination && lowerDestination->hasHeight(3) &&
-					    !lowerDestination->hasFlag(TILESTATE_IMMOVABLEBLOCKSOLID)) {
-						destination.z++;
-						flags |= FLAG_IGNOREBLOCKITEM;
-					}
-				}
-			}
-		}
-
-		Tile* tile = g_game.map.getTile(destination);
-		if (!canOccupy(player, tile, flags) || tile->getTeleportItem()) {
+		if (transition.ignoreBlockItem) flags |= FLAG_IGNOREBLOCKITEM;
+		Tile* tile = g_game.map.getTile(transition.entry);
+		if (!canOccupy(player, tile, flags)) {
 			return false;
 		}
-
-		int32_t index = 0;
-		Item* destinationItem = nullptr;
-		uint32_t destinationFlags = flags;
-		for (uint32_t layer = 0; layer < MAP_MAX_LAYERS; ++layer) {
-			Tile* nextTile = tile->queryDestination(index, player, &destinationItem, destinationFlags);
-			if (!nextTile || nextTile == tile) {
-				break;
-			}
-			if (nextTile->getTeleportItem()) {
-				return false;
-			}
-			tile = nextTile;
-		}
-		destination = tile->getPosition();
-		return g_game.map.getTile(destination) != nullptr && blockedPositions.find(destination) == blockedPositions.end();
+		destination = transition.destination;
+		return true;
 	}
 
 	bool moveUpstairsDestination(Player& player, const Position& target, Position& destination)
@@ -174,10 +146,41 @@ namespace {
 	}
 
 	struct QueueNode {
-		uint32_t cost;
+		uint32_t estimatedCost;
+		uint32_t pathCost;
 		Position position;
-		bool operator>(const QueueNode& other) const { return cost > other.cost; }
+		bool operator>(const QueueNode& other) const {
+			return estimatedCost != other.estimatedCost ? estimatedCost > other.estimatedCost : pathCost < other.pathCost;
+		}
 	};
+
+	uint32_t exactRemainingCost(const Position& position, const Position& destination)
+	{
+		return (Position::getDistanceX(position, destination) + Position::getDistanceY(position, destination)) * cardinalCost +
+		       Position::getDistanceZ(position, destination) * transitionCost;
+	}
+
+	uint32_t remainingCost(const Position& position, const PlayerBotNavigationGoal& goal)
+	{
+		if (goal.type == PlayerBotNavigationGoalType::AnyOf) {
+			uint32_t result = std::numeric_limits<uint32_t>::max();
+			for (const Position& candidate : goal.positions) result = std::min(result, exactRemainingCost(position, candidate));
+			return result;
+		}
+		const uint32_t distanceX = Position::getDistanceX(position, goal.position);
+		const uint32_t distanceY = Position::getDistanceY(position, goal.position);
+		const uint32_t distanceZ = Position::getDistanceZ(position, goal.position);
+		return (distanceX > goal.rangeX ? distanceX - goal.rangeX : 0) * cardinalCost +
+		       (distanceY > goal.rangeY ? distanceY - goal.rangeY : 0) * cardinalCost +
+		       (distanceZ > goal.rangeZ ? distanceZ - goal.rangeZ : 0) * transitionCost;
+	}
+
+	uint32_t searchHeuristic(const Position& position, const PlayerBotNavigationGoal& goal)
+	{
+		// A walk edge can redirect through a floor change or teleport. One cardinal
+		// step is therefore the strongest universal lower bound on remaining cost.
+		return goal.reached(position) ? 0 : cardinalCost;
+	}
 
 	struct Parent {
 		Position position;
@@ -185,22 +188,163 @@ namespace {
 	};
 }
 
+bool playerBotResolveWalkTransition(const Position& from, Direction direction, PlayerBotWalkTransition& transition)
+{
+	Tile* fromTile = g_game.map.getTile(from);
+	if (!fromTile) return false;
+	transition = {};
+	transition.target = getNextPosition(direction, from);
+	transition.entry = transition.target;
+	const bool diagonal = (direction & DIRECTION_DIAGONAL_MASK) != 0;
+	if (!diagonal) {
+		if (from.z != 8 && fromTile->hasHeight(3)) {
+			Tile* upperCurrent = g_game.map.getTile(from.x, from.y, from.z - 1);
+			if (!upperCurrent || (!upperCurrent->getGround() && !upperCurrent->hasFlag(TILESTATE_BLOCKSOLID))) {
+				Tile* upperDestination = g_game.map.getTile(transition.entry.x, transition.entry.y, transition.entry.z - 1);
+				if (upperDestination && upperDestination->getGround() &&
+				    !upperDestination->hasFlag(TILESTATE_IMMOVABLEBLOCKSOLID) &&
+				    !upperDestination->hasFlag(TILESTATE_FLOORCHANGE)) {
+					transition.entry.z--;
+					transition.ignoreBlockItem = true;
+				}
+			}
+		}
+		if (from.z != 7 && from.z == transition.entry.z) {
+			Tile* sameFloor = g_game.map.getTile(transition.entry);
+			if (!sameFloor || (!sameFloor->getGround() && !sameFloor->hasFlag(TILESTATE_BLOCKSOLID))) {
+				Tile* lowerDestination = g_game.map.getTile(transition.entry.x, transition.entry.y, transition.entry.z + 1);
+				if (lowerDestination && lowerDestination->hasHeight(3) &&
+				    !lowerDestination->hasFlag(TILESTATE_IMMOVABLEBLOCKSOLID)) {
+					transition.entry.z++;
+					transition.ignoreBlockItem = true;
+				}
+			}
+		}
+	}
+	Tile* tile = g_game.map.getTile(transition.entry);
+	if (!tile) return false;
+	if (Teleport* teleport = tile->getTeleportItem()) {
+		transition.destination = teleport->getDestPos();
+		return g_game.map.getTile(transition.destination) != nullptr;
+	}
+	for (uint32_t layer = 0; layer < MAP_MAX_LAYERS; ++layer) {
+		Tile* nextTile = tile->getFloorChangeDestination();
+		if (!nextTile || nextTile == tile) break;
+		tile = nextTile;
+	}
+	transition.destination = tile->getPosition();
+	return true;
+}
+
+PlayerBotNavigationGoal PlayerBotNavigationGoal::exact(const Position& position)
+{
+	PlayerBotNavigationGoal goal;
+	goal.position = position;
+	return goal;
+}
+
+PlayerBotNavigationGoal PlayerBotNavigationGoal::withinRange(const Position& position, uint8_t rangeX, uint8_t rangeY, uint8_t rangeZ)
+{
+	PlayerBotNavigationGoal goal;
+	goal.type = PlayerBotNavigationGoalType::WithinRange;
+	goal.position = position;
+	goal.rangeX = rangeX;
+	goal.rangeY = rangeY;
+	goal.rangeZ = rangeZ;
+	return goal;
+}
+
+PlayerBotNavigationGoal PlayerBotNavigationGoal::anyOf(std::vector<Position> positions)
+{
+	PlayerBotNavigationGoal goal;
+	goal.type = PlayerBotNavigationGoalType::AnyOf;
+	goal.positions = std::move(positions);
+	if (!goal.positions.empty()) goal.position = goal.positions.front();
+	return goal;
+}
+
+bool PlayerBotNavigationGoal::reached(const Position& candidate) const
+{
+	if (type == PlayerBotNavigationGoalType::AnyOf) {
+		return std::find(positions.begin(), positions.end(), candidate) != positions.end();
+	}
+	return Position::getDistanceX(candidate, position) <= rangeX &&
+	       Position::getDistanceY(candidate, position) <= rangeY &&
+	       Position::getDistanceZ(candidate, position) <= rangeZ;
+}
+
+uint32_t PlayerBotNavigationGoal::distance(const Position& candidate) const
+{
+	return remainingCost(candidate, *this) / cardinalCost;
+}
+
+Position PlayerBotNavigationGoal::representative() const
+{
+	return position;
+}
+
+bool PlayerBotNavigationGoal::operator==(const PlayerBotNavigationGoal& other) const
+{
+	return type == other.type && position == other.position && rangeX == other.rangeX && rangeY == other.rangeY &&
+	       rangeZ == other.rangeZ && positions == other.positions;
+}
+
+bool playerBotIsTraversableDoor(const Item& item)
+{
+	const ItemType& type = Item::items[item.getID()];
+	return type.isDoor() && type.blockSolid && (item.getActionId() == 0 || type.levelDoor != 0) &&
+	       g_actions && g_actions->hasAction(&item);
+}
+
 PlayerBotNavigationResult PlayerBotNavigator::plan(Player& player, const Position& destination, const std::set<Position>& blockedPositions,
                                                    std::deque<PlayerBotNavigationStep>& steps, uint64_t& expandedNodes,
-                                                   uint64_t maximumExpandedNodes) const
+                                                   uint64_t maximumExpandedNodes, Position* closestPosition) const
 
 {
-	return planFrom(player, player.getPosition(), destination, blockedPositions, steps, expandedNodes, maximumExpandedNodes);
+	return plan(player, PlayerBotNavigationGoal::exact(destination), blockedPositions, steps, expandedNodes,
+	            maximumExpandedNodes, closestPosition);
+}
+
+PlayerBotNavigationResult PlayerBotNavigator::plan(Player& player, const PlayerBotNavigationGoal& goal,
+	const std::set<Position>& blockedPositions, std::deque<PlayerBotNavigationStep>& steps,
+	uint64_t& expandedNodes, uint64_t maximumExpandedNodes, Position* closestPosition) const
+{
+	return planFrom(player, player.getPosition(), goal, blockedPositions, steps, expandedNodes, maximumExpandedNodes,
+	                closestPosition);
+}
+
+bool PlayerBotNavigator::resolveMove(Player& player, const Position& from, Direction direction,
+	                                 const std::set<Position>& blockedPositions,
+	                                 PlayerBotNavigationStep& step) const
+{
+	Position expectedPosition;
+	if (!resolveWalk(player, from, direction, blockedPositions, expectedPosition)) return false;
+	step.action = PlayerBotNavigationAction::Move;
+	step.direction = direction;
+	step.target = getNextPosition(direction, from);
+	step.expectedPosition = expectedPosition;
+	return true;
 }
 
 PlayerBotNavigationResult PlayerBotNavigator::planFrom(Player& player, const Position& start, const Position& destination,
 	                                                    const std::set<Position>& blockedPositions,
 	                                                    std::deque<PlayerBotNavigationStep>& steps, uint64_t& expandedNodes,
-	                                                    uint64_t maximumExpandedNodes) const
+	                                                    uint64_t maximumExpandedNodes, Position* closestPosition) const
+{
+	return planFrom(player, start, PlayerBotNavigationGoal::exact(destination), blockedPositions, steps, expandedNodes,
+	                maximumExpandedNodes, closestPosition);
+}
+
+PlayerBotNavigationResult PlayerBotNavigator::planFrom(Player& player, const Position& start, const PlayerBotNavigationGoal& goal,
+	const std::set<Position>& blockedPositions, std::deque<PlayerBotNavigationStep>& steps,
+	uint64_t& expandedNodes, uint64_t maximumExpandedNodes, Position* closestPosition) const
 {
 	steps.clear();
 	expandedNodes = 0;
-	if (start == destination) {
+	Position closest = start;
+	uint32_t closestCost = remainingCost(start, goal);
+	if (closestPosition) *closestPosition = closest;
+	if (goal.reached(start)) {
 		return PlayerBotNavigationResult::Reached;
 	}
 
@@ -209,11 +353,11 @@ PlayerBotNavigationResult PlayerBotNavigator::planFrom(Player& player, const Pos
 	std::unordered_map<uint64_t, Parent> parents;
 	const uint64_t startKey = positionKey(start);
 	costs[startKey] = 0;
-	open.push({0, start});
+	open.push({searchHeuristic(start, goal), 0, start});
 
 	auto addCandidate = [&](const Position& from, uint32_t currentCost, const Position& to,
 	                        uint32_t edgeCost, const PlayerBotNavigationStep& step) {
-		if (!isInsideSearchBounds(to, start, destination)) {
+		if (!isInsideSearchBounds(to, start, goal)) {
 			return;
 		}
 		const uint32_t newCost = currentCost + edgeCost;
@@ -224,7 +368,7 @@ PlayerBotNavigationResult PlayerBotNavigator::planFrom(Player& player, const Pos
 		}
 		costs[key] = newCost;
 		parents[key] = {from, step};
-		open.push({newCost, to});
+		open.push({newCost + searchHeuristic(to, goal), newCost, to});
 	};
 
 	while (!open.empty() && expandedNodes < maximumExpandedNodes) {
@@ -232,12 +376,18 @@ PlayerBotNavigationResult PlayerBotNavigator::planFrom(Player& player, const Pos
 		open.pop();
 		const uint64_t currentKey = positionKey(current.position);
 		auto knownCost = costs.find(currentKey);
-		if (knownCost == costs.end() || knownCost->second != current.cost) {
+		if (knownCost == costs.end() || knownCost->second != current.pathCost) {
 			continue;
 		}
 		++expandedNodes;
-		if (current.position == destination) {
-			Position cursor = destination;
+		const uint32_t distance = remainingCost(current.position, goal);
+		if (distance < closestCost) {
+			closest = current.position;
+			closestCost = distance;
+			if (closestPosition) *closestPosition = closest;
+		}
+		if (goal.reached(current.position)) {
+			Position cursor = current.position;
 			while (cursor != start) {
 				auto parent = parents.find(positionKey(cursor));
 				if (parent == parents.end()) {
@@ -260,7 +410,7 @@ PlayerBotNavigationResult PlayerBotNavigator::planFrom(Player& player, const Pos
 			step.direction = direction;
 			step.target = getNextPosition(direction, current.position);
 			step.expectedPosition = next;
-			addCandidate(current.position, current.cost, next,
+			addCandidate(current.position, current.pathCost, next,
 			             (direction & DIRECTION_DIAGONAL_MASK) ? diagonalCost : cardinalCost, step);
 		}
 
@@ -281,7 +431,7 @@ PlayerBotNavigationResult PlayerBotNavigator::planFrom(Player& player, const Pos
 				step.target = target;
 				step.expectedPosition = expected;
 				step.itemId = itemId;
-				addCandidate(current.position, current.cost, expected, transitionCost, step);
+				addCandidate(current.position, current.pathCost, expected, transitionCost, step);
 			};
 
 			Item* ground = tile->getGround();
@@ -315,8 +465,8 @@ PlayerBotNavigationResult PlayerBotNavigator::planFrom(Player& player, const Pos
 				} else if (contains(downUseIds, itemId) && target.z < MAP_MAX_LAYERS - 1) {
 					addDirectUse(itemId, PlayerBotNavigationAction::Use,
 					             Position(target.x, target.y, target.z + 1));
-				} else if (Item::items[itemId].isDoor() && Item::items[itemId].name.find("window") == std::string::npos &&
-				           Item::items[itemId].blockSolid && item->getActionId() == 0 &&
+				} else if (playerBotIsTraversableDoor(*item) &&
+				           Item::items[itemId].description != "It is locked." &&
 				           (!item->getDoor() || item->getDoor()->canUse(&player))) {
 					addDirectUse(itemId, PlayerBotNavigationAction::UseDoor, target);
 				}

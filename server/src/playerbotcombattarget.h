@@ -37,6 +37,7 @@ struct PlayerBotDefensiveTarget : PlayerBotTarget {
 
 struct PlayerBotTraversalCandidate : PlayerBotTarget {
 	PlayerBotExpectedCorpse expectedCorpse;
+	bool attacksPlayer = false;
 };
 
 #endif

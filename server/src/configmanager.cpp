@@ -311,7 +311,7 @@ bool ConfigManager::load()
 	integer[STATS_DUMP_INTERVAL] = getGlobalNumber(L, "statsDumpInterval", 30000);
 	integer[STATS_SLOW_LOG_TIME] = getGlobalNumber(L, "statsSlowLogTime", 10);
 	integer[STATS_VERY_SLOW_LOG_TIME] = getGlobalNumber(L, "statsVerySlowLogTime", 50);
-	integer[PLAYERBOT_HUNT_DURATION_SECONDS] = getGlobalNumber(L, "playerbotHuntDurationSeconds", 300);
+	integer[PLAYERBOT_HUNT_DURATION_SECONDS] = getGlobalNumber(L, "playerbotHuntDurationSeconds", 1500);
 	integer[PLAYERBOT_RELOG_DELAY_SECONDS] = getGlobalNumber(L, "playerbotRelogDelaySeconds", 5);
 	integer[PLAYERBOT_MAX_CONSECUTIVE_DEATHS] = getGlobalNumber(L, "playerbotMaxConsecutiveDeaths", 3);
 	integer[PLAYERBOT_SPEED_BONUS] = getGlobalNumber(L, "playerbotSpeedBonus", 300);

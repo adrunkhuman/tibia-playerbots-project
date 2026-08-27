@@ -114,6 +114,7 @@ void Npc::reset()
 	shopOffers.clear();
 	spellOffers.clear();
 	travelOffers.clear();
+	banker = false;
 	shopPlayerSet.clear();
 	spectators.clear();
 }
@@ -684,6 +685,7 @@ void NpcScriptInterface::registerFunctions()
 	registerMethod("Npc", "addShopOffer", NpcScriptInterface::luaNpcAddShopOffer);
 	registerMethod("Npc", "addSpellOffer", NpcScriptInterface::luaNpcAddSpellOffer);
 	registerMethod("Npc", "addTravelOffer", NpcScriptInterface::luaNpcAddTravelOffer);
+	registerMethod("Npc", "addBanker", NpcScriptInterface::luaNpcAddBanker);
 
 	registerMethod("Npc", "openShopWindow", NpcScriptInterface::luaNpcOpenShopWindow);
 	registerMethod("Npc", "closeShopWindow", NpcScriptInterface::luaNpcCloseShopWindow);
@@ -1101,6 +1103,14 @@ int NpcScriptInterface::luaNpcAddTravelOffer(lua_State* L)
 	offer.hasOpaqueCondition = getBoolean(L, 7, false);
 	offer.hasOpaqueAction = getBoolean(L, 8, false);
 	npc->addTravelOffer(std::move(offer));
+	return 0;
+}
+
+int NpcScriptInterface::luaNpcAddBanker(lua_State* L)
+{
+	// npc:addBanker()
+	Npc* npc = getUserdata<Npc>(L, 1);
+	if (npc) npc->addBanker();
 	return 0;
 }
 

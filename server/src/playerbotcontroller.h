@@ -21,6 +21,7 @@
 #include "playerbotequipmentadapter.h"
 #include "playerbotinventorypolicy.h"
 #include "playerbotnavigationruntime.h"
+#include "playerbottopology.h"
 #include "playerbotprogressionruntime.h"
 #include "playerbotprogressionplanners.h"
 #include "playerbotsurvivalruntime.h"
@@ -361,9 +362,14 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		void processService(Player* player, const Position& currentPosition);
 
 		Item* findNavigationItem(const PlayerBotNavigationStep& step) const;
+		PlayerBotNavigationStep resolveTopologyPortal(Player& player, const PlayerBotNavigationStep& portal,
+		                                                const std::set<Position>& blockedPositions) const;
 
 		bool executeNavigationStep(Player* player, const PlayerBotNavigationStep& step);
 		PlayerBotNavigationRoutePlan planNavigationRoute(Player& player, const Position& destination,
+		                                                const std::set<Position>& blockedPositions = {},
+		                                                uint64_t maximumExpandedNodes = playerBotNavigationMaximumExpandedNodes) const;
+		PlayerBotNavigationRoutePlan planNavigationRoute(Player& player, const PlayerBotNavigationGoal& goal,
 		                                                const std::set<Position>& blockedPositions = {},
 		                                                uint64_t maximumExpandedNodes = playerBotNavigationMaximumExpandedNodes) const;
 		std::optional<PlayerBotNavigationRoutePlan> planNpcTravelRoute(Player& player, const Position& destination,
@@ -377,7 +383,14 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		void onHealthGain(Creature* healer, const Creature& target, uint32_t gain);
 
 		bool processNavigation(Player* player, const Position& currentPosition, const Position& destination,
-		                       PlayerBotNavigationRuntimeOutcome* navigationOutcome = nullptr);
+		                       PlayerBotNavigationRuntimeOutcome* navigationOutcome = nullptr,
+		                       uint64_t maximumExpandedNodes = playerBotNavigationMaximumExpandedNodes);
+		bool processNavigation(Player* player, const Position& currentPosition, const PlayerBotNavigationGoal& goal,
+		                       PlayerBotNavigationRuntimeOutcome* navigationOutcome = nullptr,
+		                       uint64_t maximumExpandedNodes = playerBotNavigationMaximumExpandedNodes,
+		                       bool npcApproach = false);
+		bool processNpcApproach(Player* player, const Position& currentPosition, Npc* npc,
+		                        const Position& coarseDestination, bool& unavailable);
 		void observeNavigationPlan(const Position& destination, std::deque<PlayerBotNavigationStep> steps);
 
 		bool findDepositableItem(const Player& player, Container* container, Container*& source,
@@ -426,6 +439,9 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		uint32_t playerGuid;
 		std::string playerName;
 		PlayerBotTurnRouter turnRouter;
+		uint32_t scheduledTurnEvent = 0;
+		uint64_t scheduledTurnGeneration = 0;
+		std::chrono::steady_clock::time_point scheduledTurnDeadline;
 		playerbot::PlayerBotFixtureDriver fixtureDriver;
 		playerbot::PlayerBotTelemetry telemetry;
 		Position lastPosition;
@@ -446,7 +462,22 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		PlayerBotDeparturePlanner departurePlanner;
 		std::map<uint16_t, std::string> rewardInspectionFingerprints;
 		PlayerBotServiceWorkflow serviceWorkflow;
+		std::optional<PlayerBotTopologyDistances> serviceTopologyDistances;
+		Position serviceTopologyOrigin;
+		bool serviceTopologyCanUseRope = false;
+		bool serviceTopologyCanUseShovel = false;
+		uint32_t serviceTopologyLevel = 0;
+		uint64_t serviceTopologyGeneration = 0;
 		PlayerBotNavigationRuntime navigationRuntime;
+		struct {
+			uint32_t npcId = 0;
+			Position coarseDestination;
+			std::optional<Position> localDestination;
+			std::optional<Position> initialNpcPosition;
+			std::optional<Position> observedNpcPosition;
+			size_t replans = 0;
+			bool local = false;
+		} npcApproach;
 		mutable std::map<std::pair<uint32_t, Position>, std::chrono::steady_clock::time_point> unavailableTravelOffers;
 		bool deathObserved = false;
 };

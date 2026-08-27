@@ -221,7 +221,7 @@ void PlayerBotController::lootCorpse(Player* player, const Position& currentPosi
 	if (command.type == PlayerBotLootCommandType::Navigate) {
 		const uint32_t blockedStepsBefore = navigationRuntime.stepFailureCount();
 		PlayerBotNavigationRuntimeOutcome navigation;
-		processNavigation(player, currentPosition, command.destination, &navigation);
+		processNavigation(player, currentPosition, PlayerBotNavigationGoal::withinRange(command.destination, 1, 1), &navigation);
 		if (navigation.routeUnavailable || navigation.stepFailureCount > blockedStepsBefore) {
 			const auto transition = huntCoordinator.observeLootNavigationFailure(currentPosition, now);
 			if (transition == PlayerBotLootNavigationTransition::Failed) {

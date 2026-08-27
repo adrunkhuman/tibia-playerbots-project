@@ -109,8 +109,10 @@ class PlayerBotServiceWorkflow
 		void reset();
 		PlayerBotServiceStage stage() const { return serviceStage; }
 		PlayerBotServiceSnapshot snapshot() const { return {serviceStage, npcSession.targetId()}; }
+		const std::set<uint32_t>& unavailableProviders() const { return unavailableProviderIds; }
 		void setProviderUtilityProfile(PlayerBotProviderUtilityProfile profile) { providerUtilityProfile = profile; }
 		bool reportNpcReply(uint32_t playerId, uint32_t replyingPlayerId, uint32_t npcId, uint8_t type);
+		std::optional<Position> rejectSelectedApproach();
 		PlayerBotServiceCommand advance(const PlayerBotServiceObservation& observation,
 		                               const PlayerBotEconomyCatalog& catalog,
 		                               const PlayerBotDispositionPolicy& disposition);

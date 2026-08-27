@@ -39,6 +39,8 @@ const playerbot::PlayerBotTestPolicy& playerbot::playerBotTestPolicyFromEnvironm
 			 std::strcmp(gameplayMode, "equipment_buy") == 0 ||
 			 std::strcmp(gameplayMode, "equipment_buy_resume") == 0 ||
 			 std::strcmp(gameplayMode, "equipment_buy_space") == 0 ||
+			 std::strcmp(gameplayMode, "equipment_buy_provider_moved") == 0 ||
+			 std::strcmp(gameplayMode, "equipment_buy_provider_unreachable") == 0 ||
 			 std::strcmp(gameplayMode, "equipment_buy_rejected") == 0 ||
 			 std::strcmp(gameplayMode, "slotted_loot_seller") == 0 ||
 			 std::strcmp(gameplayMode, "slotted_loot_no_seller") == 0 ||
@@ -46,9 +48,12 @@ const playerbot::PlayerBotTestPolicy& playerbot::playerBotTestPolicyFromEnvironm
 			  std::strcmp(gameplayMode, "magic_training_hunt") != 0));
 		const bool startInHunt = gameplayMode &&
 			(std::strcmp(gameplayMode, "navigation") == 0 || std::strcmp(gameplayMode, "navigation_recovery") == 0 ||
+			 std::strcmp(gameplayMode, "carlin_service_route") == 0 ||
+			 std::strcmp(gameplayMode, "mutable_portal_route") == 0 ||
 			 (std::strcmp(gameplayMode, "corpse") == 0 || std::strcmp(gameplayMode, "corpse_inaccessible") == 0) ||
 			 std::strcmp(gameplayMode, "patrol_recovery") == 0 ||
-			 (std::strcmp(gameplayMode, "target_pursuit") == 0 || std::strcmp(gameplayMode, "target_pursuit_abandon") == 0) ||
+			 (std::strcmp(gameplayMode, "target_pursuit") == 0 || std::strcmp(gameplayMode, "target_pursuit_abandon") == 0 ||
+			  std::strcmp(gameplayMode, "target_attacker_priority") == 0) ||
 			 std::strcmp(gameplayMode, "healing") == 0 || std::strcmp(gameplayMode, "healing_resupply") == 0 ||
 			 std::strcmp(gameplayMode, "value") == 0 || std::strcmp(gameplayMode, "departure_interrupt") == 0 ||
 			 std::strcmp(gameplayMode, "stamina_bonus") == 0 || std::strcmp(gameplayMode, "stamina_boundary") == 0 ||
@@ -112,6 +117,7 @@ const playerbot::PlayerBotTestPolicy& playerbot::playerBotTestPolicyFromEnvironm
 			gameplayMode && std::strncmp(gameplayMode, "equipment_buy", 13) == 0,
 			gameplayMode && std::strcmp(gameplayMode, "equipment_buy_rejected") == 0,
 			gameplayMode && std::strcmp(gameplayMode, "equipment_buy_space") == 0,
+			gameplayMode && std::strcmp(gameplayMode, "equipment_buy_provider_unreachable") == 0,
 			adaptiveChallengeFixture,
 			adaptiveChallengeFixture,
 			gameplayMode && (std::strcmp(gameplayMode, "mainland_reward") == 0 ||
@@ -120,6 +126,8 @@ const playerbot::PlayerBotTestPolicy& playerbot::playerBotTestPolicyFromEnvironm
 			spellCalibrationFixture,
 			magicTrainingFixture,
 			gameplayMode && std::strcmp(gameplayMode, "magic_training_failed") == 0,
+			gameplayMode && std::strcmp(gameplayMode, "carlin_service_route") == 0,
+			gameplayMode && std::strcmp(gameplayMode, "mutable_portal_route") == 0,
 		};
 	}();
 	return policy;

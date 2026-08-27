@@ -1024,6 +1024,31 @@ QTreeLeafNode* QTreeNode::getLeaf(uint32_t x, uint32_t y)
 	return node->getLeaf(x << 1, y << 1);
 }
 
+void Map::forEachTile(const std::function<void(const Tile&)>& callback) const
+{
+	std::vector<const QTreeNode*> pending{&root};
+	while (!pending.empty()) {
+		const QTreeNode* node = pending.back();
+		pending.pop_back();
+		if (!node->leaf) {
+			for (const QTreeNode* child : node->child) {
+				if (child) pending.push_back(child);
+			}
+			continue;
+		}
+
+		const auto* leaf = static_cast<const QTreeLeafNode*>(node);
+		for (const Floor* floor : leaf->array) {
+			if (!floor) continue;
+			for (const auto& row : floor->tiles) {
+				for (const Tile* tile : row) {
+					if (tile) callback(*tile);
+				}
+			}
+		}
+	}
+}
+
 QTreeLeafNode* QTreeNode::createLeaf(uint32_t x, uint32_t y, uint32_t level)
 {
 	if (!isLeaf()) {

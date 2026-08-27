@@ -26,13 +26,18 @@ struct PlayerBotHuntPlanningSnapshot {
 	int32_t currentHealth = 0;
 	uint16_t staminaMinutes = 0;
 	uint64_t cacheRevision = 0;
+	uint64_t topologyGeneration = 0;
 	std::set<Position> excludedRegions;
+	bool canUseRope = false;
+	bool canUseShovel = false;
 };
 
 struct PlayerBotHuntPlanningStart {
 	PlayerBotHuntRegionScan scan;
 	PlayerBotHuntPlanningProfile profile;
 	PlayerBotHuntPlanningSnapshot snapshot;
+	std::shared_ptr<const PlayerBotTopologyDistances> topologyDistances;
+	uint64_t topologyDistanceTimeUs = 0;
 	std::string reason;
 	std::chrono::steady_clock::time_point started;
 };
@@ -68,11 +73,13 @@ class PlayerBotHuntPlanningSession
 		bool scoring() const { return phase == Phase::Scoring; }
 		const PlayerBotHuntPlanningProfile& profile() const { return planningProfile; }
 		const PlayerBotHuntPlanningSnapshot& snapshot() const { return planningSnapshot; }
+		const std::shared_ptr<const PlayerBotTopologyDistances>& topology() const { return topologyDistances; }
 		const std::string& reason() const { return planningReason; }
 		std::chrono::steady_clock::time_point started() const { return planningStarted; }
 		bool cacheHit() const { return scanCacheHit; }
 		uint64_t snapshotTimeUs() const { return scanSnapshotTimeUs; }
 		uint64_t clusteringTimeUs() const { return scanClusteringTimeUs; }
+		uint64_t topologyTimeUs() const { return topologyDistanceTimeUs; }
 		uint64_t scoringTimeUs() const { return totalScoringTimeUs; }
 		uint32_t totalCandidates() const { return candidateCount; }
 		uint32_t scoredCandidates() const { return scoredCandidateCount; }
@@ -83,6 +90,7 @@ class PlayerBotHuntPlanningSession
 		uint32_t yields() const { return yieldCount; }
 		uint32_t deferredRouteValidations() const { return deferredRouteValidationCount; }
 		bool boundSatisfied() const { return routeBoundSatisfied; }
+		bool topologySelection() const { return topologyDistances != nullptr; }
 
 		void beginTurn();
 		std::optional<PlayerBotHuntPlanningScoreWork> nextScoringWork(uint32_t maximumCandidates);
@@ -93,7 +101,8 @@ class PlayerBotHuntPlanningSession
 		std::optional<PlayerBotHuntPlanningRouteWork> nextRouteValidationWork(uint32_t maximumCalls);
 		void routeValidationCompleted(size_t regionIndex, bool pathfindingCalled, bool reachable, bool nodeLimit, uint64_t expandedNodes,
 		                              uint32_t travelSteps, double estimatedTravelSeconds,
-		                              double staminaExperienceMultiplier, uint32_t huntDurationSeconds);
+		                              double staminaExperienceMultiplier, const PlayerBotHuntCorridorDanger& corridorDanger,
+		                              uint32_t huntDurationSeconds);
 		PlayerBotHuntPlanningProgress completeRouteValidation();
 
 		const std::vector<PlayerBotHuntRegion>& regions() const { return scoredRegions; }
@@ -113,6 +122,7 @@ class PlayerBotHuntPlanningSession
 		std::chrono::steady_clock::time_point planningStarted;
 		PlayerBotHuntPlanningProfile planningProfile;
 		PlayerBotHuntPlanningSnapshot planningSnapshot;
+		std::shared_ptr<const PlayerBotTopologyDistances> topologyDistances;
 		size_t nextCandidate = 0;
 		size_t nextScoringCandidate = 0;
 		uint32_t scoringCandidatesThisTurn = 0;
@@ -129,6 +139,7 @@ class PlayerBotHuntPlanningSession
 		bool routeBoundSatisfied = false;
 		uint64_t scanSnapshotTimeUs = 0;
 		uint64_t scanClusteringTimeUs = 0;
+		uint64_t topologyDistanceTimeUs = 0;
 		uint64_t totalScoringTimeUs = 0;
 		Phase phase = Phase::Scoring;
 };

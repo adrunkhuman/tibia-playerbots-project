@@ -19,6 +19,8 @@
 struct PlayerBotNavigationPlanMetrics {
 	PlayerBotNavigationResult result = PlayerBotNavigationResult::Unreachable;
 	uint64_t expandedNodes = 0;
+	Position closestPosition;
+	Position waypoint;
 	size_t steps = 0;
 	double estimatedTravelSeconds = 0;
 	std::chrono::microseconds elapsed = std::chrono::microseconds::zero();
@@ -47,14 +49,14 @@ enum class PlayerBotNavigationRuntimeCommand : uint8_t {
 };
 
 struct PlayerBotNavigationRouteRequest {
-	Position destination;
+	PlayerBotNavigationGoal goal;
 	std::set<Position> blockedPositions;
 	uint64_t maximumExpandedNodes = playerBotNavigationMaximumExpandedNodes;
 };
 
 struct PlayerBotNavigationRuntimeInput {
 	Position currentPosition;
-	Position destination;
+	PlayerBotNavigationGoal goal;
 	bool actionPending = false;
 	bool canDoAction = false;
 	PlayerBotNavigationRuntimeTiming timing;
@@ -79,7 +81,7 @@ struct PlayerBotNavigationRuntimeOutcome {
 // Planner and dispatcher results are immutable observations. The runtime owns
 // all resulting route and pending-step state transitions.
 struct PlayerBotNavigationPlanObservation {
-	Position destination;
+	PlayerBotNavigationGoal goal;
 	PlayerBotNavigationRoutePlan plan;
 	bool canDoAction = false;
 	bool startsNavigation = false;
@@ -95,11 +97,12 @@ struct PlayerBotNavigationStepObservation {
 	PlayerBotNavigationStep step;
 	PlayerBotNavigationStepResult result = PlayerBotNavigationStepResult::Rejected;
 	std::chrono::steady_clock::time_point now;
+	std::chrono::steady_clock::duration suppression;
 };
 
 struct PlayerBotNavigationWorldChangeObservation {
 	PlayerBotNavigationStep step;
-	bool unchanged = false;
+	bool unresolved = false;
 	std::chrono::steady_clock::time_point now;
 	std::chrono::steady_clock::duration suppression;
 };
@@ -110,8 +113,8 @@ struct PlayerBotNavigationWorldChangeObservation {
 // pending until a later process() observes its result. A dispatched UseDoor or
 // UseShovel becomes pendingWorldChange; inspect that change and pass it to
 // observeWorldChange().
-// Rejected steps drop the route, while unchanged world changes suppress their
-// target before the runtime replans.
+// Rejected topology portals and unresolved world changes suppress their target
+// before the runtime replans.
 class PlayerBotNavigationRuntime
 {
 	public:

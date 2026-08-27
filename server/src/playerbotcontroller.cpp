@@ -12,9 +12,124 @@
 
 #include "playerbotcontroller.h"
 #include "playerbotnpccapabilities.h"
+#include "playerbottopology.h"
 
 // Playerbot lifecycle, scheduling, navigation execution, and telemetry.
 using namespace playerbot;
+
+namespace {
+	constexpr uint32_t maximumNpcTravelApproachPortals = 4;
+	constexpr uint32_t npcLocalApproachDistance = 8;
+	constexpr size_t maximumNpcLocalReplans = 8;
+	constexpr uint64_t maximumNpcLocalPathNodes = 5000;
+	constexpr uint16_t shovelToolItemId = 2554;
+	constexpr std::array<uint16_t, 4> shovelHoleIds = {468, 481, 483, 7932};
+
+	template<typename T, size_t N>
+	bool contains(const std::array<T, N>& values, T value)
+	{
+		return std::find(values.begin(), values.end(), value) != values.end();
+	}
+
+	Item* usableClosedDoor(Tile& tile, Player& player)
+	{
+		const TileItemVector* items = tile.getItemList();
+		if (!items) return nullptr;
+		const auto door = std::find_if(items->begin(), items->end(), [&player](Item* item) {
+			if (!item) return false;
+			const ItemType& type = Item::items[item->getID()];
+			return playerBotIsTraversableDoor(*item) &&
+			       type.description != "It is locked." &&
+			       (!item->getDoor() || item->getDoor()->canUse(&player));
+		});
+		return door == items->end() ? nullptr : *door;
+	}
+}
+
+bool PlayerBotController::processNpcApproach(Player* player, const Position& currentPosition, Npc* npc,
+	const Position& coarseDestination, bool& unavailable)
+{
+	unavailable = false;
+	if (!npc || npc->isRemoved()) {
+		unavailable = true;
+		return false;
+	}
+
+	const Position npcPosition = npc->getPosition();
+	if (npcApproach.npcId != npc->getID() || npcApproach.coarseDestination != coarseDestination) {
+		npcApproach.npcId = npc->getID();
+		npcApproach.coarseDestination = coarseDestination;
+		npcApproach.localDestination.reset();
+		npcApproach.initialNpcPosition = npcPosition;
+		npcApproach.observedNpcPosition = npcPosition;
+		npcApproach.replans = 0;
+		npcApproach.local = false;
+	}
+	if (Position::areInRange<3, 3, 0>(currentPosition, npcPosition)) {
+		navigationRuntime.reset();
+		return true;
+	}
+
+	const bool nearLivePosition = currentPosition.z == npcPosition.z &&
+		std::max(Position::getDistanceX(currentPosition, npcPosition),
+		         Position::getDistanceY(currentPosition, npcPosition)) <= npcLocalApproachDistance + 3;
+	const bool withinRecoveryArea = npcApproach.initialNpcPosition &&
+		npcApproach.initialNpcPosition->z == npcPosition.z &&
+		std::max(Position::getDistanceX(*npcApproach.initialNpcPosition, npcPosition),
+		         Position::getDistanceY(*npcApproach.initialNpcPosition, npcPosition)) <= npcLocalApproachDistance;
+	if (!npcApproach.local && !nearLivePosition && currentPosition != coarseDestination) {
+		PlayerBotNavigationRuntimeOutcome navigation;
+		processNavigation(player, currentPosition, coarseDestination, &navigation);
+		unavailable = navigation.fixedTargetRouteFailures >= maximumProgressionAttempts;
+		return false;
+	}
+	if (!npcApproach.local) {
+		if (!nearLivePosition || !withinRecoveryArea) {
+			unavailable = true;
+			return false;
+		}
+		npcApproach.local = true;
+		navigationRuntime.reset();
+		if (npcApproach.observedNpcPosition && *npcApproach.observedNpcPosition != npcPosition) {
+			++npcApproach.replans;
+			emit("npc_approach_replanned", currentPosition,
+			     "\"npc_id\":" + std::to_string(npc->getID()) + ",\"reason\":\"provider_moved\"");
+		}
+		npcApproach.observedNpcPosition = npcPosition;
+	}
+
+	if (npcApproach.localDestination &&
+	    !Position::areInRange<3, 3, 0>(*npcApproach.localDestination, npcPosition)) {
+		if (!nearLivePosition || !withinRecoveryArea || npcApproach.replans >= maximumNpcLocalReplans) {
+			unavailable = true;
+			return false;
+		}
+		++npcApproach.replans;
+		npcApproach.localDestination.reset();
+		npcApproach.observedNpcPosition = npcPosition;
+		navigationRuntime.reset();
+		emit("npc_approach_replanned", currentPosition,
+		     "\"npc_id\":" + std::to_string(npc->getID()) + ",\"reason\":\"provider_moved\"");
+	}
+
+	if (!npcApproach.localDestination) {
+		npcApproach.localDestination = npcPosition;
+	}
+
+	PlayerBotNavigationRuntimeOutcome navigation;
+	if (processNavigation(player, currentPosition, PlayerBotNavigationGoal::withinRange(npcPosition, 3, 3),
+	                      &navigation, maximumNpcLocalPathNodes, true)) {
+		if (Position::areInRange<3, 3, 0>(player->getPosition(), npc->getPosition())) return true;
+		npcApproach.localDestination.reset();
+		return false;
+	}
+	if (navigation.routeUnavailable) {
+		npcApproach.localDestination.reset();
+		navigationRuntime.reset();
+		unavailable = true;
+	}
+	return false;
+}
 
 PlayerBotController::PlayerBotController(const Player& player,
 	                            std::map<Position, std::chrono::steady_clock::time_point>& sharedHuntRegionCooldowns) :
@@ -30,7 +145,7 @@ PlayerBotController::PlayerBotController(const Player& player,
 		 maximumLostTargetPursuitDistance, maximumTargetReacquisitionDistance},
 		{maxCorpseSearchAttempts, maximumCorpseNavigationFailures, corpseNavigationSuspendThreshold,
 		 std::chrono::milliseconds(corpseNavigationRetryInterval), corpseLootTimeout, preferredFoodCount},
-		{huntingLoop.begin(), huntingLoop.end()},
+		fixtureDriver.huntPatrol(),
 	}, sharedHuntRegionCooldowns)
 {}
 
@@ -54,6 +169,7 @@ void PlayerBotController::start(const Position& position, bool recovered, uint32
 	size_t spellTrainerCount = 0;
 	size_t travelOfferCount = 0;
 	size_t opaqueTravelOfferCount = 0;
+	size_t bankerProviderCount = 0;
 	size_t capabilityAuditFindings = 0;
 	for (const auto& entry : g_game.getNpcs()) {
 		Npc* npc = entry.second;
@@ -61,16 +177,18 @@ void PlayerBotController::start(const Position& position, bool recovered, uint32
 		const bool shop = playerBotNpcHasCapability(*npc, PlayerBotNpcCapability::Shop);
 		const bool trainer = playerBotNpcHasCapability(*npc, PlayerBotNpcCapability::SpellTrainer);
 		const bool travel = playerBotNpcHasCapability(*npc, PlayerBotNpcCapability::Travel);
+		const bool banker = playerBotNpcHasCapability(*npc, PlayerBotNpcCapability::Banker);
 		shopProviderCount += shop;
 		spellTrainerCount += trainer;
 		if (travel) travelOfferCount += npc->getTravelOffers().size();
 		if (travel) opaqueTravelOfferCount += std::count_if(npc->getTravelOffers().begin(), npc->getTravelOffers().end(),
 			[](const NpcTravelOffer& offer) { return offer.hasOpaqueCondition; });
+		bankerProviderCount += banker;
 		const std::string* metadata = playerBotNpcMetadata(*npc);
 		const bool emptyShopDeclaration = metadata && *metadata == "shop" && npc->getShopOffers().empty();
 		const bool emptyTrainerDeclaration = metadata && *metadata == "spell_trainer" && npc->getSpellOffers().empty();
 		const bool hiddenStructuredCapability = playerBotNpcDisabled(*npc) &&
-			(!npc->getShopOffers().empty() || !npc->getSpellOffers().empty() || !npc->getTravelOffers().empty());
+			(!npc->getShopOffers().empty() || !npc->getSpellOffers().empty() || !npc->getTravelOffers().empty() || npc->isBanker());
 		if (emptyShopDeclaration || emptyTrainerDeclaration || hiddenStructuredCapability) {
 			++capabilityAuditFindings;
 			emit("npc_capability_audit", npc->getPosition(),
@@ -86,7 +204,8 @@ void PlayerBotController::start(const Position& position, bool recovered, uint32
 	     "\"result\":" + jsonString(capabilityAuditFindings == 0 ? "ok" : "warning") +
 	         ",\"findings\":" + std::to_string(capabilityAuditFindings) + ",\"shop_providers\":" +
 	         std::to_string(shopProviderCount) + ",\"spell_trainers\":" + std::to_string(spellTrainerCount) +
-	         ",\"travel_offers\":" + std::to_string(travelOfferCount));
+	         ",\"travel_offers\":" + std::to_string(travelOfferCount) + ",\"bankers\":" +
+	         std::to_string(bankerProviderCount));
 	lifecycle << "\"status\":\"online\",\"message\":\"Playerbot online\""
 	          << ",\"recovered\":" << (recovered ? "true" : "false")
 	          << ",\"recovery_count\":" << recoveryCount
@@ -97,7 +216,8 @@ void PlayerBotController::start(const Position& position, bool recovered, uint32
 		          << ",\"shop_providers\":" << shopProviderCount
 		          << ",\"spell_trainers\":" << spellTrainerCount
 		          << ",\"travel_offers\":" << travelOfferCount
-		          << ",\"opaque_travel_offers\":" << opaqueTravelOfferCount;
+		          << ",\"opaque_travel_offers\":" << opaqueTravelOfferCount
+		          << ",\"bankers\":" << bankerProviderCount;
 	telemetry.emit("lifecycle", position, lifecycle.str());
 	if (controlledPlayer) {
 		emitFixtureEvents(fixtureDriver.runSpellCalibration(*controlledPlayer), position);
@@ -126,12 +246,21 @@ void PlayerBotController::start(const Position& position, bool recovered, uint32
 void PlayerBotController::schedule(uint32_t interval)
 {
 	if (!turnRouter.running()) return;
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(interval);
+	if (scheduledTurnEvent != 0) {
+		if (scheduledTurnDeadline <= deadline) return;
+		g_scheduler.stopEvent(scheduledTurnEvent);
+	}
+	const uint64_t generation = ++scheduledTurnGeneration;
+	scheduledTurnDeadline = deadline;
 	std::weak_ptr<PlayerBotController> weakController = shared_from_this();
-	g_scheduler.addEvent(createSchedulerTask(interval, [weakController]() {
+	scheduledTurnEvent = g_scheduler.addEvent(createSchedulerTask(interval, ([weakController, generation]() {
 		if (std::shared_ptr<PlayerBotController> controller = weakController.lock()) {
+			if (controller->scheduledTurnGeneration != generation) return;
+			controller->scheduledTurnEvent = 0;
 			controller->navigate();
 		}
-	}));
+	})));
 }
 
 const char* PlayerBotController::stageName(ScenarioStage stage)
@@ -227,6 +356,11 @@ void PlayerBotController::stop(const char* reason, const Position& position)
 	const bool wasRunning = turnRouter.running();
 	const char* previous = turnRouter.stateName();
 	turnRouter.stop();
+	if (scheduledTurnEvent != 0) {
+		g_scheduler.stopEvent(scheduledTurnEvent);
+		scheduledTurnEvent = 0;
+		++scheduledTurnGeneration;
+	}
 	huntCoordinator.cancelPlanning();
 	resetNavigation();
 	if (wasRunning) {
@@ -271,7 +405,7 @@ void PlayerBotController::observeNavigationPlan(const Position& destination, std
 	plan.metrics.result = PlayerBotNavigationResult::Reached;
 	plan.metrics.steps = steps.size();
 	plan.steps = std::move(steps);
-	navigationRuntime.observePlan({destination, std::move(plan), true, true, std::chrono::steady_clock::now()});
+	navigationRuntime.observePlan({PlayerBotNavigationGoal::exact(destination), std::move(plan), true, true, std::chrono::steady_clock::now()});
 }
 
 void PlayerBotController::onDeath(const Player& player, const Creature* killer, const Creature* mostDamageKiller)
@@ -323,6 +457,42 @@ Item* PlayerBotController::findNavigationItem(const PlayerBotNavigationStep& ste
 		}
 	}
 	return nullptr;
+}
+
+PlayerBotNavigationStep PlayerBotController::resolveTopologyPortal(
+	Player& player, const PlayerBotNavigationStep& portal,
+	const std::set<Position>& blockedPositions) const
+{
+	PlayerBotNavigationStep step = portal;
+	Tile* tile = g_game.map.getTile(portal.target);
+	if (!tile) return step;
+	if (Item* door = usableClosedDoor(*tile, player)) {
+		step.action = PlayerBotNavigationAction::UseDoor;
+		step.itemId = door->getID();
+		return step;
+	}
+	if (portal.action == PlayerBotNavigationAction::UseShovel) {
+		Item* ground = tile->getGround();
+		if (ground && contains(shovelHoleIds, ground->getID())) {
+			step.itemId = ground->getID();
+			return step;
+		}
+	}
+	if (portal.action == PlayerBotNavigationAction::Move ||
+	    portal.action == PlayerBotNavigationAction::UseDoor ||
+	    portal.action == PlayerBotNavigationAction::UseShovel) {
+		const Position currentPosition = player.getPosition();
+		const Direction direction = getDirectionTo(currentPosition, portal.target);
+		PlayerBotNavigationStep move;
+		if (getNextPosition(direction, currentPosition) == portal.target &&
+		    PlayerBotNavigator().resolveMove(player, currentPosition, direction, blockedPositions, move) &&
+		    (portal.action != PlayerBotNavigationAction::UseShovel ||
+		     move.expectedPosition == portal.expectedPosition)) {
+			move.topologyPortal = true;
+			return move;
+		}
+	}
+	return step;
 }
 
 bool PlayerBotController::executeNavigationStep(Player* player, const PlayerBotNavigationStep& step)
@@ -411,15 +581,79 @@ void PlayerBotController::onCombatDamage(Creature* attacker, const Creature& tar
 PlayerBotNavigationRoutePlan PlayerBotController::planNavigationRoute(Player& player, const Position& destination,
 	                                                                    const std::set<Position>& blockedPositions,
 	                                                                    uint64_t maximumExpandedNodes) const
+
+{
+	return planNavigationRoute(player, PlayerBotNavigationGoal::exact(destination), blockedPositions, maximumExpandedNodes);
+}
+
+PlayerBotNavigationRoutePlan PlayerBotController::planNavigationRoute(Player& player, const PlayerBotNavigationGoal& goal,
+	                                                                    const std::set<Position>& blockedPositions,
+	                                                                    uint64_t maximumExpandedNodes) const
 {
 	PlayerBotNavigationRoutePlan routePlan;
 	routePlan.metrics.attempted = true;
 	const auto startedAt = std::chrono::steady_clock::now();
 	const PlayerBotNavigator navigator;
+	if (goal.type != PlayerBotNavigationGoalType::Exact) {
+		routePlan.metrics.waypoint = goal.representative();
+		routePlan.metrics.result = navigator.plan(player, goal, blockedPositions, routePlan.steps,
+		                                          routePlan.metrics.expandedNodes, maximumExpandedNodes,
+		                                          &routePlan.metrics.closestPosition);
+		routePlan.metrics.elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
+		    std::chrono::steady_clock::now() - startedAt);
+		routePlan.metrics.steps = routePlan.steps.size();
+		return routePlan;
+	}
+	const Position destination = goal.position;
 	const bool travelEligible = maximumExpandedNodes == playerBotNavigationMaximumExpandedNodes && !player.isPzLocked();
-	routePlan.metrics.result = navigator.plan(player, destination, blockedPositions, routePlan.steps,
-	                                          routePlan.metrics.expandedNodes, maximumExpandedNodes);
-	if (routePlan.metrics.result != PlayerBotNavigationResult::Reached && travelEligible) {
+	const PlayerBotTopology& topology = PlayerBotTopology::instance();
+	const bool canUseRope = g_game.findItemOfType(&player, playerbot::ropeItemId, true) != nullptr;
+	const bool canUseShovel = g_game.findItemOfType(&player, shovelToolItemId, true) != nullptr;
+	const std::optional<PlayerBotTopologyRoute> topologyRoute =
+	    topology.route(player.getPosition(), destination, blockedPositions, canUseRope, canUseShovel, player.getLevel());
+	const PlayerBotTopologyDistances coarseDistances = topology.distancesFrom(
+	    player.getPosition(), canUseRope, canUseShovel, player.getLevel());
+	const std::optional<uint32_t> coarseDistance = topology.distanceTo(coarseDistances, destination);
+	if (travelEligible && (!topologyRoute || (coarseDistance && *coarseDistance > maximumNpcTravelApproachPortals))) {
+		if (auto travelRoute = planNpcTravelRoute(player, destination, blockedPositions, maximumExpandedNodes)) {
+			const size_t directSteps = coarseDistance ?
+			    std::max<size_t>(playerBotNavigationDistance(player.getPosition(), destination),
+			                     static_cast<size_t>(*coarseDistance) * 32) :
+			    std::numeric_limits<size_t>::max();
+			const double directTravelSeconds = directSteps == std::numeric_limits<size_t>::max() ?
+			    std::numeric_limits<double>::infinity() : directSteps * player.getStepDuration() / 1000.0;
+			if (travelRoute->metrics.estimatedTravelSeconds < directTravelSeconds) {
+				travelRoute->metrics.elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
+				    std::chrono::steady_clock::now() - startedAt);
+				travelRoute->metrics.attempted = true;
+				if (travelRoute->metrics.steps == 0) travelRoute->metrics.steps = travelRoute->steps.size();
+				return *travelRoute;
+			}
+		}
+	}
+	const Position localDestination = topologyRoute ? topologyRoute->waypoint : destination;
+	routePlan.metrics.waypoint = localDestination;
+	routePlan.metrics.result = navigator.plan(player, localDestination, blockedPositions, routePlan.steps,
+	                                          routePlan.metrics.expandedNodes, maximumExpandedNodes,
+	                                          &routePlan.metrics.closestPosition);
+	if (routePlan.metrics.result == PlayerBotNavigationResult::Reached && topologyRoute && topologyRoute->portal) {
+		const PlayerBotTopologyPortal& portal = *topologyRoute->portal;
+		PlayerBotNavigationStep step;
+		switch (portal.action) {
+			case PlayerBotTopologyPortalAction::Move: step.action = PlayerBotNavigationAction::Move; break;
+			case PlayerBotTopologyPortalAction::Use: step.action = PlayerBotNavigationAction::Use; break;
+			case PlayerBotTopologyPortalAction::UseDoor: step.action = PlayerBotNavigationAction::UseDoor; break;
+			case PlayerBotTopologyPortalAction::UseRope: step.action = PlayerBotNavigationAction::UseRope; break;
+			case PlayerBotTopologyPortalAction::UseShovel: step.action = PlayerBotNavigationAction::UseShovel; break;
+		}
+		step.direction = portal.direction;
+		step.target = portal.target;
+		step.expectedPosition = portal.destination;
+		step.itemId = portal.itemId;
+		step.topologyPortal = true;
+		routePlan.steps.push_back(step);
+	}
+	if (routePlan.metrics.result != PlayerBotNavigationResult::Reached && travelEligible && topologyRoute) {
 		if (auto travelRoute = planNpcTravelRoute(player, destination, blockedPositions, maximumExpandedNodes)) {
 			travelRoute->metrics.elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
 				std::chrono::steady_clock::now() - startedAt);
@@ -430,8 +664,14 @@ PlayerBotNavigationRoutePlan PlayerBotController::planNavigationRoute(Player& pl
 		}
 	}
 	routePlan.metrics.elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
-		std::chrono::steady_clock::now() - startedAt);
-	routePlan.metrics.steps = routePlan.steps.size();
+	    std::chrono::steady_clock::now() - startedAt);
+	if (routePlan.metrics.result == PlayerBotNavigationResult::Reached && topologyRoute && topologyRoute->portal && coarseDistance) {
+		routePlan.metrics.steps = std::max<size_t>(playerBotNavigationDistance(player.getPosition(), destination),
+		                                         static_cast<size_t>(*coarseDistance) * 32);
+		routePlan.metrics.estimatedTravelSeconds = routePlan.metrics.steps * player.getStepDuration() / 1000.0;
+	} else {
+		routePlan.metrics.steps = routePlan.steps.size();
+	}
 	return routePlan;
 }
 
@@ -475,8 +715,11 @@ std::optional<PlayerBotNavigationRoutePlan> PlayerBotController::planNpcTravelRo
 	};
 	struct SegmentEstimate {
 		uint32_t stepCount = 0;
+		uint32_t movementCost = 0;
 		double travelSeconds = 0;
 		std::deque<PlayerBotNavigationStep> steps;
+		Position destination;
+		bool coarse = false;
 	};
 	auto worse = [](const QueueEntry& left, const QueueEntry& right) { return left.cost > right.cost; };
 	std::priority_queue<QueueEntry, std::vector<QueueEntry>, decltype(worse)> queue(worse);
@@ -486,9 +729,10 @@ std::optional<PlayerBotNavigationRoutePlan> PlayerBotController::planNpcTravelRo
 	const uint64_t availableMoney = player.getMoney() + player.getBankBalance();
 	const PlayerBotNavigator navigator;
 	const uint64_t graphNodeBudget = maximumExpandedNodes;
-	constexpr uint64_t segmentNodeBudget = 10000;
+	constexpr uint64_t segmentNodeBudget = 30000;
 	uint64_t graphExpandedNodes = 0;
 	std::map<std::pair<size_t, uint32_t>, std::optional<SegmentEstimate>> connections;
+	std::vector<std::optional<PlayerBotTopologyDistances>> coarseDistanceCache;
 	auto travelSeconds = [&player](const std::deque<PlayerBotNavigationStep>& steps) {
 		double seconds = 0;
 		for (const PlayerBotNavigationStep& step : steps) {
@@ -496,18 +740,44 @@ std::optional<PlayerBotNavigationRoutePlan> PlayerBotController::planNpcTravelRo
 		}
 		return seconds;
 	};
+	auto movementCost = [](const std::deque<PlayerBotNavigationStep>& steps) {
+		uint32_t cost = 0;
+		for (const PlayerBotNavigationStep& step : steps) {
+			cost += step.action == PlayerBotNavigationAction::Move &&
+			        (step.direction & DIRECTION_DIAGONAL_MASK) != 0 ? 3 : 1;
+		}
+		return cost;
+	};
 	auto walkSegment = [&](size_t stateIndex, size_t edgeIndex) -> std::optional<SegmentEstimate> {
 		const Edge& edge = edges[edgeIndex];
 		const auto key = std::make_pair(stateIndex, edge.npc->getID());
 		if (auto cached = connections.find(key); cached != connections.end()) return cached->second;
+		if (coarseDistanceCache.size() <= stateIndex) coarseDistanceCache.resize(stateIndex + 1);
+		if (!coarseDistanceCache[stateIndex]) {
+			coarseDistanceCache[stateIndex] = PlayerBotTopology::instance().distancesFrom(
+			    states[stateIndex], g_game.findItemOfType(&player, playerbot::ropeItemId, true) != nullptr,
+			    g_game.findItemOfType(&player, shovelToolItemId, true) != nullptr, player.getLevel());
+		}
 		for (int32_t xOffset = -1; xOffset <= 1; ++xOffset) {
 			for (int32_t yOffset = -1; yOffset <= 1; ++yOffset) {
-				if (graphExpandedNodes >= graphNodeBudget) return std::nullopt;
 				if (xOffset == 0 && yOffset == 0) continue;
 				const Position approach(edge.npc->getPosition().x + xOffset, edge.npc->getPosition().y + yOffset,
 				                        edge.npc->getPosition().z);
 				Tile* tile = g_game.map.getTile(approach);
 				if (!tile || tile->queryAdd(0, player, 1, FLAG_IGNOREBLOCKCREATURE) != RETURNVALUE_NOERROR) continue;
+				const uint32_t approachDistance = playerBotNavigationDistance(states[stateIndex], approach);
+				const std::optional<uint32_t> portalDistance = PlayerBotTopology::instance().distanceTo(
+				    *coarseDistanceCache[stateIndex], approach);
+				if (portalDistance && *portalDistance <= maximumNpcTravelApproachPortals) {
+					const uint32_t estimatedSteps = std::max(playerBotNavigationDistance(states[stateIndex], approach),
+					                                         *portalDistance * 32);
+					SegmentEstimate estimate{estimatedSteps, estimatedSteps, estimatedSteps * player.getStepDuration() / 1000.0,
+					                         {}, approach, true};
+					connections.emplace(key, estimate);
+					return estimate;
+				}
+				if (approachDistance > 512) continue;
+				if (graphExpandedNodes >= graphNodeBudget) return std::nullopt;
 				std::deque<PlayerBotNavigationStep> steps;
 				uint64_t expandedNodes = 0;
 				const PlayerBotNavigationResult result = navigator.planFrom(
@@ -515,7 +785,8 @@ std::optional<PlayerBotNavigationRoutePlan> PlayerBotController::planNpcTravelRo
 					std::min(segmentNodeBudget, graphNodeBudget - graphExpandedNodes));
 				graphExpandedNodes += expandedNodes;
 				if (result == PlayerBotNavigationResult::Reached) {
-					SegmentEstimate estimate{static_cast<uint32_t>(steps.size()), travelSeconds(steps), std::move(steps)};
+					SegmentEstimate estimate{static_cast<uint32_t>(steps.size()), movementCost(steps), travelSeconds(steps), std::move(steps),
+					                         approach, false};
 					connections.emplace(key, estimate);
 					return estimate;
 				}
@@ -525,13 +796,36 @@ std::optional<PlayerBotNavigationRoutePlan> PlayerBotController::planNpcTravelRo
 		return std::nullopt;
 	};
 	size_t selectedEdge = std::numeric_limits<size_t>::max();
+	uint64_t selectedCost = std::numeric_limits<uint64_t>::max();
 	uint32_t selectedRouteSteps = 0;
 	double selectedTravelSeconds = 0;
 	while (!queue.empty()) {
 		const QueueEntry current = queue.top();
 		queue.pop();
+		if (current.cost >= selectedCost) break;
 		const auto& currentLabels = labels[current.state];
 		if (std::find(currentLabels.begin(), currentLabels.end(), std::pair{current.cost, current.fare}) == currentLabels.end()) continue;
+		if (current.state != 0) {
+			if (coarseDistanceCache.size() <= current.state) coarseDistanceCache.resize(current.state + 1);
+			if (!coarseDistanceCache[current.state]) {
+				coarseDistanceCache[current.state] = PlayerBotTopology::instance().distancesFrom(
+				    states[current.state], g_game.findItemOfType(&player, playerbot::ropeItemId, true) != nullptr,
+				    g_game.findItemOfType(&player, shovelToolItemId, true) != nullptr, player.getLevel());
+			}
+			const std::optional<uint32_t> destinationPortals = PlayerBotTopology::instance().distanceTo(
+			    *coarseDistanceCache[current.state], destination);
+			if (destinationPortals && *destinationPortals <= maximumNpcTravelApproachPortals) {
+				const uint32_t finalSteps = std::max(playerBotNavigationDistance(states[current.state], destination),
+				                                     *destinationPortals * 32);
+				const uint64_t totalCost = current.cost + finalSteps;
+				if (totalCost < selectedCost) {
+					selectedCost = totalCost;
+					selectedEdge = current.firstEdge;
+					selectedRouteSteps = current.routeSteps + finalSteps;
+					selectedTravelSeconds = current.travelSeconds + finalSteps * player.getStepDuration() / 1000.0;
+				}
+			}
+		}
 		if (current.state != 0 && graphExpandedNodes < graphNodeBudget &&
 		    playerBotNavigationDistance(states[current.state], destination) <= 512) {
 			std::deque<PlayerBotNavigationStep> finalSteps;
@@ -541,22 +835,29 @@ std::optional<PlayerBotNavigationRoutePlan> PlayerBotController::planNpcTravelRo
 				std::min(segmentNodeBudget, graphNodeBudget - graphExpandedNodes));
 			graphExpandedNodes += expandedNodes;
 			if (result == PlayerBotNavigationResult::Reached) {
-				selectedEdge = current.firstEdge;
-				selectedRouteSteps = current.routeSteps + static_cast<uint32_t>(finalSteps.size());
-				selectedTravelSeconds = current.travelSeconds + travelSeconds(finalSteps);
-				break;
+				const uint64_t totalCost = current.cost + movementCost(finalSteps);
+				if (totalCost < selectedCost) {
+					selectedCost = totalCost;
+					selectedEdge = current.firstEdge;
+					selectedRouteSteps = current.routeSteps + static_cast<uint32_t>(finalSteps.size());
+					selectedTravelSeconds = current.travelSeconds + travelSeconds(finalSteps);
+				}
 			}
 		}
-		for (size_t edgeIndex = 0; edgeIndex < edges.size(); ++edgeIndex) {
+		std::vector<size_t> edgeIndices(edges.size());
+		std::iota(edgeIndices.begin(), edgeIndices.end(), 0);
+		std::sort(edgeIndices.begin(), edgeIndices.end(), [&edges, &states, &current](size_t left, size_t right) {
+			return playerBotNavigationDistance(states[current.state], edges[left].npc->getPosition()) <
+			       playerBotNavigationDistance(states[current.state], edges[right].npc->getPosition());
+		});
+		for (size_t edgeIndex : edgeIndices) {
 			const Edge& edge = edges[edgeIndex];
-			const uint32_t approachDistance = playerBotNavigationDistance(states[current.state], edge.npc->getPosition());
-			if (approachDistance > 512) continue;
 			const std::optional<SegmentEstimate> approach = walkSegment(current.state, edgeIndex);
 			if (!approach) continue;
 			const size_t nextState = stateIndices.at(edge.offer->destination);
 			const uint64_t nextFare = current.fare + edge.offer->price;
 			if (nextFare > availableMoney) continue;
-			const uint64_t nextCost = current.cost + approach->stepCount + 50 + edge.offer->price / 10;
+			const uint64_t nextCost = current.cost + approach->movementCost + 50 + edge.offer->price / 10;
 			const uint32_t nextRouteSteps = current.routeSteps + approach->stepCount + 1;
 			const double nextTravelSeconds = current.travelSeconds + approach->travelSeconds + 1.0;
 			const size_t firstEdge = current.firstEdge == std::numeric_limits<size_t>::max() ? edgeIndex : current.firstEdge;
@@ -575,14 +876,32 @@ std::optional<PlayerBotNavigationRoutePlan> PlayerBotController::planNpcTravelRo
 	if (selectedEdge == std::numeric_limits<size_t>::max()) return std::nullopt;
 
 	const Edge& selected = edges[selectedEdge];
-	const auto firstConnection = connections.find({0, selected.npc->getID()});
+	auto firstConnection = connections.find({0, selected.npc->getID()});
 	if (firstConnection == connections.end() || !firstConnection->second) return std::nullopt;
+	SegmentEstimate firstSegment = *firstConnection->second;
+	if (firstSegment.coarse && firstSegment.destination != player.getPosition()) {
+		uint64_t expandedNodes = 0;
+		std::deque<PlayerBotNavigationStep> steps;
+		const PlayerBotNavigationResult result = navigator.planFrom(
+		    player, player.getPosition(), firstSegment.destination, blockedPositions, steps, expandedNodes,
+		    std::min<uint64_t>(segmentNodeBudget, maximumExpandedNodes));
+		graphExpandedNodes += expandedNodes;
+		if (result != PlayerBotNavigationResult::Reached) return std::nullopt;
+		firstSegment.stepCount = static_cast<uint32_t>(steps.size());
+		firstSegment.movementCost = movementCost(steps);
+		firstSegment.travelSeconds = travelSeconds(steps);
+		firstSegment.steps = std::move(steps);
+		selectedRouteSteps = selectedRouteSteps >= firstConnection->second->stepCount ?
+		    selectedRouteSteps - firstConnection->second->stepCount + firstSegment.stepCount : selectedRouteSteps;
+		selectedTravelSeconds = std::max(0.0, selectedTravelSeconds - firstConnection->second->travelSeconds +
+		                                            firstSegment.travelSeconds);
+	}
 	PlayerBotNavigationRoutePlan route;
 	route.metrics.result = PlayerBotNavigationResult::Reached;
 	route.metrics.expandedNodes = graphExpandedNodes;
 	route.metrics.steps = selectedRouteSteps;
 	route.metrics.estimatedTravelSeconds = selectedTravelSeconds;
-	route.steps = firstConnection->second->steps;
+	route.steps = std::move(firstSegment.steps);
 	PlayerBotNavigationStep travel;
 	travel.action = PlayerBotNavigationAction::NpcTravel;
 	travel.target = selected.npc->getPosition();
@@ -602,28 +921,40 @@ void PlayerBotController::onHealthGain(Creature* healer, const Creature& target,
 }
 
 bool PlayerBotController::processNavigation(Player* player, const Position& currentPosition, const Position& destination,
-                                            PlayerBotNavigationRuntimeOutcome* navigationOutcome)
+	                                            PlayerBotNavigationRuntimeOutcome* navigationOutcome,
+	                                            uint64_t maximumExpandedNodes)
+
 {
+	return processNavigation(player, currentPosition, PlayerBotNavigationGoal::exact(destination), navigationOutcome,
+	                         maximumExpandedNodes);
+}
+
+bool PlayerBotController::processNavigation(Player* player, const Position& currentPosition, const PlayerBotNavigationGoal& goal,
+	                                            PlayerBotNavigationRuntimeOutcome* navigationOutcome,
+	                                            uint64_t maximumExpandedNodes, bool npcApproach)
+{
+	const Position destination = goal.representative();
 	const auto now = std::chrono::steady_clock::now();
 	const PlayerBotNavigationRuntimeTiming timing = {
 		now, navigationStepTimeout, navigationBlockSuppression, navigationOscillationSuppression,
 	};
 	PlayerBotNavigationRuntimeOutcome outcome = navigationRuntime.process({
-		currentPosition, destination, player->getWalkDelay() > 0 || !player->canDoAction(), player->canDoAction(), timing,
+		currentPosition, goal, player->getWalkDelay() > 0 || !player->canDoAction(), player->canDoAction(), timing,
 	});
 	if (outcome.routeRequest) {
-		const PlayerBotFixtureRoutePlan fixturePlan = fixtureDriver.navigationPlan(outcome.routeRequest->maximumExpandedNodes);
+		const uint64_t routeNodeBudget = std::min(outcome.routeRequest->maximumExpandedNodes, maximumExpandedNodes);
+		const PlayerBotFixtureRoutePlan fixturePlan = fixtureDriver.navigationPlan(routeNodeBudget, npcApproach);
 		PlayerBotNavigationRoutePlan routePlan;
 		if (fixturePlan.forceFailure) {
 			routePlan.metrics.attempted = true;
 			routePlan.metrics.result = PlayerBotNavigationResult::Unreachable;
 			routePlan.metrics.expandedNodes = outcome.routeRequest->maximumExpandedNodes;
 		} else {
-			routePlan = planNavigationRoute(*player, outcome.routeRequest->destination, outcome.routeRequest->blockedPositions,
-			                                outcome.routeRequest->maximumExpandedNodes);
+			routePlan = planNavigationRoute(*player, outcome.routeRequest->goal, outcome.routeRequest->blockedPositions,
+			                                std::min(fixturePlan.maximumExpandedNodes, routeNodeBudget));
 		}
 		const PlayerBotPendingMovementResult movementResult = outcome.movementResult;
-		outcome = navigationRuntime.observePlan({destination, std::move(routePlan), player->canDoAction(), false, now});
+		outcome = navigationRuntime.observePlan({goal, std::move(routePlan), player->canDoAction(), false, now});
 		outcome.movementResult = movementResult;
 	}
 	if (navigationOutcome) *navigationOutcome = outcome;
@@ -665,10 +996,13 @@ bool PlayerBotController::processNavigation(Player* player, const Position& curr
 	}
 	if (outcome.pendingWorldChange) {
 		const bool unchanged = findNavigationItem(*outcome.pendingWorldChange) != nullptr;
-		if (unchanged) {
+		Tile* targetTile = g_game.map.getTile(outcome.pendingWorldChange->target);
+		const bool blockedDoor = outcome.pendingWorldChange->action == PlayerBotNavigationAction::UseDoor &&
+		                         (!targetTile || targetTile->queryAdd(0, *player, 1, FLAG_IGNOREBLOCKCREATURE) != RETURNVALUE_NOERROR);
+		if (unchanged || blockedDoor) {
 			telemetry.logActionFailure("navigate", "transition_state_unchanged", currentPosition);
 		}
-		navigationRuntime.observeWorldChange({*outcome.pendingWorldChange, unchanged, now, navigationBlockSuppression});
+		navigationRuntime.observeWorldChange({*outcome.pendingWorldChange, unchanged || blockedDoor, now, navigationBlockSuppression});
 	}
 	if (outcome.plan.attempted) {
 		telemetry.recordPathfinding(outcome.plan.elapsed, !outcome.routeUnavailable);
@@ -679,7 +1013,12 @@ bool PlayerBotController::processNavigation(Player* player, const Position& curr
 			         ",\"y\":" + std::to_string(destination.y) + ",\"z\":" +
 			         std::to_string(static_cast<uint16_t>(destination.z)) + "},\"plan_result\":" +
 			         std::to_string(static_cast<uint16_t>(outcome.plan.result)) + ",\"expanded_nodes\":" +
-			         std::to_string(outcome.plan.expandedNodes));
+			         std::to_string(outcome.plan.expandedNodes) + ",\"closest_position\":{\"x\":" +
+			         std::to_string(outcome.plan.closestPosition.x) + ",\"y\":" +
+			         std::to_string(outcome.plan.closestPosition.y) + ",\"z\":" +
+			         std::to_string(static_cast<uint16_t>(outcome.plan.closestPosition.z)) + "},\"waypoint\":{\"x\":" +
+			         std::to_string(outcome.plan.waypoint.x) + ",\"y\":" + std::to_string(outcome.plan.waypoint.y) +
+			         ",\"z\":" + std::to_string(static_cast<uint16_t>(outcome.plan.waypoint.z)) + "}");
 			telemetry.logActionFailure("navigate", "route_unavailable", currentPosition);
 			if (outcome.fixedTargetRouteExhausted) {
 				stop("navigation_route_unavailable", currentPosition);
@@ -704,15 +1043,20 @@ bool PlayerBotController::processNavigation(Player* player, const Position& curr
 		schedule(navigationDecisionDelay(*player));
 		return false;
 	}
-	const PlayerBotNavigationStep& step = *outcome.nextStep;
+	PlayerBotNavigationStep step = *outcome.nextStep;
+	if (step.topologyPortal) {
+		step = resolveTopologyPortal(*player, step, navigationRuntime.activeBlockedPositions(now));
+	}
 	if (!executeNavigationStep(player, step)) {
-		navigationRuntime.observeStep({step, PlayerBotNavigationStepResult::Rejected, std::chrono::steady_clock::now()});
+		navigationRuntime.observeStep({step, PlayerBotNavigationStepResult::Rejected,
+		                               std::chrono::steady_clock::now(), navigationBlockSuppression});
 		telemetry.logActionFailure("navigate", "transition_unavailable", currentPosition);
 		schedule(blockedRouteRetryInterval);
 		return false;
 	}
 
-	navigationRuntime.observeStep({step, PlayerBotNavigationStepResult::Dispatched, std::chrono::steady_clock::now()});
+	navigationRuntime.observeStep({step, PlayerBotNavigationStepResult::Dispatched,
+	                               std::chrono::steady_clock::now(), navigationBlockSuppression});
 	schedule(navigationDecisionDelay(*player));
 	return false;
 }
