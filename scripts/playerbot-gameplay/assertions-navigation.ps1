@@ -48,6 +48,38 @@ function Assert-NavigationRecoveryEvents {
 	}
 }
 
+function Assert-CarlinServiceRouteEvents {
+	param([string]$Logs)
+
+	$events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
+	$reached = @($events | Where-Object {
+		$_.event -eq "action_result" -and $_.action -eq "hunt_waypoint" -and $_.result -eq "reached" -and
+		$_.position.x -eq 32338 -and $_.position.y -eq 31791 -and $_.position.z -eq 7
+	})
+	$terminal = @($events | Where-Object { $_.event -eq "terminal" })
+	if ($reached.Count -ne 1 -or $terminal.Count -ne 0) {
+		throw "Carlin service route failed. reached=$($reached.Count), terminal=$($terminal.Count)."
+	}
+}
+
+function Assert-MutablePortalRouteEvents {
+	param([string]$Logs)
+
+	$events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
+	$reached = @($events | Where-Object {
+		$_.event -eq "action_result" -and $_.action -eq "hunt_waypoint" -and $_.result -eq "reached" -and
+		$_.position.x -eq 32550 -and $_.position.y -eq 31684 -and $_.position.z -eq 8
+	})
+	$transitionFailures = @($events | Where-Object {
+		$_.event -eq "action_result" -and $_.action -eq "navigate" -and
+		$_.result -eq "failed" -and $_.reason -eq "transition_unavailable"
+	})
+	$terminal = @($events | Where-Object { $_.event -eq "terminal" })
+	if ($reached.Count -ne 1 -or $transitionFailures.Count -ne 0 -or $terminal.Count -ne 0) {
+		throw "Mutable portal route failed. reached=$($reached.Count), transitionFailures=$($transitionFailures.Count), terminal=$($terminal.Count)."
+	}
+}
+
 function Assert-PatrolRecoveryEvents {
 	param([string]$Logs)
 
@@ -144,6 +176,26 @@ function Assert-TargetPursuitAbandonEvents {
 		($distance -eq 0 -and $routeUnavailable.Count -lt 1) -or $lastSeenPlanDistance -gt 1 -or
 		$reacquired.Count -ne 0 -or $terminal.Count -ne 0) {
 		throw "Target pursuit fallback failed. started=$($started.Count), abandoned=$($abandoned.Count), distance=$distance, routeUnavailable=$($routeUnavailable.Count), lastSeenPlanDistance=$lastSeenPlanDistance, reacquired=$($reacquired.Count), terminal=$($terminal.Count)."
+	}
+}
+
+function Assert-TargetAttackerPriorityEvents {
+	param([string]$Logs)
+
+	$events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
+	$initial = @($events | Where-Object {
+		$_.event -eq "target_changed" -and $_.target_name -eq "Playerbot Empty Corpse"
+	})
+	$preempted = @($events | Where-Object {
+		$_.event -eq "target_changed" -and $_.reason -eq "active_attacker_preempted"
+	})
+	$attacker = @($events | Where-Object {
+		$_.event -eq "target_changed" -and $_.target_name -eq "Playerbot Defensive Threat"
+	})
+	if ($initial.Count -ne 1 -or $preempted.Count -ne 1 -or $attacker.Count -ne 1 -or
+		$preempted[0].previous_target_id -ne $initial[0].target_id -or
+		$attacker[0].target_id -eq $initial[0].target_id) {
+		throw "Active attacker priority failed. initial=$($initial.Count), preempted=$($preempted.Count), attacker=$($attacker.Count)."
 	}
 }
 

@@ -9,7 +9,7 @@ function F.login.onLogin(player)
 
 	local mode = os.getenv("PLAYERBOT_GAMEPLAY_MODE") or "cycle"
 	F.selectHealthPotion(player)
-    assert(mode == "mainland" or mode == "cycle" or mode == "depot" or mode == "slotted_loot_seller" or mode == "slotted_loot_no_seller" or mode == "navigation" or mode == "navigation_recovery" or mode == "patrol_recovery" or mode == "target_pursuit" or mode == "target_pursuit_abandon" or mode == "corpse" or mode == "corpse_inaccessible" or mode == "death" or mode == "healing" or mode == "spell_use" or
+    assert(mode == "mainland" or mode == "carlin_local_service" or mode == "cycle" or mode == "depot" or mode == "slotted_loot_seller" or mode == "slotted_loot_no_seller" or mode == "navigation" or mode == "navigation_recovery" or mode == "carlin_service_route" or mode == "mutable_portal_route" or mode == "patrol_recovery" or mode == "target_pursuit" or mode == "target_pursuit_abandon" or mode == "target_attacker_priority" or mode == "corpse" or mode == "corpse_inaccessible" or mode == "death" or mode == "healing" or mode == "spell_use" or
         mode == "healing_resupply" or mode == "value" or mode == "progression" or mode == "progression_bundle" or
         mode == "progression_nested" or mode == "progression_resume" or mode == "progression_nested_resume" or
         mode == "progression_space" or mode == "arbitration" or mode == "arbitration_interrupt" or mode == "departure" or
@@ -20,6 +20,8 @@ function F.login.onLogin(player)
         mode == "readiness_low_wealth" or mode == "readiness_food_capacity" or mode == "readiness_retention" or
         mode == "equipment_shadow" or mode == "equipment_shadow_unaffordable" or mode == "equipment_shadow_no_upgrade" or
         mode == "equipment_buy" or mode == "equipment_buy_resume" or mode == "equipment_buy_space" or
+        mode == "equipment_buy_provider_moved" or
+        mode == "equipment_buy_provider_unreachable" or
         mode == "equipment_buy_rejected" or mode == "mainland_reward" or mode == "magic_training_haste" or
         mode == "magic_training_great_light" or mode == "magic_training_light" or mode == "magic_training_refresh" or
         mode == "magic_training_reserve" or mode == "magic_training_failed" or mode == "magic_training_service" or
@@ -28,10 +30,16 @@ function F.login.onLogin(player)
         mode == "magic_training_expired" or mode == "magic_training_post_hunt" or mode == "magic_training_post_hunt_no_overflow",
         "unknown PLAYERBOT_GAMEPLAY_MODE: " .. mode)
     if mode == "equipment_shadow" or mode == "equipment_shadow_unaffordable" or mode == "equipment_shadow_no_upgrade" or
-        mode == "equipment_buy" or mode == "equipment_buy_resume" or mode == "equipment_buy_space" or mode == "equipment_buy_rejected" then
-        local town = player:getTown()
-        assert(player:getLevel() == 8 and player:getVocation():getId() == 4 and town and town:getId() == F.thaisTownId,
-            "equipment shadow fixture did not load the level-8 Thais Knight")
+        mode == "equipment_buy" or mode == "equipment_buy_resume" or mode == "equipment_buy_space" or
+        mode == "equipment_buy_provider_moved" or mode == "equipment_buy_provider_unreachable" or
+        mode == "equipment_buy_rejected" then
+        if mode ~= "equipment_buy_provider_moved" then
+            local thais = Town(F.thaisTownId)
+            assert(thais and player:setTown(thais) and player:teleportTo(thais:getTemplePosition()),
+                "equipment fixture could not select Thais")
+        end
+        assert(player:getLevel() == 8 and player:getVocation():getId() == 4,
+            "equipment shadow fixture did not load the level-8 mainland Knight")
         local currentLeft = player:getSlotItem(CONST_SLOT_LEFT)
         local currentRight = player:getSlotItem(CONST_SLOT_RIGHT)
         if mode == "equipment_buy" and ((currentLeft and currentLeft:getId() == F.equipmentPurchaseItemId) or
@@ -47,20 +55,28 @@ function F.login.onLogin(player)
             if item then assert(item:remove(), "equipment fixture could not clear slot " .. slot) end
         end
         for _, itemId in ipairs({2457, 2463, 2525, 2376, 2647, 2643, F.starterArmorId, F.starterWeaponId,
-            F.equipmentPurchaseItemId}) do
+            F.equipmentPurchaseItemId, 2468, F.movedProviderPurchaseItemId}) do
             F.removeAll(player, itemId)
         end
         for _, equipment in ipairs({
             {2457, CONST_SLOT_HEAD}, {2463, CONST_SLOT_ARMOR}, {2525, CONST_SLOT_RIGHT},
-            {2647, CONST_SLOT_LEGS}, {2643, CONST_SLOT_FEET}
+            {mode == "equipment_buy_provider_moved" and 2468 or 2647, CONST_SLOT_LEGS}, {2643, CONST_SLOT_FEET}
         }) do
             assert(player:addItem(equipment[1], 1, false, 1, equipment[2]),
                 "equipment fixture could not restore slot " .. equipment[2])
         end
-        assert(player:addItem(F.starterWeaponId, 1, false, 1, CONST_SLOT_LEFT),
+        local fixtureWeaponId = mode == "equipment_buy_provider_moved" and 2376 or F.starterWeaponId
+        assert(player:addItem(fixtureWeaponId, 1, false, 1, CONST_SLOT_LEFT),
             "equipment fixture could not equip the starter weapon")
         F.removeAll(player, F.potionItemId)
         assert(player:addItem(F.potionItemId, 10), "equipment fixture could not normalize healing supplies")
+        if mode == "equipment_buy_provider_moved" then
+            for _, spellName in ipairs({"Find Person", "Light"}) do
+                if not player:hasLearnedSpell(spellName) then
+                    assert(player:learnSpell(spellName), "moving-provider fixture could not suppress spell training")
+                end
+            end
+        end
         if mode == "equipment_buy_space" then
             for _, slot in ipairs({CONST_SLOT_HEAD, CONST_SLOT_ARMOR, CONST_SLOT_RIGHT, CONST_SLOT_LEGS, CONST_SLOT_FEET}) do
                 local item = player:getSlotItem(slot)
@@ -92,7 +108,8 @@ function F.login.onLogin(player)
             F.removeAll(player, F.equipmentPurchaseItemId)
             F.removeAll(player, ITEM_GOLD_COIN)
             local backpack = player:getSlotItem(CONST_SLOT_BACKPACK)
-            assert(player:getBankBalance() == 100 and backpack and backpack:addItem(ITEM_GOLD_COIN, 5),
+            local surplus = mode == "equipment_buy_provider_moved" and 80 or 5
+            assert(player:getBankBalance() == 100 and backpack and backpack:addItem(ITEM_GOLD_COIN, surplus),
                 "equipment purchase fixture could not set the bounded surplus")
             if mode == "equipment_buy_space" then
                 player:setCapacity(100000)
@@ -108,18 +125,56 @@ function F.login.onLogin(player)
         assert(left and armor, "equipment shadow fixture lost required equipment")
         if mode == "equipment_buy_space" then
             addEvent(F.verifyEquipmentPurchaseSpace, 500, player:getId())
-        elseif mode == "equipment_buy" or mode == "equipment_buy_resume" or mode == "equipment_buy_rejected" then
+        elseif mode == "equipment_buy_provider_moved" then
+            addEvent(F.verifyMovedProviderPurchase, 500, player:getId(), 360)
+        elseif mode == "equipment_buy" or mode == "equipment_buy_resume" or
+            mode == "equipment_buy_rejected" then
             addEvent(F.verifyEquipmentPurchase, 500, player:getId(), mode == "equipment_buy_rejected", mode == "equipment_buy_resume", 360)
-        else
+        elseif mode ~= "equipment_buy_provider_unreachable" then
             addEvent(F.verifyEquipmentShadow, 250, player:getId(), mode, player:getMoney(), left:getId(),
                 right and right:getId() or 0, armor:getId(), player:getPosition())
         end
         assert(player:setStorageValue(F.fixtureReadyStorage, 1), "equipment fixture could not signal readiness")
+        if mode == "equipment_buy_provider_moved" then
+            local start = player:getPosition()
+            addEvent(F.moveEquipmentProvider, 100, player:getId(), start.x, start.y, start.z, 0)
+        end
         print("PLAYERBOT_GAMEPLAY_TEST " .. string.upper(mode) .. "_START")
+        return true
+    end
+    if mode == "carlin_local_service" then
+        local carlin = Town(F.carlinTownId)
+        assert(carlin and player:setTown(carlin) and player:setVocation(4),
+            "Carlin service fixture could not select the mainland Knight")
+        F.selectHealthPotion(player)
+		assert(player:teleportTo(F.carlinTemplePosition), "Carlin service fixture could not reach the temple")
+		local eva
+		for _, creature in ipairs(Game.getSpectators(F.evaPosition, true, false, 3, 3, 3, 3)) do
+			local npc = Npc(creature)
+			if npc and npc:getName() == "Eva" then
+				eva = npc
+				break
+			end
+		end
+		assert(eva and not eva:isRemoved(), "Carlin banker Eva was not spawned")
+		F.removeAll(player, F.smallHealthPotionItemId)
+        F.removeAll(player, F.healthPotionItemId)
+        assert(player:addItem(F.healthPotionItemId, 1), "Carlin service fixture could not seed the return threshold")
+		assert(player:removeMoney(player:getMoney()) and player:setBankBalance(505),
+			"Carlin service fixture could not fund the restock target")
+        F.suppressNearbyMonsters(player:getId())
+        addEvent(F.verifyCarlinLocalService, 250, player:getId(), 480)
+        print("PLAYERBOT_GAMEPLAY_TEST CARLIN_LOCAL_SERVICE_START")
         return true
     end
     if mode == "mainland" then
         local town = player:getTown()
+		if not town or town:getId() ~= F.thaisTownId then
+			local thais = Town(F.thaisTownId)
+			assert(thais and player:setTown(thais) and player:teleportTo(thais:getTemplePosition()),
+				"mainland fixture could not select Thais")
+			town = player:getTown()
+		end
         assert(player:getLevel() == 8 and player:getVocation():getId() == 4 and town and town:getId() == F.thaisTownId,
             "mainland fixture did not load the level-8 Thais Knight")
         assert(player:getSlotItem(CONST_SLOT_ARMOR) and player:getSlotItem(CONST_SLOT_ARMOR):getId() == F.seedArmorId,
@@ -136,6 +191,12 @@ function F.login.onLogin(player)
     end
     if mode == "mainland_reward" then
         local town = player:getTown()
+		if not town or town:getId() ~= F.thaisTownId then
+			local thais = Town(F.thaisTownId)
+			assert(thais and player:setTown(thais) and player:teleportTo(thais:getTemplePosition()),
+				"mainland reward fixture could not select Thais")
+			town = player:getTown()
+		end
         assert(player:getLevel() == 8 and player:getVocation():getId() == 4 and town and town:getId() == F.thaisTownId,
             "mainland reward fixture did not load the level-8 Thais Knight")
         if player:getStorageValue(F.mainlandRewardStorage) == 1 then
@@ -323,10 +384,29 @@ function F.login.onLogin(player)
         print("PLAYERBOT_GAMEPLAY_TEST READINESS_" .. string.upper(mode:gsub("readiness_", "")) .. "_START")
         return true
     end
-    if mode == "hunt_planning" then print("PLAYERBOT_GAMEPLAY_TEST HUNT_PLANNING_START"); return true end
+    if mode == "hunt_planning" then
+        local carlin = Town(F.carlinTownId)
+        assert(carlin and player:setTown(carlin) and player:setVocation(4),
+            "hunt planning fixture could not select the Carlin Knight")
+        F.selectHealthPotion(player)
+		F.removeAllHealthPotions(player)
+		assert(player:addItem(F.healthPotionItemId, 10),
+			"hunt planning fixture could not prepare healing supplies")
+        local requiredExperience = Game.getExperienceForLevel(8) - player:getExperience()
+        if requiredExperience > 0 then player:addExperience(requiredExperience) end
+        assert(player:setMaxHealth(185) and player:setHealth(185),
+            "hunt planning fixture could not normalize Knight health")
+        assert(player:getLevel() == 8 and player:teleportTo(F.carlinTemplePosition),
+            "hunt planning fixture could not prepare the level-8 Carlin Knight")
+        F.suppressNearbyMonsters(player:getId())
+        print("PLAYERBOT_GAMEPLAY_TEST HUNT_PLANNING_START")
+        return true
+    end
     if mode == "adaptive_challenge" then
         assert(player:setVocation(4), "adaptive challenge fixture could not select Knight")
 		F.selectHealthPotion(player)
+		F.removeAllHealthPotions(player)
+		assert(player:addItem(F.healthPotionItemId, 10), "adaptive challenge fixture could not prepare healing supplies")
         local requiredExperience = Game.getExperienceForLevel(9) - player:getExperience()
         if requiredExperience > 0 then player:addExperience(requiredExperience) end
         assert(player:getLevel() == 9 and player:learnSpell("Light Healing"), "adaptive challenge fixture could not prepare learned Light Healing")
@@ -562,6 +642,30 @@ function F.login.onLogin(player)
     end
     if mode == "navigation" then F.createTemporaryBlockers(); F.suppressNearbyMonsters(player:getId()); print("PLAYERBOT_GAMEPLAY_TEST NAVIGATION_START"); return true end
     if mode == "navigation_recovery" then F.suppressNearbyMonsters(player:getId()); print("PLAYERBOT_GAMEPLAY_TEST NAVIGATION_RECOVERY_START"); return true end
+    if mode == "carlin_service_route" then
+        assert(player:teleportTo(F.carlinServiceRouteStart), "Carlin service route fixture could not reach its start")
+        F.suppressNearbyMonsters(player:getId())
+        print("PLAYERBOT_GAMEPLAY_TEST CARLIN_SERVICE_ROUTE_START")
+        return true
+    end
+    if mode == "target_attacker_priority" then
+        F.suppressNearbyMonsters(player:getId())
+        local position = player:getPosition()
+        local monster = Game.createMonster(F.emptyMonsterName, Position(position.x + 1, position.y, position.z), true, true)
+        assert(monster, "target priority fixture could not create its initial target")
+        addEvent(F.spawnTargetPriorityAttacker, 1100, player:getId(), monster:getId())
+        print("PLAYERBOT_GAMEPLAY_TEST TARGET_PRIORITY_START " .. monster:getId())
+        return true
+    end
+    if mode == "mutable_portal_route" then
+        assert(player:teleportTo(F.mutablePortalRouteStart), "Mutable portal route fixture could not reach its start")
+        if player:getItemCount(2554) == 0 then
+            assert(player:addItem(2554, 1), "Mutable portal route fixture could not add a shovel")
+        end
+        F.suppressNearbyMonsters(player:getId())
+        print("PLAYERBOT_GAMEPLAY_TEST MUTABLE_PORTAL_ROUTE_START")
+        return true
+    end
     if mode == "patrol_recovery" then F.suppressNearbyMonsters(player:getId()); print("PLAYERBOT_GAMEPLAY_TEST PATROL_RECOVERY_START"); return true end
     if mode == "healing" then
         F.suppressNearbyMonsters(player:getId())

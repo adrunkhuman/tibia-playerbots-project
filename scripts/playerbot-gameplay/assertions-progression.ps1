@@ -36,6 +36,28 @@ function Assert-PickupProgressionEvents {
     }
 }
 
+function Assert-UnreachableEquipmentProviderEvents {
+	param([string]$Logs)
+
+	$events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
+	$routeFailures = @($events | Where-Object {
+		$_.event -eq "navigation_progress" -and $_.result -eq "failed" -and
+		$_.reason -eq "route_unavailable"
+	})
+	$goalFailure = @($events | Where-Object {
+		$_.event -eq "goal_result" -and $_.goal -eq "buy_equipment" -and
+		$_.result -eq "failed" -and $_.reason -eq "route_unavailable"
+	})
+	$purchaseActions = @($events | Where-Object {
+		$_.event -eq "action_result" -and $_.action -in @("buy_equipment", "equip_equipment")
+	})
+	$terminal = @($events | Where-Object { $_.event -eq "terminal" })
+	if ($routeFailures.Count -ne 1 -or $goalFailure.Count -ne 1 -or
+		$purchaseActions.Count -ne 0 -or $terminal.Count -ne 0) {
+		throw "Unreachable NPC approach was not bounded. routeFailures=$($routeFailures.Count), goalFailure=$($goalFailure.Count), purchaseActions=$($purchaseActions.Count), terminal=$($terminal.Count)."
+	}
+}
+
 function Assert-PickupProgressionRestartEvents {
     param([string]$Logs)
 
@@ -279,10 +301,16 @@ function Assert-StaminaProjectionEvents {
         $expected = $candidate.experience_per_minute * $candidate.observed_correction * $multiplier *
             $candidate.available_hunt_seconds / 60.0
         $tolerance = [Math]::Max(0.1, [Math]::Abs($expected) * 0.01)
-        if ($candidate.stamina_minutes -ne $StaminaMinutes -or
-            [Math]::Abs($candidate.stamina_experience_multiplier - $multiplier) -gt 0.01 -or
-            [Math]::Abs($candidate.projected_experience - $expected) -gt $tolerance -or
-            [Math]::Abs($candidate.score - $candidate.projected_experience) -gt 0.01) {
+		$corridorPenalty = if ($candidate.corridor_danger_available) {
+			[Math]::Min(0.75, $candidate.corridor_danger_ratio * 0.5)
+		} else {
+			0.0
+		}
+		$expectedScore = $candidate.projected_experience * (1.0 - $corridorPenalty)
+		if ($candidate.stamina_minutes -ne $StaminaMinutes -or
+			[Math]::Abs($candidate.stamina_experience_multiplier - $multiplier) -gt 0.01 -or
+			[Math]::Abs($candidate.projected_experience - $expected) -gt $tolerance -or
+			[Math]::Abs($candidate.score - $expectedScore) -gt $tolerance) {
             throw "Hunt projection did not apply the weighted stamina multiplier at $StaminaMinutes minutes."
         }
     }
@@ -299,42 +327,34 @@ function Assert-HuntRegionPlanningEvents {
     $hit = @($scored | Where-Object { $_.cache -eq "hit" })
 	$cancelled = @($events | Where-Object { $_.event -eq "hunt_region_scan" -and $_.phase -eq "cancelled" })
 	$staleRevision = @($events | Where-Object { $_.event -eq "hunt_region_scan" -and $_.phase -eq "stale_revision" })
-	$scoringYields = @($events | Where-Object { $_.event -eq "hunt_region_scan" -and $_.phase -eq "scoring_yield" })
-    $yields = @($events | Where-Object {
-        $_.event -eq "hunt_region_scan" -and $_.phase -eq "reachability_yield" -and
-        $_.pathfinding_calls -ge 1 -and $_.batch_pathfinding_calls -le 1 -and $_.yields -ge 1
+    $topologyScans = @($events | Where-Object {
+        $_.event -eq "hunt_region_scan" -and $_.route_validation_strategy -eq "topology_execution_validation"
     })
     $selections = @($events | Where-Object { $_.event -eq "hunt_region_selection" -and $_.result -eq "selected" })
     $selection = if ($selections.Count -gt 0) { $selections[$selections.Count - 1] } else { $null }
     $candidates = @($events | Where-Object { $_.event -eq "hunt_region_candidate" })
-    $unreachableBeforeSelection = @($candidates | Where-Object {
-        $_.rejection_reason -eq "unreachable" -and $selection -and $_.region_id -lt $selection.region_id
-    })
     $outsideLocalFixture = @($candidates | Where-Object {
-        [Math]::Max([Math]::Abs($_.center.x - 32105), [Math]::Abs($_.center.y - 32195)) -gt 32
-    })
+		[Math]::Max([Math]::Abs($_.center.x - 32360), [Math]::Abs($_.center.y - 31782)) -gt 32
+	})
     $completed = @($events | Where-Object {
         $_.event -eq "hunt_region_scan" -and $_.phase -eq "selected" -and $_.decision_latency_us -gt 0 -and
         $_.expanded_nodes -ge 0
     })
     $selectedCandidate = if ($selection) { @($candidates | Where-Object { $_.region_id -eq $selection.region_id }) } else { @() }
-    $reachableCandidates = @($candidates | Where-Object { $_.suitable -and $_.reachable })
+	$reachableCandidates = @($candidates | Where-Object { $_.suitable -and $_.reachable })
     $bestScore = if ($reachableCandidates.Count -gt 0) { ($reachableCandidates | Measure-Object -Property score -Maximum).Maximum } else { $null }
-    $nodeBudget = @($candidates | Where-Object { $_.rejection_reason -eq "navigation_node_budget" })
-    $nodeBudgetMisclassified = @($nodeBudget | Where-Object {
-        $regionId = $_.region_id
-        @($candidates | Where-Object { $_.region_id -eq $regionId -and $_.rejection_reason -eq "unreachable" }).Count -gt 0
-    })
-    $tooManyPathCalls = @($events | Where-Object {
-        $_.event -eq "hunt_region_scan" -and $_.phase -eq "reachability_yield" -and $_.batch_pathfinding_calls -gt 1
-    })
-	if ($build.Count -lt 2 -or $hit.Count -lt 1 -or $cancelled.Count -ne 1 -or $staleRevision.Count -ne 1 -or $scoringYields.Count -lt 1 -or
-        $yields.Count -lt 1 -or $tooManyPathCalls.Count -ne 0 -or -not $selection -or $selectedCandidate.Count -ne 1 -or
-        $bestScore -eq $null -or [Math]::Abs($selectedCandidate[0].score - $bestScore) -gt 0.01 -or
-        $nodeBudget.Count -lt 1 -or $nodeBudgetMisclassified.Count -ne 0 -or
-        $unreachableBeforeSelection.Count -lt 1 -or $outsideLocalFixture.Count -lt 1 -or $completed.Count -lt 1) {
-		throw "Hunt planning telemetry was incomplete. build=$($build.Count), hit=$($hit.Count), cancelled=$($cancelled.Count), stale=$($staleRevision.Count), scoring_yields=$($scoringYields.Count), yields=$($yields.Count), over_budget=$($tooManyPathCalls.Count), selection=$($selection.Count), fallback=$($unreachableBeforeSelection.Count), outside=$($outsideLocalFixture.Count), completed=$($completed.Count)."
-    }
+	$completedTopology = @($completed | Where-Object {
+		$_.bound_satisfied -and $_.pathfinding_calls -ge 1
+	})
+	$routeValidations = @($candidates | Where-Object { $_.route_validation_attempted })
+	if ($build.Count -lt 2 -or $hit.Count -lt 1 -or $cancelled.Count -ne 1 -or $staleRevision.Count -ne 1 -or
+		$topologyScans.Count -lt 1 -or $routeValidations.Count -lt 1 -or -not $selection -or $selectedCandidate.Count -ne 1 -or
+		$bestScore -eq $null -or [Math]::Abs($selectedCandidate[0].score - $bestScore) -gt 0.01 -or
+		-not $selectedCandidate[0].topology_reachable -or -not $selectedCandidate[0].route_validation_attempted -or
+		-not $selectedCandidate[0].reachable -or -not $selectedCandidate[0].corridor_danger_available -or
+		$selectedCandidate[0].corridor_samples -lt 1 -or $outsideLocalFixture.Count -lt 1 -or $completedTopology.Count -lt 1) {
+		throw "Hunt planning telemetry was incomplete. build=$($build.Count), hit=$($hit.Count), cancelled=$($cancelled.Count), stale=$($staleRevision.Count), topology_scans=$($topologyScans.Count), route_validations=$($routeValidations.Count), selection=$($selection.Count), outside=$($outsideLocalFixture.Count), completed=$($completedTopology.Count)."
+	}
 }
 
 function Assert-AdaptiveChallengeEvents {
@@ -380,7 +400,7 @@ function Assert-AdaptiveChallengeEvents {
         $fixture.Count -ne 1 -or -not $fixture[0].recovery_spell_legal -or $fixture[0].recovery_spell_casts -lt 1 -or
         $fixture[0].equipment_pressure_after -gt $fixture[0].equipment_pressure_before -or
 		$fixture[0].idle_observed_seconds -ne 0 -or $fixture[0].active_observed_seconds -ne 30 -or
-		-not $fixture[0].in_band_outranks_easier -or -not $fixture[0].wounded_lethal -or
+		-not $fixture[0].higher_score_preferred -or -not $fixture[0].attacker_priority_preferred -or -not $fixture[0].wounded_lethal -or
 		-not $fixture[0].zero_health_lethal -or -not $fixture[0].helper_scope_exhausted -or
 		$candidates.Count -lt 1 -or $unsafeLethalRecovery.Count -ne 0 -or $exhausted.Count -ne 3 -or
 		@($exhausted | Where-Object { $_.attempt -notin @(1, 2, 3) }).Count -ne 0 -or

@@ -78,7 +78,8 @@ function F.suppressNearbyMonsters(playerId)
         if creature:isMonster() and creature:getName() ~= F.emptyMonsterName and creature:getName() ~= F.lootMonsterName and
             creature:getName() ~= F.nonlootableMonsterName and creature:getName() ~= F.containerDeathItemMonsterName and
             creature:getName() ~= F.valueMonsterName and creature:getName() ~= "Playerbot Food Cap Corpse" and
-            creature:getName() ~= F.spellTargetMonsterName and creature:getName() ~= F.corpseBlockerMonsterName then
+            creature:getName() ~= F.spellTargetMonsterName and creature:getName() ~= F.corpseBlockerMonsterName and
+            creature:getName() ~= F.defensiveMonsterName then
             creature:remove()
         end
     end
@@ -101,6 +102,45 @@ function F.hidePursuitMonster(playerId, monsterId, distance)
     assert(monster:teleportTo(Position(position.x + distance, position.y, position.z), true),
         "target pursuit fixture could not hide the monster")
     print("PLAYERBOT_GAMEPLAY_TEST TARGET_PURSUIT_HIDDEN " .. monsterId)
+end
+
+function F.moveEquipmentProvider(playerId, startX, startY, startZ, attempts)
+    local player = Player(playerId)
+    assert(player and not player:isRemoved(), "Bot One disappeared before the equipment provider moved")
+    local current = player:getPosition()
+    if current.x == startX and current.y == startY and current.z == startZ then
+        assert(attempts < 200, "Bot One did not start the equipment-provider route")
+        addEvent(F.moveEquipmentProvider, 100, playerId, startX, startY, startZ, attempts + 1)
+        return
+    end
+
+    local provider
+    for _, creature in ipairs(Game.getSpectators(current, true, false, 200, 200, 200, 200)) do
+        local npc = Npc(creature)
+        if npc and npc:getName() == "Cornelia" then
+            provider = npc
+            break
+        end
+    end
+    assert(provider and not provider:isRemoved(), "equipment provider was unavailable for relocation")
+    local origin = provider:getPosition()
+    for radius = 7, 10 do
+        for x = -radius, radius do
+            for y = -radius, radius do
+                if math.max(math.abs(x), math.abs(y)) == radius then
+                    local destination = Position(origin.x + x, origin.y + y, origin.z)
+                    local tile = Tile(destination)
+                    if tile and tile:isWalkable() and provider:teleportTo(destination, true) then
+                        print("PLAYERBOT_GAMEPLAY_TEST EQUIPMENT_PROVIDER_MOVED " .. provider:getId() .. " " ..
+                            origin.x .. ":" .. origin.y .. ":" .. origin.z .. " " ..
+                            destination.x .. ":" .. destination.y .. ":" .. destination.z)
+                        return
+                    end
+                end
+            end
+        end
+    end
+    error("equipment provider could not be relocated to a walkable tile")
 end
 
 function F.removeBlockers(firstId, secondId, thirdId)
