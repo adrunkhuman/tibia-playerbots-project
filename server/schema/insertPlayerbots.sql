@@ -2,8 +2,8 @@ INSERT INTO `accounts` (`name`, `password`, `type`, `premium_ends_at`, `email`, 
 VALUES ('bot-one', SHA1('bot-one'), 1, 0, '', 0)
 ON DUPLICATE KEY UPDATE `id` = `id`;
 
--- Bot One starts as a freshly promoted mainland Knight. Focused Rookgaard
--- fixtures replace this state when they exercise the earlier progression stages.
+-- Bot One starts as a freshly promoted mainland Knight at the Carlin temple.
+-- Focused Rookgaard fixtures replace this state for earlier progression stages.
 
 CREATE TABLE IF NOT EXISTS `player_bots` (
     `player_id` int NOT NULL,
@@ -22,7 +22,7 @@ SELECT
     'Bot One', 1, `id`, 8, 4, 185,
     185, 4200, 68, 76, 78,
     39, 128, 0, 2, 0, 35,
-    35, 0, 100, 2, 32369, 32241, 7,
+    35, 0, 100, 4, 32360, 31782, 7,
     470, 1, 2520, 20, 20, 400
 FROM `accounts`
 WHERE `name` = 'bot-one'

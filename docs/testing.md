@@ -64,11 +64,10 @@ Navigation or looting changes require at least:
 
 ```powershell
 pwsh -File scripts/test-playerbot-gameplay.ps1 -FullNavigation -CorpseLoot
-pwsh -File scripts/test-playerbot-gameplay.ps1 -TargetPursuit -Focused
-pwsh -File scripts/test-playerbot-gameplay.ps1 -SpellUse -Focused
-pwsh -File scripts/test-playerbot-gameplay.ps1 -MagicTraining -Focused
 ```
 
+Target-pursuit changes also require
+`pwsh -File scripts/test-playerbot-gameplay.ps1 -TargetPursuit -Focused`.
 `-TargetPursuit` runs successful `target_pursuit` reacquisition and bounded
 `target_pursuit_abandon` fallback scenarios.
 
@@ -104,10 +103,12 @@ auto-loaded and registers the fixture events.
 
 ### Limits
 
-Gameplay modes use fixed destinations and controlled worlds. They do not
-validate dynamic Rookgaard region generation, threat cooldowns, observed XP
-correction, oscillation suppression, or `GOD Admin` notifications. Observe those
-on the normal stack:
+Most gameplay modes use fixed destinations and controlled worlds.
+`-HuntRegionPlanning` is a controlled real-map Carlin fixture that validates
+loaded spawn-region discovery, cache rebuilds and hits, topology reachability,
+cancellation, stale revisions, and non-local candidates. It does not prove a
+long-running Rookgaard soak, live combat sampling, oscillation suppression, or
+`GOD Admin` notifications. Observe those on the normal stack:
 
 ```powershell
 $env:PLAYERBOT_HUNT_DURATION_SECONDS = "180"
@@ -121,7 +122,7 @@ Inspect `hunt_region_candidate`, `hunt_region_scan`, `hunt_region_selection`,
 Remove the environment override and recreate the server afterward.
 
 Focused tests prove deterministic frontier transitions, not soak stability. The
-default five-minute development hunt is smoke evidence. Use a separate normal
+default 25-minute development hunt is smoke evidence. Use a separate normal
 stack run with 20 to 60 minute hunts to assess sustained escalation, recovery
 backoff, scan retries, and telemetry volume; short hunts can end before the bot
 reaches deep patrol points or accumulates enough active-combat evidence.
