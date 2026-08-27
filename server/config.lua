@@ -5,7 +5,7 @@ blockLogin = false
 blockLoginText = "Server is closed for bug fixing."
 showPackets = false
 playerbotEnabled = os.getenv("PLAYERBOT_ENABLED") ~= "false"
-playerbotHuntDurationSeconds = tonumber(os.getenv("PLAYERBOT_HUNT_DURATION_SECONDS")) or 300
+playerbotHuntDurationSeconds = tonumber(os.getenv("PLAYERBOT_HUNT_DURATION_SECONDS")) or 1500
 playerbotRelogDelaySeconds = tonumber(os.getenv("PLAYERBOT_RELOG_DELAY_SECONDS")) or 5
 playerbotMaxConsecutiveDeaths = tonumber(os.getenv("PLAYERBOT_MAX_CONSECUTIVE_DEATHS")) or 3
 playerbotSpeedBonus = tonumber(os.getenv("PLAYERBOT_SPEED_BONUS")) or 300

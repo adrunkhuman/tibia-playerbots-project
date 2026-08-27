@@ -18,12 +18,12 @@ itself fed and healed, sells to NPCs and banks the money, claims supported quest
 rewards and equips upgrades it finds, recovers from death, and eventually talks
 to the Oracle and leaves for the mainland.
 
-Normal hunting and Oracle navigation derive destinations from loaded map and
-spawn data rather than following an ordered route. Shops, spell trainers, and
-travel providers are discovered from loaded NPC offers; bespoke banker and
-Oracle roles remain explicit. The planner is deliberately bounded to Rookgaard
-while the behavior model is still being established; progression bounds and the
-depot location remain configured.
+Normal hunting and Oracle navigation derive destination goals from loaded map
+and spawn data rather than following an ordered route. Shops, spell trainers,
+travel providers, and bankers are discovered from loaded NPC state; the bespoke
+Oracle role remains explicit. Shared map topology bounds global discovery while
+detailed route planning retains per-decision limits. The navigator remains a
+prototype rather than a complete hierarchical world router.
 
 ## Design constraints
 
@@ -58,7 +58,7 @@ A bot observes, proposes goal candidates, scores them, commits to one, works it,
 verifies the result, and reevaluates. Survival and pending irreversible actions
 outrank anything discretionary.
 
-The Rookgaard hunt planner derives regions from loaded spawns, estimates threat
+The hunt planner derives regions from loaded spawns, estimates threat
 against the bot's health, armor, defense, weapon, and skill, clusters suitable
 spawns, and checks reachability. Selected regions provide patrol destinations;
 navigation callers provide destination goals rather than transition

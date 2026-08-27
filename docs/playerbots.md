@@ -33,7 +33,7 @@ development account `bot-one`, character `Bot One`, and `player_bots` registry.
 Provisioning is idempotent: it does not restore spent money, replace occupied
 equipment slots, or take over an unrelated same-named or deleted character.
 
-On a clean schema, Bot One starts as a level 8 Knight at the Thais temple with
+On a clean schema, Bot One starts as a level 8 Knight at the Carlin temple with
 sword and shielding skill 20, legion helmet, chain armor, studded legs, leather
 boots, Carlin sword, copper shield, backpack, rope, shovel, and 400 gp bank
 balance. It starts without carried money, food, or potions. Global `freePremium`
@@ -84,14 +84,16 @@ no command.
 
 ## Navigation and hunting
 
-Callers provide destinations, not ordered transition checkpoints. The bounded
-navigator searches loaded map state within a 192-tile margin around its
-endpoints and stops after 100,000 expanded nodes. It supports ordinary floor
-changes, configured ladders, rope and shovel holes, direct-use holes, and
-unlocked doors. Arbitrary map teleports are not navigation edges. Cardinal
-movement costs 10; diagonal movement costs 30. Failed steps are excluded for 10
-seconds. Repeated A-B oscillation
-suppresses the implicated transition for two minutes.
+Callers provide exact, within-range, or alternative destination goals rather
+than ordered transition checkpoints. Shared map-derived topology indexes static
+walk regions and directed floor changes, ladders, rope and shovel holes,
+direct-use holes, map teleports, unlocked doors, and level doors. Keyed or quest
+doors with an Action ID remain unavailable unless they are level doors. Detailed
+planning searches loaded map state within a 1024-tile endpoint margin and stops
+after 100,000 expanded nodes. Cardinal movement costs 10; diagonal movement
+costs 30. Failed steps are excluded for 10 seconds. Repeated A-B oscillation
+suppresses the implicated transition for two minutes. Topology is rebuilt after
+map reload and mutable transition changes.
 
 Hunt regions come from all loaded hostile, attackable spawns. The shared cache
 groups overlapping eight-tile spawn kernels through spatial buckets. Each
@@ -127,9 +129,9 @@ does not credit potion or spell recovery before that lethal point.
 `predicted_lethal` compares unrecovered damage with snapshotted current health.
 `recovery.available_before_lethal` is therefore currently zero.
 
-Each controller starts with a `0.20` pressure frontier and rewards the highest
-projected-XP reachable region in its `+/-0.05` band. Safer regions remain a
-fallback. Thirty seconds of active combat, at least one recorded kill,
+Each controller starts with a `0.20` pressure frontier. Every nonlethal region at
+or below the frontier plus `0.05` headroom competes by projected XP; there is no
+minimum pressure band. Thirty seconds of active combat, at least one recorded kill,
 near-full health, and no verified recovery escalates the frontier by `0.025`.
 Verified potion or healing-spell pressure, observed danger, or death backs it
 off by `0.05`; the next two qualifying hunts hold before escalation resumes.
@@ -184,20 +186,23 @@ for five minutes after three unverified uses.
 
 Loaded NPC state is the source of truth for structured capabilities. Every live
 NPC with non-empty `getShopOffers()`, `getSpellOffers()`, or registered
-`getTravelOffers()` is a shop, spell trainer, or travel provider respectively;
-these capabilities do not require duplicate XML labels. The exact
-`playerbot_service` roles `banker` and `oracle` remain explicit because their
-bespoke dialogue has no structured native interface. `disabled` is the explicit
-override for suppressing an NPC's otherwise discoverable structured offers.
+`getTravelOffers()` is a shop, spell trainer, or travel provider respectively.
+Banker scripts register the same loaded-state capability with `Npc():addBanker()`.
+These capabilities do not require duplicate XML labels. The
+`playerbot_service` role `oracle` remains explicit because its bespoke dialogue
+has no structured native interface. `disabled` is the explicit override for
+suppressing an NPC's otherwise discoverable structured capabilities.
 The bot greets the selected NPC, treats a private reply as focus acknowledgement,
 and opens the normal trade window. Reply text is not interpreted. Provider
 selection is global, but route validation is bounded. Cost-ordered provider
 scans apply their route and catalog budgets only after discovery, rather than
 letting NPC registration order decide which providers are considered. Service
 validates one provider approach per scheduler decision and yields for 500 ms
-before continuing an unfinished provider search. Each provider is limited to
-eight diverse approach tiles; an unreachable provider is suppressed for the
-current workflow and selection continues with the next matching provider.
+before continuing an unfinished provider search. An exhausted local range-goal
+suppresses the provider for the current workflow, and selection continues with
+the next matching provider.
+Movement by at most eight tiles on the same floor triggers a fresh local route,
+while larger or cross-floor movement rejects the provider.
 Equipment discovery examines at most 16 providers and 64 catalog offers per goal
 scan, validates at most four provider routes, and resumes from later providers on
 the next scan.
@@ -470,7 +475,7 @@ retries, and abandonment.
 | Environment variable | Default | Contract |
 | -------------------- | ------: | -------- |
 | `PLAYERBOT_ENABLED` | `true` | Only exact `false` disables controller startup. Provisioning still runs. |
-| `PLAYERBOT_HUNT_DURATION_SECONDS` | `300` | Minimum one second. |
+| `PLAYERBOT_HUNT_DURATION_SECONDS` | `1500` | Minimum one second. |
 | `PLAYERBOT_RELOG_DELAY_SECONDS` | `5` | Initial death delay; exponential backoff caps at 60 seconds. |
 | `PLAYERBOT_MAX_CONSECUTIVE_DEATHS` | `3` | Minimum one; the next death is abandoned. |
 | `PLAYERBOT_SPEED_BONUS` | `300` | Login movement delta clamped from `0` through `1000`; combat and action delays do not change. |

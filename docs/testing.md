@@ -121,7 +121,7 @@ Inspect `hunt_region_candidate`, `hunt_region_scan`, `hunt_region_selection`,
 Remove the environment override and recreate the server afterward.
 
 Focused tests prove deterministic frontier transitions, not soak stability. The
-default five-minute development hunt is smoke evidence. Use a separate normal
+default 25-minute development hunt is smoke evidence. Use a separate normal
 stack run with 20 to 60 minute hunts to assess sustained escalation, recovery
 backoff, scan retries, and telemetry volume; short hunts can end before the bot
 reaches deep patrol points or accumulates enough active-combat evidence.
