@@ -13,11 +13,13 @@ shutdown and death recovery use the existing player save path rather than a
 parallel persistence mechanism.
 
 The controller lifecycle is `Running`, `Paused`, or `Stopped`. `Running`
-evaluates one turn at a time. `Paused` suppresses future turns at a fixture
+evaluates one turn at a time and keeps at most one scheduler callback pending.
+An earlier requested deadline replaces a later pending callback, and generation
+checks suppress stale callbacks. `Paused` suppresses future turns at a fixture
 restart checkpoint without emitting a terminal event. `Stopped` is terminal: it
-clears active planning and navigation, emits one `terminal` event, and performs
-no later turns. A restart creates a fresh `Running` controller from persisted
-player state.
+cancels the pending callback, clears active planning and navigation, emits one
+`terminal` event, and performs no later turns. A restart creates a fresh
+`Running` controller from persisted player state.
 
 `PlayerBotController` owns scheduling, player lookup, lifecycle, turn routing,
 world-command execution, navigation, survival, service, depot, and progression.
@@ -92,8 +94,11 @@ doors with an Action ID remain unavailable unless they are level doors. Detailed
 planning searches loaded map state within a 1024-tile endpoint margin and stops
 after 100,000 expanded nodes. Cardinal movement costs 10; diagonal movement
 costs 30. Failed steps are excluded for 10 seconds. Repeated A-B oscillation
-suppresses the implicated transition for two minutes. Topology is rebuilt after
-map reload and mutable transition changes.
+suppresses the implicated transition for two minutes. Topology is built at
+startup and rebuilt after successful actions, items, scripts, or full reload
+commands. Other runtime map or transition mutations do not invalidate it
+automatically; use one of those supported reloads or restart the server before
+relying on topology-based planning again.
 
 Hunt regions come from all loaded hostile, attackable spawns. The shared cache
 groups overlapping eight-tile spawn kernels through spatial buckets. Each

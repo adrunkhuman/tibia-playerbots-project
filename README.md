@@ -12,11 +12,12 @@ relationships that persist. The nearest relative is the WoW Playerbots project.
 
 ## What a bot does
 
-Starting at level 1 in Rookgaard, a bot picks hunting grounds by evaluating live
-spawns against its own gear, fights what it can handle, loots by value, keeps
-itself fed and healed, sells to NPCs and banks the money, claims supported quest
-rewards and equips upgrades it finds, recovers from death, and eventually talks
-to the Oracle and leaves for the mainland.
+On a clean development stack, Bot One starts as a level 8 Knight in Carlin. It
+picks hunting grounds by evaluating live spawns against its own gear, fights what
+it can handle, loots by value, keeps itself fed and healed, sells to NPCs and
+banks the money, claims supported quest rewards and equips upgrades it finds,
+and recovers from death. Focused fixtures also exercise the earlier lifecycle
+from level 1 in Rookgaard through Oracle departure to the mainland.
 
 Normal hunting and Oracle navigation derive destination goals from loaded map
 and spawn data rather than following an ordered route. Shops, spell trainers,
