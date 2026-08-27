@@ -27,7 +27,7 @@ struct PlayerBotHuntPlanningSnapshot {
 	uint16_t staminaMinutes = 0;
 	uint64_t cacheRevision = 0;
 	uint64_t topologyGeneration = 0;
-	std::set<Position> excludedRegions;
+	std::set<uint64_t> excludedVariants;
 	bool canUseRope = false;
 	bool canUseShovel = false;
 };
@@ -46,23 +46,16 @@ struct PlayerBotHuntPlanningScoreWork {
 	size_t candidateIndex = 0;
 };
 
-struct PlayerBotHuntPlanningRouteWork {
-	size_t regionIndex = 0;
-};
-
 enum class PlayerBotHuntPlanningProgress : uint8_t {
 	ScoringYield,
 	Scored,
-	ReachabilityYield,
-	ReadyForSelection,
 };
 
-// A session retains its start snapshot through scoring and then reachability.
+// A session retains its start snapshot through scoring.
 // For each batch, consume work until none remains and report each item exactly
 // once before calling the matching complete method. completeScoring sorts the
 // regions and advances the phase when all candidates are scored; otherwise it
-// resets the scoring budget for the next turn. beginTurn resets reachability
-// limits, and completeRouteValidation reports whether another turn is needed.
+// resets the scoring budget for the next turn.
 // Discard the session when invalidated() reports that its snapshot is stale.
 class PlayerBotHuntPlanningSession
 {
@@ -84,12 +77,7 @@ class PlayerBotHuntPlanningSession
 		uint32_t totalCandidates() const { return candidateCount; }
 		uint32_t scoredCandidates() const { return scoredCandidateCount; }
 		uint32_t suitableCandidates() const { return suitableCandidateCount; }
-		uint32_t pathfindingCalls() const { return routeValidationCalls; }
-		uint32_t batchPathfindingCalls() const { return routeValidationCallsThisTurn; }
-		uint64_t expandedNodes() const { return routeValidationExpandedNodes; }
 		uint32_t yields() const { return yieldCount; }
-		uint32_t deferredRouteValidations() const { return deferredRouteValidationCount; }
-		bool boundSatisfied() const { return routeBoundSatisfied; }
 		bool topologySelection() const { return topologyDistances != nullptr; }
 
 		void beginTurn();
@@ -98,22 +86,14 @@ class PlayerBotHuntPlanningSession
 		void addScoringTime(uint64_t elapsedUs) { totalScoringTimeUs += elapsedUs; }
 		PlayerBotHuntPlanningProgress completeScoring();
 
-		std::optional<PlayerBotHuntPlanningRouteWork> nextRouteValidationWork(uint32_t maximumCalls);
-		void routeValidationCompleted(size_t regionIndex, bool pathfindingCalled, bool reachable, bool nodeLimit, uint64_t expandedNodes,
-		                              uint32_t travelSteps, double estimatedTravelSeconds,
-		                              double staminaExperienceMultiplier, const PlayerBotHuntCorridorDanger& corridorDanger,
-		                              uint32_t huntDurationSeconds);
-		PlayerBotHuntPlanningProgress completeRouteValidation();
-
 		const std::vector<PlayerBotHuntRegion>& regions() const { return scoredRegions; }
 		const PlayerBotHuntRegion& region(size_t index) const { return scoredRegions.at(index); }
 	private:
 		void refreshSuitableCandidates();
-		bool canStopRouteValidation();
 
 		enum class Phase : uint8_t {
 			Scoring,
-			Reachability,
+			Ready,
 		};
 
 		std::vector<PlayerBotHuntRegion> scoredRegions;
@@ -123,20 +103,13 @@ class PlayerBotHuntPlanningSession
 		PlayerBotHuntPlanningProfile planningProfile;
 		PlayerBotHuntPlanningSnapshot planningSnapshot;
 		std::shared_ptr<const PlayerBotTopologyDistances> topologyDistances;
-		size_t nextCandidate = 0;
 		size_t nextScoringCandidate = 0;
 		uint32_t scoringCandidatesThisTurn = 0;
-		uint32_t routeValidationsThisTurn = 0;
-		uint32_t routeValidationCalls = 0;
-		uint32_t routeValidationCallsThisTurn = 0;
-		uint64_t routeValidationExpandedNodes = 0;
 		uint32_t yieldCount = 0;
 		uint32_t suitableCandidateCount = 0;
 		uint32_t scoredCandidateCount = 0;
-		uint32_t deferredRouteValidationCount = 0;
 		uint32_t candidateCount = 0;
 		bool scanCacheHit = false;
-		bool routeBoundSatisfied = false;
 		uint64_t scanSnapshotTimeUs = 0;
 		uint64_t scanClusteringTimeUs = 0;
 		uint64_t topologyDistanceTimeUs = 0;

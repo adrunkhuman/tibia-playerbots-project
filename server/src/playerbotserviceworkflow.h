@@ -45,6 +45,9 @@ struct PlayerBotServiceRouteObservation {
 	PlayerBotServiceRouteResult result = PlayerBotServiceRouteResult::NotObserved;
 	uint32_t steps = 0;
 	uint64_t expandedNodes = 0;
+	uint32_t dangerCost = 0;
+	double maximumDanger = 0;
+	bool requiresNpcTravel = false;
 };
 
 struct PlayerBotServiceDiscovery {
@@ -156,6 +159,7 @@ class PlayerBotServiceWorkflow
 		std::set<Position> rejectedApproaches;
 		std::set<uint32_t> unavailableProviderIds;
 		std::map<uint32_t, uint32_t> providerRouteCosts;
+		std::set<uint32_t> providersRequiringNpcTravel;
 };
 
 #endif

@@ -102,16 +102,16 @@ class PlayerBotHuntPolicy
 
 		PlayerBotHuntCombatSummary combatSummary() const;
 		PlayerBotHuntChallengeUpdate updateChallengeFrontier(const PlayerBotHuntChallengeSample& sample);
-		PlayerBotHuntPerformanceUpdate observePerformance(const Position& region,
+		PlayerBotHuntPerformanceUpdate observePerformance(uint64_t variantId,
 		                                                  const PlayerBotHuntPerformanceSample& sample);
 
 		double challengeFrontier() const { return frontier; }
-		const std::map<Position, PlayerBotHuntRegionPerformance>& regionPerformance() const { return performance; }
+		const std::map<uint64_t, PlayerBotHuntRegionPerformance>& regionPerformance() const { return performance; }
 
 	private:
 		PlayerBotHuntCombatEvidence evidence;
 		std::chrono::steady_clock::time_point lastSample;
-		std::map<Position, PlayerBotHuntRegionPerformance> performance;
+		std::map<uint64_t, PlayerBotHuntRegionPerformance> performance;
 		double frontier = 0.20;
 		uint8_t qualifyingHuntsToHold = 0;
 };

@@ -20,6 +20,8 @@ struct PlayerBotRouteEstimate {
 	Position approachPosition;
 	uint32_t steps = 0;
 	uint64_t expandedNodes = 0;
+	uint32_t dangerCost = 0;
+	double maximumDanger = 0;
 };
 
 struct PlayerBotRewardItemInspection {
@@ -154,6 +156,8 @@ struct PlayerBotSpellTrainingPlannerSnapshot {
 	uint64_t reserve = 0;
 	uint64_t totalMoney = 0;
 	bool reserveAvailable = false;
+	uint32_t maximumRouteDangerCost = 0;
+	double maximumRouteDanger = 0;
 	std::vector<PlayerBotSpellOfferSnapshot> offers;
 };
 
@@ -190,6 +194,8 @@ struct PlayerBotEquipmentProviderPlannerSnapshot {
 	uint64_t totalMoney = 0;
 	bool reserveAvailable = false;
 	uint32_t freeCapacity = 0;
+	uint32_t maximumRouteDangerCost = 0;
+	double maximumRouteDanger = 0;
 	std::vector<PlayerBotEquipmentProviderOfferSnapshot> offers;
 };
 
@@ -221,6 +227,8 @@ struct PlayerBotRewardPlannerSnapshot {
 	int32_t pickupBaseUtility = 0;
 	int32_t economicBaseUtility = 0;
 	int32_t huntUtility = 0;
+	double maximumTravelDanger = 0.08;
+	uint32_t maximumTravelDangerCost = 500;
 	std::vector<PlayerBotRewardCandidateSnapshot> candidates;
 };
 

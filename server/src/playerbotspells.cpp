@@ -367,6 +367,7 @@ bool PlayerBotController::findSpellTraining(Player& player, const Position& posi
 		bool routeReachable = false;
 		Position trainerApproach;
 		std::deque<PlayerBotNavigationStep> trainerSteps;
+		PlayerBotRouteEstimate trainerRoute;
 		auto findTrainerApproach = [&]() {
 			if (routeEvaluated) {
 				return routeReachable;
@@ -413,7 +414,7 @@ bool PlayerBotController::findSpellTraining(Player& player, const Position& posi
 				uint64_t expandedNodes = 0;
 				const auto startedAt = std::chrono::steady_clock::now();
 				const PlayerBotNavigationRoutePlan routePlan = approach == position ? PlayerBotNavigationRoutePlan{} :
-					planNavigationRoute(player, approach, {},
+					planCompleteNavigationRoute(player, approach, {},
 					                    std::min(remainingPathNodes, maximumSpellTrainerPathNodesPerApproach));
 				const PlayerBotNavigationResult result = approach == position ? PlayerBotNavigationResult::Reached : routePlan.metrics.result;
 				if (approach != position) {
@@ -428,6 +429,10 @@ bool PlayerBotController::findSpellTraining(Player& player, const Position& posi
 				}
 				trainerApproach = approach;
 				trainerSteps = std::move(steps);
+				trainerRoute = {true, false, approach,
+				    approach == position ? 0 : static_cast<uint32_t>(routePlan.metrics.steps), expandedNodes,
+				    approach == position ? 0 : routePlan.metrics.dangerCost,
+				    approach == position ? 0 : routePlan.metrics.maximumHealthLossPerSecond};
 				routeReachable = true;
 				return true;
 			}
@@ -450,12 +455,15 @@ bool PlayerBotController::findSpellTraining(Player& player, const Position& posi
 			offers.push_back({npc->getID(), npc->getPosition(), npc->getName(), offer.spellName, offer.keyword,
 			                  offer.price, offer.level, offer.premium, inScope, registryMatches, vocationEligible,
 			                  levelEligible, premiumEligible, alreadyLearned, suppliesReady,
-			                  {routeReachable, false, trainerApproach, static_cast<uint32_t>(trainerSteps.size()), 0}});
+			                  trainerRoute});
 			routes.push_back(trainerSteps);
 		}
 	}
+	const PlayerBotNavigationRiskProfile risk;
 	const PlayerBotSpellTrainingDecision decision = spellTrainingPlanner.select({reserve, totalMoney,
-	    reserve != std::numeric_limits<uint64_t>::max(), offers});
+	    reserve != std::numeric_limits<uint64_t>::max(),
+	    static_cast<uint32_t>(risk.maximumRouteHealthLoss * risk.healthLossCost),
+	    risk.maximumHealthLossPerSecond, offers});
 	for (size_t offerIndex = 0; offerIndex < offers.size(); ++offerIndex) {
 		const auto& offer = offers[offerIndex];
 		const auto rejection = std::find_if(decision.rejections.begin(), decision.rejections.end(),

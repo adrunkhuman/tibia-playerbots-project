@@ -58,6 +58,12 @@ namespace {
 		       (static_cast<uint64_t>(position.x) << 16) | position.y;
 	}
 
+	uint32_t saturatingAdd(uint32_t left, uint32_t right)
+	{
+		return left > std::numeric_limits<uint32_t>::max() - right ?
+		    std::numeric_limits<uint32_t>::max() : left + right;
+	}
+
 	bool isInsideSearchBounds(const Position& position, const Position& start, const PlayerBotNavigationGoal& goal)
 	{
 		int32_t minimumX = start.x;
@@ -185,7 +191,18 @@ namespace {
 	struct Parent {
 		Position position;
 		PlayerBotNavigationStep step;
+		uint32_t movementCost = 0;
+		uint32_t dangerCost = 0;
+		double danger = 0;
 	};
+}
+
+uint32_t PlayerBotNavigationCostPolicy::dangerCost(const Position& position, uint32_t exposureMs) const
+{
+	if (!enabled()) return 0;
+	const double expectedHealthLoss = std::max(0.0, dangerAt(position)) * exposureMs / 1000.0;
+	return static_cast<uint32_t>(std::min<double>(std::numeric_limits<uint32_t>::max(),
+	                                                std::ceil(expectedHealthLoss * risk.healthLossCost)));
 }
 
 bool playerBotResolveWalkTransition(const Position& from, Direction direction, PlayerBotWalkTransition& transition)
@@ -298,19 +315,22 @@ bool playerBotIsTraversableDoor(const Item& item)
 
 PlayerBotNavigationResult PlayerBotNavigator::plan(Player& player, const Position& destination, const std::set<Position>& blockedPositions,
                                                    std::deque<PlayerBotNavigationStep>& steps, uint64_t& expandedNodes,
-                                                   uint64_t maximumExpandedNodes, Position* closestPosition) const
+                                                   uint64_t maximumExpandedNodes, Position* closestPosition,
+	                                               const PlayerBotNavigationCostPolicy* costPolicy,
+	                                               PlayerBotNavigationCostSummary* costSummary) const
 
 {
 	return plan(player, PlayerBotNavigationGoal::exact(destination), blockedPositions, steps, expandedNodes,
-	            maximumExpandedNodes, closestPosition);
+	            maximumExpandedNodes, closestPosition, costPolicy, costSummary);
 }
 
 PlayerBotNavigationResult PlayerBotNavigator::plan(Player& player, const PlayerBotNavigationGoal& goal,
 	const std::set<Position>& blockedPositions, std::deque<PlayerBotNavigationStep>& steps,
-	uint64_t& expandedNodes, uint64_t maximumExpandedNodes, Position* closestPosition) const
+	uint64_t& expandedNodes, uint64_t maximumExpandedNodes, Position* closestPosition,
+	const PlayerBotNavigationCostPolicy* costPolicy, PlayerBotNavigationCostSummary* costSummary) const
 {
 	return planFrom(player, player.getPosition(), goal, blockedPositions, steps, expandedNodes, maximumExpandedNodes,
-	                closestPosition);
+	                closestPosition, costPolicy, costSummary);
 }
 
 bool PlayerBotNavigator::resolveMove(Player& player, const Position& from, Direction direction,
@@ -329,18 +349,22 @@ bool PlayerBotNavigator::resolveMove(Player& player, const Position& from, Direc
 PlayerBotNavigationResult PlayerBotNavigator::planFrom(Player& player, const Position& start, const Position& destination,
 	                                                    const std::set<Position>& blockedPositions,
 	                                                    std::deque<PlayerBotNavigationStep>& steps, uint64_t& expandedNodes,
-	                                                    uint64_t maximumExpandedNodes, Position* closestPosition) const
+	                                                    uint64_t maximumExpandedNodes, Position* closestPosition,
+	                                                    const PlayerBotNavigationCostPolicy* costPolicy,
+	                                                    PlayerBotNavigationCostSummary* costSummary) const
 {
 	return planFrom(player, start, PlayerBotNavigationGoal::exact(destination), blockedPositions, steps, expandedNodes,
-	                maximumExpandedNodes, closestPosition);
+	                maximumExpandedNodes, closestPosition, costPolicy, costSummary);
 }
 
 PlayerBotNavigationResult PlayerBotNavigator::planFrom(Player& player, const Position& start, const PlayerBotNavigationGoal& goal,
 	const std::set<Position>& blockedPositions, std::deque<PlayerBotNavigationStep>& steps,
-	uint64_t& expandedNodes, uint64_t maximumExpandedNodes, Position* closestPosition) const
+	uint64_t& expandedNodes, uint64_t maximumExpandedNodes, Position* closestPosition,
+	const PlayerBotNavigationCostPolicy* costPolicy, PlayerBotNavigationCostSummary* costSummary) const
 {
 	steps.clear();
 	expandedNodes = 0;
+	if (costSummary) *costSummary = {};
 	Position closest = start;
 	uint32_t closestCost = remainingCost(start, goal);
 	if (closestPosition) *closestPosition = closest;
@@ -356,19 +380,21 @@ PlayerBotNavigationResult PlayerBotNavigator::planFrom(Player& player, const Pos
 	open.push({searchHeuristic(start, goal), 0, start});
 
 	auto addCandidate = [&](const Position& from, uint32_t currentCost, const Position& to,
-	                        uint32_t edgeCost, const PlayerBotNavigationStep& step) {
+	                        uint32_t movementCost, uint32_t exposureMs, const PlayerBotNavigationStep& step) {
 		if (!isInsideSearchBounds(to, start, goal)) {
 			return;
 		}
-		const uint32_t newCost = currentCost + edgeCost;
+		const uint32_t dangerCost = costPolicy ? costPolicy->dangerCost(to, exposureMs) : 0;
+		const uint32_t edgeCost = saturatingAdd(movementCost, dangerCost);
+		const uint32_t newCost = saturatingAdd(currentCost, edgeCost);
 		const uint64_t key = positionKey(to);
 		auto existing = costs.find(key);
 		if (existing != costs.end() && existing->second <= newCost) {
 			return;
 		}
 		costs[key] = newCost;
-		parents[key] = {from, step};
-		open.push({newCost + searchHeuristic(to, goal), newCost, to});
+		parents[key] = {from, step, movementCost, dangerCost, costPolicy ? costPolicy->dangerAt(to) : 0};
+		open.push({saturatingAdd(newCost, searchHeuristic(to, goal)), newCost, to});
 	};
 
 	while (!open.empty() && expandedNodes < maximumExpandedNodes) {
@@ -395,6 +421,12 @@ PlayerBotNavigationResult PlayerBotNavigator::planFrom(Player& player, const Pos
 					return PlayerBotNavigationResult::Unreachable;
 				}
 				steps.push_front(parent->second.step);
+				if (costSummary) {
+					costSummary->movementCost = saturatingAdd(costSummary->movementCost, parent->second.movementCost);
+					costSummary->dangerCost = saturatingAdd(costSummary->dangerCost, parent->second.dangerCost);
+					costSummary->maximumHealthLossPerSecond = std::max(
+					    costSummary->maximumHealthLossPerSecond, parent->second.danger);
+				}
 				cursor = parent->second.position;
 			}
 			return PlayerBotNavigationResult::Reached;
@@ -411,7 +443,8 @@ PlayerBotNavigationResult PlayerBotNavigator::planFrom(Player& player, const Pos
 			step.target = getNextPosition(direction, current.position);
 			step.expectedPosition = next;
 			addCandidate(current.position, current.pathCost, next,
-			             (direction & DIRECTION_DIAGONAL_MASK) ? diagonalCost : cardinalCost, step);
+			             (direction & DIRECTION_DIAGONAL_MASK) ? diagonalCost : cardinalCost,
+			             player.getStepDuration(direction), step);
 		}
 
 		for (Direction direction : directions) {
@@ -431,7 +464,7 @@ PlayerBotNavigationResult PlayerBotNavigator::planFrom(Player& player, const Pos
 				step.target = target;
 				step.expectedPosition = expected;
 				step.itemId = itemId;
-				addCandidate(current.position, current.pathCost, expected, transitionCost, step);
+				addCandidate(current.position, current.pathCost, expected, transitionCost, 1000, step);
 			};
 
 			Item* ground = tile->getGround();

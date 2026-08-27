@@ -16,17 +16,20 @@ class PlayerBotHuntRegionAdapter
 {
 	public:
 		static void invalidateCache();
+		static PlayerBotHuntAtlasSummary rebuildAtlas();
+		static PlayerBotHuntAtlasSummary atlasSummary();
 		static uint64_t getCacheRevision();
 		static PlayerBotHuntRegionScan beginScan(Player& player,
 		                                         const PlayerBotTopologyDistances* topologyDistances = nullptr);
 		static PlayerBotHuntRegionScore score(Player& player, const PlayerBotHuntPlanningProfile& profile,
 		                                      uint64_t revision, size_t candidateIndex,
-		                                      const std::set<Position>& excludedRegions,
-		                                      const std::map<Position, PlayerBotHuntRegionPerformance>& performance,
+		                                      const std::set<uint64_t>& excludedVariants,
+		                                      const std::map<uint64_t, PlayerBotHuntRegionPerformance>& performance,
 		                                      uint32_t huntDurationSeconds,
 		                                      const PlayerBotTopologyDistances* topologyDistances = nullptr);
 		static PlayerBotHuntPlanningProfile planningProfile(const Player& player, const PlayerBotCombatProfile& combat,
 		                                                     double challengeFrontier);
+		static double travelDanger(const PlayerBotCombatProfile& combat, const Position& position);
 		static PlayerBotHuntCorridorDanger corridorDanger(const PlayerBotCombatProfile& combat,
 		                                                   const std::deque<PlayerBotNavigationStep>& steps,
 		                                                   const Position& destinationCenter, uint32_t stepDurationMs);

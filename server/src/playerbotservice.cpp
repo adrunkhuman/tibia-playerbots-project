@@ -357,14 +357,21 @@ void PlayerBotController::processService(Player* player, const Position& current
 		const auto startedAt = std::chrono::steady_clock::now();
 		PlayerBotNavigationRoutePlan routePlan;
 		if (command.destination != currentPosition) routePlan = planNavigationRoute(*player, command.destination);
-		lastRouteResult = routePlan.metrics.result;
+		const PlayerBotNavigationRiskProfile risk;
+		const bool routeSafe = command.destination == currentPosition || playerBotNavigationRiskAccepts(
+		    risk, routePlan.metrics.dangerCost, routePlan.metrics.maximumHealthLossPerSecond);
+		lastRouteResult = routeSafe ? routePlan.metrics.result : PlayerBotNavigationResult::Unreachable;
 		lastRouteExpandedNodes = routePlan.metrics.expandedNodes;
 		const bool reached = command.destination == currentPosition ||
-		                     (routePlan.metrics.result == PlayerBotNavigationResult::Reached && !routePlan.steps.empty());
+		                     (routePlan.metrics.result == PlayerBotNavigationResult::Reached && !routePlan.steps.empty() && routeSafe);
 		telemetry.recordPathfinding(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - startedAt), reached);
 		routeObservation.approachRoute.result = reached ? PlayerBotServiceRouteResult::Reached : PlayerBotServiceRouteResult::Unreachable;
 		routeObservation.approachRoute.steps = routePlan.metrics.steps;
 		routeObservation.approachRoute.expandedNodes = routePlan.metrics.expandedNodes;
+		routeObservation.approachRoute.dangerCost = routePlan.metrics.dangerCost;
+		routeObservation.approachRoute.maximumDanger = routePlan.metrics.maximumHealthLossPerSecond;
+		routeObservation.approachRoute.requiresNpcTravel = std::any_of(routePlan.steps.begin(), routePlan.steps.end(),
+			[](const PlayerBotNavigationStep& step) { return step.action == PlayerBotNavigationAction::NpcTravel; });
 		if (reached) approachSteps = std::move(routePlan.steps);
 		command = serviceWorkflow.advance(routeObservation, economyCatalog, dispositionPolicy);
 		if (reached && command.type == PlayerBotServiceCommandType::Wait &&
@@ -644,12 +651,17 @@ bool PlayerBotController::discoverDepot(Player& player, const Position& currentP
 			 tile && tile->queryAdd(0, player, 1, FLAG_IGNOREBLOCKCREATURE) == RETURNVALUE_NOERROR);
 		const auto startedAt = std::chrono::steady_clock::now();
 		PlayerBotNavigationRoutePlan routePlan;
-		if (valid && candidate.approachPosition != currentPosition) routePlan = planNavigationRoute(player, candidate.approachPosition);
+		if (valid && candidate.approachPosition != currentPosition) {
+			routePlan = planCompleteNavigationRoute(player, candidate.approachPosition);
+		}
+		const PlayerBotNavigationRiskProfile risk;
+		const bool routeSafe = candidate.approachPosition == currentPosition || playerBotNavigationRiskAccepts(
+		    risk, routePlan.metrics.dangerCost, routePlan.metrics.maximumHealthLossPerSecond);
 		const bool reached = valid && (candidate.approachPosition == currentPosition ||
-			(routePlan.metrics.result == PlayerBotNavigationResult::Reached && !routePlan.steps.empty()));
+			(routePlan.metrics.result == PlayerBotNavigationResult::Reached && !routePlan.steps.empty() && routeSafe));
 		telemetry.recordPathfinding(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - startedAt), reached);
 		observation.routeResult = reached ? PlayerBotDepotRouteResult::Reached : PlayerBotDepotRouteResult::Unreachable;
-		observation.routeSteps = static_cast<uint32_t>(routePlan.steps.size());
+		observation.routeSteps = static_cast<uint32_t>(routePlan.metrics.steps);
 		observation.expandedNodes = routePlan.metrics.expandedNodes;
 		if (reached) steps = std::move(routePlan.steps);
 		command = advance(observation);

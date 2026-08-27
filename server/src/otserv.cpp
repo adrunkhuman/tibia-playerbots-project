@@ -31,6 +31,7 @@
 #include "protocolstatus.h"
 #include "playerbot.h"
 #include "playerbottopology.h"
+#include "playerbothuntregions.h"
 #include "databasemanager.h"
 #include "scheduler.h"
 #include "databasetasks.h"
@@ -321,6 +322,10 @@ void mainLoader(int, char*[], ServiceManager* services)
 		          << PlayerBotTopology::instance().componentCount() << " components ("
 		          << std::chrono::duration_cast<std::chrono::milliseconds>(
 		                 std::chrono::steady_clock::now() - topologyStarted).count() << " ms)" << std::endl;
+		const PlayerBotHuntAtlasSummary atlas = PlayerBotHuntRegionPlanner::rebuildAtlas();
+		std::cout << ">> Built hunt atlas with " << atlas.spawnCount << " hostile spawns, "
+		          << atlas.pocketCount << " pockets, " << atlas.siteCount << " sites, and "
+		          << atlas.variantCount << " variants (" << atlas.buildTimeUs / 1000 << " ms)" << std::endl;
 		if (!g_playerBots.spawn("Bot One")) {
 			std::cout << "[Warning - mainLoader] Unable to log in playerbot Bot One; continuing without it." << std::endl;
 		}

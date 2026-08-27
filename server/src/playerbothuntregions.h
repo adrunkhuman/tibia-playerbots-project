@@ -69,12 +69,19 @@ struct PlayerBotHuntCorridorDanger {
 
 struct PlayerBotHuntRegion {
 	uint32_t id = 0;
+	uint64_t atlasSiteId = 0;
+	uint64_t atlasVariantId = 0;
+	uint32_t atlasPocketCount = 0;
+	uint32_t atlasSpawnCount = 0;
+	uint32_t atlasFloorCount = 0;
 	uint8_t floor = 0;
 	Position center;
 	Position destination;
 	std::vector<Position> patrolPoints;
 	std::vector<PlayerBotHuntMonsterProfile> monsters;
 	double experiencePerMinute = 0;
+	double spawnExperiencePerMinute = 0;
+	double clearExperiencePerMinute = 0;
 	double estimatedTravelSeconds = 0;
 	double availableHuntSeconds = 0;
 	double observedExperiencePerMinute = 0;
@@ -98,12 +105,11 @@ struct PlayerBotHuntRegion {
 	double score = 0;
 	uint32_t travelSteps = 0;
 	uint32_t topologyTravelSteps = 0;
-	uint64_t expandedNodes = 0;
+	uint32_t routeDangerCost = 0;
+	double maximumRouteDanger = 0;
 	bool suitable = false;
 	bool reachable = false;
 	bool topologyReachable = false;
-	bool routeValidationAttempted = false;
-	bool routeValidationDeferredByBound = false;
 	bool inChallengeBand = false;
 	bool predictedLethal = false;
 	std::string rejectionReason;
@@ -122,6 +128,17 @@ struct PlayerBotHuntRegionScan {
 	uint64_t clusteringTimeUs = 0;
 	size_t candidateCount = 0;
 	std::vector<size_t> candidateIndices;
+};
+
+struct PlayerBotHuntAtlasSummary {
+	uint64_t revision = 0;
+	uint64_t topologyGeneration = 0;
+	uint64_t spawnGeneration = 0;
+	uint64_t buildTimeUs = 0;
+	size_t spawnCount = 0;
+	size_t pocketCount = 0;
+	size_t siteCount = 0;
+	size_t variantCount = 0;
 };
 
 struct PlayerBotHuntRegionScore {
@@ -143,12 +160,14 @@ class PlayerBotHuntRegionPlanner
 {
 	public:
 		static void invalidateCache();
+		static PlayerBotHuntAtlasSummary rebuildAtlas();
+		static PlayerBotHuntAtlasSummary atlasSummary();
 		static uint64_t getCacheRevision();
 		PlayerBotHuntRegionScan beginScan(Player& player,
 		                                  const PlayerBotTopologyDistances* topologyDistances = nullptr) const;
 		PlayerBotHuntRegionScore score(Player& player, const PlayerBotHuntPlanningProfile& profile, uint64_t revision,
-		                               size_t candidateIndex, const std::set<Position>& excludedRegions,
-		                               const std::map<Position, PlayerBotHuntRegionPerformance>& performance,
+		                               size_t candidateIndex, const std::set<uint64_t>& excludedVariants,
+		                               const std::map<uint64_t, PlayerBotHuntRegionPerformance>& performance,
 		                               uint32_t huntDurationSeconds,
 		                               const PlayerBotTopologyDistances* topologyDistances = nullptr) const;
 };

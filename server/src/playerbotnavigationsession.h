@@ -58,13 +58,17 @@ class PlayerBotNavigationSession
 
 		std::set<Position> activeBlockedPositions(std::chrono::steady_clock::time_point now);
 		void suppress(const Position& position, std::chrono::steady_clock::time_point expires);
-		void clearBlockedPositions() { temporarilyBlockedPositions.clear(); }
+		bool avoidPendingRouteBlocker(uint32_t blockerId, const Position& position, std::chrono::steady_clock::time_point now,
+		                              std::chrono::steady_clock::duration suppression);
+		void confirmRequiredRouteBlocker();
+		void clearRequiredRouteBlockers() { requiredRouteBlockerIds.clear(); }
+		void clearBlockedPositions() { temporarilyBlockedPositions.clear(); clearRequiredRouteBlockers(); pendingRouteBlocker.reset(); pendingRouteBlockerId.reset(); }
 
 		std::optional<PlayerBotNavigationOscillation> observeProgress(
 			const Position& currentPosition, const PlayerBotNavigationGoal& goal,
 			std::chrono::steady_clock::time_point now, std::chrono::steady_clock::duration suppression);
 
-		bool isRouteCritical(const Position& position, std::chrono::steady_clock::time_point now) const;
+		bool isRouteCritical(uint32_t blockerId, const Position& position, std::chrono::steady_clock::time_point now) const;
 		bool hasActiveRouteBlock(std::chrono::steady_clock::time_point now) const { return now < blockedTargetExpires; }
 		bool oscillationDetected() const { return detectedOscillation; }
 		uint32_t stepFailureCount() const { return blockedStepCount; }
@@ -86,6 +90,9 @@ class PlayerBotNavigationSession
 		std::chrono::steady_clock::time_point blockedTargetExpires;
 		PlayerBotNavigationStep worldChangeStep;
 		std::map<Position, std::chrono::steady_clock::time_point> temporarilyBlockedPositions;
+		std::set<uint32_t> requiredRouteBlockerIds;
+		std::optional<Position> pendingRouteBlocker;
+		std::optional<uint32_t> pendingRouteBlockerId;
 		uint32_t blockedStepCount = 0;
 		bool movementPending = false;
 		bool worldChangePending = false;

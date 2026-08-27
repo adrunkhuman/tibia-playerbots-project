@@ -34,7 +34,7 @@ class PlayerBotHuntCoordinator
 {
 	public:
 		explicit PlayerBotHuntCoordinator(PlayerBotHuntCoordinatorConfig config,
-		                                  std::map<Position, std::chrono::steady_clock::time_point>& sharedCooldowns);
+		                                  std::map<uint64_t, std::chrono::steady_clock::time_point>& sharedCooldowns);
 
 		std::optional<PlayerBotCombatDecision> selectTraversalAttack(std::vector<PlayerBotTraversalCandidate> candidates,
 		                                                            const Position& currentPosition,
@@ -87,9 +87,12 @@ class PlayerBotHuntCoordinator
 		                                           const PlayerBotHuntPlanningObservation& observation = {});
 		PlayerBotHuntRuntimeOutcome completeScoreWork(const std::vector<PlayerBotHuntRuntimeScoreObservation>& observations,
 		                                             uint64_t elapsedUs);
-		void completeRouteWork(const PlayerBotHuntRuntimeRouteWork& work, const PlayerBotHuntRuntimeRouteObservation& route);
 		std::optional<PlayerBotHuntPlanningSession> planningSession() const;
 		void completePlanningSelection();
+		void selectPlanningRegion(PlayerBotHuntRegion region, const PlayerBotHuntRuntimePlayerObservation& player,
+		                         std::chrono::steady_clock::time_point now);
+		void rejectHuntVariant(uint64_t variantId, std::chrono::steady_clock::time_point now,
+		                       std::chrono::steady_clock::duration cooldown);
 
 		void beginHuntCycle(std::chrono::steady_clock::time_point now, uint32_t durationSeconds);
 		bool huntDeadlineReached(std::chrono::steady_clock::time_point now) const;
@@ -109,13 +112,13 @@ class PlayerBotHuntCoordinator
 		                                                        std::chrono::steady_clock::time_point now,
 		                                                        uint32_t configuredDurationSeconds);
 		PlayerBotHuntPlanningProfile huntPlanningProfile(PlayerBotHuntPlanningProfile profile) const;
-		std::map<Position, PlayerBotHuntRegionPerformance> huntRegionPerformance() const;
+		std::map<uint64_t, PlayerBotHuntRegionPerformance> huntRegionPerformance() const;
 		PlayerBotEquipmentHuntSummary summarizeEquipmentHunts(const std::vector<PlayerBotHuntRegion>& regions, bool truncated) const;
 		PlayerBotHuntPatrolOutcome huntPatrolTarget() const;
 		PlayerBotHuntPatrolOutcome observeHuntPatrolNavigation(const PlayerBotNavigationRuntimeOutcome& navigation,
 		                                                      std::chrono::steady_clock::time_point now,
 		                                                      uint32_t repeatedStepLimit, uint32_t routeFailureLimit);
-		std::set<Position> activeHuntCooldowns(std::chrono::steady_clock::time_point now);
+		std::set<uint64_t> activeHuntCooldowns(std::chrono::steady_clock::time_point now);
 
 	private:
 		void applyCooldown(const std::optional<PlayerBotHuntRuntimeCooldownCommand>& command,
@@ -124,7 +127,7 @@ class PlayerBotHuntCoordinator
 		PlayerBotCombatRuntime combatRuntime;
 		PlayerBotLootWorkflow lootWorkflow;
 		PlayerBotHuntRuntime huntRuntime;
-		std::map<Position, std::chrono::steady_clock::time_point>& huntRegionCooldowns;
+		std::map<uint64_t, std::chrono::steady_clock::time_point>& huntRegionCooldowns;
 };
 
 #endif

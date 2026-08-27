@@ -7,6 +7,16 @@
 			$corpseLogs = Wait-ForLog -Pattern '"reason":"corpse_not_lootable","expected_corpse_item_id":1987'
 			Assert-CorpseEvents -Logs $corpseLogs
 		}
+		Invoke-Scenario -Name "corpse_detour" -DefaultTimeoutSeconds 75 -Body {
+			Invoke-Compose down --volumes --remove-orphans
+			$env:PLAYERBOT_GAMEPLAY_MODE = "corpse_detour"
+			$env:PLAYERBOT_HUNT_DURATION_SECONDS = "900"
+			Invoke-Compose up --detach
+			$corpseLogs = Wait-ForPlayerbotEvent -Predicate {
+				$_.event -eq "action_result" -and $_.action -eq "loot" -and $_.result -eq "success"
+			}
+			Assert-CorpseDetourEvents -Logs $corpseLogs
+		}
 		Invoke-Scenario -Name "corpse_inaccessible" -DefaultTimeoutSeconds 75 -Body {
 			Invoke-Compose down --volumes --remove-orphans
 			$env:PLAYERBOT_GAMEPLAY_MODE = "corpse_inaccessible"

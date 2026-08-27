@@ -9,7 +9,7 @@ function F.login.onLogin(player)
 
 	local mode = os.getenv("PLAYERBOT_GAMEPLAY_MODE") or "cycle"
 	F.selectHealthPotion(player)
-    assert(mode == "mainland" or mode == "carlin_local_service" or mode == "cycle" or mode == "depot" or mode == "slotted_loot_seller" or mode == "slotted_loot_no_seller" or mode == "navigation" or mode == "navigation_recovery" or mode == "carlin_service_route" or mode == "mutable_portal_route" or mode == "patrol_recovery" or mode == "target_pursuit" or mode == "target_pursuit_abandon" or mode == "target_attacker_priority" or mode == "corpse" or mode == "corpse_inaccessible" or mode == "death" or mode == "healing" or mode == "spell_use" or
+    assert(mode == "mainland" or mode == "carlin_local_service" or mode == "cycle" or mode == "depot" or mode == "slotted_loot_seller" or mode == "slotted_loot_no_seller" or mode == "navigation" or mode == "navigation_recovery" or mode == "carlin_service_route" or mode == "mutable_portal_route" or mode == "patrol_recovery" or mode == "target_pursuit" or mode == "target_pursuit_abandon" or mode == "target_attacker_priority" or mode == "corpse" or mode == "corpse_detour" or mode == "corpse_inaccessible" or mode == "death" or mode == "healing" or mode == "spell_use" or
         mode == "healing_resupply" or mode == "value" or mode == "progression" or mode == "progression_bundle" or
         mode == "progression_nested" or mode == "progression_resume" or mode == "progression_nested_resume" or
         mode == "progression_space" or mode == "arbitration" or mode == "arbitration_interrupt" or mode == "departure" or
@@ -702,7 +702,7 @@ function F.login.onLogin(player)
         print("PLAYERBOT_GAMEPLAY_TEST CORPSE_START")
         return true
     end
-    if mode == "corpse_inaccessible" then
+    if mode == "corpse_detour" or mode == "corpse_inaccessible" then
         F.suppressNearbyMonsters(player:getId())
         F.PlayerbotSpawnInaccessibleCorpseMonster(player:getId())
         return true
@@ -724,7 +724,7 @@ function F.login.onLogin(player)
         return true
     end
     assert(player:getMoney() == 0, "Bot One initial backpack purse was not empty")
-    assert(player:getBankBalance() == 400, "Bot One initial bank balance was not 400 gp")
+    assert(player:getBankBalance() == 1000, "Bot One initial bank balance was not 1000 gp")
     local backpack = player:getSlotItem(CONST_SLOT_BACKPACK)
     local potions = player:getItemCount(F.potionItemId)
     if potions > 0 then assert(player:removeItem(F.potionItemId, potions), "cycle fixture could not remove starter potions") end

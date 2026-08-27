@@ -31,13 +31,11 @@ bool PlayerBotHuntPlanningSession::invalidated(const PlayerBotHuntPlanningSnapsh
 	       current.currentHealth < planningSnapshot.currentHealth || current.staminaMinutes != planningSnapshot.staminaMinutes ||
 	       current.topologyGeneration != planningSnapshot.topologyGeneration ||
 	       current.canUseRope != planningSnapshot.canUseRope || current.canUseShovel != planningSnapshot.canUseShovel ||
-	       current.excludedRegions != planningSnapshot.excludedRegions || current.cacheRevision != planningSnapshot.cacheRevision;
+	       current.excludedVariants != planningSnapshot.excludedVariants || current.cacheRevision != planningSnapshot.cacheRevision;
 }
 
 void PlayerBotHuntPlanningSession::beginTurn()
 {
-	routeValidationsThisTurn = 0;
-	routeValidationCallsThisTurn = 0;
 }
 
 std::optional<PlayerBotHuntPlanningScoreWork> PlayerBotHuntPlanningSession::nextScoringWork(uint32_t maximumCandidates)
@@ -62,108 +60,21 @@ PlayerBotHuntPlanningProgress PlayerBotHuntPlanningSession::completeScoring()
 		++yieldCount;
 		return PlayerBotHuntPlanningProgress::ScoringYield;
 	}
-	const bool topologySelection = topologyDistances != nullptr;
-	std::stable_sort(scoredRegions.begin(), scoredRegions.end(), [topologySelection](const PlayerBotHuntRegion& left, const PlayerBotHuntRegion& right) {
+	std::stable_sort(scoredRegions.begin(), scoredRegions.end(), [](const PlayerBotHuntRegion& left, const PlayerBotHuntRegion& right) {
 		if (left.suitable != right.suitable) return left.suitable;
-		return topologySelection ? left.score > right.score :
-		       left.optimisticProjectedExperience > right.optimisticProjectedExperience;
+		return left.score > right.score;
 	});
 	uint32_t regionId = 1;
 	for (PlayerBotHuntRegion& region : scoredRegions) {
 		region.id = regionId++;
 	}
 	refreshSuitableCandidates();
-	phase = Phase::Reachability;
+	phase = Phase::Ready;
 	return PlayerBotHuntPlanningProgress::Scored;
-}
-
-std::optional<PlayerBotHuntPlanningRouteWork> PlayerBotHuntPlanningSession::nextRouteValidationWork(uint32_t maximumCalls)
-{
-	if (phase != Phase::Reachability || routeValidationsThisTurn >= maximumCalls) {
-		return std::nullopt;
-	}
-	if (canStopRouteValidation()) {
-		return std::nullopt;
-	}
-	while (nextCandidate < scoredRegions.size()) {
-		const size_t regionIndex = nextCandidate++;
-		if (scoredRegions[regionIndex].suitable) {
-			scoredRegions[regionIndex].routeValidationAttempted = true;
-			++routeValidationsThisTurn;
-			return PlayerBotHuntPlanningRouteWork{regionIndex};
-		}
-	}
-	return std::nullopt;
-}
-
-void PlayerBotHuntPlanningSession::routeValidationCompleted(size_t regionIndex, bool pathfindingCalled, bool reachable, bool nodeLimit,
-	                                                        uint64_t expandedNodes,
-	                                                        uint32_t travelSteps, double estimatedTravelSeconds,
-	                                                        double staminaExperienceMultiplier,
-	                                                        const PlayerBotHuntCorridorDanger& corridorDanger,
-	                                                        uint32_t huntDurationSeconds)
-{
-	PlayerBotHuntRegion& region = scoredRegions[regionIndex];
-	if (pathfindingCalled) {
-		++routeValidationCalls;
-		++routeValidationCallsThisTurn;
-		routeValidationExpandedNodes += expandedNodes;
-	}
-	region.expandedNodes += expandedNodes;
-	if (!reachable) {
-		region.rejectionReason = nodeLimit ? "navigation_node_budget" : "unreachable";
-		return;
-	}
-	region.reachable = true;
-	region.travelSteps = travelSteps;
-	region.estimatedTravelSeconds = estimatedTravelSeconds;
-	region.availableHuntSeconds = std::max(0.0, huntDurationSeconds - estimatedTravelSeconds);
-	region.staminaExperienceMultiplier = staminaExperienceMultiplier;
-	region.corridorDangerAvailable = corridorDanger.available;
-	region.corridorDangerRatio = corridorDanger.dangerRatio;
-	region.corridorSampleCount = corridorDanger.sampledPositions;
-	region.corridorSpawnBlocks = corridorDanger.nearbySpawnBlocks;
-	region.projectedExperience = region.experiencePerMinute * region.observedCorrection *
-	                           region.staminaExperienceMultiplier * region.availableHuntSeconds / 60.0;
-	const double corridorPenalty = corridorDanger.available ? std::min(0.75, corridorDanger.dangerRatio * 0.5) : 0;
-	region.score = region.projectedExperience * (1.0 - corridorPenalty);
-}
-
-PlayerBotHuntPlanningProgress PlayerBotHuntPlanningSession::completeRouteValidation()
-{
-	if (routeValidationsThisTurn != 0) {
-		++yieldCount;
-		return PlayerBotHuntPlanningProgress::ReachabilityYield;
-	}
-	return PlayerBotHuntPlanningProgress::ReadyForSelection;
 }
 
 void PlayerBotHuntPlanningSession::refreshSuitableCandidates()
 {
 	suitableCandidateCount = static_cast<uint32_t>(std::count_if(scoredRegions.begin(), scoredRegions.end(),
 		[](const PlayerBotHuntRegion& region) { return region.suitable; }));
-}
-
-bool PlayerBotHuntPlanningSession::canStopRouteValidation()
-{
-	if (routeBoundSatisfied) return true;
-	const auto incumbent = std::max_element(scoredRegions.begin(), scoredRegions.end(), [](const auto& left, const auto& right) {
-		return playerBotPreferHuntRegion(right, left);
-	});
-	if (incumbent == scoredRegions.end() || !incumbent->suitable || !incumbent->reachable) return false;
-
-	for (const PlayerBotHuntRegion& candidate : scoredRegions) {
-		if (!candidate.suitable || candidate.routeValidationAttempted) continue;
-		if (!std::isfinite(candidate.optimisticProjectedExperience) ||
-		    candidate.optimisticProjectedExperience > incumbent->score) return false;
-	}
-
-	for (PlayerBotHuntRegion& candidate : scoredRegions) {
-		if (candidate.suitable && !candidate.routeValidationAttempted) {
-			candidate.routeValidationDeferredByBound = true;
-			++deferredRouteValidationCount;
-		}
-	}
-	routeBoundSatisfied = true;
-	return true;
 }

@@ -153,7 +153,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 
 	public:
 		explicit PlayerBotController(const Player& player,
-		                            std::map<Position, std::chrono::steady_clock::time_point>& sharedHuntRegionCooldowns);
+		                            std::map<uint64_t, std::chrono::steady_clock::time_point>& sharedHuntRegionCooldowns);
 
 		void start(const Position& position, bool recovered, uint32_t recoveryCount);
 
@@ -232,6 +232,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		void pause(const Position& position);
 
 		bool findPath(Player* player, const Position& target, std::vector<Direction>& result, const FindPathParams& pathParams);
+		PlayerBotNavigationCostPolicy navigationCostPolicy(const Player& player) const;
 
 		bool attackVisibleMonster(Player* player, const Position& currentPosition);
 
@@ -278,7 +279,8 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 
 		bool planSimpleRewardApproach(Player& player, const Position& rewardPosition, Position& approachPosition,
 		                              std::deque<PlayerBotNavigationStep>& approachSteps, uint64_t& expandedNodes,
-		                              uint64_t maximumExpandedNodes);
+		                              uint64_t maximumExpandedNodes, uint32_t& routeSteps, uint32_t& dangerCost,
+		                              double& maximumDanger);
 
 		void emitRewardCandidate(const PlayerBotRewardPlan& candidate, const Position& position, const char* result,
 		                         const char* reason = nullptr) const;
@@ -369,6 +371,9 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		PlayerBotNavigationRoutePlan planNavigationRoute(Player& player, const Position& destination,
 		                                                const std::set<Position>& blockedPositions = {},
 		                                                uint64_t maximumExpandedNodes = playerBotNavigationMaximumExpandedNodes) const;
+		PlayerBotNavigationRoutePlan planCompleteNavigationRoute(Player& player, const Position& destination,
+		                                                        const std::set<Position>& blockedPositions = {},
+		                                                        uint64_t maximumExpandedNodes = playerBotNavigationMaximumExpandedNodes) const;
 		PlayerBotNavigationRoutePlan planNavigationRoute(Player& player, const PlayerBotNavigationGoal& goal,
 		                                                const std::set<Position>& blockedPositions = {},
 		                                                uint64_t maximumExpandedNodes = playerBotNavigationMaximumExpandedNodes) const;
@@ -469,6 +474,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		uint32_t serviceTopologyLevel = 0;
 		uint64_t serviceTopologyGeneration = 0;
 		PlayerBotNavigationRuntime navigationRuntime;
+		bool huntRegionReached = false;
 		struct {
 			uint32_t npcId = 0;
 			Position coarseDestination;

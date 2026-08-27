@@ -50,7 +50,8 @@ const playerbot::PlayerBotTestPolicy& playerbot::playerBotTestPolicyFromEnvironm
 			(std::strcmp(gameplayMode, "navigation") == 0 || std::strcmp(gameplayMode, "navigation_recovery") == 0 ||
 			 std::strcmp(gameplayMode, "carlin_service_route") == 0 ||
 			 std::strcmp(gameplayMode, "mutable_portal_route") == 0 ||
-			 (std::strcmp(gameplayMode, "corpse") == 0 || std::strcmp(gameplayMode, "corpse_inaccessible") == 0) ||
+			 (std::strcmp(gameplayMode, "corpse") == 0 || std::strcmp(gameplayMode, "corpse_detour") == 0 ||
+			  std::strcmp(gameplayMode, "corpse_inaccessible") == 0) ||
 			 std::strcmp(gameplayMode, "patrol_recovery") == 0 ||
 			 (std::strcmp(gameplayMode, "target_pursuit") == 0 || std::strcmp(gameplayMode, "target_pursuit_abandon") == 0 ||
 			  std::strcmp(gameplayMode, "target_attacker_priority") == 0) ||

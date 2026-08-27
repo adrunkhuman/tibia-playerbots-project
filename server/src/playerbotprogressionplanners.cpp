@@ -38,7 +38,9 @@ PlayerBotSpellTrainingDecision PlayerBotSpellTrainingPlanner::select(const Playe
 		                        !offer.premiumEligible ? "premium_ineligible" : offer.known ? "already_learned" :
 		                        !offer.suppliesReady ? "supply_reserve_unmet" : !snapshot.reserveAvailable ? "recovery_reserve_unavailable" :
 		                        snapshot.totalMoney < snapshot.reserve + offer.price ? "unaffordable_after_reserves" :
-		                        !offer.route.reachable ? "trainer_unreachable" : nullptr;
+		                        !offer.route.reachable ? "trainer_unreachable" :
+		                        offer.route.dangerCost > snapshot.maximumRouteDangerCost ? "route_danger_above_tolerance" :
+		                        offer.route.maximumDanger > snapshot.maximumRouteDanger ? "route_peak_danger_above_tolerance" : nullptr;
 		if (rejection) {
 			decision.rejections.push_back({offerIndex, rejection});
 			continue;
@@ -78,6 +80,8 @@ PlayerBotEquipmentProviderDecision PlayerBotEquipmentProviderPlanner::select(con
 		if (!rejection && !evaluation.carried && snapshot.totalMoney < snapshot.reserve + evaluation.price) rejection = "unaffordable_after_reserves";
 		if (!rejection && !evaluation.carried && !offer.route.reachable) rejection = offer.routeBudgetExhausted ? "provider_evaluation_budget_exhausted" :
 		                                                               offer.route.nodeLimitReached ? "provider_route_node_budget_exhausted" : "provider_unreachable";
+		if (!rejection && !evaluation.carried && offer.route.dangerCost > snapshot.maximumRouteDangerCost) rejection = "route_danger_above_tolerance";
+		if (!rejection && !evaluation.carried && offer.route.maximumDanger > snapshot.maximumRouteDanger) rejection = "route_peak_danger_above_tolerance";
 		if (rejection) {
 			decision.rejections.push_back({offerIndex, rejection});
 			continue;
@@ -233,7 +237,8 @@ std::optional<PlayerBotRewardPlan> PlayerBotRewardPlanner::plan(uint16_t uniqueI
 int32_t PlayerBotRewardPlanner::utility(const PlayerBotRewardPlan& plan, const PlayerBotRewardPlannerSnapshot& snapshot) const
 {
 	const int32_t base = plan.equipmentUpgradeCount != 0 ? snapshot.pickupBaseUtility : snapshot.economicBaseUtility;
-	return std::max<int32_t>(0, base + static_cast<int32_t>(plan.knownUtility) - static_cast<int32_t>(plan.travelSteps));
+	return std::max<int32_t>(0, base + static_cast<int32_t>(plan.knownUtility) -
+	    static_cast<int32_t>(plan.travelSteps) - static_cast<int32_t>(plan.travelDangerCost / 10));
 }
 
 int32_t PlayerBotRewardPlanner::estimatedUtility(const PlayerBotRewardPlan& plan,
@@ -307,7 +312,14 @@ PlayerBotRewardDecision PlayerBotRewardPlanner::select(const PlayerBotRewardPlan
 		if (!routeEstimate.reachable) { decision.outcomes.push_back({candidate, "rejected", "simple_route_unavailable"}); continue; }
 		candidate.approachPosition = routeEstimate.approachPosition;
 		candidate.travelSteps = routeEstimate.steps;
+		candidate.travelDangerCost = routeEstimate.dangerCost;
+		candidate.maximumTravelDanger = routeEstimate.maximumDanger;
 		candidate.expandedNodes = routeEstimate.expandedNodes;
+		if (candidate.maximumTravelDanger > snapshot.maximumTravelDanger ||
+		    candidate.travelDangerCost > snapshot.maximumTravelDangerCost) {
+			decision.outcomes.push_back({candidate, "rejected", "route_danger_above_tolerance"});
+			continue;
+		}
 		if (utility(candidate, snapshot) <= snapshot.huntUtility) { decision.outcomes.push_back({candidate, "rejected", "actual_utility_below_hunt"}); continue; }
 		decision.outcomes.push_back({candidate, "feasible", nullptr});
 		decision.selected = std::move(candidate);

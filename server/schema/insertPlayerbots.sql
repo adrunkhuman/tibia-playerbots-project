@@ -23,7 +23,7 @@ SELECT
     185, 4200, 68, 76, 78,
     39, 128, 0, 2, 0, 35,
     35, 0, 100, 4, 32360, 31782, 7,
-    470, 1, 2520, 20, 20, 400
+    470, 1, 2520, 20, 20, 1000
 FROM `accounts`
 WHERE `name` = 'bot-one'
   AND NOT EXISTS (SELECT 1 FROM `players` WHERE `name` = 'Bot One');

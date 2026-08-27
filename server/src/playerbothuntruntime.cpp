@@ -10,7 +10,7 @@ PlayerBotHuntRuntime::PlayerBotHuntRuntime(std::vector<Position> fallbackPatrol)
 
 PlayerBotHuntPlanningSnapshot PlayerBotHuntRuntime::snapshot(const PlayerBotHuntRuntimePlayerObservation& player, uint64_t revision)
 {
-	return {player.position, player.level, player.health, player.staminaMinutes, revision, player.topologyGeneration, player.excludedRegions,
+	return {player.position, player.level, player.health, player.staminaMinutes, revision, player.topologyGeneration, player.excludedVariants,
 	        player.canUseRope, player.canUseShovel};
 }
 
@@ -65,7 +65,7 @@ PlayerBotHuntRuntimeOutcome PlayerBotHuntRuntime::advancePlanning(const PlayerBo
 		while (const auto work = planning->nextScoringWork(256)) {
 			pendingScoreCandidates.push_back(work->candidateIndex);
 			outcome.scoreWork.push_back({work->candidateIndex, planning->profile(), planning->snapshot().cacheRevision,
-				planning->snapshot().excludedRegions, policy.regionPerformance(), planning->topology(),
+				planning->snapshot().excludedVariants, policy.regionPerformance(), planning->topology(),
 				plannedHuntDurationSeconds});
 		}
 		if (outcome.scoreWork.empty()) {
@@ -74,13 +74,6 @@ PlayerBotHuntRuntimeOutcome PlayerBotHuntRuntime::advancePlanning(const PlayerBo
 		}
 		return outcome;
 	}
-	if (const auto work = planning->nextRouteValidationWork(1)) {
-		outcome.command = PlayerBotHuntRuntimeCommand::RouteValidationRequested;
-		const PlayerBotHuntRegion& region = planning->region(work->regionIndex);
-		outcome.routeWork = {{work->regionIndex, region.destination, region.center, region.patrolPoints}};
-		return outcome;
-	}
-
 	const auto& regions = planning->regions();
 	outcome.candidates = regions;
 	if (!observation.candidatesAvailable) return exhaustScope(now, std::chrono::seconds(1));
@@ -90,9 +83,8 @@ PlayerBotHuntRuntimeOutcome PlayerBotHuntRuntime::advancePlanning(const PlayerBo
 	auto selected = std::max_element(regions.begin(), regions.end(), [](const auto& left, const auto& right) {
 		return playerBotPreferHuntRegion(right, left);
 	});
-	activate(*selected, input.player, now);
 	outcome.command = PlayerBotHuntRuntimeCommand::RegionSelected;
-	outcome.selectedRegion = activeRegion;
+	outcome.selectedRegion = *selected;
 	scopeExhaustions = 0;
 	scopeReevaluationAfter = {};
 	return outcome;
@@ -133,7 +125,7 @@ void PlayerBotHuntRuntime::applyCandidateSuitability(PlayerBotHuntRegion& region
 	region.inChallengeBand = region.threatRatio <= region.challengeBandMaximum;
 	region.suitable = observation.candidateFactsAvailable && !region.predictedLethal &&
 	                  region.threatRatio <= region.challengeBandMaximum && observation.withinPlanningScope;
-	if (planning->snapshot().excludedRegions.find(region.center) != planning->snapshot().excludedRegions.end()) {
+	if (planning->snapshot().excludedVariants.find(region.atlasVariantId) != planning->snapshot().excludedVariants.end()) {
 		region.suitable = false;
 		region.rejectionReason = "observed_danger_cooldown";
 	} else if (!observation.withinPlanningScope) {
@@ -161,16 +153,6 @@ PlayerBotHuntRuntimeOutcome PlayerBotHuntRuntime::exhaustScope(std::chrono::stea
 	planning.reset();
 	pendingScoreCandidates.clear();
 	return outcome;
-}
-
-void PlayerBotHuntRuntime::completeRouteWork(const PlayerBotHuntRuntimeRouteWork& work,
-	                                          const PlayerBotHuntRuntimeRouteObservation& route)
-{
-	if (!planning) return;
-	planning->routeValidationCompleted(work.regionIndex, route.pathfindingCalled, route.reachable, route.nodeLimit,
-		route.expandedNodes, route.travelSteps, route.estimatedTravelSeconds,
-		route.staminaExperienceMultiplier, route.corridorDanger, plannedHuntDurationSeconds);
-	planning->completeRouteValidation();
 }
 
 void PlayerBotHuntRuntime::activate(PlayerBotHuntRegion region, const PlayerBotHuntRuntimePlayerObservation& player,
@@ -230,7 +212,7 @@ std::optional<PlayerBotHuntRuntimeCooldownCommand> PlayerBotHuntRuntime::dangerO
 	std::chrono::steady_clock::time_point now, std::chrono::steady_clock::duration cooldown)
 {
 	if (!activeRegion || !policy.observeDanger(maximumHealth, now - huntStarted)) return std::nullopt;
-	return {{activeRegion->center, cooldown}};
+	return {{activeRegion->atlasVariantId, cooldown}};
 }
 
 std::optional<PlayerBotHuntRuntimeCompletion> PlayerBotHuntRuntime::complete(const PlayerBotHuntRuntimePlayerObservation& player,
@@ -244,7 +226,7 @@ std::optional<PlayerBotHuntRuntimeCompletion> PlayerBotHuntRuntime::complete(con
 	result.experienceGained = player.experience >= huntStartExperience ? player.experience - huntStartExperience : 0;
 	result.levelBefore = huntStartLevel;
 	result.combat = policy.combatSummary();
-	result.performance = policy.observePerformance(activeRegion->center, {result.durationSeconds, result.combat.kills, result.experienceGained,
+	result.performance = policy.observePerformance(activeRegion->atlasVariantId, {result.durationSeconds, result.combat.kills, result.experienceGained,
 		activeRegion->projectedExperience, activeRegion->observedCorrection, configuredDurationSeconds});
 	result.challenge = policy.updateChallengeFrontier({result.durationSeconds, player.maximumHealth});
 	activeRegion.reset();
@@ -257,7 +239,7 @@ std::optional<PlayerBotHuntRuntimeCooldownCommand> PlayerBotHuntRuntime::observe
 {
 	if (activeCombat) policy.observeDeath();
 	if (!activeRegion) return std::nullopt;
-	return {{activeRegion->center, cooldown}};
+	return {{activeRegion->atlasVariantId, cooldown}};
 }
 
 PlayerBotHuntPatrolOutcome PlayerBotHuntRuntime::patrolTarget() const
@@ -310,7 +292,7 @@ PlayerBotHuntPatrolOutcome PlayerBotHuntRuntime::observePatrolNavigation(const P
 		activeRegion->patrolPoints.erase(activeRegion->patrolPoints.begin() + patrolIndex);
 		if (activeRegion->patrolPoints.empty()) {
 			outcome.command = PlayerBotHuntPatrolCommand::RegionExhausted;
-			outcome.cooldown = {{activeRegion->center, std::chrono::minutes(10)}};
+			outcome.cooldown = {{activeRegion->atlasVariantId, std::chrono::minutes(10)}};
 		} else patrolIndex %= activeRegion->patrolPoints.size();
 	} else if (!fallbackPatrol.empty()) patrolIndex = (patrolIndex + 1) % fallbackPatrol.size();
 	resetPatrolFailures();

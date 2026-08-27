@@ -25,6 +25,7 @@ void PlayerBotServiceWorkflow::reset()
 	rejectedApproaches.clear();
 	unavailableProviderIds.clear();
 	providerRouteCosts.clear();
+	providersRequiringNpcTravel.clear();
 }
 
 bool PlayerBotServiceWorkflow::reportNpcReply(uint32_t playerId, uint32_t replyingPlayerId, uint32_t npcId, uint8_t type)
@@ -125,6 +126,7 @@ PlayerBotServiceCommand PlayerBotServiceWorkflow::approachProvider(const PlayerB
 {
 	if (provider.inRange) {
 		providerRouteCosts[npcSession.targetId()] = 0;
+		providersRequiringNpcTravel.erase(npcSession.targetId());
 		pendingApproachRoute.reset();
 		selectedApproach.reset();
 		return {};
@@ -156,6 +158,11 @@ PlayerBotServiceCommand PlayerBotServiceWorkflow::approachProvider(const PlayerB
 		}
 		if (observation.approachRoute.result == PlayerBotServiceRouteResult::Reached) {
 			providerRouteCosts[npcSession.targetId()] = observation.approachRoute.steps;
+			if (observation.approachRoute.requiresNpcTravel) {
+				providersRequiringNpcTravel.insert(npcSession.targetId());
+			} else {
+				providersRequiringNpcTravel.erase(npcSession.targetId());
+			}
 			selectedApproach = *pendingApproachRoute;
 			pendingApproachRoute.reset();
 			return {PlayerBotServiceCommandType::Wait, PlayerBotServiceOutcome::Success};
@@ -406,6 +413,7 @@ PlayerBotServiceCommand PlayerBotServiceWorkflow::advanceImpl(const PlayerBotSer
 		int64_t selectedUtility = std::numeric_limits<int64_t>::min();
 		for (const auto& shop : shopProviders) for (const auto& offer : shop.offers) {
 			if (unavailableProviderIds.find(shop.id) != unavailableProviderIds.end()) continue;
+			if (providersRequiringNpcTravel.find(shop.id) != providersRequiringNpcTravel.end()) continue;
 			auto count = observation.inventoryCounts.find(offer.itemId);
 			if (offer.sellPrice == 0 || count == observation.inventoryCounts.end() || count->second == 0) continue;
 			const uint32_t backpackCount = observation.backpackSaleCounts.count(offer.itemId) ?

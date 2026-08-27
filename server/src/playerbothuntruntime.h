@@ -25,17 +25,9 @@ enum class PlayerBotHuntRuntimeCommand : uint8_t {
 	PlanningYield,
 	PlanningScored,
 	PlanningCancelled,
-	RouteValidationRequested,
 	RegionSelected,
 	ScopeExhausted,
 	ScopeReevaluationPending,
-};
-
-struct PlayerBotHuntRuntimeRouteWork {
-	size_t regionIndex = 0;
-	Position destination;
-	Position center;
-	std::vector<Position> destinations;
 };
 
 struct PlayerBotHuntRuntimePlayerObservation {
@@ -46,13 +38,13 @@ struct PlayerBotHuntRuntimePlayerObservation {
 	uint16_t staminaMinutes = 0;
 	uint64_t experience = 0;
 	uint64_t topologyGeneration = 0;
-	std::set<Position> excludedRegions;
+	std::set<uint64_t> excludedVariants;
 	bool canUseRope = false;
 	bool canUseShovel = false;
 };
 
 struct PlayerBotHuntRuntimeCooldownCommand {
-	Position region;
+	uint64_t variantId = 0;
 	std::chrono::steady_clock::duration duration{};
 };
 
@@ -75,8 +67,8 @@ struct PlayerBotHuntRuntimeScoreWork {
 	size_t candidateIndex = 0;
 	PlayerBotHuntPlanningProfile profile;
 	uint64_t cacheRevision = 0;
-	std::set<Position> excludedRegions;
-	std::map<Position, PlayerBotHuntRegionPerformance> performance;
+	std::set<uint64_t> excludedVariants;
+	std::map<uint64_t, PlayerBotHuntRegionPerformance> performance;
 	std::shared_ptr<const PlayerBotTopologyDistances> topologyDistances;
 	uint32_t huntDurationSeconds = 0;
 };
@@ -89,20 +81,8 @@ struct PlayerBotHuntRuntimeScoreObservation {
 	PlayerBotHuntRegion region;
 };
 
-struct PlayerBotHuntRuntimeRouteObservation {
-	bool pathfindingCalled = false;
-	bool reachable = false;
-	bool nodeLimit = false;
-	uint64_t expandedNodes = 0;
-	uint32_t travelSteps = 0;
-	double estimatedTravelSeconds = 0;
-	double staminaExperienceMultiplier = 0;
-	PlayerBotHuntCorridorDanger corridorDanger;
-};
-
 struct PlayerBotHuntRuntimeOutcome {
 	PlayerBotHuntRuntimeCommand command = PlayerBotHuntRuntimeCommand::None;
-	std::optional<PlayerBotHuntRuntimeRouteWork> routeWork;
 	std::vector<PlayerBotHuntRuntimeScoreWork> scoreWork;
 	std::optional<PlayerBotHuntRegion> selectedRegion;
 	std::vector<PlayerBotHuntRegion> candidates;
@@ -163,10 +143,10 @@ class PlayerBotHuntRuntime
 		                                            const PlayerBotHuntPlanningObservation& observation = {});
 		PlayerBotHuntRuntimeOutcome completeScoreWork(const std::vector<PlayerBotHuntRuntimeScoreObservation>& observations,
 		                                              uint64_t elapsedUs);
-		void completeRouteWork(const PlayerBotHuntRuntimeRouteWork& work,
-		                       const PlayerBotHuntRuntimeRouteObservation& route);
 		// Keep the completed session through final telemetry, then release it.
 		void completePlanningSelection() { planning.reset(); pendingScoreCandidates.clear(); }
+		void selectPlanningRegion(PlayerBotHuntRegion region, const PlayerBotHuntRuntimePlayerObservation& player,
+		                         std::chrono::steady_clock::time_point now) { activate(std::move(region), player, now); }
 		void cancelPlanning() { planning.reset(); pendingScoreCandidates.clear(); }
 		bool planningActive() const { return planning.has_value(); }
 		std::optional<PlayerBotHuntPlanningSession> planningSession() const
@@ -196,7 +176,7 @@ class PlayerBotHuntRuntime
 		std::optional<PlayerBotHuntRuntimeCooldownCommand> observeDeath(bool activeCombat,
 		                                                                std::chrono::steady_clock::duration cooldown);
 		PlayerBotHuntPlanningProfile planningProfile(PlayerBotHuntPlanningProfile profile) const;
-		std::map<Position, PlayerBotHuntRegionPerformance> regionPerformance() const { return policy.regionPerformance(); }
+		std::map<uint64_t, PlayerBotHuntRegionPerformance> regionPerformance() const { return policy.regionPerformance(); }
 		PlayerBotEquipmentHuntSummary summarizeEquipmentHunts(const std::vector<PlayerBotHuntRegion>& regions, bool truncated) const;
 
 		PlayerBotHuntPatrolOutcome patrolTarget() const;

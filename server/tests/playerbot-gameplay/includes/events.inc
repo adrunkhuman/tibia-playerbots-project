@@ -3,7 +3,8 @@ local F = PlayerbotGameplayFixture
 F.inaccessibleCorpseDeath = CreatureEvent("PlayerbotInaccessibleCorpseDeath")
 
 function F.inaccessibleCorpseDeath.onDeath(creature, corpse)
-    if creature:getName() ~= F.lootMonsterName or (os.getenv("PLAYERBOT_GAMEPLAY_MODE") or "") ~= "corpse_inaccessible" then
+    local mode = os.getenv("PLAYERBOT_GAMEPLAY_MODE") or ""
+    if creature:getName() ~= F.lootMonsterName or (mode ~= "corpse_detour" and mode ~= "corpse_inaccessible") then
         return true
     end
     local player = Player(F.botName)
@@ -23,6 +24,20 @@ function F.inaccessibleCorpseDeath.onDeath(creature, corpse)
             local blocker = Game.createMonster(F.corpseBlockerMonsterName, blockerPosition, true, true)
             assert(blocker and blocker:selectTarget(player),
                 "inaccessible corpse fixture could not create its attacking blocker")
+			if mode == "corpse_inaccessible" then
+				for x = -1, 1 do
+					for y = -1, 1 do
+						local wallPosition = Position(position.x + x, position.y + y, position.z)
+						if (x ~= 0 or y ~= 0) and wallPosition ~= blockerPosition then
+							local tile = Tile(wallPosition)
+							if tile and tile:isWalkable() then
+								assert(Game.createItem(1499, 1, wallPosition),
+									"inaccessible corpse fixture could not seal its corridor")
+							end
+						end
+					end
+				end
+			end
             print("PLAYERBOT_GAMEPLAY_TEST CORPSE_INACCESSIBLE_DISPLACED")
             return true
         end

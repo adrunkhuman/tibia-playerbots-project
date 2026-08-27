@@ -38,6 +38,8 @@ struct PlayerBotRewardPlan {
 	int32_t currentValue = 0;
 	int32_t candidateValue = 0;
 	uint32_t travelSteps = 0;
+	uint32_t travelDangerCost = 0;
+	double maximumTravelDanger = 0;
 	uint32_t estimatedDistance = 0;
 	uint32_t requiredBackpackSlots = 0;
 	uint16_t replacedItemId = 0;
