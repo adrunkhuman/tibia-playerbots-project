@@ -65,7 +65,7 @@ $gameplayComposeFile = Join-Path $projectRoot "server\compose.playerbot-gameplay
 $composeArguments = @("compose", "-f", $composeFile, "-f", $gameplayComposeFile)
 $scenarioCatalog = @(
 	"cycle",
-	"mainland_loop", "slotted_loot_seller", "slotted_loot_no_seller", "slotted_loot_deposit_restart",
+	"carlin_local_service", "mainland_loop", "slotted_loot_seller", "slotted_loot_no_seller", "slotted_loot_deposit_restart",
 	"real_depot", "real_depot_restart_approach", "real_depot_restart_locker", "real_depot_restart_chest",
 	"real_depot_restart_deposit", "real_depot_restart_depart", "real_depot_partial_move", "real_depot_rejected_move",
 	"pickup_progression", "pickup_progression_bundle", "pickup_progression_nested", "pickup_progression_resume",
@@ -74,10 +74,10 @@ $scenarioCatalog = @(
 	"combat_readiness_ready", "combat_readiness_upgrade", "combat_readiness_missing_weapon", "combat_readiness_supplies",
 	"combat_readiness_no_food", "combat_readiness_low_wealth", "combat_readiness_food_capacity",
 	"combat_readiness_retention", "equipment_offer_shadow_upgrade", "equipment_offer_shadow_unaffordable",
-	"equipment_offer_shadow_no_upgrade", "equipment_purchase", "equipment_purchase_resume", "equipment_purchase_space",
+	"equipment_offer_shadow_no_upgrade", "equipment_purchase", "equipment_purchase_resume", "equipment_purchase_provider_moved", "equipment_purchase_provider_unreachable", "equipment_purchase_space",
 	"equipment_purchase_rejected", "adaptive_challenge", "mainland_equipment_reward", "oracle_departure",
-	"oracle_level_eight_interrupt", "oracle_level_eight_recovery",
-	"navigation", "navigation_recovery", "patrol_recovery", "target_pursuit", "target_pursuit_abandon",
+		"oracle_level_eight_interrupt", "oracle_level_eight_recovery",
+		"navigation", "navigation_recovery", "carlin_service_route", "mutable_portal_route", "patrol_recovery", "target_pursuit", "target_pursuit_abandon", "target_attacker_priority",
 	"spell_training", "spell_use", "spell_calibration", "magic_training_haste", "magic_training_great_light",
 	"magic_training_light", "magic_training_refresh", "magic_training_reserve", "magic_training_exact_full",
 	"magic_training_pz", "magic_training_absent", "magic_training_expired", "magic_training_failed",
@@ -91,8 +91,8 @@ foreach ($scenarioName in $scenarioCatalog) {
 		throw "Duplicate gameplay scenario name: $scenarioName"
 	}
 }
-if ($scenarioCatalog.Count -ne 75) {
-	throw "The gameplay scenario catalog must contain 75 scenarios; found $($scenarioCatalog.Count)."
+if ($scenarioCatalog.Count -ne 81) {
+	throw "The gameplay scenario catalog must contain 81 scenarios; found $($scenarioCatalog.Count)."
 }
 $requestedScenarioNames = @($Scenario | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
 $exactScenarioSelection = $requestedScenarioNames.Count -gt 0

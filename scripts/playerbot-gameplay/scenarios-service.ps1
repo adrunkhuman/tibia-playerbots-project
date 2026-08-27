@@ -1,4 +1,12 @@
 	if ($MainlandLoop) {
+		Invoke-Scenario -Name "carlin_local_service" -DefaultTimeoutSeconds 120 -Body {
+			Invoke-Compose down --volumes --remove-orphans
+			$env:PLAYERBOT_GAMEPLAY_MODE = "carlin_local_service"
+			Invoke-Compose up --detach
+			$logs = Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST CARLIN_LOCAL_SERVICE_PASS'
+			Assert-CarlinLocalServiceEvents -Logs $logs
+		}
+
 		Invoke-Scenario -Name "mainland_loop" -DefaultTimeoutSeconds 600 -Body {
 			Invoke-Compose down --volumes --remove-orphans
 			$env:PLAYERBOT_GAMEPLAY_MODE = "mainland"

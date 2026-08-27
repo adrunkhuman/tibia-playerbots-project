@@ -86,6 +86,36 @@ function Assert-CycleEvents {
     }
 }
 
+function Assert-CarlinLocalServiceEvents {
+    param([string]$Logs)
+
+    $events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
+    $purchases = @($events | Where-Object {
+        $_.event -eq "action_result" -and $_.action -eq "buy_potions" -and $_.result -eq "success" -and
+        $_.item_id -eq 7618 -and $_.count -eq 9 -and $_.position.x -ge 32340 -and $_.position.x -le 32346 -and
+        $_.position.y -ge 31825 -and $_.position.y -le 31831 -and $_.position.z -eq 7
+	})
+	$rachelReplies = @($events | Where-Object { $_.event -eq "npc_reply" -and $_.npc_name -eq "Rachel" })
+	$evaReplies = @($events | Where-Object { $_.event -eq "npc_reply" -and $_.npc_name -eq "Eva" })
+	$withdrawals = @($events | Where-Object {
+		$_.event -eq "action_result" -and $_.action -eq "bank_withdraw" -and $_.result -eq "success" -and
+		$_.count -eq 100 -and $_.bank_before -eq 100 -and $_.bank_after -eq 0 -and
+		$_.position.x -ge 32323 -and $_.position.x -le 32329 -and
+		$_.position.y -ge 31777 -and $_.position.y -le 31783 -and $_.position.z -eq 7
+	})
+	$remoteAttempts = @($events | Where-Object {
+		($_.event -eq "npc_reply" -and $_.npc_name -eq "Xodet") -or
+		($_.event -eq "service_provider_rejected" -and $_.npc_name -eq "Xodet") -or
+		($_.event -eq "npc_reply" -and $_.npc_name -in @("Lokur", "Suzy")) -or
+		($_.event -eq "npc_travel")
+	})
+	$terminals = @($events | Where-Object { $_.event -eq "terminal" })
+	if ($purchases.Count -ne 1 -or $rachelReplies.Count -lt 1 -or $evaReplies.Count -lt 1 -or
+		$withdrawals.Count -ne 1 -or $remoteAttempts.Count -ne 0 -or $terminals.Count -ne 0) {
+		throw "Carlin service was not completed locally at Rachel and Eva. purchases=$($purchases.Count), rachel=$($rachelReplies.Count), eva=$($evaReplies.Count), withdrawals=$($withdrawals.Count), remote=$($remoteAttempts.Count), terminal=$($terminals.Count)."
+	}
+}
+
 function Assert-OracleDepartureEvents {
     param([string]$Logs, [switch]$Restart, [switch]$InterruptedByRestart)
 

@@ -283,6 +283,28 @@
 			}
 			Assert-EquipmentPurchaseEvents -Logs $resumeLogs -Resume
 		}
+		Invoke-Scenario -Name "equipment_purchase_provider_moved" -DefaultTimeoutSeconds 240 -Body {
+			Invoke-Compose down --volumes --remove-orphans
+			$env:PLAYERBOT_GAMEPLAY_MODE = "equipment_buy_provider_moved"
+			$env:PLAYERBOT_HUNT_DURATION_SECONDS = "900"
+			Invoke-Compose up --detach
+			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST EQUIPMENT_PROVIDER_MOVED' | Out-Null
+			$movedLogs = Wait-ForPlayerbotEvent {
+				$_.event -eq "goal_result" -and $_.goal -eq "buy_equipment" -and $_.result -eq "success"
+			}
+			Assert-EquipmentPurchaseEvents -Logs $movedLogs -ProviderMoved
+		}
+		Invoke-Scenario -Name "equipment_purchase_provider_unreachable" -DefaultTimeoutSeconds 120 -Body {
+			Invoke-Compose down --volumes --remove-orphans
+			$env:PLAYERBOT_GAMEPLAY_MODE = "equipment_buy_provider_unreachable"
+			$env:PLAYERBOT_HUNT_DURATION_SECONDS = "900"
+			Invoke-Compose up --detach
+			$unreachableLogs = Wait-ForPlayerbotEvent {
+				$_.event -eq "goal_result" -and $_.goal -eq "buy_equipment" -and
+				$_.result -eq "failed" -and $_.reason -eq "route_unavailable"
+			}
+			Assert-UnreachableEquipmentProviderEvents -Logs $unreachableLogs
+		}
 		Invoke-Scenario -Name "equipment_purchase_space" -DefaultTimeoutSeconds 240 -Body {
 			Invoke-Compose down --volumes --remove-orphans
 			$env:PLAYERBOT_GAMEPLAY_MODE = "equipment_buy_space"

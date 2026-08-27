@@ -106,7 +106,7 @@ function Assert-EquipmentOfferEvents {
 }
 
 function Assert-EquipmentPurchaseEvents {
-	param([string]$Logs, [switch]$Rejected, [switch]$Restart, [switch]$Resume)
+	param([string]$Logs, [switch]$Rejected, [switch]$Restart, [switch]$Resume, [switch]$ProviderMoved)
 
 	$events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
 	$purchases = @($events | Where-Object {
@@ -119,6 +119,7 @@ function Assert-EquipmentPurchaseEvents {
 		$_.event -eq "goal_result" -and $_.goal -eq "buy_equipment"
 	})
 	$terminal = @($events | Where-Object { $_.event -eq "terminal" })
+	$staleProviderFailures = @($results | Where-Object { $_.reason -eq "provider_moved" })
 	if ($Restart) {
 		$online = @($events | Where-Object {
 			$_.event -eq "lifecycle" -and $_.status -eq "online" -and -not $_.recovered -and $_.objective -eq "fixture_pending"
@@ -151,14 +152,32 @@ function Assert-EquipmentPurchaseEvents {
 		}
 		return
 	}
+	if ($ProviderMoved) {
+		$selections = @($events | Where-Object {
+			$_.event -eq "goal_selection" -and $_.to_goal -eq "buy_equipment" -and $_.item_id -eq 2648 -and $_.price -eq 80
+		})
+		$focus = @($events | Where-Object { $_.event -eq "npc_reply" -and $_.npc_name -eq "Cornelia" })
+		if ($selections.Count -ne 1 -or $purchases.Count -ne 1 -or $purchases[0].item_id -ne 2648 -or
+			$equips.Count -ne 1 -or $equips[0].item_id -ne 2648 -or $results.Count -ne 1 -or
+			$results[0].result -ne "success" -or $staleProviderFailures.Count -ne 0 -or
+			$focus.Count -lt 1 -or $terminal.Count -ne 0) {
+			throw "Moving equipment provider was not reacquired through a focused, successful purchase."
+		}
+		return
+	}
 	$selections = @($events | Where-Object {
 		$_.event -eq "goal_selection" -and $_.to_goal -eq "buy_equipment" -and $_.item_id -eq 2379 -and $_.price -eq 5
+	})
+	$selectedNpcId = if ($selections.Count -eq 1) { $selections[0].npc_id } else { $null }
+	$focus = @($events | Where-Object {
+		$_.event -eq "npc_reply" -and $_.npc_id -eq $selectedNpcId
 	})
 	if ($selections.Count -ne 1 -or $purchases.Count -ne 1 -or $equips.Count -ne 1 -or
 		$results.Count -ne 1 -or $results[0].result -ne "success" -or
 		$purchases[0].carried_before -ne 5 -or $purchases[0].carried_after -ne 0 -or
 		$purchases[0].bank_before -ne 100 -or $purchases[0].bank_after -ne 100 -or
-		-not $equips[0].combat_ready -or -not $equips[0].displaced_items_preserved -or $terminal.Count -ne 0) {
+		-not $equips[0].combat_ready -or -not $equips[0].displaced_items_preserved -or $terminal.Count -ne 0 -or
+		$focus.Count -lt 1 -or $staleProviderFailures.Count -ne 0) {
 		$purchase = $purchases | Select-Object -First 1
 		$equip = $equips | Select-Object -First 1
 		$terminalReasons = ($terminal | ForEach-Object { $_.reason }) -join ","

@@ -196,6 +196,34 @@ function F.verifyHealing(playerId, attempts)
     print("PLAYERBOT_GAMEPLAY_TEST HEALING_STATE_PASS")
 end
 
+function F.verifyMovedProviderPurchase(playerId, attempts)
+    local player = Player(playerId)
+    assert(player and not player:isRemoved(), "Bot One disappeared during moving-provider purchase fixture")
+    local legs = player:getSlotItem(CONST_SLOT_LEGS)
+    local complete = legs and legs:getId() == F.movedProviderPurchaseItemId and
+        player:getItemCount(2468) == 1 and player:getItemCount(2376) == 1 and
+        player:getMoney() + player:getBankBalance() == 100
+    if not complete and attempts > 0 then
+        addEvent(F.verifyMovedProviderPurchase, 500, playerId, attempts - 1)
+        return
+    end
+    assert(complete, "moving-provider purchase did not preserve the displaced equipment and payment")
+    print("PLAYERBOT_GAMEPLAY_TEST EQUIPMENT_BUY_PROVIDER_MOVED_PASS")
+end
+
+function F.verifyCarlinLocalService(playerId, attempts)
+    local player = Player(playerId)
+    assert(player and not player:isRemoved(), "Bot One disappeared during Carlin service")
+	local complete = player:getItemCount(F.healthPotionItemId) >= 10 and player:getMoney() == 100 and
+		player:getBankBalance() == 0
+    if not complete and attempts > 0 then
+        addEvent(F.verifyCarlinLocalService, 250, playerId, attempts - 1)
+        return
+    end
+	assert(complete, "Carlin service did not restock at Rachel and withdraw its reserve from Eva")
+    print("PLAYERBOT_GAMEPLAY_TEST CARLIN_LOCAL_SERVICE_PASS")
+end
+
 function F.verifyHealingResupply(playerId, attempts)
     local player = Player(playerId)
     assert(player and not player:isRemoved(), "Bot One disappeared during the healing resupply test")

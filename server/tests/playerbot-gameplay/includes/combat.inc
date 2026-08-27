@@ -27,6 +27,33 @@ function F.spawnDefensiveMonsters(playerId)
     print("PLAYERBOT_GAMEPLAY_TEST DEFENSIVE_BLOCKERS_SPAWNED " .. spawned)
 end
 
+function F.spawnTargetPriorityAttacker(playerId, targetId)
+    local player = Player(playerId)
+    local target = Monster(targetId)
+    assert(player and not player:isRemoved(), "Bot One disappeared before target priority test")
+    assert(target and not target:isRemoved(), "target priority fixture lost its initial target")
+    local origin = player:getPosition()
+	assert(target:teleportTo(Position(origin.x + 4, origin.y, origin.z), true),
+        "target priority fixture could not move its initial target")
+	target:setTarget(nil)
+	target:setIdle(true)
+	for _, position in ipairs({
+        Position(origin.x + 1, origin.y, origin.z),
+        Position(origin.x, origin.y + 1, origin.z),
+        Position(origin.x - 1, origin.y, origin.z),
+        Position(origin.x, origin.y - 1, origin.z),
+    }) do
+        local tile = Tile(position)
+        if tile and tile:isWalkable() then
+			local attacker = Game.createMonster(F.defensiveMonsterName, position, true, true)
+			assert(attacker and attacker:selectTarget(player), "target priority attacker could not target Bot One")
+			print("PLAYERBOT_GAMEPLAY_TEST TARGET_PRIORITY_ATTACKER " .. targetId .. " " .. attacker:getId())
+			return
+        end
+    end
+	error("target priority fixture found no adjacent attacker position")
+end
+
 function F.spawnDeathMonster(playerId)
     local player = Player(playerId)
     assert(player and not player:isRemoved(), "Bot One disappeared before death telemetry test")
