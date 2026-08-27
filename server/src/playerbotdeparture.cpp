@@ -184,9 +184,20 @@ void PlayerBotController::processOracleDeparture(Player* player, const Position&
 	const auto& departure = progressionRuntime.departure().plan();
 	PlayerBotDepartureObservation observation;
 	Npc* oracle = g_game.getNpcByID(departure.npcId);
+	const std::string* oracleCapability = oracle && !oracle->isRemoved() ? oracle->getParameter("playerbot_service") : nullptr;
+	if (!oracleCapability || *oracleCapability != "oracle") oracle = nullptr;
 	if (progressionRuntime.departure().stage() == PlayerBotOracleDepartureStage::Travel) {
-		observation.navigationReached = processNavigation(player, currentPosition, departure.approachPosition);
-		observation.navigationFailed = navigationRuntime.fixedTargetRouteFailureCount() >= maximumProgressionAttempts;
+		bool approachUnavailable = false;
+		observation.navigationReached = processNpcApproach(player, currentPosition, oracle, departure.approachPosition, approachUnavailable);
+		observation.navigationFailed = approachUnavailable ||
+		                              navigationRuntime.fixedTargetRouteFailureCount() >= maximumProgressionAttempts;
+	} else if (progressionRuntime.departure().stage() != PlayerBotOracleDepartureStage::Verify && oracle &&
+	           !oracle->isRemoved() && !Position::areInRange<3, 3, 0>(currentPosition, oracle->getPosition())) {
+		progressionRuntime.restartDepartureConversation();
+		bool approachUnavailable = false;
+		processNpcApproach(player, currentPosition, oracle, departure.approachPosition, approachUnavailable);
+		if (approachUnavailable) finishOracleDeparture(player, currentPosition, "failed", "route_unavailable");
+		return;
 	} else {
 		observation.npcAvailable = oracle && !oracle->isRemoved() && Position::areInRange<3, 3, 0>(currentPosition, oracle->getPosition());
 		observation.greetingAcknowledged = progressionRuntime.greetingAcknowledged();

@@ -37,11 +37,11 @@ class PlayerBotNavigationSession
 {
 	public:
 		void clear();
-		void adopt(const Position& destination, std::deque<PlayerBotNavigationStep> steps);
-		void prepareDestination(const Position& destination);
-		void installRoute(const Position& destination, std::deque<PlayerBotNavigationStep> steps);
+		void adopt(const PlayerBotNavigationGoal& goal, std::deque<PlayerBotNavigationStep> steps);
+		void prepareGoal(const PlayerBotNavigationGoal& goal);
+		void installRoute(const PlayerBotNavigationGoal& goal, std::deque<PlayerBotNavigationStep> steps);
 
-		const Position& destination() const { return target; }
+		const PlayerBotNavigationGoal& goal() const { return target; }
 		bool routeEmpty() const { return steps.empty(); }
 		const PlayerBotNavigationStep& nextStep() const { return steps.front(); }
 		void clearRoute() { steps.clear(); }
@@ -61,7 +61,7 @@ class PlayerBotNavigationSession
 		void clearBlockedPositions() { temporarilyBlockedPositions.clear(); }
 
 		std::optional<PlayerBotNavigationOscillation> observeProgress(
-			const Position& currentPosition, const Position& destination,
+			const Position& currentPosition, const PlayerBotNavigationGoal& goal,
 			std::chrono::steady_clock::time_point now, std::chrono::steady_clock::duration suppression);
 
 		bool isRouteCritical(const Position& position, std::chrono::steady_clock::time_point now) const;
@@ -72,10 +72,11 @@ class PlayerBotNavigationSession
 
 	private:
 		std::deque<PlayerBotNavigationStep> steps;
-		Position target;
+		PlayerBotNavigationGoal target;
 		Position expectedPosition;
 		Position stepTarget;
-		Position progressTarget;
+		PlayerBotNavigationGoal progressTarget;
+		bool progressTargetSet = false;
 		Position progressPrevious;
 		Position progressTwoAgo;
 		uint32_t bestDistance = std::numeric_limits<uint32_t>::max();

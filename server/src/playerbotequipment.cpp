@@ -12,6 +12,7 @@
 
 #include "playerbotcontroller.h"
 #include "playerbotnpccapabilities.h"
+#include "playerbottopology.h"
 using namespace playerbot;
 
 namespace {
@@ -154,7 +155,8 @@ std::optional<PlayerBotController::EquipmentOfferEvaluation> PlayerBotController
 				expandedNodes = routePlan.metrics.expandedNodes;
 			}
 			if (result == PlayerBotNavigationResult::Reached) {
-				return providerRoutes.emplace(npc.getID(), std::make_pair(approach, static_cast<uint32_t>(steps.size()))).first->second;
+				const uint32_t routeSteps = approach == position ? 0 : static_cast<uint32_t>(routePlan.metrics.steps);
+				return providerRoutes.emplace(npc.getID(), std::make_pair(approach, routeSteps)).first->second;
 			}
 			if (result == PlayerBotNavigationResult::NodeLimit) {
 				providerRouteNodeLimits.insert(npc.getID());
@@ -171,14 +173,31 @@ std::optional<PlayerBotController::EquipmentOfferEvaluation> PlayerBotController
 		std::vector<const ShopInfo*> offers;
 	};
 	std::vector<Npc*> shopProviders = playerBotNpcProviders(g_game.getNpcs(), PlayerBotNpcCapability::Shop, position);
-	if (!shopProviders.empty()) {
-		const size_t offset = equipmentProviderScanOffset % shopProviders.size();
-		std::rotate(shopProviders.begin(), shopProviders.begin() + offset, shopProviders.end());
-		equipmentProviderScanOffset = (offset + std::min(maximumEquipmentCatalogProviders, shopProviders.size())) % shopProviders.size();
-	}
+	const PlayerBotTopology& topology = PlayerBotTopology::instance();
+	const PlayerBotTopologyDistances coarseDistances = topology.distancesFrom(
+	    position, g_game.findItemOfType(&player, playerbot::ropeItemId, true) != nullptr,
+	    g_game.findItemOfType(&player, 2554, true) != nullptr, player.getLevel());
+	std::stable_sort(shopProviders.begin(), shopProviders.end(), [&topology, &coarseDistances](const Npc* left, const Npc* right) {
+		const std::optional<uint32_t> leftCost = topology.distanceTo(
+		    coarseDistances, PlayerBotNavigationGoal::withinRange(left->getPosition(), 3, 3));
+		const std::optional<uint32_t> rightCost = topology.distanceTo(
+		    coarseDistances, PlayerBotNavigationGoal::withinRange(right->getPosition(), 3, 3));
+		if (leftCost.has_value() != rightCost.has_value()) return leftCost.has_value();
+		return leftCost && rightCost && *leftCost != *rightCost && *leftCost < *rightCost;
+	});
 	const bool providersTruncated = shopProviders.size() > maximumEquipmentCatalogProviders;
 	if (providersTruncated) {
-		shopProviders.resize(maximumEquipmentCatalogProviders);
+		constexpr size_t nearbyProviders = maximumEquipmentCatalogProviders / 2;
+		const size_t tailSize = shopProviders.size() - nearbyProviders;
+		const size_t offset = equipmentProviderScanOffset % tailSize;
+		std::vector<Npc*> selected(shopProviders.begin(), shopProviders.begin() + nearbyProviders);
+		for (size_t index = 0; index < maximumEquipmentCatalogProviders - nearbyProviders; ++index) {
+			selected.push_back(shopProviders[nearbyProviders + (offset + index) % tailSize]);
+		}
+		equipmentProviderScanOffset = (offset + maximumEquipmentCatalogProviders - nearbyProviders) % tailSize;
+		shopProviders = std::move(selected);
+	} else {
+		equipmentProviderScanOffset = 0;
 	}
 	std::vector<ProviderCatalog> providerCatalogs;
 	std::vector<CatalogOffer> allCatalogOffers;
@@ -393,9 +412,19 @@ void PlayerBotController::processEquipmentPurchase(Player* player, const Positio
 		observation.fundingAvailable = reserve != std::numeric_limits<uint64_t>::max() && money >= purchase.price && money - purchase.price >= reserve;
 	}
 	if (progressionRuntime.equipmentPurchase().stage() == PlayerBotEquipmentPurchaseStage::Travel) {
-		observation.navigationReached = processNavigation(player, position, purchase.approachPosition);
-		observation.navigationFailed = navigationRuntime.fixedTargetRouteFailureCount() >= maximumProgressionAttempts ||
+		bool approachUnavailable = false;
+		observation.navigationReached = processNpcApproach(player, position, npc, purchase.approachPosition, approachUnavailable);
+		observation.navigationFailed = approachUnavailable ||
+		                              navigationRuntime.fixedTargetRouteFailureCount() >= maximumProgressionAttempts ||
 		                              navigationRuntime.stepFailureCount() >= maximumRepeatedNavigationStepFailures;
+	} else if (progressionRuntime.equipmentPurchase().stage() == PlayerBotEquipmentPurchaseStage::Purchase &&
+	           observation.providerAvailable && observation.offerAvailable && !observation.providerInRange) {
+		progressionRuntime.restartEquipmentConversation();
+		player->closeShopWindow(false);
+		bool approachUnavailable = false;
+		processNpcApproach(player, position, npc, purchase.approachPosition, approachUnavailable);
+		if (approachUnavailable) finishEquipmentPurchase(player, position, "failed", "route_unavailable");
+		return;
 	} else if (progressionRuntime.equipmentPurchase().stage() == PlayerBotEquipmentPurchaseStage::Equip ||
 	           progressionRuntime.equipmentPurchase().stage() == PlayerBotEquipmentPurchaseStage::VerifyEquipment) {
 		Item* purchased = g_game.findItemOfType(player, purchase.itemId, true);

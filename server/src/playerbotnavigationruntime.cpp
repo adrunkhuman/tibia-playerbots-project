@@ -15,7 +15,7 @@
 PlayerBotNavigationRuntimeOutcome PlayerBotNavigationRuntime::process(const PlayerBotNavigationRuntimeInput& input)
 {
 	PlayerBotNavigationRuntimeOutcome outcome;
-	if (input.currentPosition == input.destination) {
+	if (input.goal.reached(input.currentPosition)) {
 		session.clear();
 		outcome.destinationReached = true;
 		outcome.command = PlayerBotNavigationRuntimeCommand::None;
@@ -23,7 +23,7 @@ PlayerBotNavigationRuntimeOutcome PlayerBotNavigationRuntime::process(const Play
 		return outcome;
 	}
 
-	if (const auto oscillation = session.observeProgress(input.currentPosition, input.destination, input.timing.now,
+	if (const auto oscillation = session.observeProgress(input.currentPosition, input.goal, input.timing.now,
 	                                                     input.timing.oscillationSuppression)) {
 		outcome.oscillation = oscillation;
 		outcome.command = PlayerBotNavigationRuntimeCommand::Retry;
@@ -45,10 +45,10 @@ PlayerBotNavigationRuntimeOutcome PlayerBotNavigationRuntime::process(const Play
 		outcome.stepFailureCount = session.stepFailureCount();
 		return outcome;
 	}
-	session.prepareDestination(input.destination);
+	session.prepareGoal(input.goal);
 	if (session.routeEmpty()) {
 		outcome.blockedPositions = session.activeBlockedPositions(input.timing.now);
-		outcome.routeRequest = {input.destination, outcome.blockedPositions, playerBotNavigationMaximumExpandedNodes};
+		outcome.routeRequest = {input.goal, outcome.blockedPositions, playerBotNavigationMaximumExpandedNodes};
 		outcome.command = PlayerBotNavigationRuntimeCommand::Plan;
 		outcome.stepFailureCount = session.stepFailureCount();
 		return outcome;
@@ -76,8 +76,8 @@ PlayerBotNavigationRuntimeOutcome PlayerBotNavigationRuntime::observePlan(Player
 	}
 	fixedTargetRouteFailures = 0;
 	// A planned route replaces existing work only after planning completed.
-	if (observation.startsNavigation) session.adopt(observation.destination, std::move(observation.plan.steps));
-	else session.installRoute(observation.destination, std::move(observation.plan.steps));
+	if (observation.startsNavigation) session.adopt(observation.goal, std::move(observation.plan.steps));
+	else session.installRoute(observation.goal, std::move(observation.plan.steps));
 	dispatchNextStep(observation.canDoAction, outcome);
 	outcome.stepFailureCount = session.stepFailureCount();
 	return outcome;
@@ -87,6 +87,9 @@ PlayerBotNavigationRuntimeOutcome PlayerBotNavigationRuntime::observeStep(const 
 {
 	PlayerBotNavigationRuntimeOutcome outcome;
 	if (observation.result == PlayerBotNavigationStepResult::Rejected) {
+		if (observation.step.topologyPortal) {
+			session.suppress(observation.step.target, observation.now + observation.suppression);
+		}
 		session.clearRoute();
 	} else if (observation.step.action == PlayerBotNavigationAction::UseDoor || observation.step.action == PlayerBotNavigationAction::UseShovel) {
 		session.beginWorldChange(observation.step);
@@ -99,7 +102,7 @@ PlayerBotNavigationRuntimeOutcome PlayerBotNavigationRuntime::observeStep(const 
 
 PlayerBotNavigationRuntimeOutcome PlayerBotNavigationRuntime::observeWorldChange(const PlayerBotNavigationWorldChangeObservation& observation)
 {
-	if (observation.unchanged) session.suppress(observation.step.target, observation.now + observation.suppression);
+	if (observation.unresolved) session.suppress(observation.step.target, observation.now + observation.suppression);
 	PlayerBotNavigationRuntimeOutcome outcome;
 	outcome.stepFailureCount = session.stepFailureCount();
 	return outcome;

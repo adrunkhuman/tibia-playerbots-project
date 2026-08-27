@@ -124,6 +124,25 @@ bool PlayerBotProgressionRuntime::reportNpcReply(uint32_t playerId, uint32_t rep
 	return npcSession.acceptReply(playerId, replyingPlayerId, npcId, type);
 }
 
+void PlayerBotProgressionRuntime::restartDepartureConversation()
+{
+	npcSession.reset(departureSession.plan().npcId);
+	departureSession.setStage(PlayerBotOracleDepartureStage::Greet);
+	departureSession.resetRetries();
+}
+
+void PlayerBotProgressionRuntime::restartSpellTrainingConversation()
+{
+	npcSession.reset(spellTrainingSession.plan().npcId);
+	spellTrainingSession.setStage(PlayerBotSpellTrainingStage::Greet);
+	spellTrainingSession.resetRetries();
+}
+
+void PlayerBotProgressionRuntime::restartEquipmentConversation()
+{
+	npcSession.reset(equipmentPurchaseSession.plan().npcId);
+}
+
 PlayerBotEquipmentShopCommand PlayerBotProgressionRuntime::advanceEquipmentShop(const PlayerBotNpcShopObservation& observation,
                                                                                   uint32_t maximumRetries)
 {

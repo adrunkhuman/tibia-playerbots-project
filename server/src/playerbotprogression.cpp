@@ -404,6 +404,11 @@ bool PlayerBotController::planSimpleRewardApproach(Player& player, const Positio
 {
 	const Position currentPosition = player.getPosition();
 	expandedNodes = 0;
+	if (Position::areInRange<1, 1, 0>(currentPosition, rewardPosition)) {
+		approachPosition = currentPosition;
+		approachSteps.clear();
+		return true;
+	}
 	std::vector<Position> candidates;
 	candidates.reserve(8);
 	for (int32_t xOffset = -1; xOffset <= 1; ++xOffset) {
@@ -413,7 +418,7 @@ bool PlayerBotController::planSimpleRewardApproach(Player& player, const Positio
 			}
 			const Position candidate(rewardPosition.x + xOffset, rewardPosition.y + yOffset, rewardPosition.z);
 			Tile* tile = g_game.map.getTile(candidate);
-			if (!tile || tile->queryAdd(0, player, 1, 0) != RETURNVALUE_NOERROR) {
+			if (!tile || (candidate != currentPosition && tile->queryAdd(0, player, 1, 0) != RETURNVALUE_NOERROR)) {
 				continue;
 			}
 			candidates.push_back(candidate);
@@ -523,6 +528,7 @@ void PlayerBotController::emitRewardInspection(uint16_t uniqueId, const Position
 bool PlayerBotController::findPickupReward(Player& player, const Position& position, PlayerBotRewardPlan& reward,
                        std::deque<PlayerBotNavigationStep>& rewardSteps)
 {
+	if (!fixtureDriver.mapRewardsEnabled()) return false;
 	const PlayerBotEquipmentPlayerSnapshot playerFacts = PlayerBotEquipmentAdapter::player(player);
 	const EquipmentLoadout currentLoadout = PlayerBotEquipmentAdapter::loadout(player);
 	const PlayerBotCombatProfile currentProfile = equipmentPolicy.combatProfile(playerFacts, currentLoadout);
@@ -605,25 +611,28 @@ bool PlayerBotController::findPickupReward(Player& player, const Position& posit
 		return rewardPlanner.inspect(snapshot, context);
 	};
 	std::vector<PlayerBotRewardCandidateSnapshot> candidates;
+	std::vector<Item*> rewardObjects;
 	for (const auto& entry : g_game.getUniqueItems()) {
 		Item* rewardObject = entry.second;
-		if (!rewardObject) {
-			continue;
-		}
+		if (!rewardObject) continue;
 		const bool containerReward = rewardObject->getActionId() == genericQuestChestActionId;
 		const bool doubletReward = rewardObject->getActionId() == nonContainerQuestActionId &&
 		                           rewardObject->getUniqueId() == doubletQuestUniqueId;
-		if (!containerReward && !doubletReward) {
-			continue;
-		}
-		if (!rewardObject->isLoadedFromMap() && !doubletReward) {
-			continue;
-		}
+		if ((!containerReward && !doubletReward) || (!rewardObject->isLoadedFromMap() && !doubletReward)) continue;
+		Tile* tile = rewardObject->getTile();
+		if (tile && isRewardPosition(player, tile->getPosition())) rewardObjects.push_back(rewardObject);
+	}
+	std::sort(rewardObjects.begin(), rewardObjects.end(), [&position](const Item* left, const Item* right) {
+		const uint32_t leftDistance = playerBotNavigationDistance(position, left->getPosition());
+		const uint32_t rightDistance = playerBotNavigationDistance(position, right->getPosition());
+		return leftDistance != rightDistance ? leftDistance < rightDistance : left->getUniqueId() < right->getUniqueId();
+	});
+	for (Item* rewardObject : rewardObjects) {
+		const bool containerReward = rewardObject->getActionId() == genericQuestChestActionId;
+		const bool doubletReward = rewardObject->getActionId() == nonContainerQuestActionId &&
+		                           rewardObject->getUniqueId() == doubletQuestUniqueId;
 		Tile* tile = rewardObject->getTile();
 		Container* contents = rewardObject->getContainer();
-		if (!tile || !isRewardPosition(player, tile->getPosition())) {
-			continue;
-		}
 		PlayerBotRewardPlan rejected;
 		rejected.uniqueId = rewardObject->getUniqueId();
 		rejected.rootItemId = rewardObject->getID();
@@ -690,22 +699,52 @@ bool PlayerBotController::findPickupReward(Player& player, const Position& posit
 	uint64_t rewardRouteNodes = 0;
 	const PlayerBotRewardPlannerSnapshot routeSnapshot{player.getFreeCapacity(), pickupRewardBaseUtility,
 	                                                    economicPickupBaseUtility, huntGoalUtility, candidates};
-	for (size_t candidateIndex : rewardPlanner.routeCandidates(routeSnapshot)) {
-		if (rewardRouteNodes >= maximumRewardRouteNodes) break;
+	const std::vector<size_t> routeCandidates = rewardPlanner.routeCandidates(routeSnapshot);
+	auto routeCandidate = [&](size_t candidateIndex) {
+		if (rewardRouteNodes >= maximumRewardRouteNodes) return;
 		PlayerBotRewardCandidateSnapshot& candidate = candidates[candidateIndex];
 		std::deque<PlayerBotNavigationStep> steps;
 		if (!planSimpleRewardApproach(player, candidate.plan.itemPosition, candidate.route.approachPosition, steps,
 		                               candidate.route.expandedNodes, maximumRewardRouteNodes - rewardRouteNodes)) {
 			rewardRouteNodes += candidate.route.expandedNodes;
-			continue;
+			return;
 		}
 		rewardRouteNodes += candidate.route.expandedNodes;
 		candidate.route.reachable = true;
 		candidate.route.steps = static_cast<uint32_t>(steps.size());
 		plannedRoutes.emplace(candidate.plan.uniqueId, std::move(steps));
-		PlayerBotRewardPlan routed = candidate.plan;
-		routed.travelSteps = candidate.route.steps;
-		if (rewardPlanner.utility(routed, routeSnapshot) > routeSnapshot.huntUtility) break;
+	};
+
+	if (!routeCandidates.empty()) {
+		const auto nearestIt = std::min_element(routeCandidates.begin(), routeCandidates.end(), [&](size_t left, size_t right) {
+			const PlayerBotRewardPlan& leftPlan = candidates[left].plan;
+			const PlayerBotRewardPlan& rightPlan = candidates[right].plan;
+			if (leftPlan.estimatedDistance != rightPlan.estimatedDistance) {
+				return leftPlan.estimatedDistance < rightPlan.estimatedDistance;
+			}
+			return leftPlan.uniqueId < rightPlan.uniqueId;
+		});
+		const size_t nearestIndex = *nearestIt;
+		routeCandidate(nearestIndex);
+		int32_t incumbentUtility = routeSnapshot.huntUtility;
+		if (candidates[nearestIndex].route.reachable) {
+			PlayerBotRewardPlan routed = candidates[nearestIndex].plan;
+			routed.travelSteps = candidates[nearestIndex].route.steps;
+			incumbentUtility = std::max(incumbentUtility, rewardPlanner.utility(routed, routeSnapshot));
+		}
+
+		for (size_t candidateIndex : routeCandidates) {
+			if (candidateIndex == nearestIndex) continue;
+			if (rewardPlanner.estimatedUtility(candidates[candidateIndex].plan, routeSnapshot) <= incumbentUtility ||
+			    rewardRouteNodes >= maximumRewardRouteNodes) {
+				break;
+			}
+			routeCandidate(candidateIndex);
+			if (!candidates[candidateIndex].route.reachable) continue;
+			PlayerBotRewardPlan routed = candidates[candidateIndex].plan;
+			routed.travelSteps = candidates[candidateIndex].route.steps;
+			incumbentUtility = std::max(incumbentUtility, rewardPlanner.utility(routed, routeSnapshot));
+		}
 	}
 	const PlayerBotRewardPlannerSnapshot snapshot{player.getFreeCapacity(), pickupRewardBaseUtility,
 	                                              economicPickupBaseUtility, huntGoalUtility, std::move(candidates)};

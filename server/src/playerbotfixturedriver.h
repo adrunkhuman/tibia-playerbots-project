@@ -54,8 +54,10 @@ namespace playerbot {
 			PlayerBotFixtureStorageObservation goalLoop(bool engineSelectGoal) const;
 			PlayerBotFixtureStorageObservation progressionGoalLoop(bool engineSelectGoal) const;
 			bool startWithGoalSelection() const { return policy.progressionEnabled; }
+			bool mapRewardsEnabled() const { return !policy.equipmentPurchaseFixture; }
 			PlayerBotFixtureHuntObservation huntObservation() const;
 			bool startInHunt() const { return policy.startInHunt; }
+			std::vector<Position> huntPatrol() const;
 			bool depotScenario() const { return policy.depotFixture; }
 			bool spellCalibrationScenario() const { return policy.spellCalibrationFixture; }
 			bool magicTrainingScenario() const { return policy.magicTrainingFixture; }
@@ -64,7 +66,7 @@ namespace playerbot {
 			                                                     uint32_t engineInventoryCount = 0) const;
 			PlayerBotFixtureProviderObservation observeEquipmentOffer(bool engineAvailable) const;
 			PlayerBotFixtureStorageObservation equipmentStorageObservation() const;
-			PlayerBotFixtureRoutePlan navigationPlan(uint64_t engineMaximumExpandedNodes) const;
+			PlayerBotFixtureRoutePlan navigationPlan(uint64_t engineMaximumExpandedNodes, bool npcApproach) const;
 			PlayerBotFixtureEngineCommand navigationStepCommand();
 			void observeNavigationPlan(bool attempted);
 			PlayerBotFixtureStorageObservation navigationRecovery(bool routeUnavailable) const;

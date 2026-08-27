@@ -242,14 +242,14 @@ class PlayerBotRewardPlanner
 		std::optional<PlayerBotRewardPlan> plan(uint16_t uniqueId, const Position& itemPosition,
 		                                        uint32_t estimatedDistance, const PlayerBotRewardInspection& inspection) const;
 		int32_t utility(const PlayerBotRewardPlan& plan, const PlayerBotRewardPlannerSnapshot& snapshot) const;
+		int32_t estimatedUtility(const PlayerBotRewardPlan& plan,
+		                         const PlayerBotRewardPlannerSnapshot& snapshot) const;
 		std::vector<size_t> routeCandidates(const PlayerBotRewardPlannerSnapshot& snapshot) const;
 		PlayerBotRewardDecision select(const PlayerBotRewardPlannerSnapshot& snapshot) const;
 
 	private:
 		void finalizeInspection(const PlayerBotRewardInspectionContext& context,
 		                       PlayerBotRewardInspection& inspection) const;
-		int32_t estimatedUtility(const PlayerBotRewardPlan& plan,
-		                         const PlayerBotRewardPlannerSnapshot& snapshot) const;
 };
 
 #endif

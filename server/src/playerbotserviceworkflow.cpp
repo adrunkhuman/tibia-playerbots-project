@@ -32,6 +32,16 @@ bool PlayerBotServiceWorkflow::reportNpcReply(uint32_t playerId, uint32_t replyi
 	return npcSession.acceptReply(playerId, replyingPlayerId, npcId, type);
 }
 
+std::optional<Position> PlayerBotServiceWorkflow::rejectSelectedApproach()
+{
+	if (!selectedApproach) return std::nullopt;
+	const Position rejected = *selectedApproach;
+	rejectedApproaches.insert(rejected);
+	selectedApproach.reset();
+	pendingApproachRoute.reset();
+	return rejected;
+}
+
 void PlayerBotServiceWorkflow::observeProviders(std::vector<PlayerBotEconomyProvider> shops,
 	std::vector<PlayerBotEconomyProvider> bankers)
 {
@@ -119,6 +129,10 @@ PlayerBotServiceCommand PlayerBotServiceWorkflow::approachProvider(const PlayerB
 		selectedApproach.reset();
 		return {};
 	}
+	if (npcSession.step() != PlayerBotNpcConversationStep::Greet) {
+		npcSession.reset(npcSession.targetId());
+		shopOpenAttempts = 0;
+	}
 	if (selectedApproach) {
 		PlayerBotServiceCommand command{PlayerBotServiceCommandType::NavigateProvider, PlayerBotServiceOutcome::Pending,
 		                                npcSession.targetId()};
@@ -168,6 +182,12 @@ PlayerBotServiceCommand PlayerBotServiceWorkflow::establishNpc(const PlayerBotSe
 	}
 	if (PlayerBotServiceCommand approach = approachProvider(observation, state->second); approach.type != PlayerBotServiceCommandType::None) {
 		return approach;
+	}
+	if (shop && state->second.shopOpen) {
+		shopOpenAttempts = 0;
+		npcSession.setStep(PlayerBotNpcConversationStep::Ready);
+		npcSession.resetRetries();
+		return {PlayerBotServiceCommandType::None};
 	}
 	if (npcSession.step() == PlayerBotNpcConversationStep::Greet) {
 		npcSession.setStep(PlayerBotNpcConversationStep::Request);
@@ -298,7 +318,7 @@ PlayerBotServiceCommand PlayerBotServiceWorkflow::advanceBank(const PlayerBotSer
 	const PlayerBotDispositionPolicy& disposition)
 {
 	const PlayerBotEconomyProvider* banker = nearestBanker(observation.currentPosition);
-	if (!banker) { serviceStage = PlayerBotServiceStage::Failed; return {PlayerBotServiceCommandType::Fail, PlayerBotServiceOutcome::Unavailable}; }
+	if (!banker) { serviceStage = PlayerBotServiceStage::Complete; return {PlayerBotServiceCommandType::Complete, PlayerBotServiceOutcome::Success}; }
 	targetProvider(banker->id);
 	PlayerBotServiceCommand focus = establishNpc(observation, false);
 	if (focus.type != PlayerBotServiceCommandType::None) return focus;
@@ -374,7 +394,7 @@ PlayerBotServiceCommand PlayerBotServiceWorkflow::advanceImpl(const PlayerBotSer
 	if (serviceStage == PlayerBotServiceStage::Complete) return {PlayerBotServiceCommandType::Complete, PlayerBotServiceOutcome::Success};
 	observeProviders(observation.shops, observation.bankers);
 	if (serviceStage == PlayerBotServiceStage::Discover) {
-		if (shopProviders.empty() || bankProviders.empty()) { serviceStage = PlayerBotServiceStage::Failed; return {PlayerBotServiceCommandType::Fail, PlayerBotServiceOutcome::Unavailable}; }
+		if (shopProviders.empty()) { serviceStage = PlayerBotServiceStage::Failed; return {PlayerBotServiceCommandType::Fail, PlayerBotServiceOutcome::Unavailable}; }
 		serviceStage = PlayerBotServiceStage::SellLoot;
 	}
 	if (serviceStage == PlayerBotServiceStage::SellLoot) {

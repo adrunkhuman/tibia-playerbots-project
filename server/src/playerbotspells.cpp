@@ -329,10 +329,30 @@ bool PlayerBotController::findSpellTraining(Player& player, const Position& posi
 	std::vector<std::deque<PlayerBotNavigationStep>> routes;
 	uint64_t remainingPathNodes = maximumSpellTrainerPathNodes;
 	std::vector<Npc*> trainers = playerBotNpcProviders(g_game.getNpcs(), PlayerBotNpcCapability::SpellTrainer, position);
-	if (!trainers.empty()) {
-		const size_t offset = spellTrainerScanOffset % trainers.size();
-		std::rotate(trainers.begin(), trainers.begin() + offset, trainers.end());
-		spellTrainerScanOffset = (offset + std::min(maximumSpellTrainerRoutes, trainers.size())) % trainers.size();
+	auto hasEligibleOffer = [&](const Npc* trainer) {
+		return std::any_of(trainer->getSpellOffers().begin(), trainer->getSpellOffers().end(), [&](const NpcSpellOffer& offer) {
+			Spell* spell = g_spells ? g_spells->getSpellByName(offer.spellName) : nullptr;
+			return spell && spell->isInstant() && spell->isLearnable() && spell->getLevel() == offer.level &&
+			       spell->isPremium() == offer.premium && player.getLevel() >= offer.level &&
+			       (!offer.premium || player.isPremium()) && !player.hasLearnedInstantSpell(offer.spellName) &&
+			       suppliesReady && reserve != std::numeric_limits<uint64_t>::max() && totalMoney >= reserve + offer.price &&
+			       std::find(offer.vocationIds.begin(), offer.vocationIds.end(), baseVocationId) != offer.vocationIds.end() &&
+			       spell->getVocMap().find(vocationId) != spell->getVocMap().end();
+		});
+	};
+	const auto eligibleEnd = std::stable_partition(trainers.begin(), trainers.end(), hasEligibleOffer);
+	const size_t eligibleCount = static_cast<size_t>(std::distance(trainers.begin(), eligibleEnd));
+	if (eligibleCount > maximumSpellTrainerRoutes) {
+		const size_t rotatingCount = eligibleCount - 1;
+		const size_t offset = spellTrainerScanOffset % rotatingCount;
+		std::rotate(trainers.begin() + 1, trainers.begin() + 1 + offset, eligibleEnd);
+		spellTrainerScanOffset = (offset + maximumSpellTrainerRoutes - 1) % rotatingCount;
+	} else if (eligibleEnd != trainers.end()) {
+		const size_t remainingCount = static_cast<size_t>(std::distance(eligibleEnd, trainers.end()));
+		const size_t offset = spellTrainerScanOffset % remainingCount;
+		std::rotate(eligibleEnd, eligibleEnd + offset, trainers.end());
+		const size_t remainingSlots = maximumSpellTrainerRoutes > eligibleCount ? maximumSpellTrainerRoutes - eligibleCount : 0;
+		spellTrainerScanOffset = (offset + std::min(remainingSlots, remainingCount)) % remainingCount;
 	}
 	if (trainers.size() > maximumSpellTrainerRoutes) {
 		trainers.resize(maximumSpellTrainerRoutes);
@@ -505,8 +525,17 @@ void PlayerBotController::processSpellTraining(Player* player, const Position& c
 	PlayerBotSpellTrainingObservation observation;
 	observation.totalMoney = player->getMoney() + player->getBankBalance();
 	if (progressionRuntime.spellTraining().stage() == PlayerBotSpellTrainingStage::Travel) {
-		observation.navigationReached = processNavigation(player, currentPosition, training.approachPosition);
-		observation.navigationFailed = navigationRuntime.fixedTargetRouteFailureCount() >= maximumProgressionAttempts;
+		bool approachUnavailable = false;
+		observation.navigationReached = processNpcApproach(player, currentPosition, trainer, training.approachPosition, approachUnavailable);
+		observation.navigationFailed = approachUnavailable ||
+		                              navigationRuntime.fixedTargetRouteFailureCount() >= maximumProgressionAttempts;
+	} else if (progressionRuntime.spellTraining().stage() != PlayerBotSpellTrainingStage::Verify &&
+	           offerAvailable && !Position::areInRange<3, 3, 0>(currentPosition, trainer->getPosition())) {
+		progressionRuntime.restartSpellTrainingConversation();
+		bool approachUnavailable = false;
+		processNpcApproach(player, currentPosition, trainer, training.approachPosition, approachUnavailable);
+		if (approachUnavailable) finishSpellTraining(player, currentPosition, "failed", "route_unavailable");
+		return;
 	} else {
 		observation.npcAvailable = offerAvailable && Position::areInRange<3, 3, 0>(currentPosition, trainer->getPosition());
 		observation.greetingAcknowledged = progressionRuntime.greetingAcknowledged();

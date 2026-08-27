@@ -47,7 +47,7 @@ bool playerBotPreferHuntRegion(const PlayerBotHuntRegion& left, const PlayerBotH
 	const bool leftAvailable = left.suitable && left.reachable;
 	const bool rightAvailable = right.suitable && right.reachable;
 	if (leftAvailable != rightAvailable) return leftAvailable;
-	return left.inChallengeBand != right.inChallengeBand ? left.inChallengeBand : left.score > right.score;
+	return left.score > right.score;
 }
 
 bool playerBotHuntScopeExhausted(const std::vector<PlayerBotHuntRegion>& regions)
@@ -67,15 +67,17 @@ uint64_t PlayerBotHuntRegionPlanner::getCacheRevision()
 	return PlayerBotHuntRegionAdapter::getCacheRevision();
 }
 
-PlayerBotHuntRegionScan PlayerBotHuntRegionPlanner::beginScan(const Player& player) const
+PlayerBotHuntRegionScan PlayerBotHuntRegionPlanner::beginScan(
+	Player& player, const PlayerBotTopologyDistances* topologyDistances) const
 {
-	return PlayerBotHuntRegionAdapter::beginScan(player);
+	return PlayerBotHuntRegionAdapter::beginScan(player, topologyDistances);
 }
 
 PlayerBotHuntRegionScore PlayerBotHuntRegionPlanner::score(Player& player, const PlayerBotHuntPlanningProfile& profile,
 	uint64_t revision, size_t candidateIndex, const std::set<Position>& excludedRegions,
-	const std::map<Position, PlayerBotHuntRegionPerformance>& performance, uint32_t huntDurationSeconds) const
+	const std::map<Position, PlayerBotHuntRegionPerformance>& performance, uint32_t huntDurationSeconds,
+	const PlayerBotTopologyDistances* topologyDistances) const
 {
 	return PlayerBotHuntRegionAdapter::score(player, profile, revision, candidateIndex, excludedRegions, performance,
-	                                        huntDurationSeconds);
+	                                        huntDurationSeconds, topologyDistances);
 }

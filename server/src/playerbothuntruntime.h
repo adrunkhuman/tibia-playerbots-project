@@ -34,6 +34,8 @@ enum class PlayerBotHuntRuntimeCommand : uint8_t {
 struct PlayerBotHuntRuntimeRouteWork {
 	size_t regionIndex = 0;
 	Position destination;
+	Position center;
+	std::vector<Position> destinations;
 };
 
 struct PlayerBotHuntRuntimePlayerObservation {
@@ -43,7 +45,10 @@ struct PlayerBotHuntRuntimePlayerObservation {
 	int32_t maximumHealth = 0;
 	uint16_t staminaMinutes = 0;
 	uint64_t experience = 0;
+	uint64_t topologyGeneration = 0;
 	std::set<Position> excludedRegions;
+	bool canUseRope = false;
+	bool canUseShovel = false;
 };
 
 struct PlayerBotHuntRuntimeCooldownCommand {
@@ -54,6 +59,8 @@ struct PlayerBotHuntRuntimeCooldownCommand {
 struct PlayerBotHuntRuntimePlanningStartObservation {
 	PlayerBotHuntRegionScan scan;
 	PlayerBotHuntPlanningProfile profile;
+	std::shared_ptr<const PlayerBotTopologyDistances> topologyDistances;
+	uint64_t topologyDistanceTimeUs = 0;
 };
 
 struct PlayerBotHuntRuntimePlanningInput {
@@ -70,6 +77,7 @@ struct PlayerBotHuntRuntimeScoreWork {
 	uint64_t cacheRevision = 0;
 	std::set<Position> excludedRegions;
 	std::map<Position, PlayerBotHuntRegionPerformance> performance;
+	std::shared_ptr<const PlayerBotTopologyDistances> topologyDistances;
 	uint32_t huntDurationSeconds = 0;
 };
 
@@ -89,6 +97,7 @@ struct PlayerBotHuntRuntimeRouteObservation {
 	uint32_t travelSteps = 0;
 	double estimatedTravelSeconds = 0;
 	double staminaExperienceMultiplier = 0;
+	PlayerBotHuntCorridorDanger corridorDanger;
 };
 
 struct PlayerBotHuntRuntimeOutcome {
@@ -125,6 +134,7 @@ struct PlayerBotHuntRuntimeCompletion {
 enum class PlayerBotHuntPatrolCommand : uint8_t {
 	Continue,
 	WaypointReached,
+	WaitAtWaypoint,
 	SkipWaypoint,
 	RegionExhausted,
 };
@@ -213,6 +223,7 @@ class PlayerBotHuntRuntime
 		std::chrono::steady_clock::time_point patrolFailureStarted;
 		Position patrolFailureTarget;
 		size_t patrolIndex = 0;
+		bool singleWaypointReached = false;
 		uint32_t patrolRouteFailures = 0;
 		uint64_t patrolFailureExpandedNodes = 0;
 		uint32_t scopeExhaustions = 0;

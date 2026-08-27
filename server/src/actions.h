@@ -120,6 +120,7 @@ class Actions final : public BaseEvents
 
 		bool registerLuaEvent(Action* event);
 		void clear(bool fromLua) override final;
+		bool hasAction(const Item* item) { return getAction(item) != nullptr; }
 
 	private:
 		ReturnValue internalUseItem(Player* player, const Position& pos, uint8_t index, Item* item, bool isHotkey);

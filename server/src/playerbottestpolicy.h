@@ -49,12 +49,15 @@ namespace playerbot {
 		bool equipmentPurchaseFixture;
 		bool forceEquipmentPurchaseRejected;
 		bool pauseAfterEquipmentStorageRejection;
+		bool forceNpcApproachRouteFailures;
 		bool adaptiveChallengeFixture;
 		bool forceHuntScopeExhaustion;
 		bool deferProgressionFixtureInitialization;
 		bool spellCalibrationFixture;
 		bool magicTrainingFixture;
 		bool forceMagicTrainingVerificationFailure;
+		bool carlinServiceRouteFixture;
+		bool mutablePortalRouteFixture;
 	};
 
 	const PlayerBotTestPolicy& playerBotTestPolicyFromEnvironment();

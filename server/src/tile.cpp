@@ -711,10 +711,9 @@ ReturnValue Tile::queryRemove(const Thing& thing, uint32_t count, uint32_t flags
 	return RETURNVALUE_NOERROR;
 }
 
-Tile* Tile::queryDestination(int32_t&, const Thing&, Item** destItem, uint32_t& flags)
+Tile* Tile::getFloorChangeDestination() const
 {
 	Tile* destTile = nullptr;
-	*destItem = nullptr;
 
 	if (hasFlag(TILESTATE_FLOORCHANGE_DOWN)) {
 		uint16_t dx = tilePos.x;
@@ -793,11 +792,14 @@ Tile* Tile::queryDestination(int32_t&, const Thing&, Item** destItem, uint32_t& 
 		destTile = g_game.map.getTile(dx, dy, dz);
 	}
 
-	if (destTile == nullptr) {
-		destTile = this;
-	} else {
-		flags |= FLAG_NOLIMIT; //Will ignore that there is blocking items/creatures
-	}
+	return destTile ? destTile : const_cast<Tile*>(this);
+}
+
+Tile* Tile::queryDestination(int32_t&, const Thing&, Item** destItem, uint32_t& flags)
+{
+	*destItem = nullptr;
+	Tile* destTile = getFloorChangeDestination();
+	if (destTile != this) flags |= FLAG_NOLIMIT; //Will ignore that there is blocking items/creatures
 
 	if (destTile) {
 		Thing* destThing = destTile->getTopDownItem();

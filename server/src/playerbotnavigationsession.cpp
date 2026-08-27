@@ -17,31 +17,31 @@ void PlayerBotNavigationSession::clear()
 	steps.clear();
 	movementPending = false;
 	worldChangePending = false;
-	target = Position();
+	target = PlayerBotNavigationGoal();
 	blockedStepCount = 0;
 }
 
-void PlayerBotNavigationSession::adopt(const Position& destination, std::deque<PlayerBotNavigationStep> newSteps)
+void PlayerBotNavigationSession::adopt(const PlayerBotNavigationGoal& goal, std::deque<PlayerBotNavigationStep> newSteps)
 {
 	clear();
-	target = destination;
+	target = goal;
 	steps = std::move(newSteps);
 }
 
-void PlayerBotNavigationSession::prepareDestination(const Position& destination)
+void PlayerBotNavigationSession::prepareGoal(const PlayerBotNavigationGoal& goal)
 {
-	if (target == destination) {
+	if (target == goal) {
 		return;
 	}
 	steps.clear();
-	target = destination;
+	target = goal;
 	blockedStepCount = 0;
 }
 
-void PlayerBotNavigationSession::installRoute(const Position& destination,
+void PlayerBotNavigationSession::installRoute(const PlayerBotNavigationGoal& goal,
 	                                           std::deque<PlayerBotNavigationStep> newSteps)
 {
-	target = destination;
+	target = goal;
 	steps = std::move(newSteps);
 }
 
@@ -118,20 +118,21 @@ void PlayerBotNavigationSession::suppress(const Position& position, std::chrono:
 }
 
 std::optional<PlayerBotNavigationOscillation> PlayerBotNavigationSession::observeProgress(
-	const Position& currentPosition, const Position& destination, std::chrono::steady_clock::time_point now,
+	const Position& currentPosition, const PlayerBotNavigationGoal& goal, std::chrono::steady_clock::time_point now,
 	std::chrono::steady_clock::duration suppression)
 {
 	detectedOscillation = false;
-	if (progressTarget != destination) {
-		progressTarget = destination;
+	if (!progressTargetSet || progressTarget != goal) {
+		progressTarget = goal;
+		progressTargetSet = true;
 		progressPrevious = currentPosition;
 		progressTwoAgo = Position();
-		bestDistance = playerBotNavigationDistance(currentPosition, destination);
+		bestDistance = goal.distance(currentPosition);
 		oscillationCount = 0;
 		return std::nullopt;
 	}
 
-	const uint32_t currentDistance = playerBotNavigationDistance(currentPosition, destination);
+	const uint32_t currentDistance = goal.distance(currentPosition);
 	if (currentPosition == progressPrevious) {
 		return std::nullopt;
 	}

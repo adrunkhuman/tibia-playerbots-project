@@ -18,6 +18,7 @@
 PlayerBotHuntPlanningSession::PlayerBotHuntPlanningSession(PlayerBotHuntPlanningStart start) :
 	candidateIndices(std::move(start.scan.candidateIndices)), planningReason(std::move(start.reason)),
 	planningStarted(start.started), planningProfile(std::move(start.profile)), planningSnapshot(std::move(start.snapshot)),
+	topologyDistances(std::move(start.topologyDistances)), topologyDistanceTimeUs(start.topologyDistanceTimeUs),
 	candidateCount(static_cast<uint32_t>(start.scan.candidateCount)), scanCacheHit(start.scan.cacheHit),
 	scanSnapshotTimeUs(start.scan.snapshotTimeUs), scanClusteringTimeUs(start.scan.clusteringTimeUs)
 {
@@ -28,6 +29,8 @@ bool PlayerBotHuntPlanningSession::invalidated(const PlayerBotHuntPlanningSnapsh
 {
 	return current.playerPosition != planningSnapshot.playerPosition || current.playerLevel != planningSnapshot.playerLevel ||
 	       current.currentHealth < planningSnapshot.currentHealth || current.staminaMinutes != planningSnapshot.staminaMinutes ||
+	       current.topologyGeneration != planningSnapshot.topologyGeneration ||
+	       current.canUseRope != planningSnapshot.canUseRope || current.canUseShovel != planningSnapshot.canUseShovel ||
 	       current.excludedRegions != planningSnapshot.excludedRegions || current.cacheRevision != planningSnapshot.cacheRevision;
 }
 
@@ -59,10 +62,11 @@ PlayerBotHuntPlanningProgress PlayerBotHuntPlanningSession::completeScoring()
 		++yieldCount;
 		return PlayerBotHuntPlanningProgress::ScoringYield;
 	}
-	std::stable_sort(scoredRegions.begin(), scoredRegions.end(), [](const PlayerBotHuntRegion& left, const PlayerBotHuntRegion& right) {
+	const bool topologySelection = topologyDistances != nullptr;
+	std::stable_sort(scoredRegions.begin(), scoredRegions.end(), [topologySelection](const PlayerBotHuntRegion& left, const PlayerBotHuntRegion& right) {
 		if (left.suitable != right.suitable) return left.suitable;
-		if (left.inChallengeBand != right.inChallengeBand) return left.inChallengeBand;
-		return left.optimisticProjectedExperience > right.optimisticProjectedExperience;
+		return topologySelection ? left.score > right.score :
+		       left.optimisticProjectedExperience > right.optimisticProjectedExperience;
 	});
 	uint32_t regionId = 1;
 	for (PlayerBotHuntRegion& region : scoredRegions) {
@@ -95,7 +99,9 @@ std::optional<PlayerBotHuntPlanningRouteWork> PlayerBotHuntPlanningSession::next
 void PlayerBotHuntPlanningSession::routeValidationCompleted(size_t regionIndex, bool pathfindingCalled, bool reachable, bool nodeLimit,
 	                                                        uint64_t expandedNodes,
 	                                                        uint32_t travelSteps, double estimatedTravelSeconds,
-	                                                        double staminaExperienceMultiplier, uint32_t huntDurationSeconds)
+	                                                        double staminaExperienceMultiplier,
+	                                                        const PlayerBotHuntCorridorDanger& corridorDanger,
+	                                                        uint32_t huntDurationSeconds)
 {
 	PlayerBotHuntRegion& region = scoredRegions[regionIndex];
 	if (pathfindingCalled) {
@@ -113,9 +119,14 @@ void PlayerBotHuntPlanningSession::routeValidationCompleted(size_t regionIndex, 
 	region.estimatedTravelSeconds = estimatedTravelSeconds;
 	region.availableHuntSeconds = std::max(0.0, huntDurationSeconds - estimatedTravelSeconds);
 	region.staminaExperienceMultiplier = staminaExperienceMultiplier;
+	region.corridorDangerAvailable = corridorDanger.available;
+	region.corridorDangerRatio = corridorDanger.dangerRatio;
+	region.corridorSampleCount = corridorDanger.sampledPositions;
+	region.corridorSpawnBlocks = corridorDanger.nearbySpawnBlocks;
 	region.projectedExperience = region.experiencePerMinute * region.observedCorrection *
 	                           region.staminaExperienceMultiplier * region.availableHuntSeconds / 60.0;
-	region.score = region.projectedExperience;
+	const double corridorPenalty = corridorDanger.available ? std::min(0.75, corridorDanger.dangerRatio * 0.5) : 0;
+	region.score = region.projectedExperience * (1.0 - corridorPenalty);
 }
 
 PlayerBotHuntPlanningProgress PlayerBotHuntPlanningSession::completeRouteValidation()
@@ -143,10 +154,6 @@ bool PlayerBotHuntPlanningSession::canStopRouteValidation()
 
 	for (const PlayerBotHuntRegion& candidate : scoredRegions) {
 		if (!candidate.suitable || candidate.routeValidationAttempted) continue;
-		if (candidate.inChallengeBand != incumbent->inChallengeBand) {
-			if (candidate.inChallengeBand) return false;
-			continue;
-		}
 		if (!std::isfinite(candidate.optimisticProjectedExperience) ||
 		    candidate.optimisticProjectedExperience > incumbent->score) return false;
 	}

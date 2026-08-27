@@ -36,6 +36,7 @@
 #include "movement.h"
 #include "playerbothuntregions.h"
 #include "playerbot.h"
+#include "playerbottopology.h"
 #include "scheduler.h"
 #include "server.h"
 #include "spells.h"
@@ -5020,8 +5021,17 @@ void Game::removeUniqueItem(uint16_t uniqueId)
 
 bool Game::reload(ReloadTypes_t reloadType)
 {
+	auto rebuildPlayerBotTopology = [this]() {
+		if (!g_config.getBoolean(ConfigManager::PLAYERBOT_ENABLED)) return;
+		PlayerBotTopology::instance().build(map);
+		PlayerBotHuntRegionPlanner::invalidateCache();
+	};
 	switch (reloadType) {
-		case RELOAD_TYPE_ACTIONS: return g_actions->reload();
+		case RELOAD_TYPE_ACTIONS: {
+			const bool reloaded = g_actions->reload();
+			if (reloaded) rebuildPlayerBotTopology();
+			return reloaded;
+		}
 		case RELOAD_TYPE_CHAT: return g_chat->load();
 		case RELOAD_TYPE_CONFIG: return g_config.reload();
 		case RELOAD_TYPE_CREATURESCRIPTS: {
@@ -5031,7 +5041,11 @@ bool Game::reload(ReloadTypes_t reloadType)
 		}
 		case RELOAD_TYPE_EVENTS: return g_events->load();
 		case RELOAD_TYPE_GLOBALEVENTS: return g_globalEvents->reload();
-		case RELOAD_TYPE_ITEMS: return Item::items.reload();
+		case RELOAD_TYPE_ITEMS: {
+			const bool reloaded = Item::items.reload();
+			if (reloaded) rebuildPlayerBotTopology();
+			return reloaded;
+		}
 		case RELOAD_TYPE_MONSTERS: {
 			const bool reloaded = g_monsters.reload();
 			if (reloaded) {
@@ -5078,7 +5092,7 @@ bool Game::reload(ReloadTypes_t reloadType)
 			g_weapons->clear(true);
 			g_weapons->loadDefaults();
 			g_spells->clear(true);
-			g_scripts->loadScripts("scripts", false, true);
+			const bool reloaded = g_scripts->loadScripts("scripts", false, true);
 			g_creatureEvents->removeInvalidEvents();
 			/*
 			Npcs::reload();
@@ -5089,7 +5103,8 @@ bool Game::reload(ReloadTypes_t reloadType)
 			g_events->load();
 			g_chat->load();
 			*/
-			return true;
+			if (reloaded) rebuildPlayerBotTopology();
+			return reloaded;
 		}
 
 		default: {
@@ -5126,6 +5141,7 @@ bool Game::reload(ReloadTypes_t reloadType)
 			g_spells->clear(true);
 			g_scripts->loadScripts("scripts", false, true);
 			g_creatureEvents->removeInvalidEvents();
+			rebuildPlayerBotTopology();
 			return true;
 		}
 	}

@@ -6,6 +6,7 @@
 #include "depotchest.h"
 #include "player.h"
 #include "playerbot.h"
+#include "playerbotcombatruntime.h"
 #include "playerbothuntruntime.h"
 #include "playerbotsurvivalruntime.h"
 #include "playerbotspellcalibration.h"
@@ -18,6 +19,14 @@ namespace {
 	constexpr uint32_t gameplayFixtureReadyStorage = 50099;
 	constexpr Position fixtureDepotPosition(32105, 32195, 8);
 	constexpr Position fixtureDepotTilePosition(32105, 32196, 8);
+	constexpr Position carlinServiceApproach(32338, 31791, 7);
+	constexpr Position mutablePortalDestination(32550, 31684, 8);
+	constexpr std::array<Position, 4> fixtureHuntPatrol = {{
+		Position(32084, 32144, 5),
+		Position(32103, 32124, 8),
+		Position(32117, 32090, 9),
+		Position(32103, 32124, 8),
+	}};
 }
 
 playerbot::PlayerBotFixtureDriver::PlayerBotFixtureDriver(const PlayerBotTestPolicy& policy) : policy(policy)
@@ -42,6 +51,13 @@ playerbot::PlayerBotFixtureHuntObservation playerbot::PlayerBotFixtureDriver::hu
 	return {!policy.fixedFixtureRoute};
 }
 
+std::vector<Position> playerbot::PlayerBotFixtureDriver::huntPatrol() const
+{
+	if (policy.carlinServiceRouteFixture) return {carlinServiceApproach};
+	if (policy.mutablePortalRouteFixture) return {mutablePortalDestination};
+	return {fixtureHuntPatrol.begin(), fixtureHuntPatrol.end()};
+}
+
 playerbot::PlayerBotFixtureProviderObservation playerbot::PlayerBotFixtureDriver::observeProvider(
 	bool engineAvailable, uint16_t itemId, bool buying, uint32_t engineInventoryCount) const
 {
@@ -59,9 +75,11 @@ playerbot::PlayerBotFixtureStorageObservation playerbot::PlayerBotFixtureDriver:
 	return {policy.pauseAfterEquipmentStorageRejection, false};
 }
 
-playerbot::PlayerBotFixtureRoutePlan playerbot::PlayerBotFixtureDriver::navigationPlan(uint64_t engineMaximumExpandedNodes) const
+playerbot::PlayerBotFixtureRoutePlan playerbot::PlayerBotFixtureDriver::navigationPlan(uint64_t engineMaximumExpandedNodes,
+	                                                                                      bool npcApproach) const
 {
-	return {forcedNavigationPlanFailuresRemaining != 0, engineMaximumExpandedNodes};
+	return {(npcApproach && policy.forceNpcApproachRouteFailures) || forcedNavigationPlanFailuresRemaining != 0,
+	        engineMaximumExpandedNodes};
 }
 
 playerbot::PlayerBotFixtureEngineCommand playerbot::PlayerBotFixtureDriver::navigationStepCommand()
@@ -214,11 +232,17 @@ std::vector<playerbot::PlayerBotFixtureEvent> playerbot::PlayerBotFixtureDriver:
 		                        adaptivePolicy.regionPerformance(), duration).region;
 	}
 	const PlayerBotRecoveryPrediction recovery = playerBotPredictRecovery(playerBotHuntPlanningProfile(player, profile, adaptivePolicy.challengeFrontier()), 30);
-	PlayerBotHuntRegion inBand; inBand.score = 10; inBand.suitable = inBand.reachable = inBand.inChallengeBand = true;
-	PlayerBotHuntRegion easier; easier.score = 1000; easier.suitable = easier.reachable = true;
+	PlayerBotHuntRegion lowerScore; lowerScore.score = 10; lowerScore.suitable = lowerScore.reachable = true;
+	PlayerBotHuntRegion higherScore; higherScore.score = 1000; higherScore.suitable = higherScore.reachable = true;
+	PlayerBotCombatRuntime targeting({});
+	std::vector<PlayerBotTraversalCandidate> targets = {
+		{{1, Position(1, 0, 7), "passive"}, {}, false},
+		{{2, Position(4, 0, 7), "attacker"}, {}, true},
+	};
+	const auto preferredTarget = targeting.selectTraversalAttack(std::move(targets), Position(0, 0, 7), std::chrono::steady_clock::now());
 	std::vector<PlayerBotHuntRegion> exhausted(1); exhausted.front().suitable = true;
 	std::ostringstream fields;
-	fields << std::fixed << std::setprecision(2) << "\"recovery_total\":" << recovery.totalMinimumHealing << ",\"recovery_spell_legal\":" << (recovery.lightHealingLegal ? "true" : "false") << ",\"recovery_spell_casts\":" << recovery.spellCasts << ",\"equipment_pressure_before\":" << current.threatRatio << ",\"equipment_pressure_after\":" << equipped.threatRatio << ",\"idle_observed_seconds\":" << idle << ",\"active_observed_seconds\":" << active << ",\"in_band_outranks_easier\":" << (playerBotPreferHuntRegion(inBand, easier) ? "true" : "false") << ",\"wounded_lethal\":" << (playerBotPredictedLethal(40, 40) ? "true" : "false") << ",\"zero_health_lethal\":" << (playerBotPredictedLethal(0, 0) ? "true" : "false") << ",\"helper_scope_exhausted\":" << (playerBotHuntScopeExhausted(exhausted) ? "true" : "false");
+	fields << std::fixed << std::setprecision(2) << "\"recovery_total\":" << recovery.totalMinimumHealing << ",\"recovery_spell_legal\":" << (recovery.lightHealingLegal ? "true" : "false") << ",\"recovery_spell_casts\":" << recovery.spellCasts << ",\"equipment_pressure_before\":" << current.threatRatio << ",\"equipment_pressure_after\":" << equipped.threatRatio << ",\"idle_observed_seconds\":" << idle << ",\"active_observed_seconds\":" << active << ",\"higher_score_preferred\":" << (playerBotPreferHuntRegion(higherScore, lowerScore) ? "true" : "false") << ",\"attacker_priority_preferred\":" << (preferredTarget && preferredTarget->target.id == 2 ? "true" : "false") << ",\"wounded_lethal\":" << (playerBotPredictedLethal(40, 40) ? "true" : "false") << ",\"zero_health_lethal\":" << (playerBotPredictedLethal(0, 0) ? "true" : "false") << ",\"helper_scope_exhausted\":" << (playerBotHuntScopeExhausted(exhausted) ? "true" : "false");
 	events.push_back({"adaptive_challenge_fixture", fields.str()});
 	return events;
 }

@@ -30,6 +30,8 @@
 #include "house.h"
 #include "spawn.h"
 
+#include <functional>
+
 class Creature;
 class Player;
 class Game;
@@ -202,6 +204,7 @@ class Map
 		Tile* getTile(const Position& pos) const {
 			return getTile(pos.x, pos.y, pos.z);
 		}
+		void forEachTile(const std::function<void(const Tile&)>& callback) const;
 		const std::vector<Position>& getDepotLockerPositions(uint16_t depotId) const;
 		const std::map<uint16_t, std::vector<Position>>& getDepotLockerPositions() const {
 			return depotLockerPositions;

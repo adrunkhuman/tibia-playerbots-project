@@ -161,6 +161,9 @@ class PlayerBotProgressionRuntime {
 		bool reportNpcReply(uint32_t playerId, uint32_t replyingPlayerId, uint32_t npcId, uint8_t type);
 		bool greetingAcknowledged() const { return npcSession.isGreetingAcknowledged(); }
 		void clearGreetingAcknowledgement() { npcSession.resetGreetingAcknowledgement(); }
+		void restartDepartureConversation();
+		void restartSpellTrainingConversation();
+		void restartEquipmentConversation();
 		PlayerBotEquipmentShopCommand advanceEquipmentShop(const PlayerBotNpcShopObservation& observation,
 		                                                  uint32_t maximumRetries);
 		bool readinessEquipmentPending() const { return readinessEquipment.pending; }

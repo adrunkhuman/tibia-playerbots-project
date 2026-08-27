@@ -78,6 +78,7 @@ set(tfs_SRC
 	${CMAKE_CURRENT_LIST_DIR}/playerbotspells.cpp
 	${CMAKE_CURRENT_LIST_DIR}/playerbottelemetry.cpp
 	${CMAKE_CURRENT_LIST_DIR}/playerbottestpolicy.cpp
+	${CMAKE_CURRENT_LIST_DIR}/playerbottopology.cpp
 	${CMAKE_CURRENT_LIST_DIR}/playerbotturnrouter.cpp
 	${CMAKE_CURRENT_LIST_DIR}/playerbotservice.cpp
 	${CMAKE_CURRENT_LIST_DIR}/playerbotservicesession.cpp

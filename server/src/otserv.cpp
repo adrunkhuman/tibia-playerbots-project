@@ -30,6 +30,7 @@
 #include "protocollogin.h"
 #include "protocolstatus.h"
 #include "playerbot.h"
+#include "playerbottopology.h"
 #include "databasemanager.h"
 #include "scheduler.h"
 #include "databasetasks.h"
@@ -312,8 +313,17 @@ void mainLoader(int, char*[], ServiceManager* services)
 	std::cout << ">> Initializing gamestate" << std::endl;
 	g_game.setGameState(GAME_STATE_INIT);
 	// Server-controlled players need the loaded map but do not wait for protocol services.
-	if (g_config.getBoolean(ConfigManager::PLAYERBOT_ENABLED) && !g_playerBots.spawn("Bot One")) {
-		std::cout << "[Warning - mainLoader] Unable to log in playerbot Bot One; continuing without it." << std::endl;
+	if (g_config.getBoolean(ConfigManager::PLAYERBOT_ENABLED)) {
+		const auto topologyStarted = std::chrono::steady_clock::now();
+		PlayerBotTopology::instance().build(g_game.map);
+		std::cout << ">> Indexed " << PlayerBotTopology::instance().tileCount() << " walkable tiles in "
+		          << PlayerBotTopology::instance().nodeCount() << " local nodes and "
+		          << PlayerBotTopology::instance().componentCount() << " components ("
+		          << std::chrono::duration_cast<std::chrono::milliseconds>(
+		                 std::chrono::steady_clock::now() - topologyStarted).count() << " ms)" << std::endl;
+		if (!g_playerBots.spawn("Bot One")) {
+			std::cout << "[Warning - mainLoader] Unable to log in playerbot Bot One; continuing without it." << std::endl;
+		}
 	}
 
 	// Game client protocols

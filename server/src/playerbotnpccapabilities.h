@@ -10,7 +10,7 @@
 
 #include "npc.h"
 
-enum class PlayerBotNpcCapability : uint8_t { Shop, SpellTrainer, Travel };
+enum class PlayerBotNpcCapability : uint8_t { Shop, SpellTrainer, Travel, Banker };
 
 inline const std::string* playerBotNpcMetadata(const Npc& npc)
 {
@@ -30,14 +30,9 @@ inline bool playerBotNpcHasCapability(const Npc& npc, PlayerBotNpcCapability cap
 		case PlayerBotNpcCapability::Shop: return !npc.getShopOffers().empty();
 		case PlayerBotNpcCapability::SpellTrainer: return !npc.getSpellOffers().empty();
 		case PlayerBotNpcCapability::Travel: return !npc.getTravelOffers().empty();
+		case PlayerBotNpcCapability::Banker: return npc.isBanker();
 	}
 	return false;
-}
-
-inline bool playerBotNpcHasRole(const Npc& npc, const char* role)
-{
-	const std::string* metadata = !npc.isRemoved() ? playerBotNpcMetadata(npc) : nullptr;
-	return metadata && *metadata == role;
 }
 
 inline uint32_t playerBotNpcDistance(const Position& from, const Position& to)

@@ -16,11 +16,13 @@
 
 #include <cstdint>
 #include <map>
+#include <memory>
 #include <string>
 #include <set>
 #include <vector>
 
 class Player;
+struct PlayerBotTopologyDistances;
 
 struct PlayerBotRecoveryPrediction {
 	double spellMinimumHealing = 0;
@@ -58,6 +60,13 @@ struct PlayerBotHuntMonsterProfile {
 	double predictedFightDamage = 0;
 };
 
+struct PlayerBotHuntCorridorDanger {
+	bool available = false;
+	uint32_t sampledPositions = 0;
+	uint32_t nearbySpawnBlocks = 0;
+	double dangerRatio = 0;
+};
+
 struct PlayerBotHuntRegion {
 	uint32_t id = 0;
 	uint8_t floor = 0;
@@ -76,6 +85,10 @@ struct PlayerBotHuntRegion {
 	double optimisticProjectedExperience = 0;
 	double threatRatio = 0;
 	double rawThreatRatio = 0;
+	double corridorDangerRatio = 0;
+	uint32_t corridorSampleCount = 0;
+	uint32_t corridorSpawnBlocks = 0;
+	bool corridorDangerAvailable = false;
 	int32_t currentHealth = 0;
 	double predictedFightSeconds = 0;
 	double challengeFrontier = 0;
@@ -84,9 +97,11 @@ struct PlayerBotHuntRegion {
 	PlayerBotRecoveryPrediction recovery;
 	double score = 0;
 	uint32_t travelSteps = 0;
+	uint32_t topologyTravelSteps = 0;
 	uint64_t expandedNodes = 0;
 	bool suitable = false;
 	bool reachable = false;
+	bool topologyReachable = false;
 	bool routeValidationAttempted = false;
 	bool routeValidationDeferredByBound = false;
 	bool inChallengeBand = false;
@@ -129,11 +144,13 @@ class PlayerBotHuntRegionPlanner
 	public:
 		static void invalidateCache();
 		static uint64_t getCacheRevision();
-		PlayerBotHuntRegionScan beginScan(const Player& player) const;
+		PlayerBotHuntRegionScan beginScan(Player& player,
+		                                  const PlayerBotTopologyDistances* topologyDistances = nullptr) const;
 		PlayerBotHuntRegionScore score(Player& player, const PlayerBotHuntPlanningProfile& profile, uint64_t revision,
 		                               size_t candidateIndex, const std::set<Position>& excludedRegions,
 		                               const std::map<Position, PlayerBotHuntRegionPerformance>& performance,
-		                               uint32_t huntDurationSeconds) const;
+		                               uint32_t huntDurationSeconds,
+		                               const PlayerBotTopologyDistances* topologyDistances = nullptr) const;
 };
 
 #endif
