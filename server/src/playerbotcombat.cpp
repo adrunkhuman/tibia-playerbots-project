@@ -357,18 +357,26 @@ bool PlayerBotController::attackDefensiveThreat(Player* player, const Position& 
 	SpectatorVec spectators;
 	g_game.map.getSpectators(spectators, currentPosition);
 	const auto now = std::chrono::steady_clock::now();
-	for (Creature* creature : spectators) {
-		if (!creature->getMonster() || creature->isRemoved() || creature->isDead() ||
-		    !player->canSee(creature->getPosition()) ||
-		    !Position::areInRange<1, 1, 0>(currentPosition, creature->getPosition())) continue;
-		if (!navigationRuntime.avoidPendingRouteBlocker(creature->getID(), creature->getPosition(), now, navigationBlockSuppression)) continue;
-		emit("navigation_progress", currentPosition,
-		     "\"result\":\"replanning\",\"reason\":\"hostile_detour\",\"blocker_id\":" +
-		         std::to_string(creature->getID()) + ",\"blocker_position\":{\"x\":" +
-		         std::to_string(creature->getPosition().x) + ",\"y\":" +
-		         std::to_string(creature->getPosition().y) + ",\"z\":" +
-		         std::to_string(creature->getPosition().z) + "}");
-		return true;
+	const size_t adjacentAttackers = std::count_if(spectators.begin(), spectators.end(), [player, &currentPosition](Creature* creature) {
+		return creature->getMonster() && !creature->isRemoved() && !creature->isDead() &&
+		       creature->getAttackedCreature() == player && player->canSee(creature->getPosition()) &&
+		       Position::areInRange<1, 1, 0>(currentPosition, creature->getPosition());
+	});
+	const bool overwhelmed = adjacentAttackers >= 2;
+	if (!overwhelmed) {
+		for (Creature* creature : spectators) {
+			if (!creature->getMonster() || creature->isRemoved() || creature->isDead() ||
+			    !player->canSee(creature->getPosition()) ||
+			    !Position::areInRange<1, 1, 0>(currentPosition, creature->getPosition())) continue;
+			if (!navigationRuntime.avoidPendingRouteBlocker(creature->getID(), creature->getPosition(), now, navigationBlockSuppression)) continue;
+			emit("navigation_progress", currentPosition,
+			     "\"result\":\"replanning\",\"reason\":\"hostile_detour\",\"blocker_id\":" +
+			         std::to_string(creature->getID()) + ",\"blocker_position\":{\"x\":" +
+			         std::to_string(creature->getPosition().x) + ",\"y\":" +
+			         std::to_string(creature->getPosition().y) + ",\"z\":" +
+			         std::to_string(creature->getPosition().z) + "}");
+			return true;
+		}
 	}
 	auto isRouteCritical = [this, now](const Creature* creature) {
 		return navigationRuntime.isRouteCritical(creature->getID(), creature->getPosition(), now);
@@ -379,7 +387,7 @@ bool PlayerBotController::attackDefensiveThreat(Player* player, const Position& 
 	for (Creature* creature : spectators) {
 		const bool routeCritical = isRouteCritical(creature);
 		if (!creature->getMonster() || creature->isRemoved() || creature->isDead() ||
-		    (!routeCritical && (blockerOnly || creature->getAttackedCreature() != player)) ||
+		    (!routeCritical && ((blockerOnly && !overwhelmed) || creature->getAttackedCreature() != player)) ||
 		    !player->canSee(creature->getPosition()) ||
 		    !Position::areInRange<1, 1, 0>(currentPosition, creature->getPosition())) {
 			continue;
