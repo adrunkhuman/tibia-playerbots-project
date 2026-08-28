@@ -23,7 +23,7 @@ namespace {
 	constexpr Position fixtureDepotPosition(32105, 32195, 8);
 	constexpr Position fixtureDepotTilePosition(32105, 32196, 8);
 	constexpr Position carlinServiceApproach(32338, 31791, 7);
-	constexpr Position mutablePortalDestination(32550, 31684, 8);
+	constexpr Position mutablePortalDestination(32181, 31794, 8);
 	constexpr std::array<Position, 4> fixtureHuntPatrol = {{
 		Position(32084, 32144, 5),
 		Position(32103, 32124, 8),

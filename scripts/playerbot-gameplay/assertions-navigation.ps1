@@ -69,7 +69,7 @@ function Assert-MutablePortalRouteEvents {
 	$events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
 	$reached = @($events | Where-Object {
 		$_.event -eq "action_result" -and $_.action -eq "hunt_waypoint" -and $_.result -eq "reached" -and
-		$_.position.x -eq 32550 -and $_.position.y -eq 31684 -and $_.position.z -eq 8
+		$_.position.x -eq 32181 -and $_.position.y -eq 31794 -and $_.position.z -eq 8
 	})
 	$transitionFailures = @($events | Where-Object {
 		$_.event -eq "action_result" -and $_.action -eq "navigate" -and
