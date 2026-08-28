@@ -362,7 +362,7 @@ bool PlayerBotController::attackDefensiveThreat(Player* player, const Position& 
 		       creature->getAttackedCreature() == player && player->canSee(creature->getPosition()) &&
 		       Position::areInRange<1, 1, 0>(currentPosition, creature->getPosition());
 	});
-	const bool overwhelmed = adjacentAttackers >= 2;
+	const bool overwhelmed = adjacentAttackers >= 4;
 	if (!overwhelmed) {
 		for (Creature* creature : spectators) {
 			if (!creature->getMonster() || creature->isRemoved() || creature->isDead() ||
