@@ -1283,14 +1283,15 @@ void PlayerBotController::processDeposit(Player* player, const Position& current
 		emit("action_result", currentPosition, fields.str());
 		Container* chest = player->getContainerByID(depotChestContainerId);
 		bool selectedAfterDeposit = false;
-		const bool canEvaluateSellLoot = progressionRuntime.activeGoal() != TopLevelGoal::Service && !fixtureDepot.synthetic && chest;
-		if (canEvaluateSellLoot) {
+		if (!fixtureDepot.synthetic && chest) {
 			planLocalSellLoot(*player, *chest, currentPosition);
-			selectTopLevelGoal(*player, currentPosition, "depot_deposit_complete");
-			selectedAfterDeposit = true;
-			if (progressionRuntime.activeGoal() == TopLevelGoal::SellLoot) {
-				processDeposit(player, currentPosition);
-				return;
+			if (progressionRuntime.activeGoal() != TopLevelGoal::Service) {
+				selectTopLevelGoal(*player, currentPosition, "depot_deposit_complete");
+				selectedAfterDeposit = true;
+				if (progressionRuntime.activeGoal() == TopLevelGoal::SellLoot) {
+					processDeposit(player, currentPosition);
+					return;
+				}
 			}
 		}
 		player->closeContainer(depotChestContainerId);

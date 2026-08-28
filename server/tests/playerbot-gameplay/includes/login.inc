@@ -474,7 +474,7 @@ function F.login.onLogin(player)
 		F.removeAll(player, F.meatItemId)
 		assert(player:addItem(F.healthPotionItemId, 10) and player:addItem(F.meatItemId, 2),
 			"sell loot fixture could not prepare hunt reserves")
-        assert(player:setStorageValue(50100, player:getMoney()), "sell loot fixture could not retain starting money")
+        assert(player:setStorageValue(50100, player:getMoney() + 1), "sell loot fixture could not require service before selling")
         F.suppressNearbyMonsters(player:getId())
         addEvent(F.verifySellLoot, 500, player:getId(), 480)
         print("PLAYERBOT_GAMEPLAY_TEST SELL_LOOT_START")

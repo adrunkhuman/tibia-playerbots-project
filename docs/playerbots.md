@@ -422,6 +422,10 @@ utility are observable, but food does not yet select a separate acquisition
 goal. Later goal arbitration can weigh measured regeneration benefit against
 travel, capacity, and service costs without restoring a hard requirement.
 
+An opened depot is scanned for a local positive-value SellLoot plan after
+deposit, including when mandatory potion or banking service must run first. The
+plan remains available for goal selection after that service completes.
+
 The bot identifies only server-classified corpse containers and checks normal
 corpse ownership. It opens the corpse through normal item use before inspecting
 contents. Empty and non-lootable corpses are skipped; skinning and other

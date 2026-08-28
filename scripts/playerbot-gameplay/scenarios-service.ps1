@@ -73,10 +73,13 @@
 			$logs = Wait-ForLog -Pattern '"goal":"sell_loot","result":"success"'
 			$events = @(ConvertFrom-PlayerbotLogs -Logs $logs)
 			$plan = @($events | Where-Object { $_.event -eq "sell_loot_plan" -and $_.result -eq "candidate" -and $_.item_id -eq 7735 -and $_.count -eq 10 -and $_.utility -gt 300 })
+			$selectedAfterService = @($events | Where-Object {
+				$_.event -eq "goal_selection" -and $_.decision_reason -eq "service_complete" -and $_.to_goal -eq "sell_loot" -and $_.item_id -eq 7735
+			})
 			$withdraw = @($events | Where-Object { $_.event -eq "sell_loot_withdraw" -and $_.result -eq "success" -and $_.item_id -eq 7735 })
 			$sales = @($events | Where-Object { $_.event -eq "action_result" -and $_.action -eq "sell" -and $_.result -eq "success" -and $_.item_id -eq 7735 -and $_.count -eq 10 })
-			if ($plan.Count -ne 1 -or $withdraw.Count -ne 10 -or $sales.Count -ne 1) {
-				throw "Local SellLoot did not produce one plan, ten verified withdrawals, and one planned sale. plan=$($plan.Count), withdraw=$($withdraw.Count), sales=$($sales.Count)."
+			if ($plan.Count -lt 1 -or $selectedAfterService.Count -ne 1 -or $withdraw.Count -ne 10 -or $sales.Count -ne 1) {
+				throw "Local SellLoot did not survive mandatory service and complete the planned sale. plan=$($plan.Count), selected_after_service=$($selectedAfterService.Count), withdraw=$($withdraw.Count), sales=$($sales.Count)."
 			}
 		}
 	}
