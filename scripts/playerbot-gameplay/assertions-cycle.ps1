@@ -15,18 +15,19 @@ function Assert-CycleEvents {
         $_.event -eq "npc_capability_audit" -and $_.result -eq "ok" -and $_.findings -eq 0 -and
         $_.shop_providers -gt 0 -and $_.spell_trainers -gt 0 -and $_.travel_offers -gt 0
     })
-    $npcReplies = @($events | Where-Object { $_.event -eq "npc_reply" -and $_.npc_name })
-    $potionPurchase = @($events | Where-Object {
-        $_.event -eq "action_result" -and $_.action -eq "buy_potions" -and $_.result -eq "success" -and
-		$_.item_id -eq 8704 -and $_.count -eq 10
-    })
-    $bankWithdraw = @($events | Where-Object {
-        $_.event -eq "action_result" -and $_.action -eq "bank_withdraw" -and $_.result -eq "success"
-    })
-    $dynamicSale = @($events | Where-Object {
-        $_.event -eq "action_result" -and $_.action -eq "sell" -and $_.result -eq "success" -and
-        $_.item_id -eq 2992 -and $_.count -eq 1
-    })
+	$depositedLoot = @($events | Where-Object {
+		$_.event -eq "action_result" -and $_.action -eq "deposit" -and $_.result -eq "success" -and
+		$_.item_id -eq 2992 -and $_.count -eq 1
+	})
+	$shopTransactions = @($events | Where-Object { $_.action -in @("buy_potions", "sell") })
+	$bankDeposits = @($events | Where-Object {
+		$_.action -eq "bank_deposit" -and $_.result -eq "success" -and $_.count -eq 100 -and
+		$_.bank_before -eq 1000 -and $_.bank_after -eq 1100
+	})
+	$bankWithdrawals = @($events | Where-Object {
+		$_.action -eq "bank_withdraw" -and $_.result -eq "success" -and $_.count -eq 100 -and
+		$_.bank_before -eq 1100 -and $_.bank_after -eq 1000
+	})
     $cycles = @($events | Where-Object {
         $_.event -eq "action_result" -and $_.action -eq "hunt_cycle" -and $_.result -eq "started"
     })
@@ -60,17 +61,12 @@ function Assert-CycleEvents {
     if ($capabilityAudit.Count -ne 1) {
         throw "The startup NPC capability audit was missing or reported findings."
     }
-    if ($npcReplies.Count -lt 3) {
-        throw "The bot did not acknowledge the selected NPCs before requesting services."
-    }
-    if (@($events | Where-Object { $_.event -eq "service_catalog" }).Count -ne 0) {
-        throw "The bot probed a shop window instead of using the live NPC offer catalog."
-    }
-    if ($potionPurchase.Count -ne 1 -or $bankWithdraw.Count -lt 1) {
-        throw "The bot did not produce the expected purchase, sale, and bank balance result."
-    }
-    if ($dynamicSale.Count -ne 1) {
-        throw "The bot did not sell the dead rabbit discovered from the live NPC offer catalog."
+	if (@($events | Where-Object { $_.event -eq "service_catalog" }).Count -ne 0) {
+		throw "The bot probed a shop window instead of using the live NPC offer catalog."
+	}
+	if ($depositedLoot.Count -ne 1 -or $shopTransactions.Count -ne 0 -or
+		$bankDeposits.Count -ne 1 -or $bankWithdrawals.Count -ne 1) {
+		throw "The bot did not deposit loot while preserving completed service reserves."
     }
     if ($cycles.Count -lt 2) {
         throw "The bot did not begin a second hunt cycle."
@@ -110,9 +106,10 @@ function Assert-CarlinLocalServiceEvents {
 		($_.event -eq "npc_travel")
 	})
 	$terminals = @($events | Where-Object { $_.event -eq "terminal" })
+	$sales = @($events | Where-Object { $_.event -eq "action_result" -and $_.action -eq "sell" })
 	if ($purchases.Count -ne 1 -or $rachelReplies.Count -lt 1 -or $evaReplies.Count -lt 1 -or
-		$withdrawals.Count -ne 1 -or $remoteAttempts.Count -ne 0 -or $terminals.Count -ne 0) {
-		throw "Carlin service was not completed locally at Rachel and Eva. purchases=$($purchases.Count), rachel=$($rachelReplies.Count), eva=$($evaReplies.Count), withdrawals=$($withdrawals.Count), remote=$($remoteAttempts.Count), terminal=$($terminals.Count)."
+		$withdrawals.Count -ne 1 -or $sales.Count -ne 0 -or $remoteAttempts.Count -ne 0 -or $terminals.Count -ne 0) {
+		throw "Carlin service was not completed locally without selling at Rachel and Eva. purchases=$($purchases.Count), rachel=$($rachelReplies.Count), eva=$($evaReplies.Count), withdrawals=$($withdrawals.Count), sales=$($sales.Count), remote=$($remoteAttempts.Count), terminal=$($terminals.Count)."
 	}
 }
 
@@ -349,26 +346,27 @@ function Assert-HealingResupplyEvents {
     $purchases = @($events | Where-Object {
         $_.event -eq "action_result" -and $_.action -eq "buy_potions" -and $_.result -eq "success"
     })
-    $flaskSales = @($events | Where-Object {
-        $_.event -eq "action_result" -and $_.action -eq "sell" -and $_.result -eq "success" -and
-        $_.item_id -eq 7636 -and $_.count -eq 1
-    })
+	$flaskDeposits = @($events | Where-Object {
+		$_.event -eq "action_result" -and $_.action -eq "deposit" -and $_.result -eq "success" -and
+		$_.item_id -eq 7636 -and $_.count -eq 1
+	})
     $heals = @($events | Where-Object {
         $_.event -eq "action_result" -and $_.action -eq "heal" -and $_.result -eq "success" -and
         $_.objective -eq "service" -and $_.resource_after -eq ($_.resource_before - 1)
     })
 	$serviceResumed = @($events | Where-Object {
-		$_.event -eq "objective_transition" -and $_.from -eq "service" -and $_.to -eq "return_to_depot"
+		$_.event -eq "objective_transition" -and $_.from -eq "service" -and $_.to -eq "hunt"
 	})
 	$foodPurchases = @($events | Where-Object { $_.action -eq "buy_meat" })
+	$lootSales = @($events | Where-Object { $_.action -eq "sell" })
     $transactionFailures = @($events | Where-Object {
         $_.reason -eq "transaction_delta_mismatch" -or $_.reason -eq "shop_transaction_delta_mismatch"
     })
-    if ($missingSupply.Count -ne 1 -or $flaskSales.Count -ne 1 -or $purchases.Count -lt 1 -or $heals.Count -lt 1) {
-        throw "The bot did not refill and consume potions after the missing-supply healing outcome: missing=$($missingSupply.Count), flaskSales=$($flaskSales.Count), purchases=$($purchases.Count), heals=$($heals.Count)."
-    }
-	if ($serviceResumed.Count -lt 1 -or $foodPurchases.Count -ne 0) {
-		throw "The bot did not resume service after healing with newly purchased potions."
+	if ($missingSupply.Count -ne 1 -or $flaskDeposits.Count -ne 1 -or $purchases.Count -lt 1 -or $heals.Count -lt 1) {
+		throw "The bot did not deposit loot, refill, and consume potions after the missing-supply healing outcome: missing=$($missingSupply.Count), flaskDeposits=$($flaskDeposits.Count), purchases=$($purchases.Count), heals=$($heals.Count)."
+	}
+	if ($serviceResumed.Count -lt 1 -or $foodPurchases.Count -ne 0 -or $lootSales.Count -ne 0) {
+		throw "The bot did not resume hunting directly after potion-only service."
     }
     if ($transactionFailures.Count -ne 0 -or @($events | Where-Object { $_.event -eq "terminal" }).Count -ne 0) {
         throw "Healing interfered with service transaction verification."
@@ -381,12 +379,12 @@ function Assert-ValueLootEvents {
     $events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
 	$replacement = @($events | Where-Object {
 		$_.event -eq "action_result" -and $_.action -eq "loot_replace" -and $_.result -eq "success" -and
-		$_.discarded_item_id -eq 2671 -and $_.discarded_count -eq 1 -and $_.discarded_value -gt 0 -and
-		$_.incoming_item_id -eq 2826
+		$_.discarded_item_id -eq 2398 -and $_.discarded_count -eq 1 -and $_.discarded_value -lt 100 -and
+		$_.incoming_item_id -eq 2152
     })
     $incomingLoot = @($events | Where-Object {
         $_.event -eq "action_result" -and $_.action -eq "loot" -and $_.result -eq "success" -and
-        $_.item_id -eq 2826 -and $_.count -eq 1 -and $_.unit_value -eq 5 -and $_.total_value -eq 5
+		$_.item_id -eq 2152 -and $_.count -eq 1 -and $_.unit_value -eq 100 -and $_.total_value -eq 100
     })
     $capacitySkips = @($events | Where-Object {
         $_.event -eq "action_result" -and $_.action -eq "loot" -and $_.reason -eq "no_capacity"
@@ -399,6 +397,6 @@ function Assert-ValueLootEvents {
 	})
 	if ($replacement.Count -ne 1 -or $incomingLoot.Count -ne 1 -or $capacitySkips.Count -ne 0 -or
 		$foodPurchases.Count -ne 0 -or $foodPreference.Count -ne 1) {
-        throw "The bot did not replace lower-value cargo with the more profitable corpse item."
+		throw "The bot did not replace lower-density cargo with the denser corpse item."
     }
 }

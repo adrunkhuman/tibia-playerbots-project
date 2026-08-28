@@ -42,7 +42,7 @@ namespace {
 		DIRECTION_SOUTHWEST, DIRECTION_SOUTHEAST, DIRECTION_NORTHWEST, DIRECTION_NORTHEAST,
 	};
 	constexpr std::array<uint16_t, 3> ladderIds = {1386, 3678, 5543};
-	constexpr std::array<uint16_t, 2> downUseIds = {430, 1369};
+	constexpr std::array<uint16_t, 1> downUseIds = {430};
 	constexpr std::array<uint16_t, 4> ropeSpotIds = {384, 418, 8278, 8592};
 	constexpr std::array<uint16_t, 4> shovelHoleIds = {468, 481, 483, 7932};
 

@@ -165,6 +165,7 @@ PlayerBotController::PlayerBotController(const Player& player,
 		{maxCorpseSearchAttempts, maximumCorpseNavigationFailures, corpseNavigationSuspendThreshold,
 		 std::chrono::milliseconds(corpseNavigationRetryInterval), corpseLootTimeout, preferredFoodCount},
 		fixtureDriver.huntPatrol(),
+		huntCapacityPressureGrace,
 	}, sharedHuntRegionCooldowns)
 {}
 
@@ -253,8 +254,7 @@ void PlayerBotController::start(const Position& position, bool recovered, uint32
 		progressionRuntime.enterService();
 		turnRouter.setCyclePhase(CyclePhase::ReturnToDepot);
 	} else {
-		progressionRuntime.enterService();
-		turnRouter.setCyclePhase(CyclePhase::Service);
+		beginService(controlledPlayer, position, "startup");
 	}
 	setStage(ScenarioStage::Traverse, position);
 	// Login fixtures run through Lua after controller creation. Let the real-map
@@ -608,6 +608,14 @@ PlayerBotNavigationRoutePlan PlayerBotController::planNavigationRoute(Player& pl
 PlayerBotNavigationRoutePlan PlayerBotController::planCompleteNavigationRoute(
 	Player& player, const Position& destination, const std::set<Position>& blockedPositions,
 	uint64_t maximumExpandedNodes) const
+
+{
+	return planCompleteNavigationRoute(player, player.getPosition(), destination, blockedPositions, maximumExpandedNodes);
+}
+
+PlayerBotNavigationRoutePlan PlayerBotController::planCompleteNavigationRoute(
+	Player& player, const Position& start, const Position& destination, const std::set<Position>& blockedPositions,
+	uint64_t maximumExpandedNodes) const
 {
 	PlayerBotNavigationRoutePlan plan;
 	plan.metrics.attempted = true;
@@ -620,7 +628,7 @@ PlayerBotNavigationRoutePlan PlayerBotController::planCompleteNavigationRoute(
 	const PlayerBotTopology& topology = PlayerBotTopology::instance();
 	const bool canUseRope = g_game.findItemOfType(&player, playerbot::ropeItemId, true) != nullptr;
 	const bool canUseShovel = g_game.findItemOfType(&player, shovelToolItemId, true) != nullptr;
-	Position segmentStart = player.getPosition();
+	Position segmentStart = start;
 	std::set<Position> portalDestinations;
 	uint64_t travelMs = 0;
 	auto stepDuration = [&player](const PlayerBotNavigationStep& step) -> uint32_t {
@@ -1294,8 +1302,7 @@ void PlayerBotController::navigate()
 			progressionRuntime.enterHunt();
 			startHunt(player, currentPosition, "focused_fixture");
 		} else {
-			progressionRuntime.enterService();
-			turnRouter.setCyclePhase(CyclePhase::Service);
+			beginService(player, currentPosition, "startup");
 		}
 		schedule(navigationInterval);
 		return;

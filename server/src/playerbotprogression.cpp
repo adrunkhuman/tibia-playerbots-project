@@ -39,7 +39,8 @@ namespace {
 }
 
 void PlayerBotController::emitCombatReadiness(const Player& player, const Position& position, const char* result,
-                                              const std::string& recovery, const std::string& terminalReason) const
+	                                          const std::string& recovery, const std::string& terminalReason,
+	                                          uint32_t minimumFreeCapacity) const
 {
 	Item* left = player.getInventoryItem(CONST_SLOT_LEFT);
 	Item* right = player.getInventoryItem(CONST_SLOT_RIGHT);
@@ -63,20 +64,20 @@ void PlayerBotController::emitCombatReadiness(const Player& player, const Positi
 	       << ",\"armor_item_id\":" << (armor ? std::to_string(armor->getID()) : "null")
 	       << ",\"armor\":" << (armor ? armor->getArmor() : 0) << '}'
 	       << ",{\"name\":\"health_potions\",\"ready\":" <<
-	          (inventoryPolicy.inventoryItemCount(player, potionItemId) > healthPotionReturnThreshold ? "true" : "false")
+	          (inventoryPolicy.inventoryItemCount(player, potionItemId) > huntPotionReturnThreshold ? "true" : "false")
 	       << ",\"item_id\":" << potionItemId
 	       << ",\"count\":" << inventoryPolicy.inventoryItemCount(player, potionItemId)
-	       << ",\"return_threshold\":" << healthPotionReturnThreshold
-	       << ",\"restock_target\":" << healthPotionRestockTarget << '}'
+	       << ",\"return_threshold\":" << huntPotionReturnThreshold
+	       << ",\"restock_target\":" << huntPotionRestockTarget << '}'
 	       << ",{\"name\":\"food\",\"required\":false,\"ready\":true"
 	       << ",\"count\":" << food.count << ",\"preferred\":" << preferredFoodCount
 	       << ",\"reclaimable_weight\":" << food.weight
 	       << ",\"preference_utility\":" <<
 	          std::max<int32_t>(0, static_cast<int32_t>(preferredFoodCount -
 	              std::min<uint32_t>(preferredFoodCount, food.count))) * foodPreferenceUtility << '}'
-	       << ",{\"name\":\"free_capacity\",\"ready\":" << (usableCapacity >= returnCapacityThreshold ? "true" : "false")
+	       << ",{\"name\":\"free_capacity\",\"ready\":" << (usableCapacity >= minimumFreeCapacity ? "true" : "false")
 	       << ",\"current\":" << player.getFreeCapacity() << ",\"reclaimable_food\":" << food.weight
-	       << ",\"effective\":" << usableCapacity << ",\"minimum\":" << returnCapacityThreshold << "}]"
+	       << ",\"effective\":" << usableCapacity << ",\"minimum\":" << minimumFreeCapacity << "}]"
 	       << ",\"selected_recovery\":" << (recovery.empty() ? "null" : jsonString(recovery))
 	       << ",\"terminal_reason\":" << (terminalReason.empty() ? "null" : jsonString(terminalReason));
 	emit("combat_readiness", position, fields.str());
@@ -87,7 +88,7 @@ PlayerBotEquipmentReadinessInput PlayerBotController::equipmentReadinessInput(co
 	const Item* backpack = player.getInventoryItem(CONST_SLOT_BACKPACK);
 	const uint16_t potionItemId = recoveryPotionItemId(player.getVocationId());
 	return {backpack && backpack->getContainer(),
-	        inventoryPolicy.inventoryItemCount(player, potionItemId) > healthPotionReturnThreshold,
+	        inventoryPolicy.inventoryItemCount(player, potionItemId) > huntPotionReturnThreshold,
 	        inventoryPolicy.effectiveFreeCapacity(player), returnCapacityThreshold};
 }
 
@@ -187,7 +188,7 @@ void PlayerBotController::processReadinessEquipment(Player* player, const Positi
 	ensureCombatReady(player, position, "readiness_upgrade_incomplete");
 }
 
-bool PlayerBotController::ensureCombatReady(Player* player, const Position& position, const char* reason)
+bool PlayerBotController::ensureCombatReady(Player* player, const Position& position, const char* reason, bool requireCapacity)
 {
 	if (!player || !equipmentPolicy.requiresKnightCombatReadiness(PlayerBotEquipmentAdapter::player(*player))) {
 		return true;
@@ -196,15 +197,18 @@ bool PlayerBotController::ensureCombatReady(Player* player, const Position& posi
 	EquipmentUpgrade upgrade{};
 	const PlayerBotEquipmentPlayerSnapshot playerFacts = PlayerBotEquipmentAdapter::player(*player);
 	const EquipmentLoadout loadout = PlayerBotEquipmentAdapter::loadout(*player);
+	PlayerBotEquipmentReadinessInput readinessInput = equipmentReadinessInput(*player);
+	if (!requireCapacity) readinessInput.minimumFreeCapacity = 0;
 	const PlayerBotEquipmentReadiness readiness = equipmentPolicy.combatReadiness(
-		playerFacts, loadout, PlayerBotEquipmentAdapter::findCarriedUpgrade(equipmentPolicy, *player, carriedUpgrade, upgrade), equipmentReadinessInput(*player));
+		playerFacts, loadout, PlayerBotEquipmentAdapter::findCarriedUpgrade(equipmentPolicy, *player, carriedUpgrade, upgrade), readinessInput);
 	if (readiness.ready) {
 		if (std::strcmp(reason, "readiness_continuous_check") != 0) {
 			emitCombatReadiness(*player, position, "ready", {}, {});
 		}
 		return true;
 	}
-	emitCombatReadiness(*player, position, "recovery", readiness.recovery, readiness.terminalReason);
+	emitCombatReadiness(*player, position, "recovery", readiness.recovery, readiness.terminalReason,
+		readinessInput.minimumFreeCapacity);
 	if (readiness.recovery == "equip_carried") {
 		if (!beginReadinessEquipment(player, position, reason)) schedule(navigationDecisionDelay(*player));
 		return false;
@@ -919,6 +923,14 @@ void PlayerBotController::emitGoalCandidate(const Player& player, const GoalCand
 			       << ",\"mana_tick_remaining\":" << forecast->remaining;
 		}
 	}
+	if (candidate.goal == TopLevelGoal::SellLoot && sellLootPlan) {
+		const LocalSellLootPlan& plan = *sellLootPlan;
+		fields << ",\"npc_id\":" << plan.providerId << ",\"item_id\":" << plan.itemId << ",\"count\":" << plan.count
+		       << ",\"expected_revenue\":" << plan.expectedRevenue << ",\"liquidity_urgency\":" << plan.liquidityUrgency
+		       << ",\"fare\":" << plan.fare << ",\"round_trip_risk\":" << plan.roundTripRisk
+		       << ",\"round_trip_time_cost\":" << plan.roundTripTime << ",\"foregone_hunt_profit\":" << plan.foregoneHuntProfit
+		       << ",\"route_steps\":" << plan.routeSteps << ",\"route_validations\":" << plan.routeValidations;
+	}
 	emit("goal_candidate", position, fields.str());
 }
 
@@ -982,10 +994,11 @@ bool PlayerBotController::selectTopLevelGoal(Player& player, const Position& pos
 	const bool magicTrainingCoolingDown = progressionRuntime.isCoolingDown(TopLevelGoal::MagicTraining, now);
 	const char* magicTrainingReason = magicTrainingCoolingDown ? "cooldown" :
 	                                  survivalRuntime.magicTrainingReason(survivalSnapshot(player));
+	const bool sellLootCoolingDown = progressionRuntime.isCoolingDown(TopLevelGoal::SellLoot, now);
 	const uint16_t potionItemId = recoveryPotionItemId(player.getVocationId());
 	const uint32_t potionCount = inventoryPolicy.inventoryItemCount(player, potionItemId);
-	const uint32_t missingPotions = potionCount <= healthPotionReturnThreshold ?
-	                                  healthPotionRestockTarget - potionCount : 0;
+	const uint32_t missingPotions = potionCount <= huntPotionReturnThreshold ?
+	                                  huntPotionRestockTarget - potionCount : 0;
 	const uint32_t sellable = saleableItemCount(player);
 	const bool lowCapacity = inventoryPolicy.effectiveFreeCapacity(player) < returnCapacityThreshold;
 	const bool criticalHealing = survivalRuntime.needsHealing(survivalSnapshot(player)) && missingPotions != 0;
@@ -1000,6 +1013,8 @@ bool PlayerBotController::selectTopLevelGoal(Player& player, const Position& pos
 		equipmentPurchaseCoolingDown, fixtureDriver.observeEquipmentOffer(true).available, equipmentFound,
 		equipmentFound ? PlayerBotEquipmentPolicy::decisionRuleName(equipment->rule) : "",
 		magicTrainingCoolingDown, magicTrainingReason ? magicTrainingReason : "",
+		sellLootCoolingDown, sellLootPlan.has_value(), sellLootPlan ? sellLootPlan->utility : 0,
+		sellLootPlan ? "local_positive_plan" : "no_opened_depot_plan",
 	};
 	const PlayerBotGoalArbiter::GoalDecision decision = progressionRuntime.selectGoal(snapshot);
 	emitGoalCandidate(player, decision.candidate(TopLevelGoal::Departure), decision.id, position, decisionReason, nullptr,
@@ -1010,6 +1025,7 @@ bool PlayerBotController::selectTopLevelGoal(Player& player, const Position& pos
 	emitGoalCandidate(player, decision.candidate(TopLevelGoal::BuyEquipment), decision.id, position, decisionReason, nullptr, nullptr,
 	                  equipmentFound ? &*equipment : nullptr);
 	emitGoalCandidate(player, decision.candidate(TopLevelGoal::MagicTraining), decision.id, position, decisionReason);
+	emitGoalCandidate(player, decision.candidate(TopLevelGoal::SellLoot), decision.id, position, decisionReason);
 	emitGoalCandidate(player, decision.candidate(TopLevelGoal::Hunt), decision.id, position, decisionReason);
 	if (fixtureDriver.equipmentStorageObservation().pause) {
 		return false;
@@ -1040,6 +1056,9 @@ bool PlayerBotController::selectTopLevelGoal(Player& player, const Position& pos
 		fields << ",\"npc_id\":" << equipment->npcId << ",\"item_id\":" << equipment->itemId
 		       << ",\"price\":" << equipment->price << ",\"rule\":"
 	       << jsonString(PlayerBotEquipmentPolicy::decisionRuleName(equipment->rule));
+	} else if (selected.goal == TopLevelGoal::SellLoot && sellLootPlan) {
+		fields << ",\"npc_id\":" << sellLootPlan->providerId << ",\"item_id\":" << sellLootPlan->itemId
+		       << ",\"count\":" << sellLootPlan->count;
 	}
 	emit("goal_selection", position, fields.str());
 	if (selected.goal == TopLevelGoal::Departure) {
@@ -1054,7 +1073,10 @@ bool PlayerBotController::selectTopLevelGoal(Player& player, const Position& pos
 		beginService(&player, position, "goal_selected");
 	} else if (selected.goal == TopLevelGoal::MagicTraining) {
 		schedule(SCHEDULER_MINTICKS);
+	} else if (selected.goal == TopLevelGoal::SellLoot) {
+		setCyclePhase(CyclePhase::DepositLoot, position, "sell_loot_selected");
 	} else {
+		sellLootPlan.reset();
 		startHunt(&player, position, "goal_selected");
 	}
 	return true;

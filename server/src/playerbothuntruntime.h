@@ -157,6 +157,10 @@ class PlayerBotHuntRuntime
 
 		void beginCycle(std::chrono::steady_clock::time_point now, uint32_t durationSeconds);
 		bool deadlineReached(std::chrono::steady_clock::time_point now) const { return huntDeadline != std::chrono::steady_clock::time_point{} && now >= huntDeadline; }
+		void observeCapacityPressure(std::chrono::steady_clock::time_point now);
+		bool capacityPressureElapsed(std::chrono::steady_clock::time_point now,
+		                             std::chrono::steady_clock::duration grace) const;
+		bool capacityPressureActive() const { return capacityPressureStarted != std::chrono::steady_clock::time_point{}; }
 		uint32_t completedCycles() const { return cycles; }
 		bool active() const { return activeRegion.has_value(); }
 		std::optional<PlayerBotHuntRegion> region() const { return activeRegion; }
@@ -200,6 +204,7 @@ class PlayerBotHuntRuntime
 		std::chrono::steady_clock::time_point scopeReevaluationAfter;
 		std::chrono::steady_clock::time_point huntStarted;
 		std::chrono::steady_clock::time_point huntDeadline;
+		std::chrono::steady_clock::time_point capacityPressureStarted;
 		std::chrono::steady_clock::time_point patrolFailureStarted;
 		Position patrolFailureTarget;
 		size_t patrolIndex = 0;

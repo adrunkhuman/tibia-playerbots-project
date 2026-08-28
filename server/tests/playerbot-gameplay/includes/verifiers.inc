@@ -17,6 +17,12 @@ function F.verifyReadiness(playerId, mode, attempts)
         return
     end
     assert(ready, "combat readiness fixture did not reach its required state: " .. mode)
+	if mode == "food_capacity" then
+		local usedCapacity = player:getCapacity() - player:getFreeCapacity()
+		assert(player:setCapacity(usedCapacity), "food-capacity fixture could not exhaust capacity during the hunt")
+		addEvent(F.verifyActiveHuntCapacity, 5000, playerId)
+		return
+	end
     if mode == "supplies" or mode == "retention" then
         assert(player:teleportTo(F.depotPosition), "readiness fixture could not return to the depot")
     end
@@ -224,6 +230,27 @@ function F.verifyCarlinLocalService(playerId, attempts)
     print("PLAYERBOT_GAMEPLAY_TEST CARLIN_LOCAL_SERVICE_PASS")
 end
 
+function F.verifyActiveHuntCapacity(playerId)
+	local player = Player(playerId)
+	assert(player and not player:isRemoved(), "Bot One disappeared after active-hunt capacity exhaustion")
+	print("PLAYERBOT_GAMEPLAY_TEST READINESS_FOOD_CAPACITY_PASS")
+end
+
+function F.verifySellLoot(playerId, attempts)
+    local player = Player(playerId)
+    assert(player and not player:isRemoved(), "Bot One disappeared during local sell loot")
+    local chest = player:getDepotChest(F.PlayerbotThaisLockerDepotId(), false)
+    local complete = chest and player:getItemCount(F.sellLootItemId) == 0 and
+        chest:getItemCountById(F.sellLootItemId) == 0 and chest:getItemCountById(2050) == 1 and
+        player:getMoney() > player:getStorageValue(50100)
+    if not complete and attempts > 0 then
+        addEvent(F.verifySellLoot, 500, playerId, attempts - 1)
+        return
+    end
+    assert(complete, "local sell loot did not sell only the planned depot batch")
+    print("PLAYERBOT_GAMEPLAY_TEST SELL_LOOT_PASS")
+end
+
 function F.verifyHealingResupply(playerId, attempts)
     local player = Player(playerId)
     assert(player and not player:isRemoved(), "Bot One disappeared during the healing resupply test")
@@ -310,25 +337,27 @@ function F.triggerArbitrationInterrupt(playerId)
     print("PLAYERBOT_GAMEPLAY_TEST GOAL_ARBITRATION_INTERRUPT_TRIGGERED")
 end
 
-function F.verifyService(playerId, initialDepotBagCount, attempts)
+function F.verifyService(playerId, initialDepotBagCount, initialDepotSaleItemCount, attempts)
     local player = Player(playerId)
     assert(player and not player:isRemoved(), "Bot One disappeared during the gameplay test")
 
     local depotTile = Tile(F.depotTilePosition)
     assert(depotTile, "fake depot tile is unavailable")
     local depositedBags = depotTile:getItemCountById(ITEM_BAG) - initialDepotBagCount
-    local complete = depositedBags == 1 and player:getItemCount(F.saleItemId) == 0 and
-        player:getItemCount(F.potionItemId) >= 10 and player:getMoney() == 100 and player:getBankBalance() == 139
+	local depositedSaleItems = depotTile:getItemCountById(F.saleItemId) - initialDepotSaleItemCount
+	local complete = depositedBags == 1 and depositedSaleItems == 1 and player:getItemCount(F.saleItemId) == 0 and
+		player:getItemCount(F.potionItemId) >= 10 and player:getMoney() == 100 and player:getBankBalance() == 1000
     if not complete and attempts > 0 then
-        addEvent(F.verifyService, 500, playerId, initialDepotBagCount, attempts - 1)
+		addEvent(F.verifyService, 500, playerId, initialDepotBagCount, initialDepotSaleItemCount, attempts - 1)
         return
     end
 
     assert(depositedBags == 1, "unexpected deposited loot-bag count: " .. depositedBags)
-    assert(player:getItemCount(F.saleItemId) == 0, "policy-approved loot was not sold")
-    assert(player:getItemCount(F.potionItemId) >= 10, "selected recovery potion restock target was not purchased")
-    assert(player:getMoney() == 100, "banker did not leave the carried gold reserve")
-    assert(player:getBankBalance() == 139, "shop purchases and bank transactions produced the wrong balance")
+	assert(depositedSaleItems == 1 and player:getItemCount(F.saleItemId) == 0,
+		"policy-approved loot was not deposited")
+	assert(player:getItemCount(F.potionItemId) >= 10, "completed potion reserves were not preserved")
+	assert(player:getMoney() == 100 and player:getBankBalance() == 1000,
+		"completed cash reserves were not preserved")
     assert(player:getSlotItem(CONST_SLOT_ARMOR):getId() == F.seedArmorId, "seeded chain armor was deposited")
     local right = player:getSlotItem(CONST_SLOT_RIGHT)
     assert(right and right:getId() == F.seedShieldId, "seeded dwarven shield was deposited")
@@ -380,13 +409,12 @@ function F.verifySlottedLoot(playerId, sellerAvailable, attempts)
     local left = player and player:getSlotItem(CONST_SLOT_LEFT)
     local complete = player and not player:isRemoved() and (not ammo or ammo:getId() ~= F.slottedLootItemId) and
         left and left:getId() == F.slottedLootItemId and
-        (sellerAvailable and player:getItemCount(F.slottedLootItemId) == 1 or
-         not sellerAvailable and chest and chest:getItemCountById(F.slottedLootItemId) == 1)
+        player:getItemCount(F.slottedLootItemId) == 1 and chest and chest:getItemCountById(F.slottedLootItemId) == 1
     if not complete and attempts > 0 then
         addEvent(F.verifySlottedLoot, 500, playerId, sellerAvailable, attempts - 1)
         return
     end
-    assert(complete, "slotted loot did not reach its verified sell or deposit disposition")
+    assert(complete, "slotted loot did not reach its verified depot disposition")
     print(sellerAvailable and "PLAYERBOT_GAMEPLAY_TEST SLOTTED_LOOT_SELLER_PASS" or
         "PLAYERBOT_GAMEPLAY_TEST SLOTTED_LOOT_NO_SELLER_PASS")
 end

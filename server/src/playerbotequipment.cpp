@@ -98,7 +98,7 @@ std::optional<PlayerBotController::EquipmentOfferEvaluation> PlayerBotController
 	const uint16_t potionItemId = recoveryPotionItemId(player.getVocationId());
 	const PlayerBotEquipmentReadinessInput readiness{
 		backpackItem && backpackItem->getContainer(),
-		inventoryPolicy.inventoryItemCount(player, potionItemId) > healthPotionReturnThreshold,
+		inventoryPolicy.inventoryItemCount(player, potionItemId) > huntPotionReturnThreshold,
 		inventoryPolicy.effectiveFreeCapacity(player),
 		returnCapacityThreshold,
 	};
@@ -496,7 +496,7 @@ void PlayerBotController::processEquipmentPurchase(Player* player, const Positio
 				",\"slot\":" + std::to_string(purchase.slot) + ",\"combat_ready\":" +
 				(equipmentPolicy.loadoutReady(playerFacts, loadout,
 				    {player->getInventoryItem(CONST_SLOT_BACKPACK) && player->getInventoryItem(CONST_SLOT_BACKPACK)->getContainer(),
-				     inventoryPolicy.inventoryItemCount(*player, potionItemId) > healthPotionReturnThreshold,
+				     inventoryPolicy.inventoryItemCount(*player, potionItemId) > huntPotionReturnThreshold,
 				     inventoryPolicy.effectiveFreeCapacity(*player), returnCapacityThreshold}) ? "true" : "false") +
 				",\"suitable_regions\":" + std::to_string(hunts.suitableRegions) +
 				",\"displaced_items_preserved\":true");

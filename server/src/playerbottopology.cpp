@@ -14,6 +14,7 @@
 #include <array>
 #include <numeric>
 #include <queue>
+#include <unordered_set>
 
 namespace {
 	constexpr uint16_t sectorSize = 32;
@@ -38,7 +39,7 @@ namespace {
 		}
 	}
 	constexpr std::array<uint16_t, 3> ladderIds = {1386, 3678, 5543};
-	constexpr std::array<uint16_t, 2> downUseIds = {430, 1369};
+	constexpr std::array<uint16_t, 1> downUseIds = {430};
 	constexpr std::array<uint16_t, 4> ropeSpotIds = {384, 418, 8278, 8592};
 	constexpr std::array<uint16_t, 4> shovelHoleIds = {468, 481, 483, 7932};
 
@@ -105,13 +106,24 @@ void PlayerBotTopology::build(const Map& map)
 	map.forEachTile([&walkableTiles](const Tile& tile) {
 		if (isStaticWalkTile(tile)) ++walkableTiles;
 	});
-	walkNodes.reserve(walkableTiles);
+	std::unordered_set<uint64_t> redirectedDestinations;
+	map.forEachTile([&map, &redirectedDestinations](const Tile& tile) {
+		if (!isStaticWalkTile(tile)) return;
+		for (Direction direction : directions) {
+			PlayerBotWalkTransition transition;
+			if (!playerBotResolveWalkTransition(tile.getPosition(), direction, transition) ||
+			    transition.destination == transition.entry || !map.getTile(transition.destination)) continue;
+			redirectedDestinations.insert(positionKey(transition.destination));
+		}
+	});
+	walkNodes.reserve(walkableTiles + redirectedDestinations.size());
 	std::vector<uint32_t> parents;
 	std::vector<uint8_t> ranks;
-	parents.reserve(walkableTiles);
-	ranks.reserve(walkableTiles);
-	map.forEachTile([this, &parents, &ranks](const Tile& tile) {
-		if (!isStaticWalkTile(tile)) return;
+	parents.reserve(walkableTiles + redirectedDestinations.size());
+	ranks.reserve(walkableTiles + redirectedDestinations.size());
+	map.forEachTile([this, &redirectedDestinations, &parents, &ranks](const Tile& tile) {
+		if (!isStaticWalkTile(tile) &&
+		    redirectedDestinations.find(positionKey(tile.getPosition())) == redirectedDestinations.end()) return;
 		const uint32_t index = static_cast<uint32_t>(parents.size());
 		walkNodes.emplace(positionKey(tile.getPosition()), index);
 		parents.push_back(index);
@@ -152,7 +164,7 @@ void PlayerBotTopology::build(const Map& map)
 				const Position neighbor(static_cast<uint16_t>(x), static_cast<uint16_t>(y), position.z);
 				if (sectorKey(position) != sectorKey(neighbor)) continue;
 				const Tile* neighborTile = map.getTile(neighbor);
-				if (!neighborTile || staticDoor(*neighborTile)) continue;
+				if (!neighborTile || !isStaticWalkTile(*neighborTile) || staticDoor(*neighborTile)) continue;
 				const auto entry = walkNodes.find(positionKey(neighbor));
 				if (entry == walkNodes.end()) continue;
 				PlayerBotWalkTransition forward;
@@ -206,12 +218,16 @@ void PlayerBotTopology::build(const Map& map)
 		}
 	};
 	map.forEachTile([this, &map, &addEdge, &joinNodes](const Tile& tile) {
-		if (!isStaticWalkTile(tile)) return;
 		const Position& position = tile.getPosition();
-		const uint32_t from = walkNodes.at(positionKey(position));
+		const auto current = walkNodes.find(positionKey(position));
+		if (current == walkNodes.end()) return;
+		const uint32_t from = current->second;
 		for (Direction direction : directions) {
 			PlayerBotWalkTransition transition;
 			if (!playerBotResolveWalkTransition(position, direction, transition)) continue;
+			const Tile* destinationTile = map.getTile(transition.destination);
+			if (transition.destination == transition.entry &&
+			    (!destinationTile || !isStaticWalkTile(*destinationTile))) continue;
 			const auto entry = walkNodes.find(positionKey(transition.destination));
 			if (entry == walkNodes.end() || entry->second == from) continue;
 			const Tile* targetTile = map.getTile(transition.entry);

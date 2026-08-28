@@ -18,7 +18,6 @@ namespace {
 	constexpr int32_t capacityServiceUtility = 900;
 	constexpr int32_t criticalHealingServiceUtility = 1000;
 	constexpr int32_t missingPotionUtility = 15;
-	constexpr int32_t sellableItemUtility = 10;
 }
 
 PlayerBotGoalArbiter::GoalCandidate PlayerBotGoalPlanner::departureCandidate(const PlayerBotGoalPlannerSnapshot& snapshot) const
@@ -35,17 +34,16 @@ PlayerBotGoalArbiter::GoalCandidate PlayerBotGoalPlanner::departureCandidate(con
 PlayerBotGoalArbiter::GoalCandidate PlayerBotGoalPlanner::serviceCandidate(const PlayerBotGoalPlannerSnapshot& snapshot) const
 {
 	using Goal = PlayerBotGoalArbiter::TopLevelGoal;
-	const bool feasible = snapshot.lowCapacity || snapshot.missingPotions != 0 || snapshot.sellableItems != 0 || snapshot.cashAdjustment;
+	const bool feasible = snapshot.lowCapacity || snapshot.missingPotions != 0 || snapshot.cashAdjustment;
 	int32_t utility = feasible ? serviceGoalBaseUtility : 0;
-	utility += static_cast<int32_t>(snapshot.missingPotions) * missingPotionUtility +
-	           static_cast<int32_t>(std::min<uint32_t>(snapshot.sellableItems, 20)) * sellableItemUtility;
+	utility += static_cast<int32_t>(snapshot.missingPotions) * missingPotionUtility;
 	utility += snapshot.cashAdjustment ? 10 : 0;
 	if (snapshot.lowCapacity) utility = std::max(utility, capacityServiceUtility);
 	if (snapshot.criticalHealing) utility = std::max(utility, criticalHealingServiceUtility);
 	return {Goal::Service, feasible, utility,
 	        snapshot.criticalHealing ? "critical_healing" : snapshot.lowCapacity ? "capacity" :
-	        snapshot.missingPotions != 0 ? "healing_reserve" : snapshot.sellableItems != 0 ? "sellable_inventory" :
-	        snapshot.cashAdjustment ? "cash_reserve" : "no_service_need"};
+	        snapshot.missingPotions != 0 ? "healing_reserve" : snapshot.cashAdjustment ? "cash_reserve" :
+	        "no_service_need"};
 }
 
 PlayerBotGoalArbiter::GoalCandidate PlayerBotGoalPlanner::forcedServiceCandidate(std::string reason) const
@@ -73,6 +71,11 @@ std::vector<PlayerBotGoalArbiter::GoalCandidate> PlayerBotGoalPlanner::candidate
 		!snapshot.magicCoolingDown && snapshot.magicTrainingReason.empty(),
 		!snapshot.magicCoolingDown && snapshot.magicTrainingReason.empty() ? magicTrainingGoalUtility : 0,
 		snapshot.magicCoolingDown ? "cooldown" : snapshot.magicTrainingReason.empty() ? "next_tick_overflow" : snapshot.magicTrainingReason};
-	return {departure, service, pickup, spell, equipment, magic,
+	const auto sellLoot = PlayerBotGoalArbiter::GoalCandidate{Goal::SellLoot,
+		!snapshot.sellLootCoolingDown && snapshot.sellLootPlanAvailable && snapshot.sellLootUtility > huntGoalUtility,
+		!snapshot.sellLootCoolingDown && snapshot.sellLootPlanAvailable && snapshot.sellLootUtility > huntGoalUtility ? snapshot.sellLootUtility : 0,
+		snapshot.sellLootCoolingDown ? "cooldown" : snapshot.sellLootPlanAvailable && snapshot.sellLootUtility > huntGoalUtility ?
+			snapshot.sellLootReason : snapshot.sellLootPlanAvailable ? "utility_below_hunt" : snapshot.sellLootReason};
+	return {departure, service, pickup, spell, equipment, magic, sellLoot,
 	        {Goal::Hunt, true, huntGoalUtility, "autonomous_hunting_available"}};
 }

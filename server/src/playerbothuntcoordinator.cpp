@@ -8,7 +8,8 @@
 PlayerBotHuntCoordinator::PlayerBotHuntCoordinator(
 	PlayerBotHuntCoordinatorConfig config, std::map<uint64_t, std::chrono::steady_clock::time_point>& sharedCooldowns) :
 	combatRuntime(std::move(config.combat)), lootWorkflow(std::move(config.loot)),
-	huntRuntime(std::move(config.fallbackPatrol)), huntRegionCooldowns(sharedCooldowns)
+	huntRuntime(std::move(config.fallbackPatrol)), huntRegionCooldowns(sharedCooldowns),
+	capacityPressureGrace(config.capacityPressureGrace)
 {}
 
 std::optional<PlayerBotCombatDecision> PlayerBotHuntCoordinator::selectTraversalAttack(
@@ -101,12 +102,18 @@ void PlayerBotHuntCoordinator::beginHuntCycle(std::chrono::steady_clock::time_po
 bool PlayerBotHuntCoordinator::huntDeadlineReached(std::chrono::steady_clock::time_point now) const { return huntRuntime.deadlineReached(now); }
 uint32_t PlayerBotHuntCoordinator::completedHuntCycles() const { return huntRuntime.completedCycles(); }
 bool PlayerBotHuntCoordinator::huntActive() const { return huntRuntime.active(); }
-PlayerBotHuntTurnObservation PlayerBotHuntCoordinator::observeTurn(bool inHuntPhase, bool selectRegion, bool capacityLow,
+void PlayerBotHuntCoordinator::observeCapacityPressure(std::chrono::steady_clock::time_point now)
+{
+	huntRuntime.observeCapacityPressure(now);
+}
+PlayerBotHuntTurnObservation PlayerBotHuntCoordinator::observeTurn(bool inHuntPhase, bool selectRegion,
 	std::chrono::steady_clock::time_point now) const
 {
+	const bool pressureElapsed = inHuntPhase && huntRuntime.capacityPressureElapsed(now, capacityPressureGrace);
 	return {inHuntPhase && selectRegion && !huntRuntime.active() && !huntRuntime.planningActive(),
 	        huntRuntime.planningActive(), lootWorkflow.navigationSuspended(),
-	        inHuntPhase && (huntRuntime.deadlineReached(now) || capacityLow)};
+	        huntRuntime.capacityPressureActive(), pressureElapsed,
+	        inHuntPhase && (huntRuntime.deadlineReached(now) || pressureElapsed)};
 }
 bool PlayerBotHuntCoordinator::matchesHuntMonster(const std::string& name) const { return huntRuntime.matchesMonster(name); }
 void PlayerBotHuntCoordinator::sampleHuntCombat(const PlayerBotHuntCombatSnapshot& snapshot) { huntRuntime.sampleCombat(snapshot); }

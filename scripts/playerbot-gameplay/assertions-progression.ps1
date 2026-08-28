@@ -328,7 +328,7 @@ function Assert-HuntRegionPlanningEvents {
 	$cancelled = @($events | Where-Object { $_.event -eq "hunt_region_scan" -and $_.phase -eq "cancelled" })
 	$staleRevision = @($events | Where-Object { $_.event -eq "hunt_region_scan" -and $_.phase -eq "stale_revision" })
     $topologyScans = @($events | Where-Object {
-        $_.event -eq "hunt_region_scan" -and $_.route_validation_strategy -eq "topology_execution_validation"
+		$_.event -eq "hunt_region_scan" -and $_.selection_strategy -eq "atlas_topology_selection"
     })
     $selections = @($events | Where-Object { $_.event -eq "hunt_region_selection" -and $_.result -eq "selected" })
     $selection = if ($selections.Count -gt 0) { $selections[$selections.Count - 1] } else { $null }
@@ -337,22 +337,33 @@ function Assert-HuntRegionPlanningEvents {
 		[Math]::Max([Math]::Abs($_.center.x - 32360), [Math]::Abs($_.center.y - 31782)) -gt 32
 	})
     $completed = @($events | Where-Object {
-        $_.event -eq "hunt_region_scan" -and $_.phase -eq "selected" -and $_.decision_latency_us -gt 0 -and
-        $_.expanded_nodes -ge 0
+		$_.event -eq "hunt_region_scan" -and $_.phase -eq "selected" -and $_.decision_latency_us -gt 0
     })
     $selectedCandidate = if ($selection) { @($candidates | Where-Object { $_.region_id -eq $selection.region_id }) } else { @() }
 	$reachableCandidates = @($candidates | Where-Object { $_.suitable -and $_.reachable })
     $bestScore = if ($reachableCandidates.Count -gt 0) { ($reachableCandidates | Measure-Object -Property score -Maximum).Maximum } else { $null }
 	$completedTopology = @($completed | Where-Object {
-		$_.bound_satisfied -and $_.pathfinding_calls -ge 1
+		$_.topology_time_us -ge 0
 	})
-	$routeValidations = @($candidates | Where-Object { $_.route_validation_attempted })
+	$routeValidations = @($candidates | Where-Object { $_.topology_reachable -and $_.topology_travel_steps -gt 0 })
+	$supplyReserves = @($events | Where-Object {
+		$_.event -eq "hunt_supply_reserve" -and $_.source -eq "selected_route_reverse_estimate" -and
+		$_.return_threshold -ge 1 -and $_.restock_target -ge 10 -and $_.restock_target -gt $_.return_threshold
+	})
+	$reserveFormulaValid = $false
+	if ($supplyReserves.Count -eq 1) {
+		$reserve = $supplyReserves[0]
+		$expectedHealthLoss = [Math]::Ceiling($reserve.maximum_health * $reserve.route_danger_cost / $reserve.health_loss_cost)
+		$expectedThreshold = [Math]::Max(1, [Math]::Ceiling($expectedHealthLoss / $reserve.minimum_potion_healing))
+		$reserveFormulaValid = $reserve.return_threshold -eq $expectedThreshold
+	}
 	if ($build.Count -lt 2 -or $hit.Count -lt 1 -or $cancelled.Count -ne 1 -or $staleRevision.Count -ne 1 -or
 		$topologyScans.Count -lt 1 -or $routeValidations.Count -lt 1 -or -not $selection -or $selectedCandidate.Count -ne 1 -or
 		$bestScore -eq $null -or [Math]::Abs($selectedCandidate[0].score - $bestScore) -gt 0.01 -or
-		-not $selectedCandidate[0].topology_reachable -or -not $selectedCandidate[0].route_validation_attempted -or
-		-not $selectedCandidate[0].reachable -or -not $selectedCandidate[0].corridor_danger_available -or
-		$selectedCandidate[0].corridor_samples -lt 1 -or $outsideLocalFixture.Count -lt 1 -or $completedTopology.Count -lt 1) {
+		-not $selectedCandidate[0].topology_reachable -or $selectedCandidate[0].topology_travel_steps -lt 1 -or
+		-not $selectedCandidate[0].reachable -or $selectedCandidate[0].route_danger_cost -lt 0 -or
+		$outsideLocalFixture.Count -lt 1 -or $completedTopology.Count -lt 1 -or
+		-not $reserveFormulaValid) {
 		throw "Hunt planning telemetry was incomplete. build=$($build.Count), hit=$($hit.Count), cancelled=$($cancelled.Count), stale=$($staleRevision.Count), topology_scans=$($topologyScans.Count), route_validations=$($routeValidations.Count), selection=$($selection.Count), outside=$($outsideLocalFixture.Count), completed=$($completedTopology.Count)."
 	}
 }
@@ -402,6 +413,12 @@ function Assert-AdaptiveChallengeEvents {
 		$fixture[0].idle_observed_seconds -ne 0 -or $fixture[0].active_observed_seconds -ne 30 -or
 		-not $fixture[0].higher_score_preferred -or -not $fixture[0].attacker_priority_preferred -or -not $fixture[0].wounded_lethal -or
 		-not $fixture[0].zero_health_lethal -or -not $fixture[0].helper_scope_exhausted -or
+		$fixture[0].capacity_before_grace -or -not $fixture[0].capacity_at_grace -or -not $fixture[0].capacity_cycle_reset -or
+		$fixture[0].knight_route_reserve -ne 4 -or $fixture[0].rook_route_reserve -ne 9 -or
+		$fixture[0].high_health_route_reserve -ne 12 -or $fixture[0].high_health_restock_target -ne 13 -or
+		-not $fixture[0].net_value_loss_rejected -or -not $fixture[0].large_restock_batched -or
+		-not $fixture[0].preferred_food_consumed -or -not $fixture[0].missing_food_ignored -or
+		-not $fixture[0].food_replenished_after_eating -or
 		$candidates.Count -lt 1 -or $unsafeLethalRecovery.Count -ne 0 -or $exhausted.Count -ne 3 -or
 		@($exhausted | Where-Object { $_.attempt -notin @(1, 2, 3) }).Count -ne 0 -or
 		$terminal.Count -ne 1 -or $postTerminalEvents.Count -ne 0) {

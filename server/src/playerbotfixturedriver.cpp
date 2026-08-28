@@ -7,7 +7,10 @@
 #include "player.h"
 #include "playerbot.h"
 #include "playerbotcombatruntime.h"
+#include "playerbotinventorypolicy.h"
+#include "playerbotlootpolicy.h"
 #include "playerbothuntruntime.h"
+#include "playerbotserviceworkflow.h"
 #include "playerbotsurvivalruntime.h"
 #include "playerbotspellcalibration.h"
 
@@ -232,6 +235,70 @@ std::vector<playerbot::PlayerBotFixtureEvent> playerbot::PlayerBotFixtureDriver:
 		                        adaptivePolicy.regionPerformance(), duration).region;
 	}
 	const PlayerBotRecoveryPrediction recovery = playerBotPredictRecovery(playerBotHuntPlanningProfile(player, profile, adaptivePolicy.challengeFrontier()), 30);
+	PlayerBotHuntRuntime capacityRuntime({});
+	const auto capacityStarted = std::chrono::steady_clock::now();
+	capacityRuntime.selectPlanningRegion({}, {}, capacityStarted);
+	capacityRuntime.beginCycle(capacityStarted, 900);
+	capacityRuntime.observeCapacityPressure(capacityStarted);
+	const bool capacityBeforeGrace = capacityRuntime.capacityPressureElapsed(
+		capacityStarted + std::chrono::minutes(5) - std::chrono::milliseconds(1), std::chrono::minutes(5));
+	const bool capacityAtGrace = capacityRuntime.capacityPressureElapsed(
+		capacityStarted + std::chrono::minutes(5), std::chrono::minutes(5));
+	capacityRuntime.beginCycle(capacityStarted + std::chrono::minutes(5), 900);
+	const bool capacityReset = !capacityRuntime.capacityPressureActive();
+	const uint32_t knightRouteReserve = recoveryPotionRouteReserve(4, 1000, 500);
+	const uint32_t rookRouteReserve = recoveryPotionRouteReserve(0, 1000, 500);
+	const uint32_t highHealthRouteReserve = recoveryPotionRouteReserve(4, 3000, 500);
+	const uint32_t highHealthRestockTarget = recoveryPotionRestockTargetForReserve(highHealthRouteReserve);
+	PlayerBotLootInventorySnapshot cargo;
+	cargo.freeCapacity = 900;
+	cargo.cargo.push_back({nullptr, 1, 1, 1, 0, 10000, 900, true, 0});
+	PlayerBotLootItemSnapshot incoming;
+	incoming.count = 1;
+	incoming.unitWeight = 1000;
+	incoming.unitValue = 100;
+	const bool netValueLossRejected = !PlayerBotLootPolicy(0).replacementFor(incoming, cargo).viable;
+	PlayerBotServiceWorkflow service;
+	PlayerBotServiceObservation serviceObservation;
+	serviceObservation.currentPosition = Position(1, 1, 7);
+	serviceObservation.shops.push_back({1, serviceObservation.currentPosition, {{7618, 10, 0, 0}}});
+	serviceObservation.providers.emplace(1, PlayerBotServiceProviderObservation{true, true, true, true});
+	serviceObservation.inventoryCounts.emplace(7618, 0);
+	serviceObservation.freeCapacity = 100000;
+	serviceObservation.money = 2000;
+	serviceObservation.healthPotionItemId = 7618;
+	serviceObservation.healthPotionWeight = 100;
+	serviceObservation.healthPotionReturnThreshold = 1;
+	serviceObservation.healthPotionRestockTarget = 150;
+	serviceObservation.maximumAttempts = 3;
+	const PlayerBotServiceCommand largeRestock = service.advance(
+		serviceObservation, PlayerBotEconomyCatalog{}, PlayerBotDispositionPolicy{});
+	const bool largeRestockBatched = largeRestock.type == PlayerBotServiceCommandType::Buy && largeRestock.amount == 100;
+	PlayerBotSurvivalSnapshot carriedFood;
+	carriedFood.foodCount = preferredFoodCount;
+	carriedFood.foodInventoryCount = preferredFoodCount;
+	carriedFood.foodItemId = 2666;
+	carriedFood.foodClientId = 2666;
+	carriedFood.canDoAction = true;
+	PlayerBotSurvivalRuntime foodRuntime;
+	const bool preferredFoodConsumed = foodRuntime.decideFood(carriedFood, std::chrono::steady_clock::now()).type ==
+	                                   PlayerBotSurvivalCommandType::UseFood;
+	PlayerBotSurvivalSnapshot noFood;
+	noFood.canDoAction = true;
+	PlayerBotSurvivalRuntime noFoodRuntime;
+	const bool missingFoodIgnored = noFoodRuntime.decideFood(noFood, std::chrono::steady_clock::now()).type ==
+	                                PlayerBotSurvivalCommandType::None;
+	PlayerBotLootInventorySnapshot foodInventory;
+	foodInventory.heldFood = preferredFoodCount - 1;
+	PlayerBotLootItemSnapshot corpseFood;
+	corpseFood.itemId = 2666;
+	corpseFood.clientId = 2666;
+	corpseFood.count = 1;
+	corpseFood.availableCount = 1;
+	corpseFood.unitWeight = 200;
+	corpseFood.food = true;
+	const PlayerBotLootSelection foodSelection = PlayerBotLootPolicy(preferredFoodCount).select({corpseFood}, foodInventory, {});
+	const bool foodReplenishedAfterEating = foodSelection.result == PlayerBotLootSelectionResult::Selected && foodSelection.item.count == 1;
 	PlayerBotHuntRegion lowerScore; lowerScore.score = 10; lowerScore.suitable = lowerScore.reachable = true;
 	PlayerBotHuntRegion higherScore; higherScore.score = 1000; higherScore.suitable = higherScore.reachable = true;
 	PlayerBotCombatRuntime targeting({});
@@ -242,7 +309,7 @@ std::vector<playerbot::PlayerBotFixtureEvent> playerbot::PlayerBotFixtureDriver:
 	const auto preferredTarget = targeting.selectTraversalAttack(std::move(targets), Position(0, 0, 7), std::chrono::steady_clock::now());
 	std::vector<PlayerBotHuntRegion> exhausted(1); exhausted.front().suitable = true;
 	std::ostringstream fields;
-	fields << std::fixed << std::setprecision(2) << "\"recovery_total\":" << recovery.totalMinimumHealing << ",\"recovery_spell_legal\":" << (recovery.lightHealingLegal ? "true" : "false") << ",\"recovery_spell_casts\":" << recovery.spellCasts << ",\"equipment_pressure_before\":" << current.threatRatio << ",\"equipment_pressure_after\":" << equipped.threatRatio << ",\"idle_observed_seconds\":" << idle << ",\"active_observed_seconds\":" << active << ",\"higher_score_preferred\":" << (playerBotPreferHuntRegion(higherScore, lowerScore) ? "true" : "false") << ",\"attacker_priority_preferred\":" << (preferredTarget && preferredTarget->target.id == 2 ? "true" : "false") << ",\"wounded_lethal\":" << (playerBotPredictedLethal(40, 40) ? "true" : "false") << ",\"zero_health_lethal\":" << (playerBotPredictedLethal(0, 0) ? "true" : "false") << ",\"helper_scope_exhausted\":" << (playerBotHuntScopeExhausted(exhausted) ? "true" : "false");
+	fields << std::fixed << std::setprecision(2) << "\"recovery_total\":" << recovery.totalMinimumHealing << ",\"recovery_spell_legal\":" << (recovery.lightHealingLegal ? "true" : "false") << ",\"recovery_spell_casts\":" << recovery.spellCasts << ",\"equipment_pressure_before\":" << current.threatRatio << ",\"equipment_pressure_after\":" << equipped.threatRatio << ",\"idle_observed_seconds\":" << idle << ",\"active_observed_seconds\":" << active << ",\"higher_score_preferred\":" << (playerBotPreferHuntRegion(higherScore, lowerScore) ? "true" : "false") << ",\"attacker_priority_preferred\":" << (preferredTarget && preferredTarget->target.id == 2 ? "true" : "false") << ",\"wounded_lethal\":" << (playerBotPredictedLethal(40, 40) ? "true" : "false") << ",\"zero_health_lethal\":" << (playerBotPredictedLethal(0, 0) ? "true" : "false") << ",\"helper_scope_exhausted\":" << (playerBotHuntScopeExhausted(exhausted) ? "true" : "false") << ",\"capacity_before_grace\":" << (capacityBeforeGrace ? "true" : "false") << ",\"capacity_at_grace\":" << (capacityAtGrace ? "true" : "false") << ",\"capacity_cycle_reset\":" << (capacityReset ? "true" : "false") << ",\"knight_route_reserve\":" << knightRouteReserve << ",\"rook_route_reserve\":" << rookRouteReserve << ",\"high_health_route_reserve\":" << highHealthRouteReserve << ",\"high_health_restock_target\":" << highHealthRestockTarget << ",\"net_value_loss_rejected\":" << (netValueLossRejected ? "true" : "false") << ",\"large_restock_batched\":" << (largeRestockBatched ? "true" : "false") << ",\"preferred_food_consumed\":" << (preferredFoodConsumed ? "true" : "false") << ",\"missing_food_ignored\":" << (missingFoodIgnored ? "true" : "false") << ",\"food_replenished_after_eating\":" << (foodReplenishedAfterEating ? "true" : "false");
 	events.push_back({"adaptive_challenge_fixture", fields.str()});
 	return events;
 }

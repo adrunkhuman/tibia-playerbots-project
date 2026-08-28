@@ -423,13 +423,9 @@ function Assert-SlottedLootEvents {
 		$_.to_goal -eq "service" -and $_.reason -eq "sellable_inventory"
 	})
 	$terminal = @($events | Where-Object { $_.event -eq "terminal" })
-	if ($SellerAvailable) {
-		if ($sellMoves.Count -lt 2 -or $sales.Count -ne 1 -or $deposits.Count -ne 0) {
-			throw "Slotted seller disposition failed. moves=$($sellMoves.Count), sales=$($sales.Count), deposits=$($deposits.Count)."
-		}
-	} elseif (($Restarted -and ($depositRequests.Count -ne 1 -or $deposits.Count -ne 0)) -or
-		(-not $Restarted -and $deposits.Count -ne 1) -or $sales.Count -ne 0) {
-		throw "Slotted no-seller disposition failed. requests=$($depositRequests.Count), deposits=$($deposits.Count), sales=$($sales.Count), restarted=$Restarted."
+	if (($Restarted -and ($depositRequests.Count -ne 1 -or $deposits.Count -ne 0)) -or
+		(-not $Restarted -and $deposits.Count -ne 1) -or $sales.Count -ne 0 -or $sellMoves.Count -ne 0) {
+		throw "Slotted loot was not deferred to the depot. requests=$($depositRequests.Count), deposits=$($deposits.Count), sales=$($sales.Count), sell_moves=$($sellMoves.Count), seller=$SellerAvailable, restarted=$Restarted."
 	}
 	if ($protectedMoves.Count -ne 0 -or $reselectedService.Count -ne 0 -or $terminal.Count -ne 0) {
 		throw "Slotted disposition did not preserve protected state or bounded service. protected=$($protectedMoves.Count), repeated=$($reselectedService.Count), terminal=$($terminal.Count), restarted=$Restarted."

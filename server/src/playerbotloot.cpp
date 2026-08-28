@@ -47,9 +47,8 @@ namespace {
 	bool isReplaceableCargo(const PlayerBotInventoryPolicy& inventoryPolicy, const Item& item)
 	{
 		const ItemType& type = Item::items[item.getID()];
-		const bool food = PlayerBotInventoryPolicy::isFoodItem(item.getID());
-		return !(inventoryPolicy.isProtectedInventoryItem(item) && !food) && type.corpseType == RACE_NONE &&
-		       (food || inventoryPolicy.itemUnitValue(item.getID()) != 0) && item.getBaseWeight() != 0;
+		return !inventoryPolicy.isProtectedInventoryItem(item) && type.corpseType == RACE_NONE &&
+		       inventoryPolicy.itemUnitValue(item.getID()) != 0 && item.getBaseWeight() != 0;
 	}
 
 	uint8_t backpackDestinationIndex(const Container& backpack, const Item& item)
@@ -185,14 +184,23 @@ void PlayerBotController::lootCorpse(Player* player, const Position& currentPosi
 	snapshot.backpackAvailable = backpack != nullptr;
 	snapshot.backpackContainerOpen = backpack && player->getContainerByID(backpackContainerId) == backpack;
 	if (backpack) {
+		uint32_t replaceableFood = snapshot.inventory.heldFood > preferredFoodCount ?
+			snapshot.inventory.heldFood - preferredFoodCount : 0;
 		std::function<void(Container&)> collectCargo = [&](Container& source) {
 			const ItemDeque& items = source.getItemList();
 			for (size_t index = 0; index < items.size() && index <= UINT8_MAX; ++index) {
 				Item* item = items[index];
+				uint8_t replaceableCount = static_cast<uint8_t>(item->getItemCount());
+				bool replaceable = isReplaceableCargo(inventoryPolicy, *item);
+				if (PlayerBotInventoryPolicy::isFoodItem(item->getID())) {
+					replaceableCount = static_cast<uint8_t>(std::min<uint32_t>(item->getItemCount(), replaceableFood));
+					replaceableFood -= replaceableCount;
+					replaceable = replaceableCount != 0 && item->getBaseWeight() != 0;
+				}
 				snapshot.inventory.itemCounts[item->getID()] = inventoryPolicy.inventoryItemCount(*player, item->getID());
-				snapshot.inventory.cargo.push_back({&source, item->getID(), item->getClientID(), static_cast<uint8_t>(item->getItemCount()),
+				snapshot.inventory.cargo.push_back({&source, item->getID(), item->getClientID(), replaceableCount,
 				                                  static_cast<uint8_t>(index), item->getBaseWeight(), inventoryPolicy.itemUnitValue(item->getID()),
-				                                  isReplaceableCargo(inventoryPolicy, *item), player->getContainerID(&source)});
+				                                  replaceable, player->getContainerID(&source)});
 				if (Container* nested = item->getContainer()) collectCargo(*nested);
 			}
 		};
@@ -236,6 +244,7 @@ void PlayerBotController::lootCorpse(Player* player, const Position& currentPosi
 	}
 
 	if (command.outcome == PlayerBotLootOutcome::NoCapacity) {
+		huntCoordinator.observeCapacityPressure(now);
 		std::ostringstream fields;
 		fields << "\"action\":\"loot\",\"result\":\"skipped\",\"reason\":\"no_capacity\""
 		       << ",\"item_id\":" << command.item.itemId << ",\"count\":" << static_cast<uint32_t>(command.item.availableCount)

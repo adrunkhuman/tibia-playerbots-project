@@ -9,7 +9,7 @@ function F.login.onLogin(player)
 
 	local mode = os.getenv("PLAYERBOT_GAMEPLAY_MODE") or "cycle"
 	F.selectHealthPotion(player)
-    assert(mode == "mainland" or mode == "carlin_local_service" or mode == "cycle" or mode == "depot" or mode == "slotted_loot_seller" or mode == "slotted_loot_no_seller" or mode == "navigation" or mode == "navigation_recovery" or mode == "carlin_service_route" or mode == "mutable_portal_route" or mode == "patrol_recovery" or mode == "target_pursuit" or mode == "target_pursuit_abandon" or mode == "target_attacker_priority" or mode == "corpse" or mode == "corpse_detour" or mode == "corpse_inaccessible" or mode == "death" or mode == "healing" or mode == "spell_use" or
+    assert(mode == "mainland" or mode == "carlin_local_service" or mode == "cycle" or mode == "depot" or mode == "slotted_loot_seller" or mode == "slotted_loot_no_seller" or mode == "sell_loot" or mode == "navigation" or mode == "navigation_recovery" or mode == "carlin_service_route" or mode == "mutable_portal_route" or mode == "patrol_recovery" or mode == "target_pursuit" or mode == "target_pursuit_abandon" or mode == "target_attacker_priority" or mode == "corpse" or mode == "corpse_detour" or mode == "corpse_inaccessible" or mode == "death" or mode == "healing" or mode == "spell_use" or
         mode == "healing_resupply" or mode == "value" or mode == "progression" or mode == "progression_bundle" or
         mode == "progression_nested" or mode == "progression_resume" or mode == "progression_nested_resume" or
         mode == "progression_space" or mode == "arbitration" or mode == "arbitration_interrupt" or mode == "departure" or
@@ -337,10 +337,10 @@ function F.login.onLogin(player)
             F.removeAll(player, F.starterWeaponId)
             F.removeAll(player, F.pickupRewardId)
             print("PLAYERBOT_GAMEPLAY_TEST READINESS_MISSING_WEAPON_START")
-        elseif mode == "readiness_supplies" then
+		elseif mode == "readiness_supplies" then
 			local thais = Town(F.thaisTownId)
-			assert(thais and player:setTown(thais) and player:teleportTo(Position(32398, 32222, 7)),
-				"readiness supplies fixture could not reach Xodet")
+			assert(thais and player:setTown(thais) and player:teleportTo(Position(32354, 32226, 7)),
+				"readiness supplies fixture could not reach the Thais depot")
             F.removeAll(player, F.potionItemId)
             F.removeAll(player, F.meatItemId)
             assert(player:addItem(F.potionItemId, 1), "readiness supplies fixture could not seed the return threshold")
@@ -457,6 +457,25 @@ function F.login.onLogin(player)
     if mode == "slotted_loot_seller" or mode == "slotted_loot_no_seller" then
         F.setupSlottedLoot(player, mode == "slotted_loot_seller")
         print("PLAYERBOT_GAMEPLAY_TEST " .. string.upper(mode) .. "_START")
+        return true
+    end
+    if mode == "sell_loot" then
+        local thais = Town(F.thaisTownId)
+        assert(thais and player:setTown(thais) and player:setVocation(4), "sell loot fixture could not select Thais")
+        assert(player:teleportTo(Position(32345, 32225, 7)), "sell loot fixture could not reach the Thais depot")
+        local chest = player:getDepotChest(F.PlayerbotThaisLockerDepotId(), true)
+        assert(chest, "sell loot fixture could not open the Thais depot chest")
+        for _ = 1, 10 do assert(chest:addItem(F.sellLootItemId, 1), "sell loot fixture could not seed a local sale batch") end
+        assert(chest:addItem(2050, 1), "sell loot fixture could not seed an unrelated retained item")
+		F.removeAll(player, F.smallHealthPotionItemId)
+		F.removeAll(player, F.healthPotionItemId)
+		F.removeAll(player, F.meatItemId)
+		assert(player:addItem(F.healthPotionItemId, 10) and player:addItem(F.meatItemId, 2),
+			"sell loot fixture could not prepare hunt reserves")
+        assert(player:setStorageValue(50100, player:getMoney()), "sell loot fixture could not retain starting money")
+        F.suppressNearbyMonsters(player:getId())
+        addEvent(F.verifySellLoot, 500, player:getId(), 480)
+        print("PLAYERBOT_GAMEPLAY_TEST SELL_LOOT_START")
         return true
     end
     if mode == "stamina_bonus" or mode == "stamina_boundary" or mode == "stamina_normal" then
@@ -711,9 +730,11 @@ function F.login.onLogin(player)
         local backpack = player:getSlotItem(CONST_SLOT_BACKPACK)
         F.removeAll(player, F.meatItemId)
         F.removeAll(player, 2671)
-        local foodBag = backpack and backpack:addItem(ITEM_BAG, 1)
-        assert(foodBag and foodBag:addItem(2671, 2), "nested food replacement cargo could not be added")
-        local incomingWeight = ItemType(2826):getWeight()
+        F.removeAll(player, 2398)
+        local cargoBag = backpack and backpack:addItem(ITEM_BAG, 1)
+        assert(cargoBag and cargoBag:addItem(2671, 2) and cargoBag:addItem(2398, 1),
+            "nested value replacement cargo could not be added")
+		local incomingWeight = ItemType(ITEM_PLATINUM_COIN):getWeight()
         local usedCapacity = player:getCapacity() - player:getFreeCapacity()
         assert(incomingWeight > 1, "value replacement fixture has invalid incoming weight")
         player:setCapacity(usedCapacity + incomingWeight - 1)
@@ -730,16 +751,20 @@ function F.login.onLogin(player)
     if potions > 0 then assert(player:removeItem(F.potionItemId, potions), "cycle fixture could not remove starter potions") end
     local meat = player:getItemCount(F.meatItemId)
     if meat > 0 then assert(player:removeItem(F.meatItemId, meat), "cycle fixture could not remove starter meat") end
+	assert(player:addItem(F.potionItemId, 10), "cycle fixture could not seed completed potion reserves")
+	local money = player:getMoney()
+	if money > 0 then assert(player:removeMoney(money), "cycle fixture could not clear carried money") end
+	assert(player:addMoney(100) and player:setBankBalance(1000), "cycle fixture could not seed completed cash reserves")
     assert(backpack and backpack:getId() == ITEM_BACKPACK, "seeded backpack is missing")
     local lootBag = backpack:addItem(ITEM_BAG, 1)
     assert(lootBag, "test loot bag could not be added")
-    assert(lootBag:addItem(F.lootItemId, F.lootCount), "test loot could not be added")
-    assert(backpack:addItem(F.saleItemId, 1), "NPC-discovered sellable loot could not be added")
+	assert(lootBag:addItem(F.saleItemId, 1), "depot loot could not be added")
     addEvent(F.spawnDefensiveMonsters, 100, player:getId())
     local depotTile = Tile(F.depotTilePosition)
     assert(depotTile, "fake depot tile is unavailable")
     local initialDepotBagCount = depotTile:getItemCountById(ITEM_BAG)
-    addEvent(F.verifyService, 500, player:getId(), initialDepotBagCount, 500)
+	local initialDepotSaleItemCount = depotTile:getItemCountById(F.saleItemId)
+	addEvent(F.verifyService, 500, player:getId(), initialDepotBagCount, initialDepotSaleItemCount, 500)
     print("PLAYERBOT_GAMEPLAY_TEST START")
     return true
 end

@@ -21,12 +21,15 @@ struct PlayerBotHuntCoordinatorConfig {
 	PlayerBotCombatRuntimeConfig combat;
 	PlayerBotLootWorkflowConfig loot;
 	std::vector<Position> fallbackPatrol;
+	std::chrono::steady_clock::duration capacityPressureGrace = std::chrono::minutes(5);
 };
 
 struct PlayerBotHuntTurnObservation {
 	bool regionSelectionRequired = false;
 	bool planningActive = false;
 	bool lootNavigationSuspended = false;
+	bool capacityPressureActive = false;
+	bool capacityPressureElapsed = false;
 	bool cycleFinished = false;
 };
 
@@ -98,7 +101,8 @@ class PlayerBotHuntCoordinator
 		bool huntDeadlineReached(std::chrono::steady_clock::time_point now) const;
 		uint32_t completedHuntCycles() const;
 		bool huntActive() const;
-		PlayerBotHuntTurnObservation observeTurn(bool inHuntPhase, bool selectRegion, bool capacityLow,
+		void observeCapacityPressure(std::chrono::steady_clock::time_point now);
+		PlayerBotHuntTurnObservation observeTurn(bool inHuntPhase, bool selectRegion,
 		                                               std::chrono::steady_clock::time_point now) const;
 		bool matchesHuntMonster(const std::string& name) const;
 		void sampleHuntCombat(const PlayerBotHuntCombatSnapshot& snapshot);
@@ -128,6 +132,7 @@ class PlayerBotHuntCoordinator
 		PlayerBotLootWorkflow lootWorkflow;
 		PlayerBotHuntRuntime huntRuntime;
 		std::map<uint64_t, std::chrono::steady_clock::time_point>& huntRegionCooldowns;
+		std::chrono::steady_clock::duration capacityPressureGrace;
 };
 
 #endif

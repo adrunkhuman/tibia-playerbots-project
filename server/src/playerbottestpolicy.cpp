@@ -44,6 +44,7 @@ const playerbot::PlayerBotTestPolicy& playerbot::playerBotTestPolicyFromEnvironm
 			 std::strcmp(gameplayMode, "equipment_buy_rejected") == 0 ||
 			 std::strcmp(gameplayMode, "slotted_loot_seller") == 0 ||
 			 std::strcmp(gameplayMode, "slotted_loot_no_seller") == 0 ||
+			 std::strcmp(gameplayMode, "sell_loot") == 0 ||
 			 (std::strncmp(gameplayMode, "magic_training", 14) == 0 &&
 			  std::strcmp(gameplayMode, "magic_training_hunt") != 0));
 		const bool startInHunt = gameplayMode &&
@@ -60,6 +61,7 @@ const playerbot::PlayerBotTestPolicy& playerbot::playerBotTestPolicyFromEnvironm
 			 std::strcmp(gameplayMode, "stamina_bonus") == 0 || std::strcmp(gameplayMode, "stamina_boundary") == 0 ||
 			 std::strcmp(gameplayMode, "stamina_normal") == 0 || std::strcmp(gameplayMode, "hunt_planning") == 0 ||
 			 std::strcmp(gameplayMode, "adaptive_challenge") == 0 ||
+			 std::strcmp(gameplayMode, "sell_loot") == 0 ||
 			 std::strcmp(gameplayMode, "readiness_ready") == 0 || std::strcmp(gameplayMode, "readiness_upgrade") == 0 ||
 			 std::strcmp(gameplayMode, "readiness_missing_weapon") == 0 || std::strcmp(gameplayMode, "readiness_supplies") == 0 ||
 			 std::strcmp(gameplayMode, "readiness_food_capacity") == 0 ||
@@ -81,10 +83,13 @@ const playerbot::PlayerBotTestPolicy& playerbot::playerBotTestPolicyFromEnvironm
 		                               std::strcmp(gameplayMode, "equipment_shadow_no_upgrade") != 0 &&
 		                               std::strcmp(gameplayMode, "mainland") != 0 &&
 		                               std::strcmp(gameplayMode, "mainland_reward") != 0 &&
+		                               std::strcmp(gameplayMode, "carlin_local_service") != 0 &&
+		                               std::strcmp(gameplayMode, "readiness_supplies") != 0 &&
 		                               std::strcmp(gameplayMode, "spell_training") != 0 &&
 		                               std::strcmp(gameplayMode, "depot") != 0 &&
-		                               std::strcmp(gameplayMode, "slotted_loot_seller") != 0 &&
-		                               std::strcmp(gameplayMode, "slotted_loot_no_seller") != 0;
+			                               std::strcmp(gameplayMode, "slotted_loot_seller") != 0 &&
+			                               std::strcmp(gameplayMode, "slotted_loot_no_seller") != 0 &&
+			                               std::strcmp(gameplayMode, "sell_loot") != 0;
 		const char* depotRestartPhase = std::getenv("PLAYERBOT_DEPOT_RESTART_PHASE");
 		const DepotRestartCheckpoint depotRestartCheckpoint = !depotRestartPhase ? DepotRestartCheckpoint::None :
 			std::strcmp(depotRestartPhase, "approach") == 0 ? DepotRestartCheckpoint::Approach :
