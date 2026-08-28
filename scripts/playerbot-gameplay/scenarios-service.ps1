@@ -156,21 +156,22 @@
 			$env:PLAYERBOT_DEPOT_RESTART_PHASE = ""
 			$env:PLAYERBOT_DEPOT_MOVE_CASE = "rejected"
 			Invoke-Compose up --detach
-			$rejectedLogs = Wait-ForLog -Pattern '"event":"terminal".*"reason":"depot_no_slot_or_move_rejected"'
+			$rejectedLogs = Wait-ForLog -Pattern '"action":"deposit","result":"complete","depot_id":2'
 			$events = @(ConvertFrom-PlayerbotLogs -Logs $rejectedLogs)
 			$requests = @($events | Where-Object { $_.action -eq "deposit" -and $_.result -eq "requested" -and $_.item_id -eq 2382 })
 			$retries = @($events | Where-Object {
 				$_.action -eq "deposit" -and $_.result -eq "retry" -and $_.item_id -eq 2382 -and $_.verified -eq 0 -and
 				$_.inventory_before -eq 1 -and $_.inventory_after -eq 1 -and $_.depot_before -eq 0 -and $_.depot_after -eq 0
 			})
-			$failed = @($events | Where-Object {
-				$_.action -eq "deposit" -and $_.result -eq "failed" -and $_.reason -eq "no_slot_or_move_rejected" -and $_.item_id -eq 2382 -and
-				$_.retry -eq 3 -and $_.verified -eq 0 -and $_.inventory_before -eq 1 -and $_.inventory_after -eq 1 -and
+			$discarded = @($events | Where-Object {
+				$_.action -eq "deposit" -and $_.result -eq "discarded" -and $_.reason -eq "depot_rejected" -and $_.item_id -eq 2382 -and
+				$_.retry -eq 3 -and $_.count -eq 1 -and $_.inventory_before -eq 1 -and $_.inventory_after -eq 0 -and
+				$_.ground_after -eq ($_.ground_before + 1) -and
 				$_.depot_before -eq 0 -and $_.depot_after -eq 0
 			})
-			$terminals = @($events | Where-Object { $_.event -eq "terminal" -and $_.reason -eq "depot_no_slot_or_move_rejected" })
-			if ($requests.Count -ne 3 -or $retries.Count -ne 2 -or $failed.Count -ne 1 -or $terminals.Count -ne 1) {
-				throw "Rejected depot moves were not bounded to three attempts with unchanged exact deltas. requests=$($requests.Count), retries=$($retries.Count), failed=$($failed.Count), terminals=$($terminals.Count)."
+			$terminals = @($events | Where-Object { $_.event -eq "terminal" })
+			if ($requests.Count -ne 3 -or $retries.Count -ne 2 -or $discarded.Count -ne 1 -or $terminals.Count -ne 0) {
+				throw "Rejected depot moves did not discard the blocked item and continue. requests=$($requests.Count), retries=$($retries.Count), discarded=$($discarded.Count), terminals=$($terminals.Count)."
 			}
 		}
 	}

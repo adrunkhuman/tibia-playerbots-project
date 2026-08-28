@@ -1173,13 +1173,55 @@ void PlayerBotController::processDeposit(Player* player, const Position& current
 			return;
 		}
 		if (verification.result == PlayerBotDepotMoveResult::Rejected) {
-			emit("action_result", currentPosition, "\"action\":\"deposit\",\"result\":\"failed\",\"reason\":\"no_slot_or_move_rejected\",\"policy\":\"known_loot\",\"depot_id\":" +
+			if (!player->canDoAction()) {
+				schedule(navigationDecisionDelay(*player));
+				return;
+			}
+			Item* backpackItem = player->getInventoryItem(CONST_SLOT_BACKPACK);
+			Container* backpack = backpackItem ? backpackItem->getContainer() : nullptr;
+			Container* source = nullptr;
+			Item* discardItem = nullptr;
+			uint8_t discardableCount = 0;
+			if (!backpack || !findDepositableItem(*player, backpack, source, discardItem, discardableCount) ||
+			    !source || !discardItem || discardItem->getID() != move.itemId) {
+				stop("depot_discard_source_unavailable", currentPosition);
+				return;
+			}
+			const int8_t sourceContainerId = player->getContainerID(source);
+			const ItemDeque& sourceItems = source->getItemList();
+			auto sourceItem = std::find(sourceItems.begin(), sourceItems.end(), discardItem);
+			Tile* destination = g_game.map.getTile(currentPosition);
+			if (sourceContainerId < 0 || sourceItem == sourceItems.end() ||
+			    std::distance(sourceItems.begin(), sourceItem) > UINT8_MAX || !destination) {
+				stop("depot_discard_source_unavailable", currentPosition);
+				return;
+			}
+			const uint8_t sourceIndex = static_cast<uint8_t>(std::distance(sourceItems.begin(), sourceItem));
+			const uint8_t discardCount = std::min(move.requestedCount, discardableCount);
+			const uint32_t inventoryBefore = inventoryPolicy.inventoryItemCount(*player, move.itemId);
+			const uint32_t groundBefore = destination->getItemTypeCount(move.itemId);
+			telemetry.recordActionAttempt();
+			g_game.playerMoveItem(player,
+			    Position(0xFFFF, 0x40 | static_cast<uint8_t>(sourceContainerId), sourceIndex),
+			    discardItem->getClientID(), sourceIndex, currentPosition, discardCount, discardItem, destination);
+			const uint32_t inventoryAfter = inventoryPolicy.inventoryItemCount(*player, move.itemId);
+			const uint32_t groundAfter = destination->getItemTypeCount(move.itemId);
+			if (discardCount == 0 || inventoryBefore - std::min(inventoryBefore, inventoryAfter) != discardCount ||
+			    groundAfter - std::min(groundBefore, groundAfter) != discardCount) {
+				stop("depot_discard_move_rejected", currentPosition);
+				return;
+			}
+			emit("action_result", currentPosition,
+			     "\"action\":\"deposit\",\"result\":\"discarded\",\"reason\":\"depot_rejected\",\"policy\":\"known_loot\",\"depot_id\":" +
 			     std::to_string(command.snapshot.selected.depotId) + ",\"container_id\":" + std::to_string(depotChestContainerId) +
-			     ",\"item_id\":" + std::to_string(move.itemId) + ",\"requested\":" + std::to_string(move.requestedCount) +
-			     ",\"verified\":0,\"inventory_before\":" + std::to_string(move.inventoryCount) + ",\"inventory_after\":" +
-			     std::to_string(verification.inventoryCount) + ",\"depot_before\":" + std::to_string(move.destinationCount) +
-			     ",\"depot_after\":" + std::to_string(verification.destinationCount) + ",\"retry\":" + std::to_string(verification.attempts));
-			stop("depot_no_slot_or_move_rejected", currentPosition);
+			     ",\"item_id\":" + std::to_string(move.itemId) + ",\"count\":" + std::to_string(discardCount) +
+			     ",\"inventory_before\":" + std::to_string(inventoryBefore) + ",\"inventory_after\":" + std::to_string(inventoryAfter) +
+			     ",\"ground_before\":" + std::to_string(groundBefore) + ",\"ground_after\":" + std::to_string(groundAfter) +
+			     ",\"depot_before\":" + std::to_string(move.destinationCount) + ",\"depot_after\":" +
+			     std::to_string(verification.destinationCount) + ",\"retry\":" + std::to_string(verification.attempts));
+			observation.actionResult = PlayerBotDepotActionResult::RejectedMoveDiscarded;
+			advance(observation);
+			schedule(navigationDecisionDelay(*player));
 			return;
 		}
 		std::ostringstream fields;
@@ -1307,7 +1349,7 @@ void PlayerBotController::processDeposit(Player* player, const Position& current
 			count = static_cast<uint8_t>(std::min<uint32_t>(movable, UINT8_MAX));
 		}
 	}
-	if ((!depositItem || count == 0) && inventoryPolicy.effectiveFreeCapacity(*player) < returnCapacityThreshold) {
+	if ((!depositItem || count == 0) && inventoryPolicy.huntFreeCapacity(*player) < returnCapacityThreshold) {
 		stop("depot_capacity_not_recovered", currentPosition);
 		return;
 	}

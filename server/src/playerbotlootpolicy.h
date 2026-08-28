@@ -18,6 +18,7 @@ struct PlayerBotLootItemSnapshot {
 	uint32_t unitValue = 0;
 	uint32_t inventoryCount = 0;
 	bool food = false;
+	bool currency = false;
 };
 
 struct PlayerBotLootCargoSnapshot {

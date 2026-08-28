@@ -50,7 +50,8 @@ void PlayerBotController::emitCombatReadiness(const Player& player, const Positi
 	const EquipmentLoadout loadout = PlayerBotEquipmentAdapter::loadout(player);
 	const PlayerBotFoodInventory food = inventoryPolicy.foodInventory(player);
 	const uint16_t potionItemId = recoveryPotionItemId(player.getVocationId());
-	const uint32_t usableCapacity = inventoryPolicy.effectiveFreeCapacity(player);
+	const uint32_t currencyWeight = inventoryPolicy.currencyInventoryWeight(player);
+	const uint32_t usableCapacity = inventoryPolicy.huntFreeCapacity(player);
 	const bool weaponReady = equipmentPolicy.isKnightMeleeWeapon(playerFacts, loadout.items[CONST_SLOT_LEFT]) ||
 	                         equipmentPolicy.isKnightMeleeWeapon(playerFacts, loadout.items[CONST_SLOT_RIGHT]);
 	const bool armorReady = armor && equipmentPolicy.isLegalEquipmentItem(playerFacts, loadout.items[CONST_SLOT_ARMOR]) && armor->getArmor() > 0;
@@ -77,6 +78,7 @@ void PlayerBotController::emitCombatReadiness(const Player& player, const Positi
 	              std::min<uint32_t>(preferredFoodCount, food.count))) * foodPreferenceUtility << '}'
 	       << ",{\"name\":\"free_capacity\",\"ready\":" << (usableCapacity >= minimumFreeCapacity ? "true" : "false")
 	       << ",\"current\":" << player.getFreeCapacity() << ",\"reclaimable_food\":" << food.weight
+	       << ",\"reclaimable_currency\":" << currencyWeight
 	       << ",\"effective\":" << usableCapacity << ",\"minimum\":" << minimumFreeCapacity << "}]"
 	       << ",\"selected_recovery\":" << (recovery.empty() ? "null" : jsonString(recovery))
 	       << ",\"terminal_reason\":" << (terminalReason.empty() ? "null" : jsonString(terminalReason));
@@ -89,7 +91,7 @@ PlayerBotEquipmentReadinessInput PlayerBotController::equipmentReadinessInput(co
 	const uint16_t potionItemId = recoveryPotionItemId(player.getVocationId());
 	return {backpack && backpack->getContainer(),
 	        inventoryPolicy.inventoryItemCount(player, potionItemId) > huntPotionReturnThreshold,
-	        inventoryPolicy.effectiveFreeCapacity(player), returnCapacityThreshold};
+	        inventoryPolicy.huntFreeCapacity(player), returnCapacityThreshold};
 }
 
 bool PlayerBotController::beginReadinessEquipment(Player* player, const Position& position, const char* reason, bool resumeService)
@@ -1000,7 +1002,7 @@ bool PlayerBotController::selectTopLevelGoal(Player& player, const Position& pos
 	const uint32_t missingPotions = potionCount <= huntPotionReturnThreshold ?
 	                                  huntPotionRestockTarget - potionCount : 0;
 	const uint32_t sellable = saleableItemCount(player);
-	const bool lowCapacity = inventoryPolicy.effectiveFreeCapacity(player) < returnCapacityThreshold;
+	const bool lowCapacity = inventoryPolicy.huntFreeCapacity(player) < returnCapacityThreshold;
 	const bool criticalHealing = survivalRuntime.needsHealing(survivalSnapshot(player)) && missingPotions != 0;
 	const PlayerBotGoalPlannerSnapshot snapshot{
 		departurePlanner.required(departureSnapshot(player)), departureEligible, departureFound,

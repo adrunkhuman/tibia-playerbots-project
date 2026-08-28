@@ -407,6 +407,8 @@ function F.login.onLogin(player)
 		F.selectHealthPotion(player)
 		F.removeAllHealthPotions(player)
 		assert(player:addItem(F.healthPotionItemId, 10), "adaptive challenge fixture could not prepare healing supplies")
+        local backpack = player:getSlotItem(CONST_SLOT_BACKPACK)
+        assert(backpack and backpack:addItem(ITEM_GOLD_COIN, 100), "adaptive challenge fixture could not seed carried currency")
         local requiredExperience = Game.getExperienceForLevel(9) - player:getExperience()
         if requiredExperience > 0 then player:addExperience(requiredExperience) end
         assert(player:getLevel() == 9 and player:learnSpell("Light Healing"), "adaptive challenge fixture could not prepare learned Light Healing")
@@ -727,6 +729,10 @@ function F.login.onLogin(player)
         return true
     end
     if mode == "value" then
+        player:removeCondition(CONDITION_REGENERATION)
+        local food = Condition(CONDITION_REGENERATION, CONDITIONID_DEFAULT)
+        food:setParameter(CONDITION_PARAM_TICKS, 1200000)
+        assert(player:addCondition(food), "value replacement fixture could not fill the food timer")
         local backpack = player:getSlotItem(CONST_SLOT_BACKPACK)
         F.removeAll(player, F.meatItemId)
         F.removeAll(player, 2671)
@@ -739,8 +745,7 @@ function F.login.onLogin(player)
         assert(incomingWeight > 1, "value replacement fixture has invalid incoming weight")
         player:setCapacity(usedCapacity + incomingWeight - 1)
         F.suppressNearbyMonsters(player:getId())
-        F.spawnCorpseMonster(player:getId(), "Playerbot Food Cap Corpse")
-        addEvent(F.spawnCorpseMonster, 8000, player:getId(), F.valueMonsterName)
+        F.spawnCorpseMonster(player:getId(), F.valueMonsterName)
         print("PLAYERBOT_GAMEPLAY_TEST VALUE_START")
         return true
     end
