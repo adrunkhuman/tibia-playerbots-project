@@ -72,15 +72,18 @@
 			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST SELL_LOOT_PASS' | Out-Null
 			$logs = Wait-ForLog -Pattern '"goal":"service","result":"success","reason":"service_complete"'
 			$events = @(ConvertFrom-PlayerbotLogs -Logs $logs)
-			$plan = @($events | Where-Object { $_.event -eq "sell_loot_plan" -and $_.result -eq "candidate" -and $_.item_id -eq 7735 -and $_.count -eq 10 })
-			$withdraw = @($events | Where-Object { $_.event -eq "sell_loot_withdraw" -and $_.result -eq "success" -and $_.item_id -eq 7735 })
-			$sales = @($events | Where-Object { $_.event -eq "action_result" -and $_.action -eq "sell" -and $_.result -eq "success" -and $_.item_id -eq 7735 -and $_.count -eq 10 })
-			$purchases = @($events | Where-Object { $_.event -eq "action_result" -and $_.action -eq "buy_potions" -and $_.result -eq "success" -and $_.count -eq 10 })
+			$saleItemIds = @(7634, 7635)
+			$plan = @($events | Where-Object { $_.event -eq "sell_loot_plan" -and $_.result -eq "candidate" -and $_.item_id -in $saleItemIds })
+			$withdraw = @($events | Where-Object { $_.event -eq "sell_loot_withdraw" -and $_.result -eq "success" -and $_.item_id -in $saleItemIds })
+			$sales = @($events | Where-Object { $_.event -eq "action_result" -and $_.action -eq "sell" -and $_.result -eq "success" -and $_.item_id -in $saleItemIds })
+			$purchases = @($events | Where-Object { $_.event -eq "action_result" -and $_.action -eq "buy_potions" -and $_.result -eq "success" -and $_.count -eq 2 })
+			$retries = @($events | Where-Object { $_.event -eq "action_result" -and $_.action -eq "return" -and $_.reason -eq "local_sale_insufficient_funds" })
 			$sellGoals = @($events | Where-Object { $_.event -eq "goal_selection" -and $_.to_goal -eq "sell_loot" })
 			$terminals = @($events | Where-Object { $_.event -eq "terminal" })
-			if ($plan.Count -lt 1 -or $withdraw.Count -ne 10 -or $sales.Count -ne 1 -or $purchases.Count -ne 1 -or
+			$soldUnits = ($sales | Measure-Object -Property count -Sum).Sum
+			if ($plan.Count -ne 2 -or $withdraw.Count -ne 2 -or $sales.Count -ne 2 -or $soldUnits -ne 19 -or $purchases.Count -ne 1 -or $retries.Count -ne 1 -or
 				$sellGoals.Count -ne 0 -or $terminals.Count -ne 0 -or [datetime]$sales[0].ts -ge [datetime]$purchases[0].ts) {
-				throw "Local sale did not fund resupply before normal service. plan=$($plan.Count), withdraw=$($withdraw.Count), sales=$($sales.Count), purchases=$($purchases.Count), sell_goals=$($sellGoals.Count), terminals=$($terminals.Count)."
+				throw "Local sales did not accumulate enough funds before normal service. plan=$($plan.Count), withdraw=$($withdraw.Count), sales=$($sales.Count), retries=$($retries.Count), purchases=$($purchases.Count), sell_goals=$($sellGoals.Count), terminals=$($terminals.Count)."
 			}
 		}
 	}

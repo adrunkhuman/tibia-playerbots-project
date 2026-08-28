@@ -650,6 +650,11 @@ void PlayerBotController::processService(Player* player, const Position& current
 			deferSellLoot(*player, currentPosition, "provider_or_transaction_invalidated");
 			return;
 		}
+		if (localSaleService && command.outcome == PlayerBotServiceOutcome::InsufficientFunds) {
+			serviceWorkflow.reset();
+			beginReturn(player, currentPosition, "local_sale_insufficient_funds");
+			return;
+		}
 		stop(command.outcome == PlayerBotServiceOutcome::InsufficientFunds ? "insufficient_potion_funds" : "required_shop_offer_unavailable", currentPosition);
 		return;
 	}

@@ -427,7 +427,9 @@ deposit. A reachable sale that requires no NPC travel is deterministic service
 work: the bot withdraws one bounded batch, sells it, then continues potion and
 banking service. Its sale revenue is available for that resupply. Utility does
 not arbitrate local sales against hunting; it is reserved for future travel that
-has a fare or otherwise leaves the local service area.
+has a fare or otherwise leaves the local service area. If one batch cannot fund
+required potions, the bot returns to the depot and tries the next local batch
+before reporting insufficient funds.
 
 The bot identifies only server-classified corpse containers and checks normal
 corpse ownership. It opens the corpse through normal item use before inspecting

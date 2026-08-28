@@ -241,7 +241,8 @@ function F.verifySellLoot(playerId, attempts)
     assert(player and not player:isRemoved(), "Bot One disappeared during local sell loot")
     local chest = player:getDepotChest(F.PlayerbotThaisLockerDepotId(), false)
     local complete = chest and player:getItemCount(F.sellLootItemId) == 0 and
-        chest:getItemCountById(F.sellLootItemId) == 0 and chest:getItemCountById(2050) == 1 and
+        chest:getItemCountById(F.sellLootItemId) == 0 and chest:getItemCountById(7635) == 0 and
+        chest:getItemCountById(2050) == 1 and
         player:getMoney() > player:getStorageValue(50100)
     if not complete and attempts > 0 then
         addEvent(F.verifySellLoot, 500, playerId, attempts - 1)
