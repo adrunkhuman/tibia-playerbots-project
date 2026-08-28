@@ -406,6 +406,9 @@ function Assert-SlottedLootEvents {
 		$_.action -eq "sell" -and $_.result -eq "success" -and $_.item_id -eq 2398 -and
 		$_.count -eq 1 -and ($_.carried_after + $_.bank_after) -gt ($_.carried_before + $_.bank_before)
 	})
+	$localPlans = @($events | Where-Object {
+		$_.event -eq "sell_loot_plan" -and $_.result -eq "candidate" -and $_.item_id -eq 2398 -and $_.utility -lt 0
+	})
 	$deposits = @($events | Where-Object {
 		$_.action -eq "deposit" -and $_.result -in @("success", "partial") -and $_.item_id -eq 2398 -and
 		$_.verified -eq 1 -and $_.source_slot -eq 10 -and $_.disposition -eq "deposit" -and
@@ -423,9 +426,13 @@ function Assert-SlottedLootEvents {
 		$_.to_goal -eq "service" -and $_.reason -eq "sellable_inventory"
 	})
 	$terminal = @($events | Where-Object { $_.event -eq "terminal" })
+	$expectedSales = if ($SellerAvailable) { 1 } else { 0 }
 	if (($Restarted -and ($depositRequests.Count -ne 1 -or $deposits.Count -ne 0)) -or
-		(-not $Restarted -and $deposits.Count -ne 1) -or $sales.Count -ne 0 -or $sellMoves.Count -ne 0) {
-		throw "Slotted loot was not deferred to the depot. requests=$($depositRequests.Count), deposits=$($deposits.Count), sales=$($sales.Count), sell_moves=$($sellMoves.Count), seller=$SellerAvailable, restarted=$Restarted."
+		(-not $Restarted -and $deposits.Count -ne 1) -or $sales.Count -ne $expectedSales -or $sellMoves.Count -ne 0) {
+		throw "Slotted loot did not use the expected local disposition. requests=$($depositRequests.Count), deposits=$($deposits.Count), sales=$($sales.Count)/$expectedSales, sell_moves=$($sellMoves.Count), seller=$SellerAvailable, restarted=$Restarted."
+	}
+	if ($SellerAvailable -and $localPlans.Count -lt 1) {
+		throw "The local sale was still gated by global utility."
 	}
 	if ($protectedMoves.Count -ne 0 -or $reselectedService.Count -ne 0 -or $terminal.Count -ne 0) {
 		throw "Slotted disposition did not preserve protected state or bounded service. protected=$($protectedMoves.Count), repeated=$($reselectedService.Count), terminal=$($terminal.Count), restarted=$Restarted."

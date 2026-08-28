@@ -15,7 +15,7 @@
 #include <string>
 
 enum class PlayerBotServiceStage : uint8_t { Discover, SellLoot, BuyPotions, Bank, Complete, Failed };
-enum class PlayerBotServiceIntent : uint8_t { Resupply, LiquidateCarriedLoot };
+enum class PlayerBotServiceIntent : uint8_t { Resupply, ResupplyWithLocalSale };
 enum class PlayerBotServiceCommandType : uint8_t {
 	None, ValidateProviderRoute, NavigateProvider, Speak, Sell, Buy, DepositAll, Withdraw, OpenBackpack, MoveSlottedSale, Complete, Fail, Wait,
 };

@@ -501,6 +501,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		};
 		std::optional<LocalSellLootPlan> sellLootPlan;
 		size_t sellLootItemScanOffset = 0;
+		size_t sellLootRouteScanOffset = 0;
 		std::optional<PlayerBotTopologyDistances> serviceTopologyDistances;
 		Position serviceTopologyOrigin;
 		bool serviceTopologyCanUseRope = false;
