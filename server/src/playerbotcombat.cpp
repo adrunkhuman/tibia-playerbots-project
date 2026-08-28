@@ -1013,6 +1013,17 @@ void PlayerBotController::startHunt(Player* player, const Position& position, co
 
 void PlayerBotController::processTraversal(Player* player, const Position& currentPosition)
 {
+	if (turnRouter.cyclePhase() == CyclePhase::Hunt && huntCoordinator.huntActive() && !huntRegionReached &&
+	    huntCoordinator.insideHuntArea(currentPosition, Map::maxClientViewportX, Map::maxClientViewportX + 1,
+	                                    Map::maxClientViewportY, Map::maxClientViewportY + 1)) {
+		huntRegionReached = true;
+		const PlayerBotHuntPatrolOutcome patrol = huntCoordinator.huntPatrolTarget();
+		emit("hunt_area_entered", currentPosition,
+		     "\"region_id\":" + (patrol.regionId ? std::to_string(*patrol.regionId) : "null") +
+		         ",\"waypoint\":" + std::to_string(patrol.waypoint) + ",\"destination\":{\"x\":" +
+		         std::to_string(patrol.destination.x) + ",\"y\":" + std::to_string(patrol.destination.y) +
+		         ",\"z\":" + std::to_string(patrol.destination.z) + "}");
+	}
 	if (progressionRuntime.readinessEquipmentPending()) {
 		processReadinessEquipment(player, currentPosition);
 		return;

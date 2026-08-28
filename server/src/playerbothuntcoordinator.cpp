@@ -102,6 +102,11 @@ void PlayerBotHuntCoordinator::beginHuntCycle(std::chrono::steady_clock::time_po
 bool PlayerBotHuntCoordinator::huntDeadlineReached(std::chrono::steady_clock::time_point now) const { return huntRuntime.deadlineReached(now); }
 uint32_t PlayerBotHuntCoordinator::completedHuntCycles() const { return huntRuntime.completedCycles(); }
 bool PlayerBotHuntCoordinator::huntActive() const { return huntRuntime.active(); }
+bool PlayerBotHuntCoordinator::insideHuntArea(const Position& position, uint32_t westRange, uint32_t eastRange,
+	uint32_t northRange, uint32_t southRange) const
+{
+	return huntRuntime.insideHuntArea(position, westRange, eastRange, northRange, southRange);
+}
 void PlayerBotHuntCoordinator::observeCapacityPressure(std::chrono::steady_clock::time_point now)
 {
 	huntRuntime.observeCapacityPressure(now);

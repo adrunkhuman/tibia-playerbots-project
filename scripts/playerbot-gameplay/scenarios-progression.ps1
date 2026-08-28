@@ -128,7 +128,17 @@
             $planningLogs = Wait-ForLog -Pattern '"event":"hunt_region_scan".*"phase":"selected"'
             Assert-HuntRegionPlanningEvents -Logs $planningLogs
         }
-    }
+		Invoke-Scenario -Name "hunt_area_arrival" -DefaultTimeoutSeconds 300 -Body {
+			Invoke-Compose down --volumes --remove-orphans
+			$env:PLAYERBOT_GAMEPLAY_MODE = "hunt_area_arrival"
+			$env:PLAYERBOT_HUNT_DURATION_SECONDS = "900"
+			Invoke-Compose up --detach
+			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST HUNT_AREA_ARRIVAL_START' | Out-Null
+			Wait-ForLog -Pattern '"event":"hunt_area_entered"' | Out-Null
+			$arrivalLogs = Wait-ForLog -Pattern '"event":"target_changed".*"reason":"visible_monster"'
+			Assert-HuntAreaArrivalEvents -Logs $arrivalLogs
+		}
+	}
 
     if ($CombatReadiness) {
         Invoke-Scenario -Name "combat_readiness_ready" -DefaultTimeoutSeconds 60 -Body {
