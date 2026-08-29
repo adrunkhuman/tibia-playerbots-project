@@ -454,6 +454,11 @@ function F.login.onLogin(player)
                 "depot fixture could not equip starter armor")
             assert(player:addItem(F.starterWeaponId, 1, false, 1, CONST_SLOT_LEFT),
                 "depot fixture could not equip starter weapon")
+            if os.getenv("PLAYERBOT_DEPOT_MOVE_CASE") == "rejected" then
+                F.removeAll(player, F.emptyPotionFlaskItemId)
+                assert(player:addItem(F.emptyPotionFlaskItemId, 2, false, 1, CONST_SLOT_AMMO),
+                    "depot fixture could not seed ammunition-slot cargo")
+            end
             local fixtureBackpack = player:getSlotItem(CONST_SLOT_BACKPACK)
             assert(fixtureBackpack and fixtureBackpack:addItem(F.potionItemId, 10), "depot fixture could not add potion reserve")
             local thais = Town(F.thaisTownId)

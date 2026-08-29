@@ -577,8 +577,9 @@ terminal event.
 An unchanged backpack deposit retries three times. After the third rejection,
 the bot moves the blocked item to its current tile through normal item movement,
 verifies the inventory and ground deltas, emits `result="discarded"` with
-`reason="depot_rejected"`, and continues the deposit workflow. Rejected slotted
-deposits remain deferred rather than discarded.
+`reason="depot_rejected"`, and continues the deposit workflow. This also applies
+to actionable cargo occupying an equipment slot; valid or protected equipment
+is never selected for deposit.
 
 Target pursuit uses `action_result` with `action="target_pursuit"`.
 `result="started"` includes `target_id` and `last_seen_position`;

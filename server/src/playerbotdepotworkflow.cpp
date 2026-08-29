@@ -16,7 +16,6 @@ void PlayerBotDepotWorkflow::reset()
 	standableCandidates = 0;
 	suppressedApproaches = 0;
 	unsafeRouteCandidates = 0;
-	deferredSlottedDeposits.clear();
 }
 
 void PlayerBotDepotWorkflow::clearDiscovery()
@@ -38,10 +37,6 @@ PlayerBotDepotCommand PlayerBotDepotWorkflow::advance(const PlayerBotDepotObserv
 	uint32_t maximumDiscoveryAttempts, std::chrono::steady_clock::duration suppression)
 {
 	session.expireRejectedApproaches(observation.now);
-	for (auto it = deferredSlottedDeposits.begin(); it != deferredSlottedDeposits.end();) {
-		if (it->second <= observation.now) it = deferredSlottedDeposits.erase(it);
-		else ++it;
-	}
 	if (observation.actionResult == PlayerBotDepotActionResult::SelectedLockerUnavailable) {
 		clearDiscovery();
 		session.resetAttempts();
@@ -67,13 +62,7 @@ PlayerBotDepotCommand PlayerBotDepotWorkflow::advance(const PlayerBotDepotObserv
 		if (verification.result == PlayerBotDepotMoveResult::Retry) {
 			return command(PlayerBotDepotCommandType::Wait, PlayerBotDepotOutcome::Retry, telemetry);
 		}
-		if (verification.result == PlayerBotDepotMoveResult::Deferred && verification.before.sourceSlot != CONST_SLOT_WHEREEVER) {
-			deferredSlottedDeposits[{verification.before.itemId, verification.before.sourceSlot}] = observation.now + suppression;
-			return command(PlayerBotDepotCommandType::Wait, PlayerBotDepotOutcome::Deferred, telemetry);
-		}
-		return command(PlayerBotDepotCommandType::SelectDeposit,
-		               verification.result == PlayerBotDepotMoveResult::Moved ? PlayerBotDepotOutcome::Moved : PlayerBotDepotOutcome::Deferred,
-		               telemetry);
+		return command(PlayerBotDepotCommandType::SelectDeposit, PlayerBotDepotOutcome::Moved, telemetry);
 	}
 	if (session.stage() == PlayerBotDepotStage::Discover && !routeCandidate && discoveryCandidates.empty()) {
 		if (!observation.scan.observed) return command(PlayerBotDepotCommandType::Scan, PlayerBotDepotOutcome::Pending);
@@ -178,12 +167,6 @@ PlayerBotDepotCommand PlayerBotDepotWorkflow::advance(const PlayerBotDepotObserv
 	}
 	if (session.stage() == PlayerBotDepotStage::Depart) return command(PlayerBotDepotCommandType::Depart, PlayerBotDepotOutcome::Success);
 	if (session.stage() == PlayerBotDepotStage::Deposit && observation.deposit.observed && observation.deposit.hasDepositableItem) {
-		if (observation.deposit.move.sourceSlot != CONST_SLOT_WHEREEVER) {
-			auto deferred = deferredSlottedDeposits.find({observation.deposit.move.itemId, observation.deposit.move.sourceSlot});
-			if (deferred != deferredSlottedDeposits.end() && deferred->second > observation.now) {
-				return command(PlayerBotDepotCommandType::Wait, PlayerBotDepotOutcome::Deferred);
-			}
-		}
 		if (!observation.canDoAction) return command(PlayerBotDepotCommandType::Wait, PlayerBotDepotOutcome::Pending);
 		session.beginMove(observation.deposit.move);
 		return command(PlayerBotDepotCommandType::MoveDeposit, PlayerBotDepotOutcome::Ready);
@@ -247,14 +230,6 @@ std::optional<std::chrono::steady_clock::time_point> PlayerBotDepotWorkflow::ear
 	return earliest;
 }
 
-std::optional<std::chrono::steady_clock::time_point> PlayerBotDepotWorkflow::earliestDeferredDepositExpiry() const
-{
-	if (deferredSlottedDeposits.empty()) return std::nullopt;
-	auto earliest = deferredSlottedDeposits.begin()->second;
-	for (const auto& entry : deferredSlottedDeposits) earliest = std::min(earliest, entry.second);
-	return earliest;
-}
-
 PlayerBotDepotSnapshot PlayerBotDepotWorkflow::snapshot() const
 {
 	PlayerBotDepotSnapshot result;
@@ -273,7 +248,6 @@ PlayerBotDepotSnapshot PlayerBotDepotWorkflow::snapshot() const
 	result.suppressedApproaches = suppressedApproaches;
 	result.unsafeRouteCandidates = unsafeRouteCandidates;
 	result.retryAt = earliestRejectedApproachExpiry();
-	result.deferredDepositRetryAt = earliestDeferredDepositExpiry();
 	return result;
 }
 

@@ -125,13 +125,6 @@ PlayerBotDepotMoveVerification PlayerBotDepotSession::verifyMove(uint32_t invent
 		verification.result = PlayerBotDepotMoveResult::Retry;
 		return verification;
 	}
-	if (before.sourceSlot != CONST_SLOT_WHEREEVER) {
-		clearMove();
-		resetAttempts();
-		depotStage = PlayerBotDepotStage::Deposit;
-		verification.result = PlayerBotDepotMoveResult::Deferred;
-		return verification;
-	}
 	verification.result = PlayerBotDepotMoveResult::Rejected;
 	return verification;
 }

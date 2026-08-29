@@ -202,9 +202,25 @@
 				$_.ground_after -eq ($_.ground_before + 1) -and
 				$_.depot_before -eq 0 -and $_.depot_after -eq 0
 			})
+			$slottedRequests = @($events | Where-Object {
+				$_.action -eq "deposit" -and $_.result -eq "requested" -and $_.item_id -eq 7636 -and $_.source_slot -eq 10
+			})
+			$slottedRetries = @($events | Where-Object {
+				$_.action -eq "deposit" -and $_.result -eq "retry" -and $_.item_id -eq 7636 -and $_.source_slot -eq 10 -and
+				$_.verified -eq 0 -and $_.inventory_before -eq 2 -and $_.inventory_after -eq 2 -and
+				$_.depot_before -eq 0 -and $_.depot_after -eq 0
+			})
+			$slottedDiscarded = @($events | Where-Object {
+				$_.action -eq "deposit" -and $_.result -eq "discarded" -and $_.reason -eq "depot_rejected" -and
+				$_.item_id -eq 7636 -and $_.retry -eq 3 -and $_.count -eq 2 -and
+				$_.inventory_before -eq 2 -and $_.inventory_after -eq 0 -and $_.ground_after -eq ($_.ground_before + 2) -and
+				$_.depot_before -eq 0 -and $_.depot_after -eq 0
+			})
 			$terminals = @($events | Where-Object { $_.event -eq "terminal" })
-			if ($requests.Count -ne 3 -or $retries.Count -ne 2 -or $discarded.Count -ne 1 -or $terminals.Count -ne 0) {
-				throw "Rejected depot moves did not discard the blocked item and continue. requests=$($requests.Count), retries=$($retries.Count), discarded=$($discarded.Count), terminals=$($terminals.Count)."
+			if ($requests.Count -ne 3 -or $retries.Count -ne 2 -or $discarded.Count -ne 1 -or
+				$slottedRequests.Count -ne 3 -or $slottedRetries.Count -ne 2 -or $slottedDiscarded.Count -ne 1 -or
+				$terminals.Count -ne 0) {
+				throw "Rejected depot moves did not discard blocked backpack and ammunition-slot cargo. requests=$($requests.Count), retries=$($retries.Count), discarded=$($discarded.Count), slottedRequests=$($slottedRequests.Count), slottedRetries=$($slottedRetries.Count), slottedDiscarded=$($slottedDiscarded.Count), terminals=$($terminals.Count)."
 			}
 		}
 	}

@@ -83,7 +83,6 @@ struct PlayerBotDepotSnapshot {
 	uint32_t suppressedApproaches = 0;
 	uint32_t unsafeRouteCandidates = 0;
 	std::optional<std::chrono::steady_clock::time_point> retryAt;
-	std::optional<std::chrono::steady_clock::time_point> deferredDepositRetryAt;
 };
 
 struct PlayerBotDepotTelemetry {
@@ -119,7 +118,6 @@ class PlayerBotDepotWorkflow
 		bool hasNextCandidate() const;
 		std::optional<PlayerBotDepotCandidate> takeNextCandidate();
 		std::optional<std::chrono::steady_clock::time_point> earliestRejectedApproachExpiry() const;
-		std::optional<std::chrono::steady_clock::time_point> earliestDeferredDepositExpiry() const;
 		PlayerBotDepotCommand command(PlayerBotDepotCommandType type, PlayerBotDepotOutcome outcome,
 		                              PlayerBotDepotTelemetry telemetry = {}) const;
 
@@ -140,7 +138,6 @@ class PlayerBotDepotWorkflow
 		uint32_t standableCandidates = 0;
 		uint32_t suppressedApproaches = 0;
 		uint32_t unsafeRouteCandidates = 0;
-		std::map<std::pair<uint16_t, slots_t>, std::chrono::steady_clock::time_point> deferredSlottedDeposits;
 };
 
 #endif
