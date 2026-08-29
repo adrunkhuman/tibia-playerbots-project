@@ -68,7 +68,7 @@
 			$env:PLAYERBOT_GAMEPLAY_MODE = "target_attacker_priority"
 			$env:PLAYERBOT_HUNT_DURATION_SECONDS = "900"
 			Invoke-Compose up --detach
-			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST TARGET_PRIORITY_ATTACKER' | Out-Null
+			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST TARGET_PRIORITY_ATTACKERS' | Out-Null
 			$priorityLogs = Wait-ForLog -Pattern '"reason":"target_defeated"'
 			Assert-TargetAttackerPriorityEvents -Logs $priorityLogs
 		}

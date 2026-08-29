@@ -127,9 +127,12 @@ function Assert-TargetApproachEvents {
 		$_.event -eq "target_changed" -and $_.reason -eq "target_defeated"
 	})
 	$terminal = @($events | Where-Object { $_.event -eq "terminal" })
+	$fixture = [regex]::Match($Logs, "PLAYERBOT_GAMEPLAY_TEST TARGET_APPROACH_START (\d+) (\d+)")
+	$closestTargetId = $fixture.Success ? [uint64]$fixture.Groups[1].Value : 0
 	if ($selected.Count -ne 1 -or $approachPlan.Count -lt 1 -or $defeated.Count -lt 1 -or
+		$closestTargetId -eq 0 -or $selected[0].target_id -ne $closestTargetId -or
 		$selected[0].target_id -ne $defeated[0].previous_target_id -or $terminal.Count -ne 0) {
-		throw "Target approach failed. selected=$($selected.Count), plans=$($approachPlan.Count), defeated=$($defeated.Count), terminal=$($terminal.Count)."
+		throw "Target approach failed. selected=$($selected.Count), closest=$closestTargetId, plans=$($approachPlan.Count), defeated=$($defeated.Count), terminal=$($terminal.Count)."
 	}
 }
 

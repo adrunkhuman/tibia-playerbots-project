@@ -161,18 +161,20 @@ globally scored candidates are unavailable, the controller emits
 successful selection resets the counter; three consecutive exhausted scans stop
 the controller instead of rescanning an unchanged world snapshot forever.
 
-The bot selects a visible monster only when a bounded route can reach an
-adjacent tile without changing floors. It disables native creature chase and
+The bot selects the closest visible monster only when a bounded route can reach
+an adjacent tile without changing floors. It disables native creature chase and
 uses that same route contract for the approach. An unavailable route suppresses
 the monster for ten seconds and returns to patrol. Losing the target or attack
 association suppresses it for 120 seconds. A 60-second combat timeout uses the
 same longer suppression.
 
-A reachable attacker encountered during the approach replaces the original
-target. The original target is forgotten rather than suspended. After combat
-and looting, the bot resumes ordinary patrol. Patrol remains responsible for
-floor transitions and can encounter a previously skipped monster from another
-connected position.
+A strictly closer reachable attacker encountered during the approach replaces
+a non-attacking target. Equal-distance or farther monsters do not displace the
+selected target. Once the active target attacks the bot, that target remains
+selected; additional attackers do not churn combat targets. A replaced target
+is forgotten rather than suspended. After combat and looting, the bot resumes
+ordinary patrol. Patrol remains responsible for floor transitions and can
+encounter a previously skipped monster from another connected position.
 
 The map-derived region planner and target approach are prototypes, not
 whole-map hierarchical navigation or general creature memory. Regression

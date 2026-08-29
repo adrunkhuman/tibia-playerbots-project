@@ -483,10 +483,12 @@ void PlayerBotController::processTraversalCombat(Player* player, const Position&
 {
 	const auto traversal = huntCoordinator.traversalTarget();
 	Creature* target = traversal ? g_game.getCreatureByID(traversal->id) : nullptr;
-	if (target) {
+	if (target && target->getAttackedCreature() != player) {
 		SpectatorVec spectators;
 		g_game.map.getSpectators(spectators, currentPosition);
 		const auto now = std::chrono::steady_clock::now();
+		const uint32_t currentTargetDistance = std::max(Position::getDistanceX(currentPosition, target->getPosition()),
+		                                                Position::getDistanceY(currentPosition, target->getPosition()));
 		uint64_t remainingExpandedNodes = maximumTargetApproachExpandedNodes;
 		uint32_t reachableAttackerId = 0;
 		for (Creature* creature : spectators) {
@@ -494,6 +496,9 @@ void PlayerBotController::processTraversalCombat(Player* player, const Position&
 			    creature->getAttackedCreature() != player || !player->canSee(creature->getPosition())) {
 				continue;
 			}
+			const uint32_t candidateDistance = std::max(Position::getDistanceX(currentPosition, creature->getPosition()),
+			                                            Position::getDistanceY(currentPosition, creature->getPosition()));
+			if (candidateDistance >= currentTargetDistance) continue;
 			const std::vector<PlayerBotTraversalCandidate> candidate{{
 			    {creature->getID(), creature->getPosition(), creature->getName()}, expectedCorpseFor(*creature), true}};
 			if (!huntCoordinator.selectTraversalAttack(candidate, currentPosition, now)) continue;

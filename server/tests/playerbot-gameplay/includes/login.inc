@@ -726,6 +726,12 @@ function F.login.onLogin(player)
 					end
 				end
 			end
+		else
+			local competitor = Game.createMonster(F.defensiveMonsterName, Position(position.x + 7, position.y, position.z), true, true)
+			assert(competitor and competitor:selectTarget(player), "target approach fixture could not create its farther attacker")
+			addEvent(F.removeTargetSelectionCompetitor, 1500, competitor:getId())
+			print("PLAYERBOT_GAMEPLAY_TEST TARGET_APPROACH_START " .. monster:getId() .. " " .. competitor:getId())
+			return true
 		end
         print("PLAYERBOT_GAMEPLAY_TEST TARGET_APPROACH_START " .. monster:getId())
         return true

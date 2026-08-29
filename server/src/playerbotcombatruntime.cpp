@@ -34,17 +34,12 @@ namespace {
 std::optional<PlayerBotCombatDecision> PlayerBotCombatRuntime::selectTraversalAttack(
 	std::vector<PlayerBotTraversalCandidate> candidates, const Position& currentPosition, std::chrono::steady_clock::time_point now)
 {
-	auto select = [&candidates, &currentPosition, now, this](bool attacksPlayer) {
-		std::vector<PlayerBotTarget> targets;
-		for (const PlayerBotTraversalCandidate& candidate : candidates) {
-			if (candidate.attacksPlayer == attacksPlayer) {
-				targets.push_back({candidate.id, candidate.position, candidate.name});
-			}
-		}
-		return session->value.selectVisibleTarget(std::move(targets), currentPosition, now);
-	};
-	auto selected = select(true);
-	if (!selected) selected = select(false);
+	std::vector<PlayerBotTarget> targets;
+	targets.reserve(candidates.size());
+	for (const PlayerBotTraversalCandidate& candidate : candidates) {
+		targets.push_back({candidate.id, candidate.position, candidate.name});
+	}
+	const auto selected = session->value.selectVisibleTarget(std::move(targets), currentPosition, now);
 	if (!selected) {
 		return std::nullopt;
 	}
