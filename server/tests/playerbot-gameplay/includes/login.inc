@@ -588,7 +588,8 @@ function F.login.onLogin(player)
     end
     if mode == "spell_training" then
         if player:getStorageValue(F.spellTrainingStorage) == 1 then
-            assert(player:hasLearnedSpell("Find Person"), "spell training did not persist across restart")
+            assert(player:hasLearnedSpell("Light Healing") and not player:hasLearnedSpell("Find Person"),
+                "spell training priority did not persist across restart")
             assert(player:setStorageValue(F.fixtureReadyStorage, 1), "spell training restart fixture could not signal readiness")
             print("PLAYERBOT_GAMEPLAY_TEST SPELL_TRAINING_RESTART_PASS")
             return true
@@ -597,9 +598,9 @@ function F.login.onLogin(player)
         assert(thais and player:setTown(thais), "spell training fixture could not select Thais")
         assert(player:setVocation(4), "spell training fixture could not select Knight")
 		F.selectHealthPotion(player)
-        local requiredExperience = Game.getExperienceForLevel(8) - player:getExperience()
+        local requiredExperience = Game.getExperienceForLevel(9) - player:getExperience()
         if requiredExperience > 0 then player:addExperience(requiredExperience) end
-        assert(player:getLevel() == 8, "spell training fixture could not select level 8")
+        assert(player:getLevel() == 9, "spell training fixture could not select level 9")
 		local trainer = Npc("Gregor")
 		assert(trainer, "spell training fixture could not find Gregor")
 		local trainerPosition = trainer:getPosition()

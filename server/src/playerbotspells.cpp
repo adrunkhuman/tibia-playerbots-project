@@ -300,7 +300,7 @@ uint64_t PlayerBotController::spellTrainingReserve(const Player& player) const
 
 void PlayerBotController::emitSpellCandidate(const Npc& npc, const NpcSpellOffer& offer, const Position& position,
                                              const char* result, const char* reason, uint64_t reserve,
-                                             uint32_t travelSteps) const
+                                             uint32_t travelSteps, std::optional<uint8_t> learningPriority) const
 {
 	std::ostringstream fields;
 	fields << "\"goal\":\"learn_spell\",\"result\":" << jsonString(result)
@@ -308,7 +308,10 @@ void PlayerBotController::emitSpellCandidate(const Npc& npc, const NpcSpellOffer
 	       << ",\"spell\":" << jsonString(offer.spellName) << ",\"keyword\":" << jsonString(offer.keyword)
 	       << ",\"price\":" << offer.price << ",\"level\":" << offer.level
 	       << ",\"premium\":" << (offer.premium ? "true" : "false") << ",\"reserve\":" << reserve
-	       << ",\"travel_steps\":" << travelSteps << ",\"provider_position\":{\"x\":" << npc.getPosition().x
+	       << ",\"travel_steps\":" << travelSteps
+	       << ",\"implemented_use\":" << (learningPriority ? "true" : "false");
+	if (learningPriority) fields << ",\"learning_priority\":" << static_cast<uint16_t>(*learningPriority);
+	fields << ",\"provider_position\":{\"x\":" << npc.getPosition().x
 	       << ",\"y\":" << npc.getPosition().y << ",\"z\":" << static_cast<uint16_t>(npc.getPosition().z) << '}';
 	if (reason) {
 		fields << ",\"reason\":" << jsonString(reason);
@@ -332,7 +335,8 @@ bool PlayerBotController::findSpellTraining(Player& player, const Position& posi
 	auto hasRelevantOffer = [&](const Npc* trainer) {
 		return std::any_of(trainer->getSpellOffers().begin(), trainer->getSpellOffers().end(), [&](const NpcSpellOffer& offer) {
 			Spell* spell = g_spells ? g_spells->getSpellByName(offer.spellName) : nullptr;
-			return spell && spell->isInstant() && spell->isLearnable() && spell->getLevel() == offer.level &&
+			return playerBotSpellLearningPriority(offer.spellName.c_str()) &&
+			       spell && spell->isInstant() && spell->isLearnable() && spell->getLevel() == offer.level &&
 			       spell->isPremium() == offer.premium && player.getLevel() >= offer.level &&
 			       (!offer.premium || player.isPremium()) && !player.hasLearnedInstantSpell(offer.spellName) &&
 			       std::find(offer.vocationIds.begin(), offer.vocationIds.end(), baseVocationId) != offer.vocationIds.end() &&
@@ -439,6 +443,7 @@ bool PlayerBotController::findSpellTraining(Player& player, const Position& posi
 		};
 		for (const NpcSpellOffer& offer : npc->getSpellOffers()) {
 			Spell* spell = g_spells ? g_spells->getSpellByName(offer.spellName) : nullptr;
+			const std::optional<uint8_t> learningPriority = playerBotSpellLearningPriority(offer.spellName.c_str());
 			const bool registryMatches = spell && spell->isInstant() && spell->isLearnable() &&
 			                             spell->getLevel() == offer.level && spell->isPremium() == offer.premium;
 			const bool vocationEligible = registryMatches &&
@@ -452,7 +457,8 @@ bool PlayerBotController::findSpellTraining(Player& player, const Position& posi
 			const bool routeReachable = registryMatches && vocationEligible && levelEligible && premiumEligible &&
 			                            !alreadyLearned && suppliesReady && affordable && findTrainerApproach();
 			offers.push_back({npc->getID(), npc->getPosition(), npc->getName(), offer.spellName, offer.keyword,
-			                  offer.price, offer.level, offer.premium, inScope, registryMatches, vocationEligible,
+			                  offer.price, offer.level, offer.premium, inScope, registryMatches,
+			                  learningPriority.has_value(), learningPriority.value_or(UINT8_MAX), vocationEligible,
 			                  levelEligible, premiumEligible, alreadyLearned, suppliesReady,
 			                  trainerRoute});
 			routes.push_back(trainerSteps);
@@ -472,7 +478,8 @@ bool PlayerBotController::findSpellTraining(Player& player, const Position& posi
 		Npc* npc = g_game.getNpcByID(offer.npcId);
 		if (npc) emitSpellCandidate(*npc, {offer.spellName, offer.keyword, offer.price, offer.level, offer.premium, {}}, position,
 		                           rejection == decision.rejections.end() ? "feasible" : "rejected",
-		                           rejection == decision.rejections.end() ? nullptr : rejection->reason.c_str(), reserve, offer.route.steps);
+		                           rejection == decision.rejections.end() ? nullptr : rejection->reason.c_str(), reserve, offer.route.steps,
+		                           offer.implementedUse ? std::optional<uint8_t>(offer.learningPriority) : std::nullopt);
 	}
 	if (!decision.selected) return false;
 	plan = *decision.selected;

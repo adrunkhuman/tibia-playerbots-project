@@ -106,13 +106,15 @@ end
 function F.verifySpellTraining(playerId, attempts)
     local player = Player(playerId)
     assert(player and not player:isRemoved(), "Bot One disappeared during spell training")
-    local complete = player:hasLearnedSpell("Find Person") and player:getMoney() + player:getBankBalance() == 220
+    local complete = player:hasLearnedSpell("Light Healing") and not player:hasLearnedSpell("Find Person") and
+        player:getMoney() + player:getBankBalance() == 130
     if not complete and attempts > 0 then
         addEvent(F.verifySpellTraining, 500, playerId, attempts - 1)
         return
     end
-    assert(player:hasLearnedSpell("Find Person"), "spell training did not learn Find Person")
-    assert(player:getMoney() + player:getBankBalance() == 220, "spell training charged an unexpected amount")
+    assert(player:hasLearnedSpell("Light Healing") and not player:hasLearnedSpell("Find Person"),
+        "spell training did not prioritize Light Healing over Find Person")
+    assert(player:getMoney() + player:getBankBalance() == 130, "spell training charged an unexpected amount")
     assert(player:getItemCount(F.potionItemId) >= 5 and player:getItemCount(F.meatItemId) >= 1,
         "spell training spent the recovery supplies")
     assert(player:setStorageValue(F.spellTrainingStorage, 1), "spell training completion marker could not persist")

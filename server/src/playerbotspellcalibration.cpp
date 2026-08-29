@@ -52,6 +52,19 @@ const std::array<PlayerBotSpellDescriptor, 6>& playerBotSpellDescriptors()
 	return descriptors;
 }
 
+std::optional<uint8_t> playerBotSpellLearningPriority(const char* name)
+{
+	const PlayerBotSpellDescriptor* descriptor = playerBotSpellDescriptor(name);
+	if (!descriptor) return std::nullopt;
+	switch (descriptor->role) {
+		case PlayerBotSpellRole::Healing: return 0;
+		case PlayerBotSpellRole::MeleeOffense:
+		case PlayerBotSpellRole::RangedOffense: return 1;
+		case PlayerBotSpellRole::Support: return 2;
+	}
+	return std::nullopt;
+}
+
 const char* playerBotSpellRoleName(PlayerBotSpellRole role)
 {
 	switch (role) {

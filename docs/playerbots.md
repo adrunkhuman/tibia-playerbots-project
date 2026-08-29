@@ -238,8 +238,12 @@ aggregate route budget; later trainers are evaluated on subsequent scans. The
 bounded shortlist prioritizes trainers with an unlearned spell matching the
 player's vocation, level, and premium status. Temporary money and supply
 constraints reject offers after shortlisting rather than hiding relevant
-trainers. The planner derives trainer offers from loaded NPC scripts and rejects
-offers with a registry mismatch, wrong vocation, level, premium status, learned
+trainers. Learning is limited to spells with an implemented bot use and ranks
+healing before combat, then support. Unsupported utility spells such as
+`Find Person` remain unlearned. `spell_candidate` reports `implemented_use` and
+`learning_priority` for this policy. The planner derives trainer offers from
+loaded NPC scripts and rejects offers with a registry mismatch, wrong vocation,
+level, premium status, learned
 state, missing supply reserve, insufficient funds after the 100 gp carried
 reserve plus the cost of the current stock gap to the 10-potion restock target,
 or an unavailable route.
