@@ -435,14 +435,19 @@ utility are observable, but food does not yet select a separate acquisition
 goal. Later goal arbitration can weigh measured regeneration benefit against
 travel, capacity, and service costs without restoring a hard requirement.
 
-An opened depot is scanned for loot with a positive local NPC sell price after
-deposit. A reachable sale that requires no NPC travel is deterministic service
-work: the bot withdraws one bounded batch, sells it, then continues potion and
-banking service. Its sale revenue is available for that resupply. Utility does
-not arbitrate local sales against hunting; it is reserved for future travel that
-has a fare or otherwise leaves the local service area. If one batch cannot fund
-required potions, the bot returns to the depot and tries the next local batch
-before reporting insufficient funds.
+After deposit, the bot scans bounded windows across its depot chests for loot
+with a positive NPC sell price. It groups compatible items into one
+capacity-bounded manifest and compares walking and NPC-travel routes to one
+source depot and seller. The trip must remain safe, profitable after fare and
+travel time, and affordable before sale proceeds. Route validation examines one
+candidate per scheduler turn and rotates through all item windows and candidates.
+
+The bot travels physically to the selected depot, opens the planned locker and
+chest, withdraws and verifies each manifest batch, then travels to the seller
+through normal movement and NPC dialogue. It replans after each trip. A stale,
+unsafe, or unavailable optional liquidation route is deferred rather than
+stopping the bot. Local sales use the same workflow without a travel fare, and
+their proceeds remain available for potion and banking service.
 
 The bot identifies only server-classified corpse containers and checks normal
 corpse ownership. It opens the corpse through normal item use before inspecting

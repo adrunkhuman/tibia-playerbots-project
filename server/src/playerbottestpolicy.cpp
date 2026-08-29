@@ -47,6 +47,7 @@ const playerbot::PlayerBotTestPolicy& playerbot::playerBotTestPolicyFromEnvironm
 			 std::strcmp(gameplayMode, "slotted_loot_seller") == 0 ||
 			 std::strcmp(gameplayMode, "slotted_loot_no_seller") == 0 ||
 			 std::strcmp(gameplayMode, "sell_loot") == 0 ||
+			 std::strcmp(gameplayMode, "sell_loot_remote_depot") == 0 ||
 			 (std::strncmp(gameplayMode, "magic_training", 14) == 0 &&
 			  std::strcmp(gameplayMode, "magic_training_hunt") != 0));
 		const bool huntAreaArrivalFixture = gameplayMode && std::strcmp(gameplayMode, "hunt_area_arrival") == 0;
@@ -66,6 +67,7 @@ const playerbot::PlayerBotTestPolicy& playerbot::playerBotTestPolicyFromEnvironm
 			 std::strcmp(gameplayMode, "stamina_normal") == 0 || std::strcmp(gameplayMode, "hunt_planning") == 0 || huntAreaArrivalFixture ||
 			 std::strcmp(gameplayMode, "adaptive_challenge") == 0 ||
 			 std::strcmp(gameplayMode, "sell_loot") == 0 ||
+			 std::strcmp(gameplayMode, "sell_loot_remote_depot") == 0 ||
 			 std::strcmp(gameplayMode, "readiness_ready") == 0 || std::strcmp(gameplayMode, "readiness_upgrade") == 0 ||
 			 std::strcmp(gameplayMode, "readiness_missing_weapon") == 0 || std::strcmp(gameplayMode, "readiness_supplies") == 0 ||
 			 std::strcmp(gameplayMode, "readiness_food_capacity") == 0 ||
@@ -93,7 +95,8 @@ const playerbot::PlayerBotTestPolicy& playerbot::playerBotTestPolicyFromEnvironm
 		                               std::strcmp(gameplayMode, "depot") != 0 && !depotRiskFallbackFixture &&
 			                               std::strcmp(gameplayMode, "slotted_loot_seller") != 0 &&
 			                               std::strcmp(gameplayMode, "slotted_loot_no_seller") != 0 &&
-			                               std::strcmp(gameplayMode, "sell_loot") != 0;
+			                               std::strcmp(gameplayMode, "sell_loot") != 0 &&
+			                               std::strcmp(gameplayMode, "sell_loot_remote_depot") != 0;
 		const char* depotRestartPhase = std::getenv("PLAYERBOT_DEPOT_RESTART_PHASE");
 		const DepotRestartCheckpoint depotRestartCheckpoint = !depotRestartPhase ? DepotRestartCheckpoint::None :
 			std::strcmp(depotRestartPhase, "approach") == 0 ? DepotRestartCheckpoint::Approach :

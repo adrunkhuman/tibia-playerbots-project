@@ -160,8 +160,9 @@ PlayerBotServiceCommand PlayerBotServiceWorkflow::approachProvider(const PlayerB
 			return command;
 		}
 		if (observation.approachRoute.result == PlayerBotServiceRouteResult::Reached) {
-			if (liquidationPlan && (observation.approachRoute.requiresNpcTravel ||
-			    observation.approachRoute.steps > liquidationPlan->maximumRouteSteps)) {
+			if (liquidationPlan && ((!liquidationPlan->allowNpcTravel && observation.approachRoute.requiresNpcTravel) ||
+			    (liquidationPlan->maximumRouteSteps != 0 && observation.approachRoute.steps > liquidationPlan->maximumRouteSteps) ||
+			    observation.approachRoute.fare > liquidationPlan->maximumFare)) {
 				return rejectCurrentProvider();
 			}
 			providerRouteCosts[npcSession.targetId()] = observation.approachRoute.steps;
@@ -313,10 +314,13 @@ PlayerBotServiceCommand PlayerBotServiceWorkflow::verifyShop(const PlayerBotServ
 		purchase, observation.maximumAttempts);
 	if (result.result == PlayerBotServiceVerificationResult::Success) {
 		if (!purchase && liquidationPlan) {
-			liquidationPlan.reset();
-			serviceStage = PlayerBotServiceStage::BuyPotions;
+			++liquidationPlan->nextBatch;
+			if (liquidationPlan->nextBatch >= liquidationPlan->batches.size()) {
+				liquidationPlan.reset();
+				serviceStage = PlayerBotServiceStage::BuyPotions;
+			}
 			serviceSession.reset();
-			npcSession.reset();
+			if (!liquidationPlan) npcSession.reset();
 		} else {
 			npcSession.setStep(PlayerBotNpcConversationStep::Ready);
 			npcSession.resetRetries();
@@ -422,13 +426,19 @@ PlayerBotServiceCommand PlayerBotServiceWorkflow::advanceImpl(const PlayerBotSer
 		if (serviceSession.hasShopTransaction()) return verifyShop(observation, false);
 		if (liquidationPlan) {
 			const PlayerBotServiceLiquidationPlan& plan = *liquidationPlan;
+			if (plan.nextBatch >= plan.batches.size()) {
+				liquidationPlan.reset();
+				serviceStage = PlayerBotServiceStage::BuyPotions;
+				return advanceImpl(observation, catalog, disposition);
+			}
+			const PlayerBotServiceLiquidationBatch& batch = plan.batches[plan.nextBatch];
 			const PlayerBotEconomyProvider* selected = provider(plan.providerId, true);
 			if (!selected || unavailableProviderIds.find(plan.providerId) != unavailableProviderIds.end()) {
 				serviceStage = PlayerBotServiceStage::Failed;
 				return {PlayerBotServiceCommandType::Fail, PlayerBotServiceOutcome::Unavailable, plan.providerId};
 			}
-			auto offer = std::find_if(selected->offers.begin(), selected->offers.end(), [&plan](const auto& value) {
-				return value.itemId == plan.itemId && value.sellPrice == plan.price && value.subType == plan.subType;
+			auto offer = std::find_if(selected->offers.begin(), selected->offers.end(), [&batch](const auto& value) {
+				return value.itemId == batch.itemId && value.sellPrice == batch.price && value.subType == batch.subType;
 			});
 			if (offer == selected->offers.end()) {
 				serviceStage = PlayerBotServiceStage::Failed;
@@ -437,18 +447,18 @@ PlayerBotServiceCommand PlayerBotServiceWorkflow::advanceImpl(const PlayerBotSer
 			targetProvider(plan.providerId);
 			PlayerBotServiceCommand focus = establishNpc(observation, true);
 			if (focus.type != PlayerBotServiceCommandType::None) return focus;
-			const uint32_t backpack = observation.backpackSaleCounts.count(plan.itemId) ? observation.backpackSaleCounts.at(plan.itemId) : 0;
-			if (backpack < plan.count) {
+			const uint32_t backpack = observation.backpackSaleCounts.count(batch.itemId) ? observation.backpackSaleCounts.at(batch.itemId) : 0;
+			if (backpack < batch.count) {
 				serviceStage = PlayerBotServiceStage::Failed;
 				return {PlayerBotServiceCommandType::Fail, PlayerBotServiceOutcome::Unavailable, plan.providerId};
 			}
-			const uint32_t inventory = observation.inventoryCounts.count(plan.itemId) ? observation.inventoryCounts.at(plan.itemId) : 0;
-			const PlayerBotServiceTransaction transaction{plan.itemId, plan.count, inventory, observation.money,
-				observation.bankBalance, plan.price, plan.subType};
+			const uint32_t inventory = observation.inventoryCounts.count(batch.itemId) ? observation.inventoryCounts.at(batch.itemId) : 0;
+			const PlayerBotServiceTransaction transaction{batch.itemId, batch.count, inventory, observation.money,
+				observation.bankBalance, batch.price, batch.subType};
 			serviceSession.beginShopTransaction(transaction);
 			PlayerBotServiceCommand command{PlayerBotServiceCommandType::Sell, PlayerBotServiceOutcome::Pending,
-				plan.providerId, plan.itemId, plan.count};
-			command.subType = plan.subType;
+				plan.providerId, batch.itemId, batch.count};
+			command.subType = batch.subType;
 			command.transaction = transaction;
 			return command;
 		}
