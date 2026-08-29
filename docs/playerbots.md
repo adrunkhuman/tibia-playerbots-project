@@ -234,11 +234,15 @@ with explicit service errors instead of completing an unverified transaction.
 Spell training considers every live NPC with loaded spell offers through
 round-robin scans of at most four trainers. Each scan evaluates up to eight
 approach tiles per trainer with a 5,000-node limit per approach and a 20,000-node
-aggregate route budget; later trainers are evaluated on subsequent scans. It
-derives trainer offers from loaded NPC scripts and rejects offers with a registry
-mismatch, wrong vocation, level, premium status, learned state, missing supply
-reserve, insufficient funds after the 100 gp carried reserve plus the cost of
-the current stock gap to the 10-potion restock target, or an unavailable route.
+aggregate route budget; later trainers are evaluated on subsequent scans. The
+bounded shortlist prioritizes trainers with an unlearned spell matching the
+player's vocation, level, and premium status. Temporary money and supply
+constraints reject offers after shortlisting rather than hiding relevant
+trainers. The planner derives trainer offers from loaded NPC scripts and rejects
+offers with a registry mismatch, wrong vocation, level, premium status, learned
+state, missing supply reserve, insufficient funds after the 100 gp carried
+reserve plus the cost of the current stock gap to the 10-potion restock target,
+or an unavailable route.
 A selected spell uses normal `hi`, keyword, and `yes`
 dialogue. Completion requires both learned state and the exact total-money
 delta. Learned-spell persistence reconstructs completion after restart and

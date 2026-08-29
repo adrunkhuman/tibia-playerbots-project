@@ -329,18 +329,17 @@ bool PlayerBotController::findSpellTraining(Player& player, const Position& posi
 	std::vector<std::deque<PlayerBotNavigationStep>> routes;
 	uint64_t remainingPathNodes = maximumSpellTrainerPathNodes;
 	std::vector<Npc*> trainers = playerBotNpcProviders(g_game.getNpcs(), PlayerBotNpcCapability::SpellTrainer, position);
-	auto hasEligibleOffer = [&](const Npc* trainer) {
+	auto hasRelevantOffer = [&](const Npc* trainer) {
 		return std::any_of(trainer->getSpellOffers().begin(), trainer->getSpellOffers().end(), [&](const NpcSpellOffer& offer) {
 			Spell* spell = g_spells ? g_spells->getSpellByName(offer.spellName) : nullptr;
 			return spell && spell->isInstant() && spell->isLearnable() && spell->getLevel() == offer.level &&
 			       spell->isPremium() == offer.premium && player.getLevel() >= offer.level &&
 			       (!offer.premium || player.isPremium()) && !player.hasLearnedInstantSpell(offer.spellName) &&
-			       suppliesReady && reserve != std::numeric_limits<uint64_t>::max() && totalMoney >= reserve + offer.price &&
 			       std::find(offer.vocationIds.begin(), offer.vocationIds.end(), baseVocationId) != offer.vocationIds.end() &&
 			       spell->getVocMap().find(vocationId) != spell->getVocMap().end();
 		});
 	};
-	const auto eligibleEnd = std::stable_partition(trainers.begin(), trainers.end(), hasEligibleOffer);
+	const auto eligibleEnd = std::stable_partition(trainers.begin(), trainers.end(), hasRelevantOffer);
 	const size_t eligibleCount = static_cast<size_t>(std::distance(trainers.begin(), eligibleEnd));
 	if (eligibleCount > maximumSpellTrainerRoutes) {
 		const size_t rotatingCount = eligibleCount - 1;

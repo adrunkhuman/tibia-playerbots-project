@@ -13,6 +13,28 @@
 			$restartLogs = Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST SPELL_TRAINING_RESTART_PASS'
 			Assert-SpellTrainingEvents -Logs $restartLogs -Restart
 		}
+
+		Invoke-Scenario -Name "spell_training_shortlist" -DefaultTimeoutSeconds 90 -Body {
+			Invoke-Compose down --volumes --remove-orphans
+			$env:PLAYERBOT_GAMEPLAY_MODE = "spell_training_shortlist"
+			$env:PLAYERBOT_HUNT_DURATION_SECONDS = "900"
+			Invoke-Compose up --detach
+			Wait-ForLog -Pattern '"npc_name":"Trisha","spell":"Light Healing".*"reason":"unaffordable_after_reserves"' | Out-Null
+			$logs = Wait-ForLog -Pattern '"event":"goal_candidate".*"goal":"learn_spell".*"feasible":false'
+			$events = @(ConvertFrom-PlayerbotLogs -Logs $logs)
+			$trisha = @($events | Where-Object {
+				$_.event -eq "spell_candidate" -and $_.npc_name -eq "Trisha" -and $_.spell -eq "Light Healing" -and
+				$_.result -eq "rejected" -and $_.reason -eq "unaffordable_after_reserves" -and
+				$_.price -eq 170 -and $_.reserve -eq 100 -and $_.travel_steps -eq 0
+			})
+			$nearbyWrongVocation = @($events | Where-Object {
+				$_.event -eq "spell_candidate" -and $_.npc_name -in @("Faluae", "Eroth", "Maealil", "Elathriel")
+			})
+			if ($trisha.Count -ne 1 -or $nearbyWrongVocation.Count -ne 0 -or
+				@($events | Where-Object { $_.event -eq "terminal" }).Count -ne 0) {
+				throw "The bounded spell trainer shortlist did not prioritize the statically relevant Knight trainer. trisha=$($trisha.Count), wrongVocation=$($nearbyWrongVocation.Count)."
+			}
+		}
 	}
 
 	if ($SpellUse) {
