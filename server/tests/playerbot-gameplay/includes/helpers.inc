@@ -93,17 +93,6 @@ function F.activateDefensiveMonster(playerId, monsterId)
     assert(monster and monster:selectTarget(player), "defensive blocker could not target Bot One")
 end
 
-function F.hidePursuitMonster(playerId, monsterId, distance)
-    local player = Player(playerId)
-    local monster = Monster(monsterId)
-    assert(player and not player:isRemoved(), "Bot One disappeared before target pursuit")
-    assert(monster and not monster:isRemoved(), "target pursuit monster disappeared before target loss")
-    local position = player:getPosition()
-    assert(monster:teleportTo(Position(position.x + distance, position.y, position.z), true),
-        "target pursuit fixture could not hide the monster")
-    print("PLAYERBOT_GAMEPLAY_TEST TARGET_PURSUIT_HIDDEN " .. monsterId)
-end
-
 function F.moveEquipmentProvider(playerId, startX, startY, startZ, attempts)
     local player = Player(playerId)
     assert(player and not player:isRemoved(), "Bot One disappeared before the equipment provider moved")

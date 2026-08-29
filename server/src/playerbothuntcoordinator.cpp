@@ -31,9 +31,11 @@ PlayerBotCombatDecision PlayerBotHuntCoordinator::confirmCombatAttack(const Play
 }
 
 PlayerBotCombatDecision PlayerBotHuntCoordinator::advanceCombat(const PlayerBotCombatSnapshot& snapshot) { return combatRuntime.advance(snapshot); }
-PlayerBotCombatDecision PlayerBotHuntCoordinator::beginPursuit(const Position& currentPosition, const Position& destination,
-	std::chrono::steady_clock::time_point now) { return combatRuntime.beginPursuit(currentPosition, destination, now); }
-PlayerBotCombatDecision PlayerBotHuntCoordinator::abandonPursuit(std::chrono::steady_clock::time_point now) { return combatRuntime.abandonPursuit(now); }
+void PlayerBotHuntCoordinator::suppressTraversalTarget(uint32_t id, std::chrono::steady_clock::time_point now,
+	                                                    std::chrono::steady_clock::duration suppression)
+{
+	combatRuntime.suppressTraversalTarget(id, now, suppression);
+}
 std::optional<PlayerBotTraversalTarget> PlayerBotHuntCoordinator::clearTraversalTarget() { return combatRuntime.clearTraversalTarget(); }
 std::optional<PlayerBotDefensiveTarget> PlayerBotHuntCoordinator::clearDefensiveTarget() { return combatRuntime.clearDefensiveTarget(); }
 bool PlayerBotHuntCoordinator::hasDefensiveCombat() const { return combatRuntime.hasDefensiveCombat(); }

@@ -45,25 +45,23 @@
 		}
 	}
 
-	if ($TargetPursuit) {
-		Invoke-Scenario -Name "target_pursuit" -DefaultTimeoutSeconds 60 -Body {
+	if ($TargetApproach) {
+		Invoke-Scenario -Name "target_approach" -DefaultTimeoutSeconds 60 -Body {
 			Invoke-Compose down --volumes --remove-orphans
-			$env:PLAYERBOT_GAMEPLAY_MODE = "target_pursuit"
+			$env:PLAYERBOT_GAMEPLAY_MODE = "target_approach"
 			$env:PLAYERBOT_HUNT_DURATION_SECONDS = "900"
 			Invoke-Compose up --detach
-			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST TARGET_PURSUIT_HIDDEN' | Out-Null
-			Wait-ForLog -Pattern '"action":"target_pursuit","result":"reacquired"' | Out-Null
-			$pursuitLogs = Wait-ForLog -Pattern '"reason":"target_defeated"'
-			Assert-TargetPursuitEvents -Logs $pursuitLogs
+			$approachLogs = Wait-ForLog -Pattern '"reason":"target_defeated"'
+			Assert-TargetApproachEvents -Logs $approachLogs
 		}
-		Invoke-Scenario -Name "target_pursuit_abandon" -DefaultTimeoutSeconds 60 -Body {
+		Invoke-Scenario -Name "target_approach_unreachable" -DefaultTimeoutSeconds 60 -Body {
 			Invoke-Compose down --volumes --remove-orphans
-			$env:PLAYERBOT_GAMEPLAY_MODE = "target_pursuit_abandon"
+			$env:PLAYERBOT_GAMEPLAY_MODE = "target_approach_unreachable"
 			$env:PLAYERBOT_HUNT_DURATION_SECONDS = "900"
 			Invoke-Compose up --detach
-			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST TARGET_PURSUIT_HIDDEN' | Out-Null
-			$pursuitLogs = Wait-ForLog -Pattern '"action":"target_pursuit","result":"abandoned"'
-			Assert-TargetPursuitAbandonEvents -Logs $pursuitLogs
+			Wait-ForLog -Pattern '"action":"target_approach","result":"skipped","reason":"route_unavailable"' | Out-Null
+			$approachLogs = Wait-ForLog -Pattern '"action":"plan","result":"success".*"same_floor":false'
+			Assert-UnreachableTargetApproachEvents -Logs $approachLogs
 		}
 		Invoke-Scenario -Name "target_attacker_priority" -DefaultTimeoutSeconds 60 -Body {
 			Invoke-Compose down --volumes --remove-orphans
@@ -71,7 +69,7 @@
 			$env:PLAYERBOT_HUNT_DURATION_SECONDS = "900"
 			Invoke-Compose up --detach
 			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST TARGET_PRIORITY_ATTACKER' | Out-Null
-			$priorityLogs = Wait-ForLog -Pattern '"target_name":"Playerbot Defensive Threat"'
+			$priorityLogs = Wait-ForLog -Pattern '"reason":"target_defeated"'
 			Assert-TargetAttackerPriorityEvents -Logs $priorityLogs
 		}
 	}

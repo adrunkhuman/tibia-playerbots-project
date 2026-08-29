@@ -213,7 +213,7 @@ const char* PlayerBotSurvivalRuntime::magicTrainingReason(const PlayerBotSurviva
 {
 	if (snapshot.hunting) return "hunting";
 	if (snapshot.progressionActive) return "progression_objective";
-	if (snapshot.combatOrPursuit) return "combat_or_pursuit";
+	if (snapshot.combatActive) return "combat";
 	if (snapshot.navigationPending) return "pending_navigation";
 	if (hasPendingDefensiveWork() || needsHealing(snapshot)) return "defensive_work";
 	if (!snapshot.canDoAction || snapshot.healingExhausted) return "spell_cooldown";

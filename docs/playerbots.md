@@ -81,8 +81,7 @@ families cool down for 60 seconds.
 Turn routing is independent of utility scores and uses fixed preemption order:
 progression, magic training, hunt start, hunt planning, suspended-loot retry,
 loot, hunt finish, service, depot return, depot deposit, traversal combat,
-target pursuit, then ordinary hunting. A paused or stopped controller returns
-no command.
+then ordinary hunting. A paused or stopped controller returns no command.
 
 ## Navigation and hunting
 
@@ -162,25 +161,23 @@ globally scored candidates are unavailable, the controller emits
 successful selection resets the counter; three consecutive exhausted scans stop
 the controller instead of rescanning an unchanged world snapshot forever.
 
-When an attacked monster leaves normal positional or creature visibility, or
-the attack association is lost, the bot clears chase and pursues a reachable
-tile adjacent to its last observed position. It never updates this goal from a
-hidden creature's live state.
-Visible targets may update the approach goal and can be reacquired within six
-tiles. Pursuit lasts at most five seconds and six tiles of Chebyshev displacement.
-Reaching the approach point or exhausting either budget returns to patrol and
-suppresses that target for ten seconds. A 60-second traversal combat timeout
-retains its separate 120-second suppression.
+The bot selects a visible monster only when a bounded route can reach an
+adjacent tile without changing floors. It disables native creature chase and
+uses that same route contract for the approach. An unavailable route suppresses
+the monster for ten seconds and returns to patrol. Losing the target or attack
+association suppresses it for 120 seconds. A 60-second combat timeout uses the
+same longer suppression.
 
-Defensive combat runs only outside the hunt cycle. During a hunt, only the
-active traversal combat episode contributes combat evidence; target pursuit is
-part of that episode for hunt death attribution, but does not itself add active
-combat time or damage.
+A reachable attacker encountered during the approach replaces the original
+target. The original target is forgotten rather than suspended. After combat
+and looting, the bot resumes ordinary patrol. Patrol remains responsible for
+floor transitions and can encounter a previously skipped monster from another
+connected position.
 
-The map-derived region planner and bounded pursuit are prototypes, not
+The map-derived region planner and target approach are prototypes, not
 whole-map hierarchical navigation or general creature memory. Regression
 fixtures use fixed destinations unless their focused mode explicitly exercises
-dynamic planning or pursuit.
+dynamic planning or target approach.
 
 ## Survival, service, and loot
 
@@ -589,12 +586,11 @@ verifies the inventory and ground deltas, emits `result="discarded"` with
 to actionable cargo occupying an equipment slot; valid or protected equipment
 is never selected for deposit.
 
-Target pursuit uses `action_result` with `action="target_pursuit"`.
-`result="started"` includes `target_id` and `last_seen_position`;
-`result="reacquired"` includes `target_id`; and `result="abandoned"` includes
-`target_id` plus `reason`. Current abandonment reasons are
-`last_seen_position_reached` and `pursuit_budget_exhausted`.
-`state_transition` exposes entry to and exit from `target_pursuit`.
+Target approach plans report `same_floor=true`. A visible monster without a
+bounded same-floor route emits `action_result` with `action="target_approach"`,
+`result="skipped"`, and `reason="route_unavailable"`. Target changes report
+`target_route_unavailable`, `target_lost`, or `active_attacker_preempted` as
+applicable.
 
 When `GOD Admin` is online, selected objectives and verified transactions also
 appear as private messages and orange status text. JSONL remains authoritative.

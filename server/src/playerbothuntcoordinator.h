@@ -47,9 +47,8 @@ class PlayerBotHuntCoordinator
 		PlayerBotCombatDecision confirmCombatAttack(const PlayerBotCombatDecision& command, bool accepted,
 		                                           std::chrono::steady_clock::time_point now);
 		PlayerBotCombatDecision advanceCombat(const PlayerBotCombatSnapshot& snapshot);
-		PlayerBotCombatDecision beginPursuit(const Position& currentPosition, const Position& destination,
-		                                    std::chrono::steady_clock::time_point now);
-		PlayerBotCombatDecision abandonPursuit(std::chrono::steady_clock::time_point now);
+		void suppressTraversalTarget(uint32_t id, std::chrono::steady_clock::time_point now,
+		                             std::chrono::steady_clock::duration suppression);
 		std::optional<PlayerBotTraversalTarget> clearTraversalTarget();
 		std::optional<PlayerBotDefensiveTarget> clearDefensiveTarget();
 		bool hasDefensiveCombat() const;

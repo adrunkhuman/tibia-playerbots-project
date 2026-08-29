@@ -317,20 +317,20 @@ PlayerBotNavigationResult PlayerBotNavigator::plan(Player& player, const Positio
                                                    std::deque<PlayerBotNavigationStep>& steps, uint64_t& expandedNodes,
                                                    uint64_t maximumExpandedNodes, Position* closestPosition,
 	                                               const PlayerBotNavigationCostPolicy* costPolicy,
-	                                               PlayerBotNavigationCostSummary* costSummary) const
+	                                               PlayerBotNavigationCostSummary* costSummary, bool sameFloorOnly) const
 
 {
 	return plan(player, PlayerBotNavigationGoal::exact(destination), blockedPositions, steps, expandedNodes,
-	            maximumExpandedNodes, closestPosition, costPolicy, costSummary);
+	            maximumExpandedNodes, closestPosition, costPolicy, costSummary, sameFloorOnly);
 }
 
 PlayerBotNavigationResult PlayerBotNavigator::plan(Player& player, const PlayerBotNavigationGoal& goal,
 	const std::set<Position>& blockedPositions, std::deque<PlayerBotNavigationStep>& steps,
 	uint64_t& expandedNodes, uint64_t maximumExpandedNodes, Position* closestPosition,
-	const PlayerBotNavigationCostPolicy* costPolicy, PlayerBotNavigationCostSummary* costSummary) const
+	const PlayerBotNavigationCostPolicy* costPolicy, PlayerBotNavigationCostSummary* costSummary, bool sameFloorOnly) const
 {
 	return planFrom(player, player.getPosition(), goal, blockedPositions, steps, expandedNodes, maximumExpandedNodes,
-	                closestPosition, costPolicy, costSummary);
+	                closestPosition, costPolicy, costSummary, sameFloorOnly);
 }
 
 bool PlayerBotNavigator::resolveMove(Player& player, const Position& from, Direction direction,
@@ -351,16 +351,16 @@ PlayerBotNavigationResult PlayerBotNavigator::planFrom(Player& player, const Pos
 	                                                    std::deque<PlayerBotNavigationStep>& steps, uint64_t& expandedNodes,
 	                                                    uint64_t maximumExpandedNodes, Position* closestPosition,
 	                                                    const PlayerBotNavigationCostPolicy* costPolicy,
-	                                                    PlayerBotNavigationCostSummary* costSummary) const
+	                                                    PlayerBotNavigationCostSummary* costSummary, bool sameFloorOnly) const
 {
 	return planFrom(player, start, PlayerBotNavigationGoal::exact(destination), blockedPositions, steps, expandedNodes,
-	                maximumExpandedNodes, closestPosition, costPolicy, costSummary);
+	                maximumExpandedNodes, closestPosition, costPolicy, costSummary, sameFloorOnly);
 }
 
 PlayerBotNavigationResult PlayerBotNavigator::planFrom(Player& player, const Position& start, const PlayerBotNavigationGoal& goal,
 	const std::set<Position>& blockedPositions, std::deque<PlayerBotNavigationStep>& steps,
 	uint64_t& expandedNodes, uint64_t maximumExpandedNodes, Position* closestPosition,
-	const PlayerBotNavigationCostPolicy* costPolicy, PlayerBotNavigationCostSummary* costSummary) const
+	const PlayerBotNavigationCostPolicy* costPolicy, PlayerBotNavigationCostSummary* costSummary, bool sameFloorOnly) const
 {
 	steps.clear();
 	expandedNodes = 0;
@@ -437,6 +437,7 @@ PlayerBotNavigationResult PlayerBotNavigator::planFrom(Player& player, const Pos
 			if (!resolveWalk(player, current.position, direction, blockedPositions, next)) {
 				continue;
 			}
+			if (sameFloorOnly && next.z != start.z) continue;
 			PlayerBotNavigationStep step;
 			step.action = PlayerBotNavigationAction::Move;
 			step.direction = direction;
@@ -456,7 +457,8 @@ PlayerBotNavigationResult PlayerBotNavigator::planFrom(Player& player, const Pos
 
 			auto addDirectUse = [&](uint16_t itemId, PlayerBotNavigationAction action, const Position& expected) {
 				if (blockedPositions.find(target) != blockedPositions.end() ||
-				    blockedPositions.find(expected) != blockedPositions.end()) {
+				    blockedPositions.find(expected) != blockedPositions.end() ||
+				    (sameFloorOnly && expected.z != start.z)) {
 					return;
 				}
 				PlayerBotNavigationStep step;

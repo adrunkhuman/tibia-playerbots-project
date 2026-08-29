@@ -9,7 +9,7 @@ function F.login.onLogin(player)
 
 	local mode = os.getenv("PLAYERBOT_GAMEPLAY_MODE") or "cycle"
 	F.selectHealthPotion(player)
-    assert(mode == "mainland" or mode == "carlin_local_service" or mode == "cycle" or mode == "depot" or mode == "depot_risk_fallback" or mode == "slotted_loot_seller" or mode == "slotted_loot_no_seller" or mode == "sell_loot" or mode == "navigation" or mode == "navigation_recovery" or mode == "carlin_service_route" or mode == "mutable_portal_route" or mode == "patrol_recovery" or mode == "target_pursuit" or mode == "target_pursuit_abandon" or mode == "target_attacker_priority" or mode == "hunt_area_arrival" or mode == "corpse" or mode == "corpse_detour" or mode == "corpse_inaccessible" or mode == "death" or mode == "healing" or mode == "spell_use" or
+    assert(mode == "mainland" or mode == "carlin_local_service" or mode == "cycle" or mode == "depot" or mode == "depot_risk_fallback" or mode == "slotted_loot_seller" or mode == "slotted_loot_no_seller" or mode == "sell_loot" or mode == "navigation" or mode == "navigation_recovery" or mode == "carlin_service_route" or mode == "mutable_portal_route" or mode == "patrol_recovery" or mode == "target_approach" or mode == "target_approach_unreachable" or mode == "target_attacker_priority" or mode == "hunt_area_arrival" or mode == "corpse" or mode == "corpse_detour" or mode == "corpse_inaccessible" or mode == "death" or mode == "healing" or mode == "spell_use" or
         mode == "healing_resupply" or mode == "value" or mode == "progression" or mode == "progression_bundle" or
         mode == "progression_nested" or mode == "progression_resume" or mode == "progression_nested_resume" or
         mode == "progression_space" or mode == "arbitration" or mode == "arbitration_interrupt" or mode == "departure" or
@@ -708,13 +708,26 @@ function F.login.onLogin(player)
         return true
     end
     assert(player:teleportTo(F.depotPosition), "fake depot position could not be restored")
-    if mode == "target_pursuit" or mode == "target_pursuit_abandon" then
+    if mode == "target_approach" or mode == "target_approach_unreachable" then
         F.suppressNearbyMonsters(player:getId())
         local position = player:getPosition()
         local monster = Game.createMonster(F.emptyMonsterName, Position(position.x + 4, position.y, position.z), true, true)
-        assert(monster, "target pursuit fixture could not create a visible monster")
-        addEvent(F.hidePursuitMonster, 1100, player:getId(), monster:getId(), mode == "target_pursuit" and 12 or 30)
-        print("PLAYERBOT_GAMEPLAY_TEST TARGET_PURSUIT_START " .. monster:getId())
+        assert(monster, "target approach fixture could not create a visible monster")
+		if mode == "target_approach_unreachable" then
+			local targetPosition = monster:getPosition()
+			for x = -1, 1 do
+				for y = -1, 1 do
+					if x ~= 0 or y ~= 0 then
+						local wallPosition = Position(targetPosition.x + x, targetPosition.y + y, targetPosition.z)
+						local tile = Tile(wallPosition)
+						if tile and tile:isWalkable() then
+							assert(Game.createItem(1499, 1, wallPosition), "target approach fixture could not seal target")
+						end
+					end
+				end
+			end
+		end
+        print("PLAYERBOT_GAMEPLAY_TEST TARGET_APPROACH_START " .. monster:getId())
         return true
     end
     if mode == "navigation" then F.createTemporaryBlockers(); F.suppressNearbyMonsters(player:getId()); print("PLAYERBOT_GAMEPLAY_TEST NAVIGATION_START"); return true end
@@ -728,7 +741,7 @@ function F.login.onLogin(player)
     if mode == "target_attacker_priority" then
         F.suppressNearbyMonsters(player:getId())
         local position = player:getPosition()
-        local monster = Game.createMonster(F.emptyMonsterName, Position(position.x + 1, position.y, position.z), true, true)
+		local monster = Game.createMonster(F.emptyMonsterName, Position(position.x + 7, position.y, position.z), true, true)
         assert(monster, "target priority fixture could not create its initial target")
         addEvent(F.spawnTargetPriorityAttacker, 1100, player:getId(), monster:getId())
         print("PLAYERBOT_GAMEPLAY_TEST TARGET_PRIORITY_START " .. monster:getId())

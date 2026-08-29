@@ -137,28 +137,32 @@ class PlayerBotNavigator
 		                               uint64_t maximumExpandedNodes = playerBotNavigationMaximumExpandedNodes,
 		                               Position* closestPosition = nullptr,
 		                               const PlayerBotNavigationCostPolicy* costPolicy = nullptr,
-		                               PlayerBotNavigationCostSummary* costSummary = nullptr) const;
+		                               PlayerBotNavigationCostSummary* costSummary = nullptr,
+		                               bool sameFloorOnly = false) const;
 		PlayerBotNavigationResult plan(Player& player, const Position& destination, const std::set<Position>& blockedPositions,
 		                               std::deque<PlayerBotNavigationStep>& steps,
 		                               uint64_t& expandedNodes,
 		                               uint64_t maximumExpandedNodes = playerBotNavigationMaximumExpandedNodes,
 		                               Position* closestPosition = nullptr,
 		                               const PlayerBotNavigationCostPolicy* costPolicy = nullptr,
-		                               PlayerBotNavigationCostSummary* costSummary = nullptr) const;
+		                               PlayerBotNavigationCostSummary* costSummary = nullptr,
+		                               bool sameFloorOnly = false) const;
 		PlayerBotNavigationResult planFrom(Player& player, const Position& start, const Position& destination,
 		                                   const std::set<Position>& blockedPositions,
 		                                   std::deque<PlayerBotNavigationStep>& steps, uint64_t& expandedNodes,
 		                                   uint64_t maximumExpandedNodes = playerBotNavigationMaximumExpandedNodes,
 		                                   Position* closestPosition = nullptr,
 		                                   const PlayerBotNavigationCostPolicy* costPolicy = nullptr,
-		                                   PlayerBotNavigationCostSummary* costSummary = nullptr) const;
+		                                   PlayerBotNavigationCostSummary* costSummary = nullptr,
+		                                   bool sameFloorOnly = false) const;
 		PlayerBotNavigationResult planFrom(Player& player, const Position& start, const PlayerBotNavigationGoal& goal,
 		                                   const std::set<Position>& blockedPositions,
 		                                   std::deque<PlayerBotNavigationStep>& steps, uint64_t& expandedNodes,
 		                                   uint64_t maximumExpandedNodes = playerBotNavigationMaximumExpandedNodes,
 		                                   Position* closestPosition = nullptr,
 		                                   const PlayerBotNavigationCostPolicy* costPolicy = nullptr,
-		                                   PlayerBotNavigationCostSummary* costSummary = nullptr) const;
+		                                   PlayerBotNavigationCostSummary* costSummary = nullptr,
+		                                   bool sameFloorOnly = false) const;
 		bool resolveMove(Player& player, const Position& from, Direction direction,
 		                 const std::set<Position>& blockedPositions, PlayerBotNavigationStep& step) const;
 };

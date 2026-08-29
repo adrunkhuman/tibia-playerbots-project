@@ -30,18 +30,17 @@ end
 function F.spawnTargetPriorityAttacker(playerId, targetId)
     local player = Player(playerId)
     local target = Monster(targetId)
-    assert(player and not player:isRemoved(), "Bot One disappeared before target priority test")
-    assert(target and not target:isRemoved(), "target priority fixture lost its initial target")
-    local origin = player:getPosition()
-	assert(target:teleportTo(Position(origin.x + 4, origin.y, origin.z), true),
+	assert(player and not player:isRemoved(), "Bot One disappeared before target priority test")
+	assert(target and not target:isRemoved(), "target priority fixture lost its initial target")
+	local origin = player:getPosition()
+	assert(target:teleportTo(Position(origin.x + 1, origin.y, origin.z), true),
         "target priority fixture could not move its initial target")
-	target:setTarget(nil)
-	target:setIdle(true)
+	assert(target:selectTarget(player), "target priority fixture could not keep its initial target aggressive")
 	for _, position in ipairs({
-        Position(origin.x + 1, origin.y, origin.z),
-        Position(origin.x, origin.y + 1, origin.z),
-        Position(origin.x - 1, origin.y, origin.z),
-        Position(origin.x, origin.y - 1, origin.z),
+		Position(origin.x + 4, origin.y, origin.z),
+		Position(origin.x, origin.y + 4, origin.z),
+		Position(origin.x - 4, origin.y, origin.z),
+		Position(origin.x, origin.y - 4, origin.z),
     }) do
         local tile = Tile(position)
         if tile and tile:isWalkable() then

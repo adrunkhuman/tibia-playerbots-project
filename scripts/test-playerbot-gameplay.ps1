@@ -20,7 +20,7 @@ param(
 	[ValidateRange(30, 3600)]
 	[int]$TimeoutSeconds = 300,
     [switch]$FullNavigation,
-	[switch]$TargetPursuit,
+	[switch]$TargetApproach,
     [switch]$CorpseLoot,
     [switch]$DeathTelemetry,
 	[switch]$Healing,
@@ -78,7 +78,7 @@ $scenarioCatalog = @(
 	"equipment_offer_shadow_no_upgrade", "equipment_purchase", "equipment_purchase_resume", "equipment_purchase_provider_moved", "equipment_purchase_provider_unreachable", "equipment_purchase_space",
 	"equipment_purchase_rejected", "adaptive_challenge", "mainland_equipment_reward", "oracle_departure",
 		"oracle_level_eight_interrupt", "oracle_level_eight_recovery",
-		"navigation", "navigation_recovery", "carlin_service_route", "mutable_portal_route", "patrol_recovery", "target_pursuit", "target_pursuit_abandon", "target_attacker_priority",
+		"navigation", "navigation_recovery", "carlin_service_route", "mutable_portal_route", "patrol_recovery", "target_approach", "target_approach_unreachable", "target_attacker_priority",
 	"spell_training", "spell_training_shortlist", "spell_use", "spell_calibration", "magic_training_haste", "magic_training_great_light",
 	"magic_training_light", "magic_training_refresh", "magic_training_reserve", "magic_training_exact_full",
 	"magic_training_pz", "magic_training_absent", "magic_training_expired", "magic_training_failed",
@@ -145,7 +145,7 @@ if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
 	throw "Docker is required to run the playerbot gameplay suite."
 }
 
-$focusedScenarioRequested = $FullNavigation -or $TargetPursuit -or $CorpseLoot -or $DeathTelemetry -or $Healing -or $ValueLoot -or
+$focusedScenarioRequested = $FullNavigation -or $TargetApproach -or $CorpseLoot -or $DeathTelemetry -or $Healing -or $ValueLoot -or
 	$PickupProgression -or $GoalArbitration -or $OracleDeparture -or $StaminaProjection -or $HuntRegionPlanning -or
 	$AdaptiveChallenge -or
 	$CombatReadiness -or $EquipmentOffers -or $EquipmentPurchases -or $MainlandRewards -or $Depot -or $SlottedLoot -or $SellLoot -or $MainlandLoop -or $SpellTraining -or $SpellUse -or $SpellCalibration -or $MagicTraining -or $MagicTrainingCase
@@ -153,7 +153,7 @@ if ($Focused -and -not $focusedScenarioRequested) {
 	throw "-Focused requires at least one focused scenario switch."
 }
 if (-not $Focused) {
-	$FullNavigation = $TargetPursuit = $CorpseLoot = $DeathTelemetry = $Healing = $ValueLoot = $true
+	$FullNavigation = $TargetApproach = $CorpseLoot = $DeathTelemetry = $Healing = $ValueLoot = $true
 	$PickupProgression = $GoalArbitration = $OracleDeparture = $StaminaProjection = $HuntRegionPlanning = $true
 	$AdaptiveChallenge = $CombatReadiness = $EquipmentOffers = $EquipmentPurchases = $MainlandRewards = $true
 	$Depot = $SlottedLoot = $SellLoot = $MainlandLoop = $SpellTraining = $SpellUse = $SpellCalibration = $MagicTraining = $true

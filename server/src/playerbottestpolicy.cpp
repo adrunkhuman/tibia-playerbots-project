@@ -58,7 +58,7 @@ const playerbot::PlayerBotTestPolicy& playerbot::playerBotTestPolicyFromEnvironm
 			 (std::strcmp(gameplayMode, "corpse") == 0 || std::strcmp(gameplayMode, "corpse_detour") == 0 ||
 			  std::strcmp(gameplayMode, "corpse_inaccessible") == 0) ||
 			 std::strcmp(gameplayMode, "patrol_recovery") == 0 ||
-			 (std::strcmp(gameplayMode, "target_pursuit") == 0 || std::strcmp(gameplayMode, "target_pursuit_abandon") == 0 ||
+			 (std::strcmp(gameplayMode, "target_approach") == 0 || std::strcmp(gameplayMode, "target_approach_unreachable") == 0 ||
 			  std::strcmp(gameplayMode, "target_attacker_priority") == 0) ||
 			 std::strcmp(gameplayMode, "healing") == 0 || std::strcmp(gameplayMode, "healing_resupply") == 0 ||
 			 std::strcmp(gameplayMode, "value") == 0 || std::strcmp(gameplayMode, "departure_interrupt") == 0 ||

@@ -23,6 +23,7 @@ extern Spells* g_spells;
 namespace {
 	constexpr size_t maximumHuntCandidateTelemetry = 64;
 	constexpr size_t maximumHuntRouteCandidates = 8;
+	constexpr uint64_t maximumTargetApproachExpandedNodes = 10000;
 
 	double projectedHuntStaminaMultiplier(const Player& player, double availableHuntSeconds)
 	{
@@ -125,7 +126,7 @@ PlayerBotSurvivalSnapshot PlayerBotController::survivalSnapshot(const Player& pl
 	snapshot.progressionActive = progressionRuntime.session().active() != PlayerBotProgressionProcedure::None;
 	snapshot.progressionDeparture = progressionRuntime.session().active(PlayerBotProgressionProcedure::OracleDeparture);
 	snapshot.hunting = turnRouter.cyclePhase() == CyclePhase::Hunt;
-	snapshot.combatOrPursuit = turnRouter.scenarioStage() != ScenarioStage::Traverse || huntCoordinator.hasActiveCombat() ||
+	snapshot.combatActive = turnRouter.scenarioStage() != ScenarioStage::Traverse || huntCoordinator.hasActiveCombat() ||
 	                          const_cast<Player&>(player).getAttackedCreature() != nullptr;
 	snapshot.navigationPending = navigationRuntime.hasPendingWork();
 	snapshot.healingExhausted = player.hasCondition(CONDITION_EXHAUST_HEAL);
@@ -292,7 +293,8 @@ bool PlayerBotController::handleFood(Player* player, const Position& currentPosi
 	return true;
 }
 
-bool PlayerBotController::attackVisibleMonster(Player* player, const Position& currentPosition)
+bool PlayerBotController::attackVisibleMonster(Player* player, const Position& currentPosition, uint32_t preferredTargetId,
+	                                            bool routeValidated)
 {
 	if (huntCoordinator.huntActive() && !huntRegionReached) return false;
 	SpectatorVec spectators;
@@ -302,18 +304,9 @@ bool PlayerBotController::attackVisibleMonster(Player* player, const Position& c
 		if (!creature->getMonster() || creature->isRemoved() || creature->isDead() || !player->canSee(creature->getPosition())) {
 			continue;
 		}
+		if (preferredTargetId != 0 && creature->getID() != preferredTargetId) continue;
 		if (huntCoordinator.huntActive() && creature->getAttackedCreature() != player && !huntCoordinator.matchesHuntMonster(creature->getName())) {
 			continue;
-		}
-		if (!Position::areInRange<1, 1, 0>(currentPosition, creature->getPosition())) {
-			FindPathParams pathParams;
-			pathParams.maxSearchDist = 32;
-			pathParams.minTargetDist = 1;
-			pathParams.maxTargetDist = 1;
-			std::vector<Direction> targetRoute;
-			if (!findPath(player, creature->getPosition(), targetRoute, pathParams)) {
-				continue;
-			}
 		}
 		candidates.push_back({{creature->getID(), creature->getPosition(), creature->getName()}, expectedCorpseFor(*creature),
 		                      creature->getAttackedCreature() == player});
@@ -330,8 +323,25 @@ bool PlayerBotController::attackVisibleMonster(Player* player, const Position& c
 		if (!target) {
 			continue;
 		}
+		if (!routeValidated && !Position::areInRange<1, 1, 0>(currentPosition, target->getPosition())) {
+			const PlayerBotNavigationRoutePlan route = planNavigationRoute(
+			    *player, PlayerBotNavigationGoal::withinRange(target->getPosition(), 1, 1), {},
+			    maximumTargetApproachExpandedNodes, true);
+			telemetry.recordPathfinding(route.metrics.elapsed, route.metrics.result == PlayerBotNavigationResult::Reached);
+			if (route.metrics.result != PlayerBotNavigationResult::Reached) {
+				huntCoordinator.suppressTraversalTarget(target->getID(), std::chrono::steady_clock::now(),
+				                                              navigationBlockSuppression);
+				if (shouldEmitRepeated("target:skip:route_unavailable:" + std::to_string(target->getID()))) {
+					emit("action_result", currentPosition,
+					     "\"action\":\"target_approach\",\"result\":\"skipped\",\"reason\":\"route_unavailable\",\"target_id\":" +
+					         std::to_string(target->getID()) + ",\"same_floor\":true,\"expanded_nodes\":" +
+					         std::to_string(route.metrics.expandedNodes));
+				}
+				return false;
+			}
+		}
 		telemetry.recordActionAttempt();
-		g_game.playerSetFightModes(playerId, FIGHTMODE_ATTACK, true, false);
+		g_game.playerSetFightModes(playerId, FIGHTMODE_ATTACK, false, false);
 		g_game.playerSetAttackedCreature(playerId, target->getID());
 		const PlayerBotCombatDecision started = huntCoordinator.confirmCombatAttack(*command, player->getAttackedCreature() == target,
 		                                                                  std::chrono::steady_clock::now());
@@ -469,130 +479,50 @@ void PlayerBotController::finishTraversalCombat(Player* player, const Position& 
 	setStage(ScenarioStage::Traverse, currentPosition);
 }
 
-void PlayerBotController::beginTargetPursuit(Player* player, const Position& currentPosition)
-{
-	g_game.playerSetAttackedCreature(playerId, 0);
-	resetNavigation();
-	const auto target = huntCoordinator.traversalTarget();
-	if (!target) {
-		return;
-	}
-	const Position destination = target->position;
-	const PlayerBotCombatDecision decision = huntCoordinator.beginPursuit(currentPosition, destination, std::chrono::steady_clock::now());
-	if (decision.command != PlayerBotCombatCommand::PursueDestination) return;
-	setStage(ScenarioStage::TargetPursuit, currentPosition);
-	emit("action_result", currentPosition,
-	     "\"action\":\"target_pursuit\",\"result\":\"started\",\"target_id\":" +
-	         std::to_string(decision.target.id) + ",\"last_seen_position\":{\"x\":" + std::to_string(decision.target.position.x) +
-	         ",\"y\":" + std::to_string(target->position.y) + ",\"z\":" + std::to_string(target->position.z) + '}');
-}
-
-void PlayerBotController::finishTargetPursuit(const Position& currentPosition, const char* reason)
-{
-	const PlayerBotCombatDecision decision = huntCoordinator.abandonPursuit(std::chrono::steady_clock::now());
-	const uint32_t previousTargetId = decision.target.id;
-	resetNavigation();
-	if (previousTargetId != 0 && shouldEmitRepeated(std::string("target:clear:") + reason)) {
-		emit("target_changed", currentPosition, "\"previous_target_id\":" + std::to_string(previousTargetId) +
-		     ",\"target_id\":null,\"reason\":" + jsonString(reason));
-	}
-	setStage(ScenarioStage::Traverse, currentPosition);
-	emit("action_result", currentPosition,
-	     "\"action\":\"target_pursuit\",\"result\":\"abandoned\",\"target_id\":" +
-	         std::to_string(previousTargetId) + ",\"reason\":" + jsonString(reason));
-}
-
-void PlayerBotController::processTargetPursuit(Player* player, const Position& currentPosition)
-{
-	const auto traversal = huntCoordinator.traversalTarget();
-	Creature* target = traversal ? g_game.getCreatureByID(traversal->id) : nullptr;
-	PlayerBotCombatTargetSnapshot observed;
-	std::optional<Position> approach;
-	if (target) {
-		observed = {true, target->isRemoved(), target->isDead(), player->canSee(target->getPosition()), player->canSeeCreature(target), false,
-		            false, player->getAttackedCreature() == target, {target->getID(), target->getPosition(), target->getName()}};
-		approach = target->getPosition();
-	}
-	const PlayerBotCombatDecision decision = huntCoordinator.advanceCombat({currentPosition, std::chrono::steady_clock::now(), observed, {}, approach});
-	if (decision.command == PlayerBotCombatCommand::Abandon) {
-		finishTargetPursuit(currentPosition, decision.reason);
-		schedule(navigationInterval);
-		return;
-	}
-	if (decision.command == PlayerBotCombatCommand::AttackTraversal && target) {
-		telemetry.recordActionAttempt();
-		g_game.playerSetFightModes(playerId, FIGHTMODE_ATTACK, true, false);
-		g_game.playerSetAttackedCreature(playerId, target->getID());
-		const PlayerBotCombatDecision started = huntCoordinator.confirmCombatAttack(decision, player->getAttackedCreature() == target,
-		                                                                  std::chrono::steady_clock::now());
-		if (started.result && std::strcmp(started.result, "started") == 0) {
-			resetNavigation();
-			setStage(ScenarioStage::TraversalCombat, currentPosition);
-			emit("action_result", currentPosition,
-			     "\"action\":\"target_pursuit\",\"result\":\"reacquired\",\"target_id\":" +
-			         std::to_string(target->getID()));
-			schedule(navigationInterval);
-			return;
-		}
-		if (started.command == PlayerBotCombatCommand::PursueDestination) {
-			processNavigation(player, currentPosition, PlayerBotNavigationGoal::withinRange(started.destination, 1, 1));
-			return;
-		}
-	}
-
-	const PlayerBotNavigationGoal pursuitGoal = target ? PlayerBotNavigationGoal::withinRange(decision.destination, 1, 1) :
-	                                                PlayerBotNavigationGoal::exact(decision.destination);
-	if (decision.command == PlayerBotCombatCommand::PursueDestination &&
-	    (pursuitGoal.reached(currentPosition) || processNavigation(player, currentPosition, pursuitGoal))) {
-		finishTargetPursuit(currentPosition, "last_seen_position_reached");
-		schedule(navigationInterval);
-	}
-}
-
 void PlayerBotController::processTraversalCombat(Player* player, const Position& currentPosition)
 {
 	const auto traversal = huntCoordinator.traversalTarget();
 	Creature* target = traversal ? g_game.getCreatureByID(traversal->id) : nullptr;
-	bool currentTargetReachable = false;
-	if (target && Position::areInRange<1, 1, 0>(currentPosition, target->getPosition())) {
-		currentTargetReachable = true;
-	} else if (target) {
-		FindPathParams pathParams;
-		pathParams.maxSearchDist = 32;
-		pathParams.minTargetDist = 1;
-		pathParams.maxTargetDist = 1;
-		std::vector<Direction> route;
-		currentTargetReachable = findPath(player, target->getPosition(), route, pathParams);
-	}
 	if (target) {
 		SpectatorVec spectators;
 		g_game.map.getSpectators(spectators, currentPosition);
-		const uint32_t currentTargetDistance = std::max(Position::getDistanceX(currentPosition, target->getPosition()),
-		                                                Position::getDistanceY(currentPosition, target->getPosition()));
-		const bool reachableAttacker = std::any_of(spectators.begin(), spectators.end(),
-		    [this, player, target, currentTargetReachable, currentTargetDistance, &currentPosition](Creature* creature) {
-			if (!creature->getMonster() || creature->isRemoved() || creature->isDead() ||
-			    creature == target || creature->getAttackedCreature() != player || !player->canSee(creature->getPosition())) return false;
-			const uint32_t candidateDistance = std::max(Position::getDistanceX(currentPosition, creature->getPosition()),
-			                                            Position::getDistanceY(currentPosition, creature->getPosition()));
-			if (currentTargetReachable && target->getAttackedCreature() == player && candidateDistance >= currentTargetDistance) return false;
-			if (Position::areInRange<1, 1, 0>(currentPosition, creature->getPosition())) return true;
-			FindPathParams pathParams;
-			pathParams.maxSearchDist = 32;
-			pathParams.minTargetDist = 1;
-			pathParams.maxTargetDist = 1;
-			std::vector<Direction> route;
-			return findPath(player, creature->getPosition(), route, pathParams);
-		    });
-		if (reachableAttacker) {
+		const auto now = std::chrono::steady_clock::now();
+		uint64_t remainingExpandedNodes = maximumTargetApproachExpandedNodes;
+		uint32_t reachableAttackerId = 0;
+		for (Creature* creature : spectators) {
+			if (!creature->getMonster() || creature->isRemoved() || creature->isDead() || creature == target ||
+			    creature->getAttackedCreature() != player || !player->canSee(creature->getPosition())) {
+				continue;
+			}
+			const std::vector<PlayerBotTraversalCandidate> candidate{{
+			    {creature->getID(), creature->getPosition(), creature->getName()}, expectedCorpseFor(*creature), true}};
+			if (!huntCoordinator.selectTraversalAttack(candidate, currentPosition, now)) continue;
+			if (Position::areInRange<1, 1, 0>(currentPosition, creature->getPosition())) {
+				reachableAttackerId = creature->getID();
+				break;
+			}
+			if (remainingExpandedNodes == 0) break;
+			const PlayerBotNavigationRoutePlan route = planNavigationRoute(
+			    *player, PlayerBotNavigationGoal::withinRange(creature->getPosition(), 1, 1), {},
+			    remainingExpandedNodes, true);
+			telemetry.recordPathfinding(route.metrics.elapsed, route.metrics.result == PlayerBotNavigationResult::Reached);
+			remainingExpandedNodes -= std::min(remainingExpandedNodes, route.metrics.expandedNodes);
+			if (route.metrics.result == PlayerBotNavigationResult::Reached) {
+				reachableAttackerId = creature->getID();
+				break;
+			}
+		}
+		if (reachableAttackerId != 0) {
 			const uint32_t previousTargetId = target->getID();
 			g_game.playerSetAttackedCreature(playerId, 0);
+			huntCoordinator.suppressTraversalTarget(previousTargetId, now,
+			                                              traversalTargetSuppression);
 			huntCoordinator.clearTraversalTarget();
 			resetNavigation();
 			setStage(ScenarioStage::Traverse, currentPosition);
 			emit("target_changed", currentPosition, "\"previous_target_id\":" + std::to_string(previousTargetId) +
 			     ",\"target_id\":null,\"reason\":\"active_attacker_preempted\"");
-			attackVisibleMonster(player, currentPosition);
+			attackVisibleMonster(player, currentPosition, reachableAttackerId, true);
 			schedule(navigationInterval);
 			return;
 		}
@@ -601,14 +531,30 @@ void PlayerBotController::processTraversalCombat(Player* player, const Position&
 	if (target) observed = {true, target->isRemoved(), target->isDead(), player->canSee(target->getPosition()), player->canSeeCreature(target),
 	                        Position::areInRange<1, 1, 0>(currentPosition, target->getPosition()), target->getAttackedCreature() == player,
 	                        player->getAttackedCreature() == target, {target->getID(), target->getPosition(), target->getName()}};
+	if (target && !target->isRemoved() && !target->isDead() && observed.visible && observed.visibleCreature && !observed.adjacent) {
+		PlayerBotNavigationRuntimeOutcome navigation;
+		if (!processNavigation(player, currentPosition, PlayerBotNavigationGoal::withinRange(target->getPosition(), 1, 1),
+		                       &navigation, maximumTargetApproachExpandedNodes, false, true)) {
+			if (navigation.routeUnavailable || navigation.oscillation) {
+				const uint32_t previousTargetId = target->getID();
+				huntCoordinator.suppressTraversalTarget(previousTargetId, std::chrono::steady_clock::now(),
+				                                              navigationBlockSuppression);
+				emit("action_result", currentPosition,
+				     "\"action\":\"target_approach\",\"result\":\"skipped\",\"reason\":\"route_unavailable\",\"target_id\":" +
+				         std::to_string(previousTargetId) + ",\"same_floor\":true");
+				finishTraversalCombat(player, currentPosition, "target_route_unavailable");
+			}
+			return;
+		}
+	}
 	const PlayerBotCombatDecision decision = huntCoordinator.advanceCombat({currentPosition, std::chrono::steady_clock::now(), observed, {}});
 	if (decision.command == PlayerBotCombatCommand::BeginLoot) {
 		beginLoot(player, currentPosition, decision);
-	} else if (decision.command == PlayerBotCombatCommand::BeginPursuit) {
-		beginTargetPursuit(player, currentPosition);
 	} else if (decision.command == PlayerBotCombatCommand::Abandon) {
-		logActionFailure("attack", "combat_timeout", currentPosition);
-		finishTraversalCombat(player, currentPosition, "combat_timeout");
+		if (decision.reason && std::strcmp(decision.reason, "combat_timeout") == 0) {
+			logActionFailure("attack", decision.reason, currentPosition);
+		}
+		finishTraversalCombat(player, currentPosition, decision.reason ? decision.reason : "target_lost");
 	} else if (target) {
 		if (tryOffensiveSpell(player, currentPosition)) {
 			schedule(navigationDecisionDelay(*player));
@@ -1171,10 +1117,6 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 
 	if (turnCommand == PlayerBotTurnCommand::TraversalCombat) {
 		processTraversalCombat(player, currentPosition);
-		return;
-	}
-	if (turnCommand == PlayerBotTurnCommand::TargetPursuit) {
-		processTargetPursuit(player, currentPosition);
 		return;
 	}
 	if (turnCommand != PlayerBotTurnCommand::Hunt) {
