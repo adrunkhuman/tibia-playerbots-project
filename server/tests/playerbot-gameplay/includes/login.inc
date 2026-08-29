@@ -9,7 +9,7 @@ function F.login.onLogin(player)
 
 	local mode = os.getenv("PLAYERBOT_GAMEPLAY_MODE") or "cycle"
 	F.selectHealthPotion(player)
-    assert(mode == "mainland" or mode == "carlin_local_service" or mode == "cycle" or mode == "depot" or mode == "slotted_loot_seller" or mode == "slotted_loot_no_seller" or mode == "sell_loot" or mode == "navigation" or mode == "navigation_recovery" or mode == "carlin_service_route" or mode == "mutable_portal_route" or mode == "patrol_recovery" or mode == "target_pursuit" or mode == "target_pursuit_abandon" or mode == "target_attacker_priority" or mode == "hunt_area_arrival" or mode == "corpse" or mode == "corpse_detour" or mode == "corpse_inaccessible" or mode == "death" or mode == "healing" or mode == "spell_use" or
+    assert(mode == "mainland" or mode == "carlin_local_service" or mode == "cycle" or mode == "depot" or mode == "depot_risk_fallback" or mode == "slotted_loot_seller" or mode == "slotted_loot_no_seller" or mode == "sell_loot" or mode == "navigation" or mode == "navigation_recovery" or mode == "carlin_service_route" or mode == "mutable_portal_route" or mode == "patrol_recovery" or mode == "target_pursuit" or mode == "target_pursuit_abandon" or mode == "target_attacker_priority" or mode == "hunt_area_arrival" or mode == "corpse" or mode == "corpse_detour" or mode == "corpse_inaccessible" or mode == "death" or mode == "healing" or mode == "spell_use" or
         mode == "healing_resupply" or mode == "value" or mode == "progression" or mode == "progression_bundle" or
         mode == "progression_nested" or mode == "progression_resume" or mode == "progression_nested_resume" or
         mode == "progression_space" or mode == "arbitration" or mode == "arbitration_interrupt" or mode == "departure" or
@@ -416,6 +416,27 @@ function F.login.onLogin(player)
         assert(player:setMaxMana(200) and player:addMana(player:getMaxMana() - player:getMana()), "adaptive challenge fixture could not prepare recovery mana")
         F.suppressNearbyMonsters(player:getId())
         print("PLAYERBOT_GAMEPLAY_TEST ADAPTIVE_CHALLENGE_START")
+        return true
+    end
+    if mode == "depot_risk_fallback" then
+        assert(player:setVocation(4), "depot risk fallback fixture could not select Knight")
+        local requiredExperience = Game.getExperienceForLevel(15) - player:getExperience()
+        if requiredExperience > 0 then player:addExperience(requiredExperience) end
+        assert(player:getLevel() == 15 and player:setMaxHealth(290) and player:setHealth(290),
+            "depot risk fallback fixture could not normalize the live bot")
+        for _, slot in ipairs({CONST_SLOT_ARMOR, CONST_SLOT_RIGHT, CONST_SLOT_LEFT, CONST_SLOT_LEGS}) do
+            local item = player:getSlotItem(slot)
+            if item then assert(item:remove(), "depot risk fallback fixture could not clear equipment slot " .. slot) end
+        end
+        assert(player:addItem(2464, 1, false, 1, CONST_SLOT_ARMOR) and
+            player:addItem(2395, 1, false, 1, CONST_SLOT_LEFT) and
+            player:addItem(2509, 1, false, 1, CONST_SLOT_RIGHT) and
+            player:addItem(2648, 1, false, 1, CONST_SLOT_LEGS),
+            "depot risk fallback fixture could not equip the live loadout")
+        assert(player:teleportTo(Position(32947, 32171, 8)),
+            "depot risk fallback fixture could not reach the swamp troll cave")
+        addEvent(F.verifyDepotRiskFallback, 500, player:getId(), 1440)
+        print("PLAYERBOT_GAMEPLAY_TEST DEPOT_RISK_FALLBACK_START")
         return true
     end
     if mode == "depot" then

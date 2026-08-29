@@ -89,6 +89,32 @@
 	}
 
 	if ($Depot) {
+		Invoke-Scenario -Name "depot_risk_fallback" -DefaultTimeoutSeconds 720 -Body {
+			Invoke-Compose down --volumes --remove-orphans
+			$env:PLAYERBOT_GAMEPLAY_MODE = "depot_risk_fallback"
+			$env:PLAYERBOT_DEPOT_RESTART_PHASE = ""
+			$env:PLAYERBOT_DEPOT_MOVE_CASE = "normal"
+			Invoke-Compose up --detach
+			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST DEPOT_RISK_FALLBACK_START' | Out-Null
+			Wait-ForLog -Pattern '"action":"depot_discover","result":"success".*"risk_fallback":true' | Out-Null
+			$logs = Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST DEPOT_RISK_FALLBACK_PASS'
+			$events = @(ConvertFrom-PlayerbotLogs -Logs $logs)
+			$contract = @($events | Where-Object {
+				$_.event -eq "depot_risk_fallback_contract" -and $_.safe_precedence -eq $true -and
+				$_.retained_across_turns -eq $true -and $_.ranked_fallback -eq $true -and
+				$_.requested_revalidation -eq $true -and $_.failed_revalidation_rejected -eq $true
+			})
+			$fallback = @($events | Where-Object {
+				$_.event -eq "action_result" -and $_.action -eq "depot_discover" -and $_.result -eq "success" -and
+				$_.risk_fallback -eq $true -and $_.unsafe_routes -gt 0 -and $_.route_steps -gt 0 -and
+				($_.danger_cost -gt 500 -or $_.maximum_health_loss_per_second -gt 0.08)
+			})
+			$terminal = @($events | Where-Object { $_.event -eq "terminal" })
+			if ($contract.Count -ne 1 -or $fallback.Count -ne 1 -or $terminal.Count -ne 0) {
+				throw "The depot risk fallback contract or swamp-troll escape failed. contract=$($contract.Count), fallback=$($fallback.Count), terminal=$($terminal.Count)."
+			}
+		}
+
 		Invoke-Scenario -Name "real_depot" -DefaultTimeoutSeconds 240 -Body {
 			Invoke-Compose down --volumes --remove-orphans
 			$env:PLAYERBOT_GAMEPLAY_MODE = "depot"

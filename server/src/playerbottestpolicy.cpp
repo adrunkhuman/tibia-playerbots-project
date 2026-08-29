@@ -48,6 +48,7 @@ const playerbot::PlayerBotTestPolicy& playerbot::playerBotTestPolicyFromEnvironm
 			 (std::strncmp(gameplayMode, "magic_training", 14) == 0 &&
 			  std::strcmp(gameplayMode, "magic_training_hunt") != 0));
 		const bool huntAreaArrivalFixture = gameplayMode && std::strcmp(gameplayMode, "hunt_area_arrival") == 0;
+		const bool depotRiskFallbackFixture = gameplayMode && std::strcmp(gameplayMode, "depot_risk_fallback") == 0;
 		const bool startInHunt = gameplayMode &&
 			(std::strcmp(gameplayMode, "navigation") == 0 || std::strcmp(gameplayMode, "navigation_recovery") == 0 ||
 			 std::strcmp(gameplayMode, "carlin_service_route") == 0 ||
@@ -87,7 +88,7 @@ const playerbot::PlayerBotTestPolicy& playerbot::playerBotTestPolicyFromEnvironm
 		                               std::strcmp(gameplayMode, "carlin_local_service") != 0 &&
 		                               std::strcmp(gameplayMode, "readiness_supplies") != 0 &&
 		                               std::strcmp(gameplayMode, "spell_training") != 0 &&
-		                               std::strcmp(gameplayMode, "depot") != 0 &&
+		                               std::strcmp(gameplayMode, "depot") != 0 && !depotRiskFallbackFixture &&
 			                               std::strcmp(gameplayMode, "slotted_loot_seller") != 0 &&
 			                               std::strcmp(gameplayMode, "slotted_loot_no_seller") != 0 &&
 			                               std::strcmp(gameplayMode, "sell_loot") != 0;
@@ -108,7 +109,7 @@ const playerbot::PlayerBotTestPolicy& playerbot::playerBotTestPolicyFromEnvironm
 			!regressionMode && (!gameplayMode || progressionMode || std::strcmp(gameplayMode, "mainland") == 0),
 			startInHunt,
 			fixedFixtureRoute,
-			gameplayMode && std::strcmp(gameplayMode, "depot") == 0,
+			gameplayMode && (std::strcmp(gameplayMode, "depot") == 0 || depotRiskFallbackFixture),
 			depotRestartCheckpoint,
 			depotMoveFixture,
 			gameplayMode && std::strcmp(gameplayMode, "hunt_planning") == 0,
@@ -135,6 +136,7 @@ const playerbot::PlayerBotTestPolicy& playerbot::playerBotTestPolicyFromEnvironm
 			gameplayMode && std::strcmp(gameplayMode, "magic_training_failed") == 0,
 			gameplayMode && std::strcmp(gameplayMode, "carlin_service_route") == 0,
 			gameplayMode && std::strcmp(gameplayMode, "mutable_portal_route") == 0,
+			depotRiskFallbackFixture,
 		};
 	}();
 	return policy;

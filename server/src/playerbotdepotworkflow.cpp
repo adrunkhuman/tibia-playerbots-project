@@ -8,11 +8,14 @@ void PlayerBotDepotWorkflow::reset()
 	session.reset();
 	discoveryCandidates.clear();
 	routeCandidate.reset();
+	riskFallback.reset();
+	validatingRiskFallback = false;
 	nextCandidateOffset = 0;
 	indexedCandidates = 0;
 	inScopeCandidates = 0;
 	standableCandidates = 0;
 	suppressedApproaches = 0;
+	unsafeRouteCandidates = 0;
 	deferredSlottedDeposits.clear();
 }
 
@@ -21,11 +24,14 @@ void PlayerBotDepotWorkflow::clearDiscovery()
 	session.clearDiscovery();
 	discoveryCandidates.clear();
 	routeCandidate.reset();
+	riskFallback.reset();
+	validatingRiskFallback = false;
 	nextCandidateOffset = 0;
 	indexedCandidates = 0;
 	inScopeCandidates = 0;
 	standableCandidates = 0;
 	suppressedApproaches = 0;
+	unsafeRouteCandidates = 0;
 }
 
 PlayerBotDepotCommand PlayerBotDepotWorkflow::advance(const PlayerBotDepotObservation& observation, uint32_t routeBudget,
@@ -114,21 +120,37 @@ PlayerBotDepotCommand PlayerBotDepotWorkflow::advance(const PlayerBotDepotObserv
 			}
 			if (observation.routeResult == PlayerBotDepotRouteResult::Reached) {
 				const PlayerBotDepotCandidate selected = *routeCandidate;
+				const bool selectedRiskFallback = validatingRiskFallback;
 				routeCandidate.reset();
+				validatingRiskFallback = false;
 				session.select(selected);
 				PlayerBotDepotTelemetry telemetry;
 				telemetry.routeSteps = observation.routeSteps;
 				telemetry.expandedNodes = observation.expandedNodes;
+				telemetry.dangerCost = observation.dangerCost;
+				telemetry.maximumHealthLossPerSecond = observation.maximumHealthLossPerSecond;
+				telemetry.riskFallback = selectedRiskFallback;
 				return command(PlayerBotDepotCommandType::Navigate, PlayerBotDepotOutcome::Ready, telemetry);
 			}
-			session.rejectApproach(routeCandidate->approachPosition, observation.now + suppression);
+			if (observation.routeResult == PlayerBotDepotRouteResult::Unsafe && !validatingRiskFallback) {
+				recordUnsafeCandidate(observation);
+			} else {
+				session.rejectApproach(routeCandidate->approachPosition, observation.now + suppression);
+			}
 			routeCandidate.reset();
+			validatingRiskFallback = false;
 		}
 		for (uint32_t attempt = 0; attempt < routeBudget && hasNextCandidate(); ++attempt) {
 			routeCandidate = takeNextCandidate();
 			if (routeCandidate) return command(PlayerBotDepotCommandType::ValidateRoute, PlayerBotDepotOutcome::Pending);
 		}
 		if (hasNextCandidate()) return command(PlayerBotDepotCommandType::Wait, PlayerBotDepotOutcome::Retry);
+		if (riskFallback) {
+			routeCandidate = riskFallback->candidate;
+			riskFallback.reset();
+			validatingRiskFallback = true;
+			return command(PlayerBotDepotCommandType::ValidateRoute, PlayerBotDepotOutcome::Retry);
+		}
 		const uint32_t attempts = session.incrementAttempts();
 		if (attempts >= maximumDiscoveryAttempts) return command(PlayerBotDepotCommandType::Fail, PlayerBotDepotOutcome::Unavailable);
 		clearDiscovery();
@@ -172,6 +194,21 @@ PlayerBotDepotCommand PlayerBotDepotWorkflow::advance(const PlayerBotDepotObserv
 void PlayerBotDepotWorkflow::recordCandidate(PlayerBotDepotCandidate candidate)
 {
 	discoveryCandidates.push_back(candidate);
+}
+
+void PlayerBotDepotWorkflow::recordUnsafeCandidate(const PlayerBotDepotObservation& observation)
+{
+	++unsafeRouteCandidates;
+	UnsafeCandidate candidate{*routeCandidate, observation.dangerCost,
+	                          observation.maximumHealthLossPerSecond, observation.routeSteps};
+	if (!riskFallback || std::tie(candidate.dangerCost, candidate.maximumHealthLossPerSecond, candidate.routeSteps,
+	                            candidate.candidate.depotId, candidate.candidate.lockerPosition,
+	                            candidate.candidate.approachPosition) <
+	                    std::tie(riskFallback->dangerCost, riskFallback->maximumHealthLossPerSecond,
+	                            riskFallback->routeSteps, riskFallback->candidate.depotId,
+	                            riskFallback->candidate.lockerPosition, riskFallback->candidate.approachPosition)) {
+		riskFallback = std::move(candidate);
+	}
 }
 
 void PlayerBotDepotWorkflow::sortCandidates()
@@ -226,6 +263,7 @@ PlayerBotDepotSnapshot PlayerBotDepotWorkflow::snapshot() const
 	result.selected = {session.depotId(), session.lockerItemId(), session.lockerPosition(), session.approachPosition()};
 	result.hasRouteCandidate = routeCandidate.has_value();
 	if (routeCandidate) result.routeCandidate = *routeCandidate;
+	result.validatingRiskFallback = validatingRiskFallback;
 	result.hasPendingMove = session.hasPendingMove();
 	if (result.hasPendingMove) result.pendingMove = session.move();
 	result.attempts = session.attempts();
@@ -233,6 +271,7 @@ PlayerBotDepotSnapshot PlayerBotDepotWorkflow::snapshot() const
 	result.inScopeCandidates = inScopeCandidates;
 	result.standableCandidates = standableCandidates;
 	result.suppressedApproaches = suppressedApproaches;
+	result.unsafeRouteCandidates = unsafeRouteCandidates;
 	result.retryAt = earliestRejectedApproachExpiry();
 	result.deferredDepositRetryAt = earliestDeferredDepositExpiry();
 	return result;

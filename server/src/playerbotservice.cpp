@@ -914,12 +914,16 @@ bool PlayerBotController::discoverDepot(Player& player, const Position& currentP
 		const PlayerBotNavigationRiskProfile risk;
 		const bool routeSafe = candidate.approachPosition == currentPosition || playerBotNavigationRiskAccepts(
 		    risk, routePlan.metrics.dangerCost, routePlan.metrics.maximumHealthLossPerSecond);
-		const bool reached = valid && (candidate.approachPosition == currentPosition ||
-			(routePlan.metrics.result == PlayerBotNavigationResult::Reached && !routePlan.steps.empty() && routeSafe));
-		telemetry.recordPathfinding(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - startedAt), reached);
-		observation.routeResult = reached ? PlayerBotDepotRouteResult::Reached : PlayerBotDepotRouteResult::Unreachable;
+		const bool executable = valid && (candidate.approachPosition == currentPosition ||
+			(routePlan.metrics.result == PlayerBotNavigationResult::Reached && !routePlan.steps.empty()));
+		const bool reached = executable && (routeSafe || command.snapshot.validatingRiskFallback);
+		telemetry.recordPathfinding(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - startedAt), executable);
+		observation.routeResult = reached ? PlayerBotDepotRouteResult::Reached :
+		                          executable ? PlayerBotDepotRouteResult::Unsafe : PlayerBotDepotRouteResult::Unreachable;
 		observation.routeSteps = static_cast<uint32_t>(routePlan.metrics.steps);
 		observation.expandedNodes = routePlan.metrics.expandedNodes;
+		observation.dangerCost = routePlan.metrics.dangerCost;
+		observation.maximumHealthLossPerSecond = routePlan.metrics.maximumHealthLossPerSecond;
 		if (reached) steps = std::move(routePlan.steps);
 		command = advance(observation);
 	}
@@ -929,7 +933,8 @@ bool PlayerBotController::discoverDepot(Player& player, const Position& currentP
 		         std::to_string(command.snapshot.indexedCandidates) + ",\"in_scope\":" +
 		         std::to_string(command.snapshot.inScopeCandidates) + ",\"standable\":" +
 		         std::to_string(command.snapshot.standableCandidates) + ",\"route_validations\":" +
-		         std::to_string(routeValidations));
+		         std::to_string(routeValidations) + ",\"unsafe_routes\":" +
+		         std::to_string(command.snapshot.unsafeRouteCandidates));
 		schedule(blockedRouteRetryInterval);
 		return false;
 	}
@@ -945,7 +950,12 @@ bool PlayerBotController::discoverDepot(Player& player, const Position& currentP
 		       << "},\"approach\":{\"x\":" << depot.approachPosition.x << ",\"y\":" << depot.approachPosition.y
 		       << ",\"z\":" << static_cast<uint16_t>(depot.approachPosition.z) << "},\"distance\":" << depot.distance
 		       << ",\"route_steps\":" << command.telemetry.routeSteps
-		       << ",\"expanded_nodes\":" << command.telemetry.expandedNodes << ",\"indexed\":" << command.snapshot.indexedCandidates
+		       << ",\"expanded_nodes\":" << command.telemetry.expandedNodes
+		       << ",\"danger_cost\":" << command.telemetry.dangerCost
+		       << ",\"maximum_health_loss_per_second\":" << command.telemetry.maximumHealthLossPerSecond
+		       << ",\"risk_fallback\":" << (command.telemetry.riskFallback ? "true" : "false")
+		       << ",\"unsafe_routes\":" << command.snapshot.unsafeRouteCandidates
+		       << ",\"indexed\":" << command.snapshot.indexedCandidates
 		       << ",\"in_scope\":" << command.snapshot.inScopeCandidates << ",\"standable\":" << command.snapshot.standableCandidates;
 		emit("action_result", currentPosition, fields.str());
 		return true;

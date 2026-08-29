@@ -58,6 +58,7 @@ namespace playerbot {
 		bool forceMagicTrainingVerificationFailure;
 		bool carlinServiceRouteFixture;
 		bool mutablePortalRouteFixture;
+		bool depotRiskFallbackFixture;
 	};
 
 	const PlayerBotTestPolicy& playerBotTestPolicyFromEnvironment();
