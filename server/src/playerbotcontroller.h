@@ -401,11 +401,15 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		bool processNavigation(Player* player, const Position& currentPosition, const Position& destination,
 		                       PlayerBotNavigationRuntimeOutcome* navigationOutcome = nullptr,
 		                       uint64_t maximumExpandedNodes = playerBotNavigationMaximumExpandedNodes,
-		                       bool sameFloorOnly = false);
+		                       bool sameFloorOnly = false,
+		                       const PlayerBotNavigationRiskProfile* risk = nullptr,
+		                       bool allowRoutePlanning = true);
 		bool processNavigation(Player* player, const Position& currentPosition, const PlayerBotNavigationGoal& goal,
 		                       PlayerBotNavigationRuntimeOutcome* navigationOutcome = nullptr,
 		                       uint64_t maximumExpandedNodes = playerBotNavigationMaximumExpandedNodes,
-		                       bool npcApproach = false, bool sameFloorOnly = false);
+		                       bool npcApproach = false, bool sameFloorOnly = false,
+		                       const PlayerBotNavigationRiskProfile* risk = nullptr,
+		                       bool allowRoutePlanning = true);
 		bool processNpcApproach(Player* player, const Position& currentPosition, Npc* npc,
 		                        const Position& coarseDestination, bool& unavailable);
 		void observeNavigationPlan(const Position& destination, std::deque<PlayerBotNavigationStep> steps);
@@ -525,6 +529,17 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		uint64_t serviceTopologyGeneration = 0;
 		PlayerBotNavigationRuntime navigationRuntime;
 		bool huntRegionReached = false;
+		size_t huntRouteCandidateIndex = 0;
+		size_t huntRouteCandidatesValidated = 0;
+		std::optional<PlayerBotHuntRegion> huntRouteValidationCandidate;
+		std::vector<uint64_t> huntRouteRejectedVariants;
+		Position huntReturnDestination;
+		uint32_t huntReturnRouteDangerCost = 0;
+		std::optional<Position> huntPatrolValidationDestination;
+		std::optional<Position> huntPatrolValidationOrigin;
+		std::optional<PlayerBotNavigationRoutePlan> huntPatrolOutboundPlan;
+		std::set<Position> huntPatrolPreflightBlockedPositions;
+		std::optional<Position> huntPatrolValidatedDestination;
 		uint32_t huntPotionReturnThreshold = playerbot::healthPotionReturnThreshold;
 		uint32_t huntPotionRestockTarget = playerbot::healthPotionRestockTarget;
 		struct {

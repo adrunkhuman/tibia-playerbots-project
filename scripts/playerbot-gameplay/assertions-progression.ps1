@@ -347,7 +347,7 @@ function Assert-HuntRegionPlanningEvents {
 	})
 	$routeValidations = @($candidates | Where-Object { $_.topology_reachable -and $_.topology_travel_steps -gt 0 })
 	$supplyReserves = @($events | Where-Object {
-		$_.event -eq "hunt_supply_reserve" -and $_.source -eq "selected_route_reverse_estimate" -and
+		$_.event -eq "hunt_supply_reserve" -and $_.source -eq "selected_return_route" -and
 		$_.return_threshold -ge 1 -and $_.restock_target -ge 10 -and $_.restock_target -gt $_.return_threshold
 	})
 	$reserveFormulaValid = $false

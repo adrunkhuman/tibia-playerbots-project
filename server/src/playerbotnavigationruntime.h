@@ -76,6 +76,7 @@ struct PlayerBotNavigationRuntimeOutcome {
 	std::set<Position> blockedPositions;
 	PlayerBotNavigationPlanMetrics plan;
 	bool routeUnavailable = false;
+	bool routeUnsafe = false;
 	uint32_t fixedTargetRouteFailures = 0;
 	bool fixedTargetRouteExhausted = false;
 	PlayerBotNavigationRuntimeCommand command = PlayerBotNavigationRuntimeCommand::None;

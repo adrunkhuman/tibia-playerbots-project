@@ -416,6 +416,11 @@ bool PlayerBotController::findPath(Player* player, const Position& target, std::
 void PlayerBotController::resetNavigation()
 {
 	navigationRuntime.reset();
+	huntPatrolValidationDestination.reset();
+	huntPatrolValidationOrigin.reset();
+	huntPatrolOutboundPlan.reset();
+	huntPatrolPreflightBlockedPositions.clear();
+	huntPatrolValidatedDestination.reset();
 }
 
 void PlayerBotController::observeNavigationPlan(const Position& destination, std::deque<PlayerBotNavigationStep> steps)
@@ -1177,16 +1182,18 @@ void PlayerBotController::onHealthGain(Creature* healer, const Creature& target,
 
 bool PlayerBotController::processNavigation(Player* player, const Position& currentPosition, const Position& destination,
 	                                            PlayerBotNavigationRuntimeOutcome* navigationOutcome,
-	                                            uint64_t maximumExpandedNodes, bool sameFloorOnly)
+	                                            uint64_t maximumExpandedNodes, bool sameFloorOnly,
+	                                            const PlayerBotNavigationRiskProfile* risk, bool allowRoutePlanning)
 
 {
 	return processNavigation(player, currentPosition, PlayerBotNavigationGoal::exact(destination), navigationOutcome,
-	                         maximumExpandedNodes, false, sameFloorOnly);
+	                         maximumExpandedNodes, false, sameFloorOnly, risk, allowRoutePlanning);
 }
 
 bool PlayerBotController::processNavigation(Player* player, const Position& currentPosition, const PlayerBotNavigationGoal& goal,
 	                                            PlayerBotNavigationRuntimeOutcome* navigationOutcome,
-	                                            uint64_t maximumExpandedNodes, bool npcApproach, bool sameFloorOnly)
+	                                            uint64_t maximumExpandedNodes, bool npcApproach, bool sameFloorOnly,
+	                                            const PlayerBotNavigationRiskProfile* risk, bool allowRoutePlanning)
 {
 	const Position destination = goal.representative();
 	const auto now = std::chrono::steady_clock::now();
@@ -1196,6 +1203,10 @@ bool PlayerBotController::processNavigation(Player* player, const Position& curr
 	PlayerBotNavigationRuntimeOutcome outcome = navigationRuntime.process({
 		currentPosition, goal, player->getWalkDelay() > 0 || !player->canDoAction(), player->canDoAction(), timing,
 	});
+	if (outcome.routeRequest && !allowRoutePlanning) {
+		if (navigationOutcome) *navigationOutcome = outcome;
+		return false;
+	}
 	if (outcome.routeRequest) {
 		const uint64_t routeNodeBudget = std::min(outcome.routeRequest->maximumExpandedNodes, maximumExpandedNodes);
 		const PlayerBotFixtureRoutePlan fixturePlan = fixtureDriver.navigationPlan(routeNodeBudget, npcApproach);
@@ -1211,6 +1222,24 @@ bool PlayerBotController::processNavigation(Player* player, const Position& curr
 		const PlayerBotPendingMovementResult movementResult = outcome.movementResult;
 		outcome = navigationRuntime.observePlan({goal, std::move(routePlan), player->canDoAction(), false, now});
 		outcome.movementResult = movementResult;
+	}
+	if (risk && outcome.plan.attempted && !outcome.routeUnavailable) {
+		if (!playerBotNavigationRiskAccepts(*risk, outcome.plan.dangerCost,
+		                                    outcome.plan.maximumHealthLossPerSecond)) {
+			outcome.routeUnsafe = true;
+			outcome.routeUnavailable = true;
+			navigationRuntime.reset();
+			if (navigationOutcome) *navigationOutcome = outcome;
+			telemetry.emit("navigation_progress", currentPosition,
+			     "\"result\":\"skipped\",\"reason\":\"route_danger_above_tolerance\",\"destination\":{\"x\":" +
+			         std::to_string(destination.x) + ",\"y\":" + std::to_string(destination.y) +
+			         ",\"z\":" + std::to_string(static_cast<uint16_t>(destination.z)) +
+			         "},\"danger_cost\":" + std::to_string(outcome.plan.dangerCost) +
+			         ",\"maximum_health_loss_per_second\":" +
+			         std::to_string(outcome.plan.maximumHealthLossPerSecond));
+			schedule(navigationDecisionDelay(*player));
+			return false;
+		}
 	}
 	if (navigationOutcome) *navigationOutcome = outcome;
 	fixtureDriver.observeNavigationPlan(outcome.plan.attempted);
@@ -1293,7 +1322,6 @@ bool PlayerBotController::processNavigation(Player* player, const Position& curr
 		       << ",\"y\":" << destination.y << ",\"z\":" << static_cast<uint16_t>(destination.z) << '}';
 		telemetry.emit("action_result", currentPosition, fields.str());
 	}
-
 	if (outcome.command != PlayerBotNavigationRuntimeCommand::Move &&
 	    outcome.command != PlayerBotNavigationRuntimeCommand::Use) {
 		schedule(navigationDecisionDelay(*player));

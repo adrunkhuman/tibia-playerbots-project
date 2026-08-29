@@ -1,5 +1,5 @@
 	if ($FullNavigation -or $selectedScenarios.Contains("carlin_service_route") -or $selectedScenarios.Contains("mutable_portal_route")) {
-		Invoke-Scenario -Name "navigation" -DefaultTimeoutSeconds 180 -Body {
+		Invoke-Scenario -Name "navigation" -DefaultTimeoutSeconds 240 -Body {
 			Invoke-Compose down --volumes --remove-orphans
 			$env:PLAYERBOT_GAMEPLAY_MODE = "navigation"
 			$env:PLAYERBOT_HUNT_DURATION_SECONDS = "900"

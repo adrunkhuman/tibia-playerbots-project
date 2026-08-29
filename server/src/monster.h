@@ -116,6 +116,9 @@ class Monster final : public Creature
 		bool isHostile() const {
 			return mType->info.isHostile;
 		}
+		int32_t getTargetDistance() const {
+			return mType->info.targetDistance;
+		}
 		bool canSee(const Position& pos) const override;
 		bool canSeeInvisibility() const override {
 			return isImmune(CONDITION_INVISIBLE);

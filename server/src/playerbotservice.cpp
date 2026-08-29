@@ -93,6 +93,8 @@ bool PlayerBotController::planSellLootTrip(Player& player, uint16_t currentDepot
 			struct OfferedItem { uint16_t itemId; uint32_t count; const ShopInfo* offer; uint32_t weight; };
 			std::vector<OfferedItem> offered;
 			for (const auto& [itemId, count] : depotItems) {
+				const ItemType& type = Item::items[itemId];
+				if (type.isFluidContainer() || type.isSplash()) continue;
 				auto offer = std::find_if(seller->getShopOffers().begin(), seller->getShopOffers().end(), [itemId](const ShopInfo& value) {
 					return value.itemId == itemId && value.sellPrice != 0;
 				});
