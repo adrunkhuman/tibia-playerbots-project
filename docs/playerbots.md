@@ -112,6 +112,12 @@ planner does not calculate a complete route-adjusted ordering of every suitable
 region. Navigation remains behind the destination/reachability interface so a
 later navigator can replace tile planning without changing hunt selection.
 
+The bot switches from transit to active hunting when any patrol point in the
+selected region enters normal client view range on the current floor. It does
+not wait to stand on the first patrol point. Outside that area it still ignores
+non-attacking transit monsters; inside it proactively targets the selected
+region's monster types.
+
 Resetting navigation clears only the current route and recovery state. It does
 not cancel an active hunt-region plan. The controller cancels hunt planning when
 it leaves the hunt phase or when an explicit interruption, such as Oracle

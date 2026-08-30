@@ -164,6 +164,8 @@ class PlayerBotHuntRuntime
 		uint32_t completedCycles() const { return cycles; }
 		bool active() const { return activeRegion.has_value(); }
 		std::optional<PlayerBotHuntRegion> region() const { return activeRegion; }
+		bool insideHuntArea(const Position& position, uint32_t westRange, uint32_t eastRange,
+		                    uint32_t northRange, uint32_t southRange) const;
 		bool matchesMonster(const std::string& name) const;
 
 		void sampleCombat(const PlayerBotHuntCombatSnapshot& snapshot) { policy.sampleCombat(snapshot); }

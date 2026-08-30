@@ -368,6 +368,37 @@ function Assert-HuntRegionPlanningEvents {
 	}
 }
 
+function Assert-HuntAreaArrivalEvents {
+	param([string]$Logs)
+
+	$events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
+	$entry = @($events | Where-Object { $_.event -eq "hunt_area_entered" })
+	$entryIndex = -1
+	$targetIndex = -1
+	$targetsBeforeEntry = 0
+	$waypointsBeforeCombat = 0
+	for ($index = 0; $index -lt $events.Count; $index++) {
+		$event = $events[$index]
+		if ($entryIndex -lt 0 -and $event.event -eq "hunt_area_entered") { $entryIndex = $index }
+		if ($event.event -eq "target_changed" -and $event.reason -eq "visible_monster" -and $event.target_type -eq "monster") {
+			if ($entryIndex -lt 0) { $targetsBeforeEntry++ }
+			elseif ($targetIndex -lt 0) { $targetIndex = $index }
+		}
+		if ($targetIndex -lt 0 -and $event.event -eq "action_result" -and $event.action -eq "hunt_waypoint") {
+			$waypointsBeforeCombat++
+		}
+	}
+	$target = if ($targetIndex -ge 0) { $events[$targetIndex] } else { $null }
+	$candidates = @($events | Where-Object { $_.event -eq "hunt_region_candidate" })
+	$selected = if ($entry.Count -gt 0) { @($candidates | Where-Object { $_.region_id -eq $entry[0].region_id }) } else { @() }
+	$monsterNames = if ($selected.Count -gt 0) { @($selected[0].monsters | ForEach-Object { $_.name }) } else { @() }
+	$terminal = @($events | Where-Object { $_.event -eq "terminal" })
+	if ($entry.Count -ne 1 -or -not $target -or $targetsBeforeEntry -ne 0 -or $waypointsBeforeCombat -ne 0 -or
+		$target.target_name -notin $monsterNames -or $terminal.Count -ne 0) {
+		throw "Hunt-area arrival did not start matching combat before the first waypoint. entry=$($entry.Count), target=$($targetIndex -ge 0), prior_targets=$targetsBeforeEntry, prior_waypoints=$waypointsBeforeCombat, selected=$($selected.Count), terminal=$($terminal.Count)."
+	}
+}
+
 function Assert-AdaptiveChallengeEvents {
     param([string]$Logs)
 

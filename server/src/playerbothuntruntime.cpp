@@ -199,6 +199,19 @@ bool PlayerBotHuntRuntime::matchesMonster(const std::string& name) const
 	});
 }
 
+bool PlayerBotHuntRuntime::insideHuntArea(const Position& position, uint32_t westRange, uint32_t eastRange,
+	uint32_t northRange, uint32_t southRange) const
+{
+	return activeRegion && std::any_of(activeRegion->patrolPoints.begin(), activeRegion->patrolPoints.end(),
+		[&position, westRange, eastRange, northRange, southRange](const Position& patrolPoint) {
+			const int32_t deltaX = static_cast<int32_t>(patrolPoint.x) - position.x;
+			const int32_t deltaY = static_cast<int32_t>(patrolPoint.y) - position.y;
+			return position.z == patrolPoint.z && deltaX >= -static_cast<int32_t>(westRange) &&
+			       deltaX <= static_cast<int32_t>(eastRange) && deltaY >= -static_cast<int32_t>(northRange) &&
+			       deltaY <= static_cast<int32_t>(southRange);
+		});
+}
+
 PlayerBotHuntPlanningProfile PlayerBotHuntRuntime::planningProfile(PlayerBotHuntPlanningProfile profile) const
 {
 	profile.challengeFrontier = policy.challengeFrontier();

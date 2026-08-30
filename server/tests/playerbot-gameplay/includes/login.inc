@@ -9,7 +9,7 @@ function F.login.onLogin(player)
 
 	local mode = os.getenv("PLAYERBOT_GAMEPLAY_MODE") or "cycle"
 	F.selectHealthPotion(player)
-    assert(mode == "mainland" or mode == "carlin_local_service" or mode == "cycle" or mode == "depot" or mode == "slotted_loot_seller" or mode == "slotted_loot_no_seller" or mode == "sell_loot" or mode == "navigation" or mode == "navigation_recovery" or mode == "carlin_service_route" or mode == "mutable_portal_route" or mode == "patrol_recovery" or mode == "target_pursuit" or mode == "target_pursuit_abandon" or mode == "target_attacker_priority" or mode == "corpse" or mode == "corpse_detour" or mode == "corpse_inaccessible" or mode == "death" or mode == "healing" or mode == "spell_use" or
+    assert(mode == "mainland" or mode == "carlin_local_service" or mode == "cycle" or mode == "depot" or mode == "slotted_loot_seller" or mode == "slotted_loot_no_seller" or mode == "sell_loot" or mode == "navigation" or mode == "navigation_recovery" or mode == "carlin_service_route" or mode == "mutable_portal_route" or mode == "patrol_recovery" or mode == "target_pursuit" or mode == "target_pursuit_abandon" or mode == "target_attacker_priority" or mode == "hunt_area_arrival" or mode == "corpse" or mode == "corpse_detour" or mode == "corpse_inaccessible" or mode == "death" or mode == "healing" or mode == "spell_use" or
         mode == "healing_resupply" or mode == "value" or mode == "progression" or mode == "progression_bundle" or
         mode == "progression_nested" or mode == "progression_resume" or mode == "progression_nested_resume" or
         mode == "progression_space" or mode == "arbitration" or mode == "arbitration_interrupt" or mode == "departure" or
@@ -384,7 +384,7 @@ function F.login.onLogin(player)
         print("PLAYERBOT_GAMEPLAY_TEST READINESS_" .. string.upper(mode:gsub("readiness_", "")) .. "_START")
         return true
     end
-    if mode == "hunt_planning" then
+    if mode == "hunt_planning" or mode == "hunt_area_arrival" then
         local carlin = Town(F.carlinTownId)
         assert(carlin and player:setTown(carlin) and player:setVocation(4),
             "hunt planning fixture could not select the Carlin Knight")
@@ -398,8 +398,9 @@ function F.login.onLogin(player)
             "hunt planning fixture could not normalize Knight health")
         assert(player:getLevel() == 8 and player:teleportTo(F.carlinTemplePosition),
             "hunt planning fixture could not prepare the level-8 Carlin Knight")
-        F.suppressNearbyMonsters(player:getId())
-        print("PLAYERBOT_GAMEPLAY_TEST HUNT_PLANNING_START")
+        if mode == "hunt_planning" then F.suppressNearbyMonsters(player:getId()) end
+        print(mode == "hunt_area_arrival" and "PLAYERBOT_GAMEPLAY_TEST HUNT_AREA_ARRIVAL_START" or
+            "PLAYERBOT_GAMEPLAY_TEST HUNT_PLANNING_START")
         return true
     end
     if mode == "adaptive_challenge" then

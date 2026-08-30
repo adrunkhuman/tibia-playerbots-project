@@ -101,6 +101,8 @@ class PlayerBotHuntCoordinator
 		bool huntDeadlineReached(std::chrono::steady_clock::time_point now) const;
 		uint32_t completedHuntCycles() const;
 		bool huntActive() const;
+		bool insideHuntArea(const Position& position, uint32_t westRange, uint32_t eastRange,
+		                    uint32_t northRange, uint32_t southRange) const;
 		void observeCapacityPressure(std::chrono::steady_clock::time_point now);
 		PlayerBotHuntTurnObservation observeTurn(bool inHuntPhase, bool selectRegion,
 		                                               std::chrono::steady_clock::time_point now) const;
