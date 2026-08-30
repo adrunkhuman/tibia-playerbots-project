@@ -419,7 +419,9 @@ function F.verifyDepot(playerId, attempts)
     assert(player:getSlotItem(CONST_SLOT_LEFT):getId() == F.seedWeaponId, "carried weapon upgrade was not equipped")
     assert(player:getSlotItem(CONST_SLOT_HEAD):getId() == 2461, "carried helmet upgrade was not equipped")
     assert(player:getSlotItem(CONST_SLOT_FEET):getId() == 2643, "carried boot upgrade was not equipped")
-    assert(player:getItemCount(2120) == 1 and player:getItemCount(2554) == 1, "navigation tools were deposited")
+    assert(player:getItemCount(2120) == 1 and player:getItemCount(2554) == 1, "navigation tool reserves were not retained")
+    assert(chest:getItemCountById(2120) == 2 and chest:getItemCountById(2554) == 2,
+        "surplus navigation tools were not deposited")
     assert(player:getItemCount(F.potionItemId) >= 5 and player:getItemCount(F.meatItemId) >= 1, "supply reserves were deposited")
     print("PLAYERBOT_GAMEPLAY_TEST DEPOT_PASS")
 end

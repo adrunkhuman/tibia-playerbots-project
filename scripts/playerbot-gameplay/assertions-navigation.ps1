@@ -296,7 +296,7 @@ function Assert-CorpseDetourEvents {
 }
 
 function Assert-DepotEvents {
-	param([string]$Logs, [int]$ExpectedDepositedCount, [int]$ExpectedEquipmentDeposits)
+	param([string]$Logs, [int]$ExpectedDepositedCount, [int]$ExpectedEquipmentDeposits, [int]$ExpectedToolDeposits = 0)
 
 	$events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
 	$discovery = @($events | Where-Object {
@@ -330,6 +330,12 @@ function Assert-DepotEvents {
 		$_.event -eq "action_result" -and $_.action -eq "deposit" -and $_.result -in @("success", "partial") -and
 		$_.item_id -in @(2380, 2382) -and $_.verified -eq 1
 	})
+	$toolDeposits = @($events | Where-Object {
+		$_.event -eq "action_result" -and $_.action -eq "deposit" -and $_.result -eq "success" -and
+		$_.item_id -in @(2120, 2554) -and $_.verified -eq 1 -and
+		$_.inventory_after -eq ($_.inventory_before - 1) -and $_.inventory_after -ge 1 -and
+		$_.depot_after -eq ($_.depot_before + 1)
+	})
 	$equipmentUpgrades = @($events | Where-Object {
 		$_.event -eq "action_result" -and $_.action -eq "equip_readiness" -and $_.result -eq "success" -and
 		$_.item_id -in @(2395, 2461, 2643)
@@ -337,14 +343,14 @@ function Assert-DepotEvents {
 	$deposited = ($verified | Measure-Object -Property verified -Sum).Sum
 	$unsafeMoves = @($events | Where-Object {
 		$_.event -eq "action_result" -and $_.action -eq "deposit" -and
-		$_.item_id -in @(2050, 2120, 2554, 2467, 2666, 7618)
+		$_.item_id -in @(2050, 2467, 2666, 7618)
 	})
 	$terminal = @($events | Where-Object { $_.event -eq "terminal" })
 	if ($discovery.Count -lt 1 -or $locker.Count -lt 1 -or $chest.Count -lt 1 -or
 		$deposited -ne $ExpectedDepositedCount -or $complete.Count -lt 1 -or
 		$equipmentDeposits.Count -ne $ExpectedEquipmentDeposits -or $equipmentUpgrades.Count -ne (3 * [Math]::Min($ExpectedEquipmentDeposits, 1)) -or
-		$unsafeMoves.Count -ne 0 -or $terminal.Count -ne 0) {
-		throw "Real Thais depot evidence was incomplete. discovery=$($discovery.Count), depotId=$depotId, locker=$($locker.Count), chest=$($chest.Count), deposited=$deposited/$ExpectedDepositedCount, equipment_deposits=$($equipmentDeposits.Count)/$ExpectedEquipmentDeposits, equipment_upgrades=$($equipmentUpgrades.Count)/$(3 * [Math]::Min($ExpectedEquipmentDeposits, 1)), complete=$($complete.Count), unsafe=$($unsafeMoves.Count), terminal=$($terminal.Count)."
+		$toolDeposits.Count -ne $ExpectedToolDeposits -or $unsafeMoves.Count -ne 0 -or $terminal.Count -ne 0) {
+		throw "Real Thais depot evidence was incomplete. discovery=$($discovery.Count), depotId=$depotId, locker=$($locker.Count), chest=$($chest.Count), deposited=$deposited/$ExpectedDepositedCount, equipment_deposits=$($equipmentDeposits.Count)/$ExpectedEquipmentDeposits, equipment_upgrades=$($equipmentUpgrades.Count)/$(3 * [Math]::Min($ExpectedEquipmentDeposits, 1)), tool_deposits=$($toolDeposits.Count)/$ExpectedToolDeposits, complete=$($complete.Count), unsafe=$($unsafeMoves.Count), terminal=$($terminal.Count)."
 	}
 }
 
