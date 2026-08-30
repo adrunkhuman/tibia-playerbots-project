@@ -736,15 +736,53 @@ PlayerBotNavigationRoutePlan PlayerBotController::planNavigationRoute(Player& pl
 	const PlayerBotTopology& topology = PlayerBotTopology::instance();
 	const bool canUseRope = g_game.findItemOfType(&player, playerbot::ropeItemId, true) != nullptr;
 	const bool canUseShovel = g_game.findItemOfType(&player, shovelToolItemId, true) != nullptr;
+	const Position currentPosition = player.getPosition();
+	if (canUseShovel && destination.z > currentPosition.z) {
+		for (int32_t xOffset = -1; xOffset <= 1; ++xOffset) {
+			for (int32_t yOffset = -1; yOffset <= 1; ++yOffset) {
+				const int32_t x = static_cast<int32_t>(currentPosition.x) + xOffset;
+				const int32_t y = static_cast<int32_t>(currentPosition.y) + yOffset;
+				if (x < 0 || y < 0 || x > std::numeric_limits<uint16_t>::max() ||
+				    y > std::numeric_limits<uint16_t>::max() || currentPosition.z >= MAP_MAX_LAYERS - 1) continue;
+				const Position target(static_cast<uint16_t>(x), static_cast<uint16_t>(y), currentPosition.z);
+				Tile* tile = g_game.map.getTile(target);
+				Item* ground = tile ? tile->getGround() : nullptr;
+				if (!ground || !contains(shovelHoleIds, ground->getID()) ||
+				    blockedPositions.find(target) != blockedPositions.end()) continue;
+				const Position expected(target.x, target.y, target.z + 1);
+				if (blockedPositions.find(expected) != blockedPositions.end() ||
+				    !topology.route(expected, destination, blockedPositions, canUseRope, canUseShovel,
+				                    player.getLevel(), &costPolicy)) continue;
+
+				PlayerBotNavigationStep step;
+				step.action = PlayerBotNavigationAction::UseShovel;
+				step.target = target;
+				step.expectedPosition = expected;
+				step.itemId = ground->getID();
+				step.topologyPortal = true;
+				routePlan.steps.push_back(step);
+				routePlan.metrics.waypoint = expected;
+				routePlan.metrics.result = PlayerBotNavigationResult::Reached;
+				routePlan.metrics.steps = 1;
+				routePlan.metrics.estimatedTravelSeconds = 1;
+				routePlan.metrics.dangerCost = costPolicy.dangerCost(target, 1000);
+				routePlan.metrics.maximumHealthLossPerSecond = costPolicy.dangerAt(target);
+				routePlan.metrics.dangerAware = costPolicy.enabled();
+				routePlan.metrics.elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
+				    std::chrono::steady_clock::now() - startedAt);
+				return routePlan;
+			}
+		}
+	}
 	const std::optional<PlayerBotTopologyRoute> topologyRoute =
-	    topology.route(player.getPosition(), destination, blockedPositions, canUseRope, canUseShovel, player.getLevel(), &costPolicy);
+	    topology.route(currentPosition, destination, blockedPositions, canUseRope, canUseShovel, player.getLevel(), &costPolicy);
 	const PlayerBotTopologyDistances coarseDistances = topology.distancesFrom(
-	    player.getPosition(), canUseRope, canUseShovel, player.getLevel());
+	    currentPosition, canUseRope, canUseShovel, player.getLevel());
 	const std::optional<uint32_t> coarseDistance = topology.distanceTo(coarseDistances, destination);
 	if (travelEligible && (!topologyRoute || (coarseDistance && *coarseDistance > maximumNpcTravelApproachPortals))) {
 		if (auto travelRoute = planNpcTravelRoute(player, destination, blockedPositions, maximumExpandedNodes)) {
 			const size_t directSteps = coarseDistance ?
-			    std::max<size_t>(playerBotNavigationDistance(player.getPosition(), destination),
+			    std::max<size_t>(playerBotNavigationDistance(currentPosition, destination),
 			                     static_cast<size_t>(*coarseDistance) * 32) :
 			    std::numeric_limits<size_t>::max();
 			const double directTravelSeconds = directSteps == std::numeric_limits<size_t>::max() ?
