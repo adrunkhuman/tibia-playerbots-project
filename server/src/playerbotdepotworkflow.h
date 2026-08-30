@@ -20,7 +20,7 @@ enum class PlayerBotDepotCommandType : uint8_t {
 	Wait,
 };
 enum class PlayerBotDepotOutcome : uint8_t { Pending, Ready, Success, Retry, Moved, Partial, Deferred, Rejected, Unavailable };
-enum class PlayerBotDepotRouteResult : uint8_t { NotObserved, Reached, Unreachable };
+enum class PlayerBotDepotRouteResult : uint8_t { NotObserved, Reached, Unsafe, Unreachable };
 enum class PlayerBotDepotActionResult : uint8_t {
 	None,
 	SelectedLockerUnavailable,
@@ -55,6 +55,8 @@ struct PlayerBotDepotObservation {
 	PlayerBotDepotRouteResult routeResult = PlayerBotDepotRouteResult::NotObserved;
 	uint32_t routeSteps = 0;
 	uint64_t expandedNodes = 0;
+	uint32_t dangerCost = 0;
+	double maximumHealthLossPerSecond = 0;
 	bool atApproach = false;
 	bool lockerOpen = false;
 	bool chestOpen = false;
@@ -71,6 +73,7 @@ struct PlayerBotDepotSnapshot {
 	PlayerBotDepotCandidate selected;
 	bool hasRouteCandidate = false;
 	PlayerBotDepotCandidate routeCandidate;
+	bool validatingRiskFallback = false;
 	bool hasPendingMove = false;
 	PlayerBotDepotMove pendingMove;
 	uint32_t attempts = 0;
@@ -78,13 +81,16 @@ struct PlayerBotDepotSnapshot {
 	uint32_t inScopeCandidates = 0;
 	uint32_t standableCandidates = 0;
 	uint32_t suppressedApproaches = 0;
+	uint32_t unsafeRouteCandidates = 0;
 	std::optional<std::chrono::steady_clock::time_point> retryAt;
-	std::optional<std::chrono::steady_clock::time_point> deferredDepositRetryAt;
 };
 
 struct PlayerBotDepotTelemetry {
 	uint32_t routeSteps = 0;
 	uint64_t expandedNodes = 0;
+	uint32_t dangerCost = 0;
+	double maximumHealthLossPerSecond = 0;
+	bool riskFallback = false;
 	std::optional<PlayerBotDepotMoveVerification> moveVerification;
 };
 
@@ -106,24 +112,32 @@ class PlayerBotDepotWorkflow
 	private:
 		void clearDiscovery();
 		void recordCandidate(PlayerBotDepotCandidate candidate);
+		void recordUnsafeCandidate(const PlayerBotDepotObservation& observation);
 		void sortCandidates();
 		bool hasCandidates() const { return !discoveryCandidates.empty(); }
 		bool hasNextCandidate() const;
 		std::optional<PlayerBotDepotCandidate> takeNextCandidate();
 		std::optional<std::chrono::steady_clock::time_point> earliestRejectedApproachExpiry() const;
-		std::optional<std::chrono::steady_clock::time_point> earliestDeferredDepositExpiry() const;
 		PlayerBotDepotCommand command(PlayerBotDepotCommandType type, PlayerBotDepotOutcome outcome,
 		                              PlayerBotDepotTelemetry telemetry = {}) const;
 
 		PlayerBotDepotSession session;
 		std::vector<PlayerBotDepotCandidate> discoveryCandidates;
 		std::optional<PlayerBotDepotCandidate> routeCandidate;
+		struct UnsafeCandidate {
+			PlayerBotDepotCandidate candidate;
+			uint32_t dangerCost = 0;
+			double maximumHealthLossPerSecond = 0;
+			uint32_t routeSteps = 0;
+		};
+		std::optional<UnsafeCandidate> riskFallback;
+		bool validatingRiskFallback = false;
 		size_t nextCandidateOffset = 0;
 		uint32_t indexedCandidates = 0;
 		uint32_t inScopeCandidates = 0;
 		uint32_t standableCandidates = 0;
 		uint32_t suppressedApproaches = 0;
-		std::map<std::pair<uint16_t, slots_t>, std::chrono::steady_clock::time_point> deferredSlottedDeposits;
+		uint32_t unsafeRouteCandidates = 0;
 };
 
 #endif

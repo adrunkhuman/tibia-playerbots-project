@@ -8,12 +8,14 @@ void PlayerBotDepotWorkflow::reset()
 	session.reset();
 	discoveryCandidates.clear();
 	routeCandidate.reset();
+	riskFallback.reset();
+	validatingRiskFallback = false;
 	nextCandidateOffset = 0;
 	indexedCandidates = 0;
 	inScopeCandidates = 0;
 	standableCandidates = 0;
 	suppressedApproaches = 0;
-	deferredSlottedDeposits.clear();
+	unsafeRouteCandidates = 0;
 }
 
 void PlayerBotDepotWorkflow::clearDiscovery()
@@ -21,21 +23,20 @@ void PlayerBotDepotWorkflow::clearDiscovery()
 	session.clearDiscovery();
 	discoveryCandidates.clear();
 	routeCandidate.reset();
+	riskFallback.reset();
+	validatingRiskFallback = false;
 	nextCandidateOffset = 0;
 	indexedCandidates = 0;
 	inScopeCandidates = 0;
 	standableCandidates = 0;
 	suppressedApproaches = 0;
+	unsafeRouteCandidates = 0;
 }
 
 PlayerBotDepotCommand PlayerBotDepotWorkflow::advance(const PlayerBotDepotObservation& observation, uint32_t routeBudget,
 	uint32_t maximumDiscoveryAttempts, std::chrono::steady_clock::duration suppression)
 {
 	session.expireRejectedApproaches(observation.now);
-	for (auto it = deferredSlottedDeposits.begin(); it != deferredSlottedDeposits.end();) {
-		if (it->second <= observation.now) it = deferredSlottedDeposits.erase(it);
-		else ++it;
-	}
 	if (observation.actionResult == PlayerBotDepotActionResult::SelectedLockerUnavailable) {
 		clearDiscovery();
 		session.resetAttempts();
@@ -61,13 +62,7 @@ PlayerBotDepotCommand PlayerBotDepotWorkflow::advance(const PlayerBotDepotObserv
 		if (verification.result == PlayerBotDepotMoveResult::Retry) {
 			return command(PlayerBotDepotCommandType::Wait, PlayerBotDepotOutcome::Retry, telemetry);
 		}
-		if (verification.result == PlayerBotDepotMoveResult::Deferred && verification.before.sourceSlot != CONST_SLOT_WHEREEVER) {
-			deferredSlottedDeposits[{verification.before.itemId, verification.before.sourceSlot}] = observation.now + suppression;
-			return command(PlayerBotDepotCommandType::Wait, PlayerBotDepotOutcome::Deferred, telemetry);
-		}
-		return command(PlayerBotDepotCommandType::SelectDeposit,
-		               verification.result == PlayerBotDepotMoveResult::Moved ? PlayerBotDepotOutcome::Moved : PlayerBotDepotOutcome::Deferred,
-		               telemetry);
+		return command(PlayerBotDepotCommandType::SelectDeposit, PlayerBotDepotOutcome::Moved, telemetry);
 	}
 	if (session.stage() == PlayerBotDepotStage::Discover && !routeCandidate && discoveryCandidates.empty()) {
 		if (!observation.scan.observed) return command(PlayerBotDepotCommandType::Scan, PlayerBotDepotOutcome::Pending);
@@ -114,21 +109,37 @@ PlayerBotDepotCommand PlayerBotDepotWorkflow::advance(const PlayerBotDepotObserv
 			}
 			if (observation.routeResult == PlayerBotDepotRouteResult::Reached) {
 				const PlayerBotDepotCandidate selected = *routeCandidate;
+				const bool selectedRiskFallback = validatingRiskFallback;
 				routeCandidate.reset();
+				validatingRiskFallback = false;
 				session.select(selected);
 				PlayerBotDepotTelemetry telemetry;
 				telemetry.routeSteps = observation.routeSteps;
 				telemetry.expandedNodes = observation.expandedNodes;
+				telemetry.dangerCost = observation.dangerCost;
+				telemetry.maximumHealthLossPerSecond = observation.maximumHealthLossPerSecond;
+				telemetry.riskFallback = selectedRiskFallback;
 				return command(PlayerBotDepotCommandType::Navigate, PlayerBotDepotOutcome::Ready, telemetry);
 			}
-			session.rejectApproach(routeCandidate->approachPosition, observation.now + suppression);
+			if (observation.routeResult == PlayerBotDepotRouteResult::Unsafe && !validatingRiskFallback) {
+				recordUnsafeCandidate(observation);
+			} else {
+				session.rejectApproach(routeCandidate->approachPosition, observation.now + suppression);
+			}
 			routeCandidate.reset();
+			validatingRiskFallback = false;
 		}
 		for (uint32_t attempt = 0; attempt < routeBudget && hasNextCandidate(); ++attempt) {
 			routeCandidate = takeNextCandidate();
 			if (routeCandidate) return command(PlayerBotDepotCommandType::ValidateRoute, PlayerBotDepotOutcome::Pending);
 		}
 		if (hasNextCandidate()) return command(PlayerBotDepotCommandType::Wait, PlayerBotDepotOutcome::Retry);
+		if (riskFallback) {
+			routeCandidate = riskFallback->candidate;
+			riskFallback.reset();
+			validatingRiskFallback = true;
+			return command(PlayerBotDepotCommandType::ValidateRoute, PlayerBotDepotOutcome::Retry);
+		}
 		const uint32_t attempts = session.incrementAttempts();
 		if (attempts >= maximumDiscoveryAttempts) return command(PlayerBotDepotCommandType::Fail, PlayerBotDepotOutcome::Unavailable);
 		clearDiscovery();
@@ -156,12 +167,6 @@ PlayerBotDepotCommand PlayerBotDepotWorkflow::advance(const PlayerBotDepotObserv
 	}
 	if (session.stage() == PlayerBotDepotStage::Depart) return command(PlayerBotDepotCommandType::Depart, PlayerBotDepotOutcome::Success);
 	if (session.stage() == PlayerBotDepotStage::Deposit && observation.deposit.observed && observation.deposit.hasDepositableItem) {
-		if (observation.deposit.move.sourceSlot != CONST_SLOT_WHEREEVER) {
-			auto deferred = deferredSlottedDeposits.find({observation.deposit.move.itemId, observation.deposit.move.sourceSlot});
-			if (deferred != deferredSlottedDeposits.end() && deferred->second > observation.now) {
-				return command(PlayerBotDepotCommandType::Wait, PlayerBotDepotOutcome::Deferred);
-			}
-		}
 		if (!observation.canDoAction) return command(PlayerBotDepotCommandType::Wait, PlayerBotDepotOutcome::Pending);
 		session.beginMove(observation.deposit.move);
 		return command(PlayerBotDepotCommandType::MoveDeposit, PlayerBotDepotOutcome::Ready);
@@ -172,6 +177,21 @@ PlayerBotDepotCommand PlayerBotDepotWorkflow::advance(const PlayerBotDepotObserv
 void PlayerBotDepotWorkflow::recordCandidate(PlayerBotDepotCandidate candidate)
 {
 	discoveryCandidates.push_back(candidate);
+}
+
+void PlayerBotDepotWorkflow::recordUnsafeCandidate(const PlayerBotDepotObservation& observation)
+{
+	++unsafeRouteCandidates;
+	UnsafeCandidate candidate{*routeCandidate, observation.dangerCost,
+	                          observation.maximumHealthLossPerSecond, observation.routeSteps};
+	if (!riskFallback || std::tie(candidate.dangerCost, candidate.maximumHealthLossPerSecond, candidate.routeSteps,
+	                            candidate.candidate.depotId, candidate.candidate.lockerPosition,
+	                            candidate.candidate.approachPosition) <
+	                    std::tie(riskFallback->dangerCost, riskFallback->maximumHealthLossPerSecond,
+	                            riskFallback->routeSteps, riskFallback->candidate.depotId,
+	                            riskFallback->candidate.lockerPosition, riskFallback->candidate.approachPosition)) {
+		riskFallback = std::move(candidate);
+	}
 }
 
 void PlayerBotDepotWorkflow::sortCandidates()
@@ -210,14 +230,6 @@ std::optional<std::chrono::steady_clock::time_point> PlayerBotDepotWorkflow::ear
 	return earliest;
 }
 
-std::optional<std::chrono::steady_clock::time_point> PlayerBotDepotWorkflow::earliestDeferredDepositExpiry() const
-{
-	if (deferredSlottedDeposits.empty()) return std::nullopt;
-	auto earliest = deferredSlottedDeposits.begin()->second;
-	for (const auto& entry : deferredSlottedDeposits) earliest = std::min(earliest, entry.second);
-	return earliest;
-}
-
 PlayerBotDepotSnapshot PlayerBotDepotWorkflow::snapshot() const
 {
 	PlayerBotDepotSnapshot result;
@@ -226,6 +238,7 @@ PlayerBotDepotSnapshot PlayerBotDepotWorkflow::snapshot() const
 	result.selected = {session.depotId(), session.lockerItemId(), session.lockerPosition(), session.approachPosition()};
 	result.hasRouteCandidate = routeCandidate.has_value();
 	if (routeCandidate) result.routeCandidate = *routeCandidate;
+	result.validatingRiskFallback = validatingRiskFallback;
 	result.hasPendingMove = session.hasPendingMove();
 	if (result.hasPendingMove) result.pendingMove = session.move();
 	result.attempts = session.attempts();
@@ -233,8 +246,8 @@ PlayerBotDepotSnapshot PlayerBotDepotWorkflow::snapshot() const
 	result.inScopeCandidates = inScopeCandidates;
 	result.standableCandidates = standableCandidates;
 	result.suppressedApproaches = suppressedApproaches;
+	result.unsafeRouteCandidates = unsafeRouteCandidates;
 	result.retryAt = earliestRejectedApproachExpiry();
-	result.deferredDepositRetryAt = earliestDeferredDepositExpiry();
 	return result;
 }
 

@@ -562,7 +562,11 @@ scored, suitable, and reachable candidate counts plus the retry delay and either
 
 `action_result` with `action="depot_discover"` reports indexed, in-scope, and
 standable candidate counts. Success records the actual `depot_id`, locker and
-approach positions, weighted distance, route steps, and expanded nodes.
+approach positions, weighted distance, route steps, expanded nodes, route danger,
+and whether the route is a risk fallback. Discovery prefers routes within the
+normal risk limits. If none qualify, it revalidates the lowest-risk executable
+route instead of stopping in the dangerous area. `unsafe_routes` reports how
+many executable candidates exceeded the normal limits.
 `unavailable` records `no_local_locker`, `no_standable_approach`, or
 `no_reachable_locker`; `continuing` records
 `route_validation_budget_exhausted` while the bounded candidate queue remains.
@@ -573,8 +577,9 @@ terminal event.
 An unchanged backpack deposit retries three times. After the third rejection,
 the bot moves the blocked item to its current tile through normal item movement,
 verifies the inventory and ground deltas, emits `result="discarded"` with
-`reason="depot_rejected"`, and continues the deposit workflow. Rejected slotted
-deposits remain deferred rather than discarded.
+`reason="depot_rejected"`, and continues the deposit workflow. This also applies
+to actionable cargo occupying an equipment slot; valid or protected equipment
+is never selected for deposit.
 
 Target pursuit uses `action_result` with `action="target_pursuit"`.
 `result="started"` includes `target_id` and `last_seen_position`;

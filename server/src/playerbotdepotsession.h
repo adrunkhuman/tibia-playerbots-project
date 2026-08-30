@@ -44,7 +44,6 @@ enum class PlayerBotDepotMoveResult : uint8_t {
 	Moved,
 	Mismatch,
 	Retry,
-	Deferred,
 	Rejected,
 };
 

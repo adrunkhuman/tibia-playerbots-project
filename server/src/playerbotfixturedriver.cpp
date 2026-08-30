@@ -2,6 +2,8 @@
 
 #include "playerbotfixturedriver.h"
 
+#include "playerbotdepotworkflow.h"
+
 #include "condition.h"
 #include "depotchest.h"
 #include "player.h"
@@ -320,6 +322,76 @@ std::vector<playerbot::PlayerBotFixtureEvent> playerbot::PlayerBotFixtureDriver:
 	fields << std::fixed << std::setprecision(2) << "\"recovery_total\":" << recovery.totalMinimumHealing << ",\"recovery_spell_legal\":" << (recovery.lightHealingLegal ? "true" : "false") << ",\"recovery_spell_casts\":" << recovery.spellCasts << ",\"equipment_pressure_before\":" << current.threatRatio << ",\"equipment_pressure_after\":" << equipped.threatRatio << ",\"idle_observed_seconds\":" << idle << ",\"active_observed_seconds\":" << active << ",\"higher_score_preferred\":" << (playerBotPreferHuntRegion(higherScore, lowerScore) ? "true" : "false") << ",\"attacker_priority_preferred\":" << (preferredTarget && preferredTarget->target.id == 2 ? "true" : "false") << ",\"wounded_lethal\":" << (playerBotPredictedLethal(40, 40) ? "true" : "false") << ",\"zero_health_lethal\":" << (playerBotPredictedLethal(0, 0) ? "true" : "false") << ",\"helper_scope_exhausted\":" << (playerBotHuntScopeExhausted(exhausted) ? "true" : "false") << ",\"capacity_before_grace\":" << (capacityBeforeGrace ? "true" : "false") << ",\"capacity_at_grace\":" << (capacityAtGrace ? "true" : "false") << ",\"capacity_cycle_reset\":" << (capacityReset ? "true" : "false") << ",\"knight_route_reserve\":" << knightRouteReserve << ",\"rook_route_reserve\":" << rookRouteReserve << ",\"high_health_route_reserve\":" << highHealthRouteReserve << ",\"high_health_restock_target\":" << highHealthRestockTarget << ",\"net_value_loss_rejected\":" << (netValueLossRejected ? "true" : "false") << ",\"currency_priority_override\":" << (currencyPriorityOverride ? "true" : "false") << ",\"currency_hunt_capacity_excluded\":" << (currencyExcludedFromHuntCapacity ? "true" : "false") << ",\"large_restock_batched\":" << (largeRestockBatched ? "true" : "false") << ",\"preferred_food_consumed\":" << (preferredFoodConsumed ? "true" : "false") << ",\"missing_food_ignored\":" << (missingFoodIgnored ? "true" : "false") << ",\"food_replenished_after_eating\":" << (foodReplenishedAfterEating ? "true" : "false");
 	events.push_back({"adaptive_challenge_fixture", fields.str()});
 	return events;
+}
+
+std::vector<playerbot::PlayerBotFixtureEvent> playerbot::PlayerBotFixtureDriver::runDepotRiskFallbackContract() const
+{
+	if (!policy.depotRiskFallbackFixture) return {};
+	const auto now = std::chrono::steady_clock::now();
+	constexpr auto suppression = std::chrono::seconds(2);
+	auto candidate = [](uint16_t depotId, uint16_t coordinate, uint32_t distance) {
+		return PlayerBotDepotCandidate{depotId, 2589, Position(coordinate, coordinate, 7),
+		                               Position(coordinate + 1, coordinate, 7), distance};
+	};
+	auto scan = [&](PlayerBotDepotWorkflow& workflow, std::vector<PlayerBotDepotCandidate> candidates,
+	                uint32_t maximumAttempts = 4) {
+		PlayerBotDepotObservation observation;
+		observation.currentPosition = Position(1, 1, 7);
+		observation.now = now;
+		observation.scan.observed = true;
+		observation.scan.indexedCandidates = observation.scan.inScopeCandidates =
+			observation.scan.standableCandidates = static_cast<uint32_t>(candidates.size());
+		observation.scan.candidates = std::move(candidates);
+		return workflow.advance(observation, 2, maximumAttempts, suppression);
+	};
+	auto observe = [&](PlayerBotDepotWorkflow& workflow, PlayerBotDepotRouteResult result, uint32_t danger,
+	                   double peak, uint32_t steps, uint32_t maximumAttempts = 4) {
+		PlayerBotDepotObservation observation;
+		observation.currentPosition = Position(1, 1, 7);
+		observation.now = now;
+		observation.routeResult = result;
+		observation.dangerCost = danger;
+		observation.maximumHealthLossPerSecond = peak;
+		observation.routeSteps = steps;
+		return workflow.advance(observation, 2, maximumAttempts, suppression);
+	};
+
+	PlayerBotDepotWorkflow precedence;
+	PlayerBotDepotCommand command = scan(precedence, {candidate(1, 10, 1), candidate(2, 20, 2)});
+	command = observe(precedence, PlayerBotDepotRouteResult::Unsafe, 600, 0.09, 20);
+	command = observe(precedence, PlayerBotDepotRouteResult::Reached, 100, 0.01, 30);
+	const bool safePrecedence = command.type == PlayerBotDepotCommandType::Navigate &&
+	                            command.snapshot.selected.depotId == 2 && !command.telemetry.riskFallback;
+
+	PlayerBotDepotWorkflow ranking;
+	command = scan(ranking, {candidate(1, 10, 1), candidate(2, 20, 2), candidate(3, 30, 3), candidate(4, 40, 4)});
+	command = observe(ranking, PlayerBotDepotRouteResult::Unsafe, 700, 0.05, 10);
+	command = observe(ranking, PlayerBotDepotRouteResult::Unsafe, 600, 0.08, 10);
+	command = observe(ranking, PlayerBotDepotRouteResult::Unsafe, 600, 0.07, 20);
+	command = observe(ranking, PlayerBotDepotRouteResult::Unsafe, 600, 0.07, 15);
+	const bool retainedAcrossTurns = command.type == PlayerBotDepotCommandType::ValidateRoute &&
+	                                 command.snapshot.validatingRiskFallback &&
+	                                 command.snapshot.routeCandidate.depotId == 4 &&
+	                                 command.snapshot.unsafeRouteCandidates == 4;
+	command = observe(ranking, PlayerBotDepotRouteResult::Reached, 600, 0.07, 15);
+	const bool rankedFallback = command.type == PlayerBotDepotCommandType::Navigate &&
+	                            command.snapshot.selected.depotId == 4 && command.telemetry.riskFallback;
+
+	PlayerBotDepotWorkflow failedRevalidation;
+	command = scan(failedRevalidation, {candidate(1, 10, 1)}, 1);
+	command = observe(failedRevalidation, PlayerBotDepotRouteResult::Unsafe, 600, 0.09, 10, 1);
+	const bool requestedRevalidation = command.type == PlayerBotDepotCommandType::ValidateRoute &&
+	                                   command.snapshot.validatingRiskFallback;
+	command = observe(failedRevalidation, PlayerBotDepotRouteResult::Unreachable, 0, 0, 0, 1);
+	const bool failedRevalidationRejected = command.type == PlayerBotDepotCommandType::Fail;
+
+	std::ostringstream fields;
+	fields << "\"safe_precedence\":" << (safePrecedence ? "true" : "false")
+	       << ",\"retained_across_turns\":" << (retainedAcrossTurns ? "true" : "false")
+	       << ",\"ranked_fallback\":" << (rankedFallback ? "true" : "false")
+	       << ",\"requested_revalidation\":" << (requestedRevalidation ? "true" : "false")
+	       << ",\"failed_revalidation_rejected\":" << (failedRevalidationRejected ? "true" : "false");
+	return {{"depot_risk_fallback_contract", fields.str()}};
 }
 
 std::vector<playerbot::PlayerBotFixtureEvent> playerbot::PlayerBotFixtureDriver::runSpellCalibration(Player& player)

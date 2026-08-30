@@ -242,6 +242,7 @@ void PlayerBotController::start(const Position& position, bool recovered, uint32
 	if (controlledPlayer) {
 		emitFixtureEvents(fixtureDriver.runSpellCalibration(*controlledPlayer), position);
 		emitFixtureEvents(fixtureDriver.runAdaptiveChallenge(*controlledPlayer), position);
+		emitFixtureEvents(fixtureDriver.runDepotRiskFallbackContract(), position);
 	}
 	if (fixtureDriver.magicTrainingScenario() || fixtureDriver.deferInitialization()) {
 		fixtureDriver.beginDelayedInitialization();

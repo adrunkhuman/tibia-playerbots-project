@@ -89,6 +89,32 @@
 	}
 
 	if ($Depot) {
+		Invoke-Scenario -Name "depot_risk_fallback" -DefaultTimeoutSeconds 720 -Body {
+			Invoke-Compose down --volumes --remove-orphans
+			$env:PLAYERBOT_GAMEPLAY_MODE = "depot_risk_fallback"
+			$env:PLAYERBOT_DEPOT_RESTART_PHASE = ""
+			$env:PLAYERBOT_DEPOT_MOVE_CASE = "normal"
+			Invoke-Compose up --detach
+			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST DEPOT_RISK_FALLBACK_START' | Out-Null
+			Wait-ForLog -Pattern '"action":"depot_discover","result":"success".*"risk_fallback":true' | Out-Null
+			$logs = Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST DEPOT_RISK_FALLBACK_PASS'
+			$events = @(ConvertFrom-PlayerbotLogs -Logs $logs)
+			$contract = @($events | Where-Object {
+				$_.event -eq "depot_risk_fallback_contract" -and $_.safe_precedence -eq $true -and
+				$_.retained_across_turns -eq $true -and $_.ranked_fallback -eq $true -and
+				$_.requested_revalidation -eq $true -and $_.failed_revalidation_rejected -eq $true
+			})
+			$fallback = @($events | Where-Object {
+				$_.event -eq "action_result" -and $_.action -eq "depot_discover" -and $_.result -eq "success" -and
+				$_.risk_fallback -eq $true -and $_.unsafe_routes -gt 0 -and $_.route_steps -gt 0 -and
+				($_.danger_cost -gt 500 -or $_.maximum_health_loss_per_second -gt 0.08)
+			})
+			$terminal = @($events | Where-Object { $_.event -eq "terminal" })
+			if ($contract.Count -ne 1 -or $fallback.Count -ne 1 -or $terminal.Count -ne 0) {
+				throw "The depot risk fallback contract or swamp-troll escape failed. contract=$($contract.Count), fallback=$($fallback.Count), terminal=$($terminal.Count)."
+			}
+		}
+
 		Invoke-Scenario -Name "real_depot" -DefaultTimeoutSeconds 240 -Body {
 			Invoke-Compose down --volumes --remove-orphans
 			$env:PLAYERBOT_GAMEPLAY_MODE = "depot"
@@ -176,9 +202,25 @@
 				$_.ground_after -eq ($_.ground_before + 1) -and
 				$_.depot_before -eq 0 -and $_.depot_after -eq 0
 			})
+			$slottedRequests = @($events | Where-Object {
+				$_.action -eq "deposit" -and $_.result -eq "requested" -and $_.item_id -eq 7636 -and $_.source_slot -eq 10
+			})
+			$slottedRetries = @($events | Where-Object {
+				$_.action -eq "deposit" -and $_.result -eq "retry" -and $_.item_id -eq 7636 -and $_.source_slot -eq 10 -and
+				$_.verified -eq 0 -and $_.inventory_before -eq 2 -and $_.inventory_after -eq 2 -and
+				$_.depot_before -eq 0 -and $_.depot_after -eq 0
+			})
+			$slottedDiscarded = @($events | Where-Object {
+				$_.action -eq "deposit" -and $_.result -eq "discarded" -and $_.reason -eq "depot_rejected" -and
+				$_.item_id -eq 7636 -and $_.retry -eq 3 -and $_.count -eq 2 -and
+				$_.inventory_before -eq 2 -and $_.inventory_after -eq 0 -and $_.ground_after -eq ($_.ground_before + 2) -and
+				$_.depot_before -eq 0 -and $_.depot_after -eq 0
+			})
 			$terminals = @($events | Where-Object { $_.event -eq "terminal" })
-			if ($requests.Count -ne 3 -or $retries.Count -ne 2 -or $discarded.Count -ne 1 -or $terminals.Count -ne 0) {
-				throw "Rejected depot moves did not discard the blocked item and continue. requests=$($requests.Count), retries=$($retries.Count), discarded=$($discarded.Count), terminals=$($terminals.Count)."
+			if ($requests.Count -ne 3 -or $retries.Count -ne 2 -or $discarded.Count -ne 1 -or
+				$slottedRequests.Count -ne 3 -or $slottedRetries.Count -ne 2 -or $slottedDiscarded.Count -ne 1 -or
+				$terminals.Count -ne 0) {
+				throw "Rejected depot moves did not discard blocked backpack and ammunition-slot cargo. requests=$($requests.Count), retries=$($retries.Count), discarded=$($discarded.Count), slottedRequests=$($slottedRequests.Count), slottedRetries=$($slottedRetries.Count), slottedDiscarded=$($slottedDiscarded.Count), terminals=$($terminals.Count)."
 			}
 		}
 	}

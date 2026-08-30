@@ -67,7 +67,7 @@ $composeArguments = @("compose", "-f", $composeFile, "-f", $gameplayComposeFile)
 $scenarioCatalog = @(
 	"cycle",
 	"carlin_local_service", "mainland_loop", "slotted_loot_seller", "slotted_loot_no_seller", "slotted_loot_deposit_restart", "sell_loot",
-	"real_depot", "real_depot_restart_approach", "real_depot_restart_locker", "real_depot_restart_chest",
+	"real_depot", "depot_risk_fallback", "real_depot_restart_approach", "real_depot_restart_locker", "real_depot_restart_chest",
 	"real_depot_restart_deposit", "real_depot_restart_depart", "real_depot_partial_move", "real_depot_rejected_move",
 	"pickup_progression", "pickup_progression_bundle", "pickup_progression_nested", "pickup_progression_resume",
 	"pickup_progression_nested_resume", "pickup_progression_space", "goal_arbitration", "goal_arbitration_interrupt",
@@ -92,8 +92,8 @@ foreach ($scenarioName in $scenarioCatalog) {
 		throw "Duplicate gameplay scenario name: $scenarioName"
 	}
 }
-if ($scenarioCatalog.Count -ne 84) {
-	throw "The gameplay scenario catalog must contain 84 scenarios; found $($scenarioCatalog.Count)."
+if ($scenarioCatalog.Count -ne 85) {
+	throw "The gameplay scenario catalog must contain 85 scenarios; found $($scenarioCatalog.Count)."
 }
 $requestedScenarioNames = @($Scenario | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
 $exactScenarioSelection = $requestedScenarioNames.Count -gt 0

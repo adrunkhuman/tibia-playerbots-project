@@ -914,12 +914,16 @@ bool PlayerBotController::discoverDepot(Player& player, const Position& currentP
 		const PlayerBotNavigationRiskProfile risk;
 		const bool routeSafe = candidate.approachPosition == currentPosition || playerBotNavigationRiskAccepts(
 		    risk, routePlan.metrics.dangerCost, routePlan.metrics.maximumHealthLossPerSecond);
-		const bool reached = valid && (candidate.approachPosition == currentPosition ||
-			(routePlan.metrics.result == PlayerBotNavigationResult::Reached && !routePlan.steps.empty() && routeSafe));
-		telemetry.recordPathfinding(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - startedAt), reached);
-		observation.routeResult = reached ? PlayerBotDepotRouteResult::Reached : PlayerBotDepotRouteResult::Unreachable;
+		const bool executable = valid && (candidate.approachPosition == currentPosition ||
+			(routePlan.metrics.result == PlayerBotNavigationResult::Reached && !routePlan.steps.empty()));
+		const bool reached = executable && (routeSafe || command.snapshot.validatingRiskFallback);
+		telemetry.recordPathfinding(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - startedAt), executable);
+		observation.routeResult = reached ? PlayerBotDepotRouteResult::Reached :
+		                          executable ? PlayerBotDepotRouteResult::Unsafe : PlayerBotDepotRouteResult::Unreachable;
 		observation.routeSteps = static_cast<uint32_t>(routePlan.metrics.steps);
 		observation.expandedNodes = routePlan.metrics.expandedNodes;
+		observation.dangerCost = routePlan.metrics.dangerCost;
+		observation.maximumHealthLossPerSecond = routePlan.metrics.maximumHealthLossPerSecond;
 		if (reached) steps = std::move(routePlan.steps);
 		command = advance(observation);
 	}
@@ -929,7 +933,8 @@ bool PlayerBotController::discoverDepot(Player& player, const Position& currentP
 		         std::to_string(command.snapshot.indexedCandidates) + ",\"in_scope\":" +
 		         std::to_string(command.snapshot.inScopeCandidates) + ",\"standable\":" +
 		         std::to_string(command.snapshot.standableCandidates) + ",\"route_validations\":" +
-		         std::to_string(routeValidations));
+		         std::to_string(routeValidations) + ",\"unsafe_routes\":" +
+		         std::to_string(command.snapshot.unsafeRouteCandidates));
 		schedule(blockedRouteRetryInterval);
 		return false;
 	}
@@ -945,7 +950,12 @@ bool PlayerBotController::discoverDepot(Player& player, const Position& currentP
 		       << "},\"approach\":{\"x\":" << depot.approachPosition.x << ",\"y\":" << depot.approachPosition.y
 		       << ",\"z\":" << static_cast<uint16_t>(depot.approachPosition.z) << "},\"distance\":" << depot.distance
 		       << ",\"route_steps\":" << command.telemetry.routeSteps
-		       << ",\"expanded_nodes\":" << command.telemetry.expandedNodes << ",\"indexed\":" << command.snapshot.indexedCandidates
+		       << ",\"expanded_nodes\":" << command.telemetry.expandedNodes
+		       << ",\"danger_cost\":" << command.telemetry.dangerCost
+		       << ",\"maximum_health_loss_per_second\":" << command.telemetry.maximumHealthLossPerSecond
+		       << ",\"risk_fallback\":" << (command.telemetry.riskFallback ? "true" : "false")
+		       << ",\"unsafe_routes\":" << command.snapshot.unsafeRouteCandidates
+		       << ",\"indexed\":" << command.snapshot.indexedCandidates
 		       << ",\"in_scope\":" << command.snapshot.inScopeCandidates << ",\"standable\":" << command.snapshot.standableCandidates;
 		emit("action_result", currentPosition, fields.str());
 		return true;
@@ -1186,32 +1196,54 @@ void PlayerBotController::processDeposit(Player* player, const Position& current
 				schedule(navigationDecisionDelay(*player));
 				return;
 			}
-			Item* backpackItem = player->getInventoryItem(CONST_SLOT_BACKPACK);
-			Container* backpack = backpackItem ? backpackItem->getContainer() : nullptr;
-			Container* source = nullptr;
 			Item* discardItem = nullptr;
 			uint8_t discardableCount = 0;
-			if (!backpack || !findDepositableItem(*player, backpack, source, discardItem, discardableCount) ||
-			    !source || !discardItem || discardItem->getID() != move.itemId) {
-				stop("depot_discard_source_unavailable", currentPosition);
-				return;
+			Position sourcePosition;
+			uint8_t sourceIndex = 0;
+			if (move.sourceSlot == CONST_SLOT_WHEREEVER) {
+				Item* backpackItem = player->getInventoryItem(CONST_SLOT_BACKPACK);
+				Container* backpack = backpackItem ? backpackItem->getContainer() : nullptr;
+				Container* source = nullptr;
+				if (!backpack || !findDepositableItem(*player, backpack, source, discardItem, discardableCount) ||
+				    !source || !discardItem || discardItem->getID() != move.itemId) {
+					stop("depot_discard_source_unavailable", currentPosition);
+					return;
+				}
+				const int8_t sourceContainerId = player->getContainerID(source);
+				const ItemDeque& sourceItems = source->getItemList();
+				auto sourceItem = std::find(sourceItems.begin(), sourceItems.end(), discardItem);
+				if (sourceContainerId < 0 || sourceItem == sourceItems.end() ||
+				    std::distance(sourceItems.begin(), sourceItem) > UINT8_MAX) {
+					stop("depot_discard_source_unavailable", currentPosition);
+					return;
+				}
+				sourceIndex = static_cast<uint8_t>(std::distance(sourceItems.begin(), sourceItem));
+				sourcePosition = Position(0xFFFF, 0x40 | static_cast<uint8_t>(sourceContainerId), sourceIndex);
+			} else {
+				slots_t discardSlot = CONST_SLOT_WHEREEVER;
+				discardItem = findActionableSlottedItem(*player, move.itemId, discardSlot);
+				if (!discardItem || discardSlot != move.sourceSlot) {
+					stop("depot_discard_source_unavailable", currentPosition);
+					return;
+				}
+				discardableCount = discardItem->getItemCount();
+				g_game.internalGetPosition(discardItem, sourcePosition, sourceIndex);
+				if (sourcePosition.x != 0xFFFF || sourcePosition.y != discardSlot) {
+					stop("depot_discard_source_unavailable", currentPosition);
+					return;
+				}
 			}
-			const int8_t sourceContainerId = player->getContainerID(source);
-			const ItemDeque& sourceItems = source->getItemList();
-			auto sourceItem = std::find(sourceItems.begin(), sourceItems.end(), discardItem);
 			Tile* destination = g_game.map.getTile(currentPosition);
-			if (sourceContainerId < 0 || sourceItem == sourceItems.end() ||
-			    std::distance(sourceItems.begin(), sourceItem) > UINT8_MAX || !destination) {
+			if (!destination) {
 				stop("depot_discard_source_unavailable", currentPosition);
 				return;
 			}
-			const uint8_t sourceIndex = static_cast<uint8_t>(std::distance(sourceItems.begin(), sourceItem));
 			const uint8_t discardCount = std::min(move.requestedCount, discardableCount);
 			const uint32_t inventoryBefore = inventoryPolicy.inventoryItemCount(*player, move.itemId);
 			const uint32_t groundBefore = destination->getItemTypeCount(move.itemId);
 			telemetry.recordActionAttempt();
 			g_game.playerMoveItem(player,
-			    Position(0xFFFF, 0x40 | static_cast<uint8_t>(sourceContainerId), sourceIndex),
+			    sourcePosition,
 			    discardItem->getClientID(), sourceIndex, currentPosition, discardCount, discardItem, destination);
 			const uint32_t inventoryAfter = inventoryPolicy.inventoryItemCount(*player, move.itemId);
 			const uint32_t groundAfter = destination->getItemTypeCount(move.itemId);
@@ -1235,8 +1267,7 @@ void PlayerBotController::processDeposit(Player* player, const Position& current
 		}
 		std::ostringstream fields;
 		fields << "\"action\":\"deposit\",\"result\":" << jsonString(verification.result == PlayerBotDepotMoveResult::Moved ?
-			(verification.movedCount == move.requestedCount ? "success" : "partial") :
-			verification.result == PlayerBotDepotMoveResult::Deferred ? "deferred" : "retry") << ",\"policy\":\"known_loot\",\"depot_id\":"
+			(verification.movedCount == move.requestedCount ? "success" : "partial") : "retry") << ",\"policy\":\"known_loot\",\"depot_id\":"
 		       << command.snapshot.selected.depotId << ",\"container_id\":" << static_cast<uint32_t>(depotChestContainerId)
 		       << ",\"item_id\":" << move.itemId << ",\"requested\":" << static_cast<uint32_t>(move.requestedCount)
 		       << ",\"verified\":" << verification.movedCount;
@@ -1249,13 +1280,6 @@ void PlayerBotController::processDeposit(Player* player, const Position& current
 		       << (move.sourceSlot == CONST_SLOT_WHEREEVER ? "null" : std::to_string(move.sourceSlot))
 		       << ",\"provider_available\":false,\"disposition\":\"deposit\",\"retry\":" << verification.attempts;
 		emit("action_result", currentPosition, fields.str());
-		if (verification.result == PlayerBotDepotMoveResult::Deferred) {
-			const int64_t delay = command.snapshot.deferredDepositRetryAt ?
-			    std::chrono::duration_cast<std::chrono::milliseconds>(
-			        *command.snapshot.deferredDepositRetryAt - std::chrono::steady_clock::now()).count() : 1;
-			schedule(static_cast<uint32_t>(std::max<int64_t>(1, delay)));
-			return;
-		}
 		if (verification.result == PlayerBotDepotMoveResult::Retry) {
 			schedule(navigationDecisionDelay(*player));
 			return;
@@ -1272,13 +1296,7 @@ void PlayerBotController::processDeposit(Player* player, const Position& current
 		return;
 	}
 	if (command.type == PlayerBotDepotCommandType::Wait) {
-		if (command.outcome == PlayerBotDepotOutcome::Deferred && command.snapshot.deferredDepositRetryAt) {
-			const int64_t delay = std::chrono::duration_cast<std::chrono::milliseconds>(
-			    *command.snapshot.deferredDepositRetryAt - std::chrono::steady_clock::now()).count();
-			schedule(static_cast<uint32_t>(std::max<int64_t>(1, delay)));
-		} else {
-			schedule(navigationDecisionDelay(*player));
-		}
+		schedule(navigationDecisionDelay(*player));
 		return;
 	}
 	if (command.type == PlayerBotDepotCommandType::Fail) {
@@ -1388,13 +1406,7 @@ void PlayerBotController::processDeposit(Player* player, const Position& current
 		return;
 	}
 	if (command.type == PlayerBotDepotCommandType::Wait) {
-		if (command.outcome == PlayerBotDepotOutcome::Deferred && command.snapshot.deferredDepositRetryAt) {
-			const int64_t delay = std::chrono::duration_cast<std::chrono::milliseconds>(
-			    *command.snapshot.deferredDepositRetryAt - std::chrono::steady_clock::now()).count();
-			schedule(static_cast<uint32_t>(std::max<int64_t>(1, delay)));
-		} else {
-			schedule(navigationDecisionDelay(*player));
-		}
+		schedule(navigationDecisionDelay(*player));
 		return;
 	}
 	if (command.type != PlayerBotDepotCommandType::MoveDeposit || !depositItem) return;
