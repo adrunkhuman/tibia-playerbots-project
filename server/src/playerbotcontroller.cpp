@@ -293,8 +293,8 @@ void PlayerBotController::say(Player& player, const std::string& text) const
 	if (!admin || admin->isRemoved()) {
 		return;
 	}
-	admin->sendTextMessage(MESSAGE_STATUS_CONSOLE_ORANGE, "[Bot One] " + text);
-	admin->sendPrivateMessage(&player, TALKTYPE_PRIVATE, text);
+	admin->sendTextMessage(MESSAGE_STATUS_CONSOLE_ORANGE,
+	                       "[Bot One][" + std::to_string(player.getLevel()) + "] " + text);
 }
 
 void PlayerBotController::setStage(ScenarioStage stage, const Position& position)
