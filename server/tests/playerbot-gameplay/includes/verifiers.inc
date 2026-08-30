@@ -241,7 +241,8 @@ function F.verifySellLoot(playerId, attempts)
     assert(player and not player:isRemoved(), "Bot One disappeared during local sell loot")
     local chest = player:getDepotChest(F.PlayerbotThaisLockerDepotId(), false)
     local complete = chest and player:getItemCount(F.sellLootItemId) == 0 and
-        chest:getItemCountById(F.sellLootItemId) == 0 and chest:getItemCountById(2050) == 1 and
+        chest:getItemCountById(F.sellLootItemId) == 0 and chest:getItemCountById(7635) == 0 and
+        chest:getItemCountById(2050) == 1 and
         player:getMoney() > player:getStorageValue(50100)
     if not complete and attempts > 0 then
         addEvent(F.verifySellLoot, 500, playerId, attempts - 1)
@@ -409,12 +410,13 @@ function F.verifySlottedLoot(playerId, sellerAvailable, attempts)
     local left = player and player:getSlotItem(CONST_SLOT_LEFT)
     local complete = player and not player:isRemoved() and (not ammo or ammo:getId() ~= F.slottedLootItemId) and
         left and left:getId() == F.slottedLootItemId and
-        player:getItemCount(F.slottedLootItemId) == 1 and chest and chest:getItemCountById(F.slottedLootItemId) == 1
+        player:getItemCount(F.slottedLootItemId) == 1 and chest and
+        chest:getItemCountById(F.slottedLootItemId) == (sellerAvailable and 0 or 1)
     if not complete and attempts > 0 then
         addEvent(F.verifySlottedLoot, 500, playerId, sellerAvailable, attempts - 1)
         return
     end
-    assert(complete, "slotted loot did not reach its verified depot disposition")
+    assert(complete, "slotted loot did not reach its verified local disposition")
     print(sellerAvailable and "PLAYERBOT_GAMEPLAY_TEST SLOTTED_LOOT_SELLER_PASS" or
         "PLAYERBOT_GAMEPLAY_TEST SLOTTED_LOOT_NO_SELLER_PASS")
 end

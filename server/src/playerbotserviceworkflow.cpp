@@ -312,9 +312,15 @@ PlayerBotServiceCommand PlayerBotServiceWorkflow::verifyShop(const PlayerBotServ
 	const PlayerBotServiceVerification result = serviceSession.verifyShopTransaction(count, observation.money, observation.bankBalance,
 		purchase, observation.maximumAttempts);
 	if (result.result == PlayerBotServiceVerificationResult::Success) {
-		if (!purchase && liquidationPlan) serviceStage = PlayerBotServiceStage::Complete;
-		npcSession.setStep(PlayerBotNpcConversationStep::Ready);
-		npcSession.resetRetries();
+		if (!purchase && liquidationPlan) {
+			liquidationPlan.reset();
+			serviceStage = PlayerBotServiceStage::BuyPotions;
+			serviceSession.reset();
+			npcSession.reset();
+		} else {
+			npcSession.setStep(PlayerBotNpcConversationStep::Ready);
+			npcSession.resetRetries();
+		}
 		PlayerBotServiceCommand command{PlayerBotServiceCommandType::Wait, PlayerBotServiceOutcome::Success};
 		command.transaction = result.before;
 		command.verification = result;
@@ -409,7 +415,7 @@ PlayerBotServiceCommand PlayerBotServiceWorkflow::advanceImpl(const PlayerBotSer
 	if (serviceStage == PlayerBotServiceStage::Complete) return {PlayerBotServiceCommandType::Complete, PlayerBotServiceOutcome::Success};
 	observeProviders(observation.shops, observation.bankers);
 	if (serviceStage == PlayerBotServiceStage::Discover) {
-		serviceStage = serviceIntent == PlayerBotServiceIntent::LiquidateCarriedLoot ?
+		serviceStage = serviceIntent == PlayerBotServiceIntent::ResupplyWithLocalSale ?
 			PlayerBotServiceStage::SellLoot : PlayerBotServiceStage::BuyPotions;
 	}
 	if (serviceStage == PlayerBotServiceStage::SellLoot) {

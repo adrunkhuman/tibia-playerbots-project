@@ -422,9 +422,14 @@ utility are observable, but food does not yet select a separate acquisition
 goal. Later goal arbitration can weigh measured regeneration benefit against
 travel, capacity, and service costs without restoring a hard requirement.
 
-An opened depot is scanned for a local positive-value SellLoot plan after
-deposit, including when mandatory potion or banking service must run first. The
-plan remains available for goal selection after that service completes.
+An opened depot is scanned for loot with a positive local NPC sell price after
+deposit. A reachable sale that requires no NPC travel is deterministic service
+work: the bot withdraws one bounded batch, sells it, then continues potion and
+banking service. Its sale revenue is available for that resupply. Utility does
+not arbitrate local sales against hunting; it is reserved for future travel that
+has a fare or otherwise leaves the local service area. If one batch cannot fund
+required potions, the bot returns to the depot and tries the next local batch
+before reporting insufficient funds.
 
 The bot identifies only server-classified corpse containers and checks normal
 corpse ownership. It opens the corpse through normal item use before inspecting
