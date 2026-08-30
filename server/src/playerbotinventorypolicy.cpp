@@ -163,7 +163,7 @@ bool PlayerBotInventoryPolicy::isProtectedDepositItem(const Player& player, cons
 		return false;
 	}
 	const ItemType& type = Item::items[item.getID()];
-	return (type.isContainer() && type.corpseType == RACE_NONE) || item.getID() == ropeItemId || item.getID() == 2554 ||
+	return (type.isContainer() && type.corpseType == RACE_NONE) ||
 	       ((type.slotPosition & SLOTP_TWO_HAND) != 0 && type.weaponType != WEAPON_NONE) ||
 	       equipmentUpgrade(player, item) || item.getWorth() != 0 || sellValues.find(item.getID()) == sellValues.end();
 }

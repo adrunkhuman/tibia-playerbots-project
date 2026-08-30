@@ -143,7 +143,7 @@
 			Invoke-Compose up --detach
 			Invoke-DatabaseCommand -Query "INSERT INTO player_depotitems (player_id, sid, pid, itemtype, count, attributes) SELECT id, 9001, 2, 2684, 7, X'' FROM players WHERE name = 'Rook Tester'"
 			$firstCycleLogs = Wait-ForLog -Pattern '"action":"deposit","result":"complete"'
-			Assert-DepotEvents -Logs $firstCycleLogs -ExpectedDepositedCount 2 -ExpectedEquipmentDeposits 2
+			Assert-DepotEvents -Logs $firstCycleLogs -ExpectedDepositedCount 2 -ExpectedEquipmentDeposits 2 -ExpectedToolDeposits 4
 
 			Invoke-Compose stop server
 			Invoke-Compose up --detach server

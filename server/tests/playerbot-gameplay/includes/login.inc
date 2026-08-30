@@ -473,6 +473,9 @@ function F.login.onLogin(player)
             assert(nested and nested:addItem(F.depotLootItemId, 1) and nested:addItem(F.depotLootItemId, 1) and nested:addItem(F.depotLootItemId, 1) and nested:addItem(F.depotLootItemId, 1), "depot fixture could not seed nested loot")
             assert(nested:addItem(2380, 1) and nested:addItem(F.seedWeaponId, 1) and nested:addItem(2461, 1) and nested:addItem(2643, 1), "depot fixture could not seed surplus equipment")
             assert(backpack:addItem(2050, 1), "depot fixture could not seed an unknown retained item")
+            assert(backpack:addItem(2120, 1) and backpack:addItem(2120, 1) and
+                backpack:addItem(2554, 1) and backpack:addItem(2554, 1),
+                "depot fixture could not seed surplus navigation tools")
             local restartPhase = os.getenv("PLAYERBOT_DEPOT_RESTART_PHASE") or ""
             assert(player:setStorageValue(F.depotFixtureStorage, restartPhase == "" and 0 or 2), "depot fixture state could not persist")
         elseif fixtureState == 0 then

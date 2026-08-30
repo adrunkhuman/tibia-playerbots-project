@@ -425,10 +425,11 @@ scan. A selected route is transferred into
 normal navigation, so it is not planned again. The selected actual locker ID,
 rather than the town ID, identifies the opened locker and player depot storage.
 Nested containers are opened and deposits are verified through normal item
-movement. Equipped items, the root backpack, currency, rope, shovel, the potion
-reserve, food, and unknown items are retained. The depot equips carried upgrades
-through the normal verified equipment path, then treats displaced and inferior
-equipment as ordinary cargo for sale or deposit. This prevents equipment from
+movement. Equipped items, the root backpack, currency, one rope, one shovel, the
+potion reserve, food, and unknown items are retained. Surplus ropes and shovels
+are ordinary cargo for sale or deposit. The depot equips carried upgrades through
+the normal verified equipment path, then treats displaced and inferior equipment
+as ordinary cargo for sale or deposit. This prevents equipment from
 permanently consuming capacity without discarding upgrades. A carried weapon
 must improve maximum damage with the player's trained weapon skill; higher raw
 attack alone does not justify switching weapon classes. Two-handed weapons are
