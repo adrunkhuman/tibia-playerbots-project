@@ -24,12 +24,6 @@
 class PlayerBotTargetingSession
 {
 	public:
-		enum class TraversalState : uint8_t {
-			None,
-			Combat,
-			Pursuit,
-		};
-
 		std::optional<PlayerBotTarget> selectVisibleTarget(std::vector<PlayerBotTarget> candidates,
 		                                                   const Position& currentPosition,
 		                                                   std::chrono::steady_clock::time_point now);
@@ -53,28 +47,14 @@ class PlayerBotTargetingSession
 		                             std::chrono::steady_clock::duration timeout) const;
 		std::optional<PlayerBotDefensiveTarget> clearDefensiveTarget();
 
-		void beginPursuit(const Position& start, const Position& destination,
-		                  std::chrono::steady_clock::time_point now);
-		bool pursuitBudgetExhausted(const Position& currentPosition, std::chrono::steady_clock::time_point now,
-		                           std::chrono::steady_clock::duration timeout, uint32_t maximumDistance) const;
-		const Position& pursuitDestination() const { return lastKnownPursuitDestination; }
-		void updatePursuitDestination(const Position& destination) { lastKnownPursuitDestination = destination; }
-		std::optional<PlayerBotTraversalTarget> abandonPursuit(std::chrono::steady_clock::time_point now,
-		                                                       std::chrono::steady_clock::duration suppression);
-
 		std::optional<PlayerBotTarget> activeTarget() const;
-		TraversalState traversalState() const { return state; }
 
 	private:
 		std::optional<PlayerBotTraversalTarget> activeTraversalTarget;
 		std::optional<PlayerBotDefensiveTarget> activeDefensiveTarget;
 		std::chrono::steady_clock::time_point traversalCombatStarted;
 		std::chrono::steady_clock::time_point defensiveCombatStarted;
-		std::chrono::steady_clock::time_point pursuitStarted;
-		Position pursuitStartPosition;
-		Position lastKnownPursuitDestination;
 		std::unordered_map<uint32_t, std::chrono::steady_clock::time_point> suppressedTraversalTargets;
-		TraversalState state = TraversalState::None;
 };
 
 #endif

@@ -38,7 +38,7 @@ the changed behavior:
 | Switch | Coverage |
 | ------ | -------- |
 | `-FullNavigation` | Complete fixed A-B-C-B-A fixture route and temporary blockage recovery. |
-| `-TargetPursuit` | Visible-only last-seen pursuit, bounded reacquisition, and out-of-budget abandonment. |
+| `-TargetApproach` | Same-floor routed engagement, unreachable-target patrol fallback, and encountered-attacker replacement. |
 | `-CorpseLoot` | Non-corpse, empty, guaranteed-loot, and container death items; open-before-inspect ordering, suspended-route retry, and bounded inaccessible-corpse timeout. |
 | `-DeathTelemetry` | Death context, exponential relog, fresh controller state, abandonment, and removal. |
 | `-Healing` | Potion verification, threshold recovery, missing-stock service, purchase, and resume behavior. |
@@ -66,10 +66,10 @@ Navigation or looting changes require at least:
 pwsh -File scripts/test-playerbot-gameplay.ps1 -FullNavigation -CorpseLoot
 ```
 
-Target-pursuit changes also require
-`pwsh -File scripts/test-playerbot-gameplay.ps1 -TargetPursuit -Focused`.
-`-TargetPursuit` runs successful `target_pursuit` reacquisition and bounded
-`target_pursuit_abandon` fallback scenarios.
+Target-approach changes also require
+`pwsh -File scripts/test-playerbot-gameplay.ps1 -TargetApproach -Focused`.
+`-TargetApproach` runs `target_approach`, `target_approach_unreachable`, and
+`target_attacker_priority`.
 
 Use `-Focused` with one or more scenario switches to skip the baseline. Use
 `-SkipBuild` only with a known-current `angelion-server:latest` image; it does

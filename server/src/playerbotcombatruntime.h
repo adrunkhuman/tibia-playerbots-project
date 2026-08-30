@@ -22,8 +22,6 @@ enum class PlayerBotCombatCommand : uint8_t {
 	None,
 	AttackTraversal,
 	AttackDefensive,
-	BeginPursuit,
-	PursueDestination,
 	Abandon,
 	BeginLoot,
 	CompleteDefensiveCombat,
@@ -56,16 +54,11 @@ struct PlayerBotCombatSnapshot {
 	std::chrono::steady_clock::time_point now;
 	PlayerBotCombatTargetSnapshot traversal;
 	PlayerBotCombatTargetSnapshot defensive;
-	std::optional<Position> pursuitDestination;
 };
 
 struct PlayerBotCombatRuntimeConfig {
 	std::chrono::steady_clock::duration combatTimeout;
 	std::chrono::steady_clock::duration traversalSuppression;
-	std::chrono::steady_clock::duration pursuitTimeout;
-	std::chrono::steady_clock::duration pursuitSuppression;
-	uint32_t maximumPursuitDistance = 0;
-	uint32_t maximumReacquisitionDistance = 0;
 };
 
 // Owns combat transitions. The controller supplies already eligible world candidates and executes commands.
@@ -83,9 +76,8 @@ class PlayerBotCombatRuntime
 		PlayerBotCombatDecision confirmAttack(const PlayerBotCombatDecision& command, bool accepted,
 		                                     std::chrono::steady_clock::time_point now);
 		PlayerBotCombatDecision advance(const PlayerBotCombatSnapshot& snapshot);
-		PlayerBotCombatDecision beginPursuit(const Position& currentPosition, const Position& destination,
-		                                    std::chrono::steady_clock::time_point now);
-		PlayerBotCombatDecision abandonPursuit(std::chrono::steady_clock::time_point now);
+		void suppressTraversalTarget(uint32_t id, std::chrono::steady_clock::time_point now,
+		                             std::chrono::steady_clock::duration suppression);
 		std::optional<PlayerBotTraversalTarget> clearTraversalTarget();
 		std::optional<PlayerBotDefensiveTarget> clearDefensiveTarget();
 

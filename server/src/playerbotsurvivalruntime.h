@@ -54,7 +54,7 @@ struct PlayerBotSurvivalSnapshot {
 	bool progressionActive = false;
 	bool progressionDeparture = false;
 	bool hunting = false;
-	bool combatOrPursuit = false;
+	bool combatActive = false;
 	bool navigationPending = false;
 	bool healingExhausted = false;
 	bool combatExhausted = false;

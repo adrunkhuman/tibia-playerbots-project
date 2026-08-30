@@ -160,8 +160,7 @@ PlayerBotController::PlayerBotController(const Player& player,
 		                                      PlayerBotEquipmentAdapter::loadout(candidatePlayer),
 		                                      PlayerBotEquipmentAdapter::item(item)).has_value();
 	}), huntCoordinator({
-		{traversalCombatTimeout, traversalTargetSuppression, lostTargetPursuitTimeout, lostTargetSuppression,
-		 maximumLostTargetPursuitDistance, maximumTargetReacquisitionDistance},
+		{traversalCombatTimeout, traversalTargetSuppression},
 		{maxCorpseSearchAttempts, maximumCorpseNavigationFailures, corpseNavigationSuspendThreshold,
 		 std::chrono::milliseconds(corpseNavigationRetryInterval), corpseLootTimeout, preferredFoodCount},
 		fixtureDriver.huntPatrol(),
@@ -436,8 +435,7 @@ void PlayerBotController::onDeath(const Player& player, const Creature* killer, 
 	deathObserved = true;
 	lastPosition = player.getPosition();
 	if (huntCoordinator.huntActive() && turnRouter.cyclePhase() == CyclePhase::Hunt &&
-	    (turnRouter.scenarioStage() == ScenarioStage::TraversalCombat ||
-	     turnRouter.scenarioStage() == ScenarioStage::TargetPursuit)) {
+	    turnRouter.scenarioStage() == ScenarioStage::TraversalCombat) {
 		const auto now = std::chrono::steady_clock::now();
 		huntCoordinator.observeHuntDeath(true, now, huntRegionCooldown);
 	} else {
@@ -600,10 +598,12 @@ void PlayerBotController::onCombatDamage(Creature* attacker, const Creature& tar
 
 PlayerBotNavigationRoutePlan PlayerBotController::planNavigationRoute(Player& player, const Position& destination,
 	                                                                    const std::set<Position>& blockedPositions,
-	                                                                    uint64_t maximumExpandedNodes) const
+	                                                                    uint64_t maximumExpandedNodes,
+	                                                                    bool sameFloorOnly) const
 
 {
-	return planNavigationRoute(player, PlayerBotNavigationGoal::exact(destination), blockedPositions, maximumExpandedNodes);
+	return planNavigationRoute(player, PlayerBotNavigationGoal::exact(destination), blockedPositions, maximumExpandedNodes,
+	                           sameFloorOnly);
 }
 
 PlayerBotNavigationRoutePlan PlayerBotController::planCompleteNavigationRoute(
@@ -710,7 +710,8 @@ PlayerBotNavigationRoutePlan PlayerBotController::planCompleteNavigationRoute(
 
 PlayerBotNavigationRoutePlan PlayerBotController::planNavigationRoute(Player& player, const PlayerBotNavigationGoal& goal,
 	                                                                    const std::set<Position>& blockedPositions,
-	                                                                    uint64_t maximumExpandedNodes) const
+	                                                                    uint64_t maximumExpandedNodes,
+	                                                                    bool sameFloorOnly) const
 {
 	PlayerBotNavigationRoutePlan routePlan;
 	routePlan.metrics.attempted = true;
@@ -718,11 +719,12 @@ PlayerBotNavigationRoutePlan PlayerBotController::planNavigationRoute(Player& pl
 	const PlayerBotNavigator navigator;
 	const PlayerBotNavigationCostPolicy costPolicy = navigationCostPolicy(player);
 	PlayerBotNavigationCostSummary costSummary;
-	if (goal.type != PlayerBotNavigationGoalType::Exact) {
+	if (sameFloorOnly || goal.type != PlayerBotNavigationGoalType::Exact) {
 		routePlan.metrics.waypoint = goal.representative();
 		routePlan.metrics.result = navigator.plan(player, goal, blockedPositions, routePlan.steps,
 		                                          routePlan.metrics.expandedNodes, maximumExpandedNodes,
-		                                          &routePlan.metrics.closestPosition, &costPolicy, &costSummary);
+		                                          &routePlan.metrics.closestPosition, &costPolicy, &costSummary,
+		                                          sameFloorOnly);
 		routePlan.metrics.movementCost = costSummary.movementCost;
 		routePlan.metrics.dangerCost = costSummary.dangerCost;
 		routePlan.metrics.maximumHealthLossPerSecond = costSummary.maximumHealthLossPerSecond;
@@ -1144,16 +1146,16 @@ void PlayerBotController::onHealthGain(Creature* healer, const Creature& target,
 
 bool PlayerBotController::processNavigation(Player* player, const Position& currentPosition, const Position& destination,
 	                                            PlayerBotNavigationRuntimeOutcome* navigationOutcome,
-	                                            uint64_t maximumExpandedNodes)
+	                                            uint64_t maximumExpandedNodes, bool sameFloorOnly)
 
 {
 	return processNavigation(player, currentPosition, PlayerBotNavigationGoal::exact(destination), navigationOutcome,
-	                         maximumExpandedNodes);
+	                         maximumExpandedNodes, false, sameFloorOnly);
 }
 
 bool PlayerBotController::processNavigation(Player* player, const Position& currentPosition, const PlayerBotNavigationGoal& goal,
 	                                            PlayerBotNavigationRuntimeOutcome* navigationOutcome,
-	                                            uint64_t maximumExpandedNodes, bool npcApproach)
+	                                            uint64_t maximumExpandedNodes, bool npcApproach, bool sameFloorOnly)
 {
 	const Position destination = goal.representative();
 	const auto now = std::chrono::steady_clock::now();
@@ -1173,7 +1175,7 @@ bool PlayerBotController::processNavigation(Player* player, const Position& curr
 			routePlan.metrics.expandedNodes = outcome.routeRequest->maximumExpandedNodes;
 		} else {
 			routePlan = planNavigationRoute(*player, outcome.routeRequest->goal, outcome.routeRequest->blockedPositions,
-			                                std::min(fixturePlan.maximumExpandedNodes, routeNodeBudget));
+			                                std::min(fixturePlan.maximumExpandedNodes, routeNodeBudget), sameFloorOnly);
 		}
 		const PlayerBotPendingMovementResult movementResult = outcome.movementResult;
 		outcome = navigationRuntime.observePlan({goal, std::move(routePlan), player->canDoAction(), false, now});
@@ -1255,6 +1257,7 @@ bool PlayerBotController::processNavigation(Player* player, const Position& curr
 		       << ",\"movement_cost\":" << outcome.plan.movementCost
 		       << ",\"danger_cost\":" << outcome.plan.dangerCost
 		       << ",\"maximum_health_loss_per_second\":" << outcome.plan.maximumHealthLossPerSecond
+		       << ",\"same_floor\":" << (sameFloorOnly ? "true" : "false")
 		       << ",\"destination\":{\"x\":" << destination.x
 		       << ",\"y\":" << destination.y << ",\"z\":" << static_cast<uint16_t>(destination.z) << '}';
 		telemetry.emit("action_result", currentPosition, fields.str());

@@ -113,70 +113,44 @@ function Assert-PatrolRecoveryEvents {
 	}
 }
 
-function Assert-TargetPursuitEvents {
+function Assert-TargetApproachEvents {
 	param([string]$Logs)
 
 	$events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
-	$started = @($events | Where-Object {
-		$_.event -eq "action_result" -and $_.action -eq "target_pursuit" -and $_.result -eq "started"
+	$selected = @($events | Where-Object {
+		$_.event -eq "target_changed" -and $_.reason -eq "visible_monster"
 	})
-	$reacquired = @($events | Where-Object {
-		$_.event -eq "action_result" -and $_.action -eq "target_pursuit" -and $_.result -eq "reacquired"
+	$approachPlan = @($events | Where-Object {
+		$_.event -eq "action_result" -and $_.action -eq "plan" -and $_.result -eq "success" -and $_.same_floor
 	})
 	$defeated = @($events | Where-Object {
 		$_.event -eq "target_changed" -and $_.reason -eq "target_defeated"
 	})
 	$terminal = @($events | Where-Object { $_.event -eq "terminal" })
-	$firstPlan = @($events | Where-Object {
-		$_.event -eq "action_result" -and $_.action -eq "plan" -and $_.result -eq "success"
-	}) | Select-Object -First 1
-	$lastSeenPlanDistance = $started.Count -eq 1 -and $firstPlan.Count -eq 1 ?
-		[Math]::Max([Math]::Abs($started[0].last_seen_position.x - $firstPlan[0].destination.x),
-			[Math]::Abs($started[0].last_seen_position.y - $firstPlan[0].destination.y)) : 99
-	$distance = $started.Count -eq 1 -and $reacquired.Count -eq 1 ?
-		[Math]::Max([Math]::Abs($started[0].position.x - $reacquired[0].position.x),
-			[Math]::Abs($started[0].position.y - $reacquired[0].position.y)) : 0
-	if ($started.Count -ne 1 -or $reacquired.Count -ne 1 -or $defeated.Count -lt 1 -or
-		$started[0].target_id -ne $reacquired[0].target_id -or
-		$reacquired[0].target_id -ne $defeated[0].previous_target_id -or
-		$distance -lt 1 -or $distance -gt 6 -or $lastSeenPlanDistance -gt 1 -or $terminal.Count -ne 0) {
-		throw "Target pursuit failed. started=$($started.Count), reacquired=$($reacquired.Count), defeated=$($defeated.Count), distance=$distance, lastSeenPlanDistance=$lastSeenPlanDistance, terminal=$($terminal.Count)."
+	$fixture = [regex]::Match($Logs, "PLAYERBOT_GAMEPLAY_TEST TARGET_APPROACH_START (\d+) (\d+)")
+	$closestTargetId = $fixture.Success ? [uint64]$fixture.Groups[1].Value : 0
+	if ($selected.Count -ne 1 -or $approachPlan.Count -lt 1 -or $defeated.Count -lt 1 -or
+		$closestTargetId -eq 0 -or $selected[0].target_id -ne $closestTargetId -or
+		$selected[0].target_id -ne $defeated[0].previous_target_id -or $terminal.Count -ne 0) {
+		throw "Target approach failed. selected=$($selected.Count), closest=$closestTargetId, plans=$($approachPlan.Count), defeated=$($defeated.Count), terminal=$($terminal.Count)."
 	}
 }
 
-function Assert-TargetPursuitAbandonEvents {
+function Assert-UnreachableTargetApproachEvents {
 	param([string]$Logs)
 
 	$events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
-	$started = @($events | Where-Object {
-		$_.event -eq "action_result" -and $_.action -eq "target_pursuit" -and $_.result -eq "started"
+	$skipped = @($events | Where-Object {
+		$_.event -eq "action_result" -and $_.action -eq "target_approach" -and $_.result -eq "skipped" -and
+		$_.reason -eq "route_unavailable" -and $_.same_floor
 	})
-	$abandoned = @($events | Where-Object {
-		$_.event -eq "action_result" -and $_.action -eq "target_pursuit" -and $_.result -eq "abandoned" -and
-		$_.reason -in @("last_seen_position_reached", "pursuit_budget_exhausted")
+	$patrolPlan = @($events | Where-Object {
+		$_.event -eq "action_result" -and $_.action -eq "plan" -and $_.result -eq "success" -and -not $_.same_floor
 	})
-	$reacquired = @($events | Where-Object {
-		$_.event -eq "action_result" -and $_.action -eq "target_pursuit" -and $_.result -eq "reacquired"
-	})
-	$routeUnavailable = @($events | Where-Object {
-		$_.event -eq "action_result" -and $_.action -eq "navigate" -and $_.result -eq "failed" -and
-		$_.reason -eq "route_unavailable"
-	})
+	$selected = @($events | Where-Object { $_.event -eq "target_changed" -and $_.reason -eq "visible_monster" })
 	$terminal = @($events | Where-Object { $_.event -eq "terminal" })
-	$firstPlan = @($events | Where-Object {
-		$_.event -eq "action_result" -and $_.action -eq "plan" -and $_.result -eq "success"
-	}) | Select-Object -First 1
-	$lastSeenPlanDistance = $started.Count -eq 1 -and $firstPlan.Count -eq 1 ?
-		[Math]::Max([Math]::Abs($started[0].last_seen_position.x - $firstPlan[0].destination.x),
-			[Math]::Abs($started[0].last_seen_position.y - $firstPlan[0].destination.y)) : 99
-	$distance = $started.Count -eq 1 -and $abandoned.Count -eq 1 ?
-		[Math]::Max([Math]::Abs($started[0].position.x - $abandoned[0].position.x),
-			[Math]::Abs($started[0].position.y - $abandoned[0].position.y)) : 0
-	if ($started.Count -ne 1 -or $abandoned.Count -ne 1 -or
-		$started[0].target_id -ne $abandoned[0].target_id -or $distance -gt 6 -or
-		($distance -eq 0 -and $routeUnavailable.Count -lt 1) -or $lastSeenPlanDistance -gt 1 -or
-		$reacquired.Count -ne 0 -or $terminal.Count -ne 0) {
-		throw "Target pursuit fallback failed. started=$($started.Count), abandoned=$($abandoned.Count), distance=$distance, routeUnavailable=$($routeUnavailable.Count), lastSeenPlanDistance=$lastSeenPlanDistance, reacquired=$($reacquired.Count), terminal=$($terminal.Count)."
+	if ($skipped.Count -ne 1 -or $patrolPlan.Count -lt 1 -or $selected.Count -ne 0 -or $terminal.Count -ne 0) {
+		throw "Unreachable target fallback failed. skipped=$($skipped.Count), patrolPlans=$($patrolPlan.Count), selected=$($selected.Count), terminal=$($terminal.Count)."
 	}
 }
 
@@ -193,10 +167,15 @@ function Assert-TargetAttackerPriorityEvents {
 	$attacker = @($events | Where-Object {
 		$_.event -eq "target_changed" -and $_.target_name -eq "Playerbot Defensive Threat"
 	})
+	$defeated = @($events | Where-Object {
+		$_.event -eq "target_changed" -and $_.reason -eq "target_defeated"
+	})
+	$terminal = @($events | Where-Object { $_.event -eq "terminal" })
 	if ($initial.Count -ne 1 -or $preempted.Count -ne 1 -or $attacker.Count -ne 1 -or
 		$preempted[0].previous_target_id -ne $initial[0].target_id -or
-		$attacker[0].target_id -eq $initial[0].target_id) {
-		throw "Active attacker priority failed. initial=$($initial.Count), preempted=$($preempted.Count), attacker=$($attacker.Count)."
+		$attacker[0].target_id -eq $initial[0].target_id -or $defeated.Count -lt 1 -or
+		$defeated[0].previous_target_id -ne $attacker[0].target_id -or $terminal.Count -ne 0) {
+		throw "Active attacker priority failed. initial=$($initial.Count), preempted=$($preempted.Count), attacker=$($attacker.Count), defeated=$($defeated.Count), terminal=$($terminal.Count)."
 	}
 }
 

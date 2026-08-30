@@ -34,17 +34,12 @@ namespace {
 std::optional<PlayerBotCombatDecision> PlayerBotCombatRuntime::selectTraversalAttack(
 	std::vector<PlayerBotTraversalCandidate> candidates, const Position& currentPosition, std::chrono::steady_clock::time_point now)
 {
-	auto select = [&candidates, &currentPosition, now, this](bool attacksPlayer) {
-		std::vector<PlayerBotTarget> targets;
-		for (const PlayerBotTraversalCandidate& candidate : candidates) {
-			if (candidate.attacksPlayer == attacksPlayer) {
-				targets.push_back({candidate.id, candidate.position, candidate.name});
-			}
-		}
-		return session->value.selectVisibleTarget(std::move(targets), currentPosition, now);
-	};
-	auto selected = select(true);
-	if (!selected) selected = select(false);
+	std::vector<PlayerBotTarget> targets;
+	targets.reserve(candidates.size());
+	for (const PlayerBotTraversalCandidate& candidate : candidates) {
+		targets.push_back({candidate.id, candidate.position, candidate.name});
+	}
+	const auto selected = session->value.selectVisibleTarget(std::move(targets), currentPosition, now);
 	if (!selected) {
 		return std::nullopt;
 	}
@@ -73,13 +68,7 @@ PlayerBotCombatDecision PlayerBotCombatRuntime::confirmAttack(const PlayerBotCom
 	if (!accepted) {
 		result.result = "failed";
 		result.reason = "target_rejected";
-		if (command.command == PlayerBotCombatCommand::AttackTraversal &&
-		    session->value.traversalState() == PlayerBotTargetingSession::TraversalState::Pursuit) {
-			result.command = PlayerBotCombatCommand::PursueDestination;
-			result.destination = session->value.pursuitDestination();
-		} else {
-			result.command = PlayerBotCombatCommand::None;
-		}
+		result.command = PlayerBotCombatCommand::None;
 		return result;
 	}
 	if (command.command == PlayerBotCombatCommand::AttackTraversal) {
@@ -124,25 +113,6 @@ PlayerBotCombatDecision PlayerBotCombatRuntime::advance(const PlayerBotCombatSna
 	if (!traversal) {
 		return {};
 	}
-	if (session->value.traversalState() == PlayerBotTargetingSession::TraversalState::Pursuit) {
-		if (session->value.pursuitBudgetExhausted(snapshot.currentPosition, snapshot.now, config.pursuitTimeout, config.maximumPursuitDistance)) {
-			return {PlayerBotCombatCommand::Abandon, {traversal->id, traversal->position, traversal->name}, traversal->expectedCorpse, {}, false,
-			        "abandoned", "pursuit_budget_exhausted"};
-		}
-		const PlayerBotCombatTargetSnapshot& target = snapshot.traversal;
-		if (target.present && !target.removed && !target.dead && target.visible && target.visibleCreature) {
-			session->value.updateTraversalTargetPosition(target.target.position);
-			if (targetDistance(snapshot.currentPosition, target.target.position) <= config.maximumReacquisitionDistance) {
-				return {PlayerBotCombatCommand::AttackTraversal, target.target, traversal->expectedCorpse};
-			}
-			if (snapshot.pursuitDestination) {
-				session->value.updatePursuitDestination(*snapshot.pursuitDestination);
-			}
-		}
-		return {PlayerBotCombatCommand::PursueDestination, {traversal->id, traversal->position, traversal->name}, traversal->expectedCorpse,
-		        session->value.pursuitDestination()};
-	}
-
 	const PlayerBotCombatTargetSnapshot& target = snapshot.traversal;
 	if (!target.present || target.removed || target.dead) {
 		const auto defeated = session->value.takeDefeatedTraversalTarget();
@@ -150,7 +120,9 @@ PlayerBotCombatDecision PlayerBotCombatRuntime::advance(const PlayerBotCombatSna
 		        defeated ? defeated->expectedCorpse : PlayerBotExpectedCorpse{}};
 	}
 	if (!target.visible || !target.visibleCreature || !target.attackedByPlayer) {
-		return {PlayerBotCombatCommand::BeginPursuit, {traversal->id, traversal->position, traversal->name}, traversal->expectedCorpse};
+		session->value.suppressTraversalTarget(target.target.id, snapshot.now + config.traversalSuppression);
+		return {PlayerBotCombatCommand::Abandon, {traversal->id, traversal->position, traversal->name}, traversal->expectedCorpse,
+		        {}, false, "abandoned", "target_lost"};
 	}
 	if (session->value.traversalCombatTimedOut(snapshot.now, config.combatTimeout)) {
 		session->value.suppressTraversalTarget(target.target.id, snapshot.now + config.traversalSuppression);
@@ -161,21 +133,10 @@ PlayerBotCombatDecision PlayerBotCombatRuntime::advance(const PlayerBotCombatSna
 	return {};
 }
 
-PlayerBotCombatDecision PlayerBotCombatRuntime::beginPursuit(const Position& currentPosition, const Position& destination,
-	std::chrono::steady_clock::time_point now)
+void PlayerBotCombatRuntime::suppressTraversalTarget(uint32_t id, std::chrono::steady_clock::time_point now,
+	                                                  std::chrono::steady_clock::duration suppression)
 {
-	const auto target = session->value.traversalTarget();
-	if (!target) return {};
-	session->value.beginPursuit(currentPosition, destination, now);
-	return {PlayerBotCombatCommand::PursueDestination, {target->id, target->position, target->name}, target->expectedCorpse, destination, false,
-	        "started", "target_lost"};
-}
-
-PlayerBotCombatDecision PlayerBotCombatRuntime::abandonPursuit(std::chrono::steady_clock::time_point now)
-{
-	const auto previous = session->value.abandonPursuit(now, config.pursuitSuppression);
-	return {PlayerBotCombatCommand::Abandon, previous ? PlayerBotTarget{previous->id, previous->position, previous->name} : PlayerBotTarget{}, {}, {}, false,
-	        "abandoned", "pursuit_budget_exhausted"};
+	session->value.suppressTraversalTarget(id, now + suppression);
 }
 
 std::optional<PlayerBotTraversalTarget> PlayerBotCombatRuntime::clearTraversalTarget() { return session->value.clearTraversalTarget(); }

@@ -58,7 +58,6 @@ const char* PlayerBotTurnRouter::scenarioStageName(PlayerBotScenarioStage value)
 		case PlayerBotScenarioStage::LootCorpse: return "loot_corpse";
 		case PlayerBotScenarioStage::Traverse: return "traverse";
 		case PlayerBotScenarioStage::TraversalCombat: return "traversal_combat";
-		case PlayerBotScenarioStage::TargetPursuit: return "target_pursuit";
 	}
 	return "unknown";
 }

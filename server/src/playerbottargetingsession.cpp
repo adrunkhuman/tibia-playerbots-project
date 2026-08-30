@@ -67,7 +67,6 @@ void PlayerBotTargetingSession::beginTraversalCombat(PlayerBotTarget target, Pla
 	traversalTarget.expectedCorpse = expectedCorpse;
 	activeTraversalTarget = std::move(traversalTarget);
 	traversalCombatStarted = now;
-	state = TraversalState::Combat;
 }
 
 void PlayerBotTargetingSession::updateTraversalTargetPosition(const Position& position)
@@ -87,7 +86,6 @@ std::optional<PlayerBotTraversalTarget> PlayerBotTargetingSession::takeDefeatedT
 {
 	std::optional<PlayerBotTraversalTarget> target = std::move(activeTraversalTarget);
 	activeTraversalTarget.reset();
-	state = TraversalState::None;
 	return target;
 }
 
@@ -127,33 +125,6 @@ std::optional<PlayerBotDefensiveTarget> PlayerBotTargetingSession::clearDefensiv
 	std::optional<PlayerBotDefensiveTarget> target = std::move(activeDefensiveTarget);
 	activeDefensiveTarget.reset();
 	return target;
-}
-
-void PlayerBotTargetingSession::beginPursuit(const Position& start, const Position& destination,
-	                                          std::chrono::steady_clock::time_point now)
-{
-	pursuitStarted = now;
-	pursuitStartPosition = start;
-	lastKnownPursuitDestination = destination;
-	state = TraversalState::Pursuit;
-}
-
-bool PlayerBotTargetingSession::pursuitBudgetExhausted(const Position& currentPosition,
-	                                                     std::chrono::steady_clock::time_point now,
-	                                                     std::chrono::steady_clock::duration timeout,
-	                                                     uint32_t maximumDistance) const
-{
-	return !activeTraversalTarget || now - pursuitStarted >= timeout ||
-	       targetDistance(pursuitStartPosition, currentPosition) > maximumDistance;
-}
-
-std::optional<PlayerBotTraversalTarget> PlayerBotTargetingSession::abandonPursuit(
-	std::chrono::steady_clock::time_point now, std::chrono::steady_clock::duration suppression)
-{
-	if (activeTraversalTarget) {
-		suppressTraversalTarget(activeTraversalTarget->id, now + suppression);
-	}
-	return clearTraversalTarget();
 }
 
 std::optional<PlayerBotTarget> PlayerBotTargetingSession::activeTarget() const

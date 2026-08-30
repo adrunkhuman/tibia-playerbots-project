@@ -78,10 +78,6 @@ namespace playerbot {
 	inline constexpr std::chrono::seconds corpseLootTimeout(20);
 	inline constexpr std::chrono::seconds traversalCombatTimeout(60);
 	inline constexpr std::chrono::seconds traversalTargetSuppression(120);
-	inline constexpr std::chrono::seconds lostTargetPursuitTimeout(5);
-	inline constexpr std::chrono::seconds lostTargetSuppression(120);
-	inline constexpr uint32_t maximumLostTargetPursuitDistance = 6;
-	inline constexpr uint32_t maximumTargetReacquisitionDistance = 6;
 	inline constexpr std::chrono::seconds navigationBlockSuppression(10);
 	inline constexpr std::chrono::minutes navigationOscillationSuppression(2);
 	inline constexpr std::chrono::seconds navigationStepTimeout(2);
@@ -236,7 +232,8 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		bool findPath(Player* player, const Position& target, std::vector<Direction>& result, const FindPathParams& pathParams);
 		PlayerBotNavigationCostPolicy navigationCostPolicy(const Player& player) const;
 
-		bool attackVisibleMonster(Player* player, const Position& currentPosition);
+		bool attackVisibleMonster(Player* player, const Position& currentPosition, uint32_t preferredTargetId = 0,
+		                          bool routeValidated = false);
 
 		bool attackDefensiveThreat(Player* player, const Position& currentPosition);
 
@@ -247,9 +244,6 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		void finishTraversalCombat(Player* player, const Position& currentPosition, const char* reason);
 
 		void processTraversalCombat(Player* player, const Position& currentPosition);
-		void beginTargetPursuit(Player* player, const Position& currentPosition);
-		void finishTargetPursuit(const Position& currentPosition, const char* reason);
-		void processTargetPursuit(Player* player, const Position& currentPosition);
 
 		EquipmentHuntSummary equipmentHuntSummary(Player& player, const PlayerBotCombatProfile& profile) const;
 		void emitEquipmentOffer(const Player& player, const EquipmentOfferEvaluation& evaluation,
@@ -376,7 +370,8 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		bool executeNavigationStep(Player* player, const PlayerBotNavigationStep& step);
 		PlayerBotNavigationRoutePlan planNavigationRoute(Player& player, const Position& destination,
 		                                                const std::set<Position>& blockedPositions = {},
-		                                                uint64_t maximumExpandedNodes = playerBotNavigationMaximumExpandedNodes) const;
+		                                                uint64_t maximumExpandedNodes = playerBotNavigationMaximumExpandedNodes,
+		                                                bool sameFloorOnly = false) const;
 		PlayerBotNavigationRoutePlan planCompleteNavigationRoute(Player& player, const Position& destination,
 		                                                        const std::set<Position>& blockedPositions = {},
 		                                                        uint64_t maximumExpandedNodes = playerBotNavigationMaximumExpandedNodes) const;
@@ -386,7 +381,8 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		                                                        uint64_t maximumExpandedNodes = playerBotNavigationMaximumExpandedNodes) const;
 		PlayerBotNavigationRoutePlan planNavigationRoute(Player& player, const PlayerBotNavigationGoal& goal,
 		                                                const std::set<Position>& blockedPositions = {},
-		                                                uint64_t maximumExpandedNodes = playerBotNavigationMaximumExpandedNodes) const;
+		                                                uint64_t maximumExpandedNodes = playerBotNavigationMaximumExpandedNodes,
+		                                                bool sameFloorOnly = false) const;
 		std::optional<PlayerBotNavigationRoutePlan> planNpcTravelRoute(Player& player, const Position& destination,
 		                                                               const std::set<Position>& blockedPositions,
 		                                                               uint64_t maximumExpandedNodes) const;
@@ -399,11 +395,12 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 
 		bool processNavigation(Player* player, const Position& currentPosition, const Position& destination,
 		                       PlayerBotNavigationRuntimeOutcome* navigationOutcome = nullptr,
-		                       uint64_t maximumExpandedNodes = playerBotNavigationMaximumExpandedNodes);
+		                       uint64_t maximumExpandedNodes = playerBotNavigationMaximumExpandedNodes,
+		                       bool sameFloorOnly = false);
 		bool processNavigation(Player* player, const Position& currentPosition, const PlayerBotNavigationGoal& goal,
 		                       PlayerBotNavigationRuntimeOutcome* navigationOutcome = nullptr,
 		                       uint64_t maximumExpandedNodes = playerBotNavigationMaximumExpandedNodes,
-		                       bool npcApproach = false);
+		                       bool npcApproach = false, bool sameFloorOnly = false);
 		bool processNpcApproach(Player* player, const Position& currentPosition, Npc* npc,
 		                        const Position& coarseDestination, bool& unavailable);
 		void observeNavigationPlan(const Position& destination, std::deque<PlayerBotNavigationStep> steps);

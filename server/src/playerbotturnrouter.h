@@ -15,7 +15,6 @@ enum class PlayerBotScenarioStage : uint8_t {
 	LootCorpse,
 	Traverse,
 	TraversalCombat,
-	TargetPursuit,
 };
 
 enum class PlayerBotControllerLifecycle : uint8_t {
@@ -37,7 +36,6 @@ enum class PlayerBotTurnCommand : uint8_t {
 	ReturnToDepot,
 	DepositLoot,
 	TraversalCombat,
-	TargetPursuit,
 	Hunt,
 };
 
@@ -87,7 +85,6 @@ class PlayerBotTurnRouter
 			if (phase == PlayerBotCyclePhase::ReturnToDepot) return PlayerBotTurnCommand::ReturnToDepot;
 			if (phase == PlayerBotCyclePhase::DepositLoot) return PlayerBotTurnCommand::DepositLoot;
 			if (stage == PlayerBotScenarioStage::TraversalCombat) return PlayerBotTurnCommand::TraversalCombat;
-			if (stage == PlayerBotScenarioStage::TargetPursuit) return PlayerBotTurnCommand::TargetPursuit;
 			return phase == PlayerBotCyclePhase::Hunt ? PlayerBotTurnCommand::Hunt : PlayerBotTurnCommand::None;
 		}
 
