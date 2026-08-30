@@ -163,7 +163,7 @@ PlayerBotHuntChallengeUpdate PlayerBotHuntPolicy::updateChallengeFrontier(const 
 	return update;
 }
 
-PlayerBotHuntPerformanceUpdate PlayerBotHuntPolicy::observePerformance(const Position& region,
+PlayerBotHuntPerformanceUpdate PlayerBotHuntPolicy::observePerformance(uint64_t variantId,
 	const PlayerBotHuntPerformanceSample& sample)
 {
 	PlayerBotHuntPerformanceUpdate update;
@@ -177,7 +177,7 @@ PlayerBotHuntPerformanceUpdate PlayerBotHuntPolicy::observePerformance(const Pos
 	if (predictedNetRate <= 0) {
 		return update;
 	}
-	PlayerBotHuntRegionPerformance& regionPerformance = performance[region];
+	PlayerBotHuntRegionPerformance& regionPerformance = performance[variantId];
 	const double sampleCorrection = std::clamp(
 		sample.observedCorrection * update.actualExperiencePerMinute / predictedNetRate, 0.25, 2.0);
 	if (regionPerformance.samples == 0) {

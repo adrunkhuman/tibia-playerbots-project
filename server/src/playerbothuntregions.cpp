@@ -62,6 +62,16 @@ void PlayerBotHuntRegionPlanner::invalidateCache()
 	PlayerBotHuntRegionAdapter::invalidateCache();
 }
 
+PlayerBotHuntAtlasSummary PlayerBotHuntRegionPlanner::rebuildAtlas()
+{
+	return PlayerBotHuntRegionAdapter::rebuildAtlas();
+}
+
+PlayerBotHuntAtlasSummary PlayerBotHuntRegionPlanner::atlasSummary()
+{
+	return PlayerBotHuntRegionAdapter::atlasSummary();
+}
+
 uint64_t PlayerBotHuntRegionPlanner::getCacheRevision()
 {
 	return PlayerBotHuntRegionAdapter::getCacheRevision();
@@ -74,10 +84,10 @@ PlayerBotHuntRegionScan PlayerBotHuntRegionPlanner::beginScan(
 }
 
 PlayerBotHuntRegionScore PlayerBotHuntRegionPlanner::score(Player& player, const PlayerBotHuntPlanningProfile& profile,
-	uint64_t revision, size_t candidateIndex, const std::set<Position>& excludedRegions,
-	const std::map<Position, PlayerBotHuntRegionPerformance>& performance, uint32_t huntDurationSeconds,
+	uint64_t revision, size_t candidateIndex, const std::set<uint64_t>& excludedVariants,
+	const std::map<uint64_t, PlayerBotHuntRegionPerformance>& performance, uint32_t huntDurationSeconds,
 	const PlayerBotTopologyDistances* topologyDistances) const
 {
-	return PlayerBotHuntRegionAdapter::score(player, profile, revision, candidateIndex, excludedRegions, performance,
+	return PlayerBotHuntRegionAdapter::score(player, profile, revision, candidateIndex, excludedVariants, performance,
 	                                        huntDurationSeconds, topologyDistances);
 }

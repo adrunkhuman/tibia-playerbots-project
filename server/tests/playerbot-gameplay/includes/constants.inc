@@ -40,6 +40,7 @@ F.pickupRewardId = 2384
 F.equipmentPurchaseItemId = 2379
 F.movedProviderPurchaseItemId = 2648
 F.slottedLootItemId = 2398
+F.sellLootItemId = 7735
 F.mainlandRewardItemId = 2483
 F.mainlandRewardStorage = 50076
 F.pickupRewardStorage = 64120

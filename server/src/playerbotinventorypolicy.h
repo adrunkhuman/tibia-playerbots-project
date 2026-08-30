@@ -43,6 +43,10 @@ namespace playerbot {
 		return vocationId == 0 ? 90 : 175;
 	}
 
+	uint32_t recoveryPotionRouteReserve(uint16_t vocationId, int32_t maximumHealth,
+	                                   uint32_t routeDangerCost, uint32_t healthLossCost = 1000);
+	uint32_t recoveryPotionRestockTargetForReserve(uint32_t returnReserve);
+
 	struct PlayerBotFoodInventory {
 		uint32_t count = 0;
 		uint32_t weight = 0;

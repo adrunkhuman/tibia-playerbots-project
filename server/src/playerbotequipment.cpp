@@ -98,13 +98,13 @@ std::optional<PlayerBotController::EquipmentOfferEvaluation> PlayerBotController
 	const uint16_t potionItemId = recoveryPotionItemId(player.getVocationId());
 	const PlayerBotEquipmentReadinessInput readiness{
 		backpackItem && backpackItem->getContainer(),
-		inventoryPolicy.inventoryItemCount(player, potionItemId) > healthPotionReturnThreshold,
+		inventoryPolicy.inventoryItemCount(player, potionItemId) > huntPotionReturnThreshold,
 		inventoryPolicy.effectiveFreeCapacity(player),
 		returnCapacityThreshold,
 	};
 	const bool currentReady = equipmentPolicy.loadoutReady(playerFacts, currentLoadout, readiness);
 	std::map<uint16_t, EquipmentOfferEvaluation> evaluatedItems;
-	std::map<uint32_t, std::optional<std::pair<Position, uint32_t>>> providerRoutes;
+	std::map<uint32_t, std::optional<PlayerBotRouteEstimate>> providerRoutes;
 	std::set<uint32_t> providerRouteNodeLimits;
 	std::vector<PlayerBotEquipmentProviderOfferSnapshot> plannerOffers;
 	size_t simulatedItems = 0;
@@ -112,7 +112,7 @@ std::optional<PlayerBotController::EquipmentOfferEvaluation> PlayerBotController
 	size_t catalogOffers = 0;
 	bool catalogTruncated = false;
 
-	auto providerRoute = [&](Npc& npc) -> std::optional<std::pair<Position, uint32_t>> {
+	auto providerRoute = [&](Npc& npc) -> std::optional<PlayerBotRouteEstimate> {
 		if (auto route = providerRoutes.find(npc.getID()); route != providerRoutes.end()) {
 			return route->second;
 		}
@@ -147,7 +147,7 @@ std::optional<PlayerBotController::EquipmentOfferEvaluation> PlayerBotController
 			std::deque<PlayerBotNavigationStep> steps;
 			uint64_t expandedNodes = 0;
 			const PlayerBotNavigationRoutePlan routePlan = approach == position ? PlayerBotNavigationRoutePlan{} :
-				planNavigationRoute(player, approach, {}, maximumEquipmentProviderPathNodes);
+				planCompleteNavigationRoute(player, approach, {}, maximumEquipmentProviderPathNodes);
 			const PlayerBotNavigationResult result = approach == position ? PlayerBotNavigationResult::Reached : routePlan.metrics.result;
 			telemetry.recordPathfinding(std::chrono::microseconds::zero(), result == PlayerBotNavigationResult::Reached);
 			if (approach != position) {
@@ -155,8 +155,11 @@ std::optional<PlayerBotController::EquipmentOfferEvaluation> PlayerBotController
 				expandedNodes = routePlan.metrics.expandedNodes;
 			}
 			if (result == PlayerBotNavigationResult::Reached) {
-				const uint32_t routeSteps = approach == position ? 0 : static_cast<uint32_t>(routePlan.metrics.steps);
-				return providerRoutes.emplace(npc.getID(), std::make_pair(approach, routeSteps)).first->second;
+				PlayerBotRouteEstimate route{true, false, approach,
+				    approach == position ? 0 : static_cast<uint32_t>(routePlan.metrics.steps), expandedNodes,
+				    approach == position ? 0 : routePlan.metrics.dangerCost,
+				    approach == position ? 0 : routePlan.metrics.maximumHealthLossPerSecond};
+				return providerRoutes.emplace(npc.getID(), route).first->second;
 			}
 			if (result == PlayerBotNavigationResult::NodeLimit) {
 				providerRouteNodeLimits.insert(npc.getID());
@@ -290,19 +293,22 @@ std::optional<PlayerBotController::EquipmentOfferEvaluation> PlayerBotController
 				                         true, false, {true, false, Position(), 0, 0}});
 				continue;
 			}
-			const std::optional<std::pair<Position, uint32_t>> route = evaluation.rejection.empty() ?
+			const std::optional<PlayerBotRouteEstimate> route = evaluation.rejection.empty() ?
 				providerRoute(*npc) : std::nullopt;
 			if (route) {
-				evaluation.approachPosition = route->first;
-				evaluation.travelSteps = route->second;
+				evaluation.approachPosition = route->approachPosition;
+				evaluation.travelSteps = route->steps;
 			}
 			plannerOffers.push_back({evaluation, Item::items[offer.itemId].weight, freeBackpackSlots, backpack != nullptr,
 			                         offer.buyPrice != 0, providerRouteBudgetExhausted,
-			                         {route.has_value(), providerRouteNodeLimits.find(npc->getID()) != providerRouteNodeLimits.end(),
-			                          route ? route->first : Position(), route ? route->second : 0, 0}});
+			                         route.value_or(PlayerBotRouteEstimate{false,
+			                             providerRouteNodeLimits.find(npc->getID()) != providerRouteNodeLimits.end()})});
 	}
+	const PlayerBotNavigationRiskProfile risk;
 	const PlayerBotEquipmentProviderPlannerSnapshot plannerSnapshot{equipmentPolicy.requiresKnightCombatReadiness(playerFacts), reserve,
-	    totalMoney, reserve != std::numeric_limits<uint64_t>::max(), player.getFreeCapacity(), plannerOffers};
+	    totalMoney, reserve != std::numeric_limits<uint64_t>::max(), player.getFreeCapacity(),
+	    static_cast<uint32_t>(risk.maximumRouteHealthLoss * risk.healthLossCost),
+	    risk.maximumHealthLossPerSecond, plannerOffers};
 	const PlayerBotEquipmentProviderDecision plannerDecision = equipmentProviderPlanner.select(plannerSnapshot);
 	if (!plannerDecision.evaluated) return std::nullopt;
 	const std::optional<EquipmentOfferEvaluation>& selected = plannerDecision.selected;
@@ -490,7 +496,7 @@ void PlayerBotController::processEquipmentPurchase(Player* player, const Positio
 				",\"slot\":" + std::to_string(purchase.slot) + ",\"combat_ready\":" +
 				(equipmentPolicy.loadoutReady(playerFacts, loadout,
 				    {player->getInventoryItem(CONST_SLOT_BACKPACK) && player->getInventoryItem(CONST_SLOT_BACKPACK)->getContainer(),
-				     inventoryPolicy.inventoryItemCount(*player, potionItemId) > healthPotionReturnThreshold,
+				     inventoryPolicy.inventoryItemCount(*player, potionItemId) > huntPotionReturnThreshold,
 				     inventoryPolicy.effectiveFreeCapacity(*player), returnCapacityThreshold}) ? "true" : "false") +
 				",\"suitable_regions\":" + std::to_string(hunts.suitableRegions) +
 				",\"displaced_items_preserved\":true");

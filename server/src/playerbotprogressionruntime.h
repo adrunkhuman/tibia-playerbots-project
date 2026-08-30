@@ -145,6 +145,7 @@ class PlayerBotProgressionRuntime {
 		void completeSpellTraining(bool succeeded, std::chrono::steady_clock::duration cooldown);
 		void completeEquipmentPurchase(bool succeeded, std::chrono::steady_clock::duration cooldown);
 		void completeMagicTraining(std::chrono::steady_clock::duration cooldown);
+		void completeSellLoot(std::chrono::steady_clock::duration cooldown);
 
 		PlayerBotProgressionProcedure active() const { return progression.active(); }
 		bool active(PlayerBotProgressionProcedure procedure) const { return progression.active(procedure); }

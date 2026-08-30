@@ -53,7 +53,7 @@ class PlayerBotManager
 		uint32_t recoveryEventId = 0;
 		uint32_t recoveryGeneration = 0;
 		uint32_t consecutiveDeaths = 0;
-		std::map<Position, std::chrono::steady_clock::time_point> huntRegionCooldowns;
+		std::map<uint64_t, std::chrono::steady_clock::time_point> huntRegionCooldowns;
 		std::chrono::steady_clock::time_point lastSpawnedAt;
 };
 

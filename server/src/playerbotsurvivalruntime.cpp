@@ -92,7 +92,7 @@ PlayerBotSurvivalCommand PlayerBotSurvivalRuntime::decideFood(const PlayerBotSur
 		command.foodVerification = recovery.verifyFood(snapshot.pendingFoodCount,
 		    snapshot.foodTicks, canEat, now, maximumEatFailures, std::chrono::seconds(5), foodCooldown);
 	}
-	if (!recovery.canRetryFood(now) || !canEat || snapshot.foodInventoryCount <= playerbot::preferredFoodCount || snapshot.foodClientId == 0) return command;
+	if (!recovery.canRetryFood(now) || !canEat || snapshot.foodClientId == 0) return command;
 	if (!snapshot.canDoAction) {
 		command.type = PlayerBotSurvivalCommandType::Wait;
 		return command;

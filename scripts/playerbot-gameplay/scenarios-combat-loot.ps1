@@ -7,6 +7,16 @@
 			$corpseLogs = Wait-ForLog -Pattern '"reason":"corpse_not_lootable","expected_corpse_item_id":1987'
 			Assert-CorpseEvents -Logs $corpseLogs
 		}
+		Invoke-Scenario -Name "corpse_detour" -DefaultTimeoutSeconds 75 -Body {
+			Invoke-Compose down --volumes --remove-orphans
+			$env:PLAYERBOT_GAMEPLAY_MODE = "corpse_detour"
+			$env:PLAYERBOT_HUNT_DURATION_SECONDS = "900"
+			Invoke-Compose up --detach
+			$corpseLogs = Wait-ForPlayerbotEvent -Predicate {
+				$_.event -eq "action_result" -and $_.action -eq "loot" -and $_.result -eq "success"
+			}
+			Assert-CorpseDetourEvents -Logs $corpseLogs
+		}
 		Invoke-Scenario -Name "corpse_inaccessible" -DefaultTimeoutSeconds 75 -Body {
 			Invoke-Compose down --volumes --remove-orphans
 			$env:PLAYERBOT_GAMEPLAY_MODE = "corpse_inaccessible"
@@ -51,9 +61,10 @@
 		Invoke-Scenario -Name "healing_resupply" -DefaultTimeoutSeconds 90 -Body {
 			Invoke-Compose down --volumes --remove-orphans
 			$env:PLAYERBOT_GAMEPLAY_MODE = "healing_resupply"
+			$env:PLAYERBOT_DEPOT_RESTART_PHASE = ""
 			Invoke-Compose up --detach
 			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST HEALING_RESUPPLY_STATE_PASS' | Out-Null
-			$resupplyLogs = Wait-ForLog -Pattern '"event":"objective_transition".*"from":"service".*"to":"return_to_depot"'
+			$resupplyLogs = Wait-ForLog -Pattern '"event":"objective_transition".*"from":"service".*"to":"hunt"'
 			Assert-HealingResupplyEvents -Logs $resupplyLogs
 		}
 	}
@@ -64,7 +75,7 @@
 			$env:PLAYERBOT_GAMEPLAY_MODE = "value"
 			$env:PLAYERBOT_HUNT_DURATION_SECONDS = "900"
 			Invoke-Compose up --detach
-			$valueLogs = Wait-ForLog -Pattern '"action":"loot".*"result":"success".*"item_id":2826'
+			$valueLogs = Wait-ForLog -Pattern '"action":"loot".*"result":"success".*"item_id":2152'
 			Assert-ValueLootEvents -Logs $valueLogs
 		}
 	}

@@ -36,6 +36,11 @@ struct PlayerBotGoalPlannerSnapshot {
 
 	bool magicCoolingDown = false;
 	std::string magicTrainingReason;
+
+	bool sellLootCoolingDown = false;
+	bool sellLootPlanAvailable = false;
+	int32_t sellLootUtility = 0;
+	std::string sellLootReason;
 };
 
 class PlayerBotGoalPlanner {

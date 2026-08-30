@@ -56,6 +56,11 @@ void PlayerBotProgressionRuntime::completeMagicTraining(std::chrono::steady_cloc
 	arbiter.setCooldown(PlayerBotGoalArbiter::TopLevelGoal::MagicTraining, cooldown);
 }
 
+void PlayerBotProgressionRuntime::completeSellLoot(std::chrono::steady_clock::duration cooldown)
+{
+	arbiter.setCooldown(PlayerBotGoalArbiter::TopLevelGoal::SellLoot, cooldown);
+}
+
 bool PlayerBotProgressionRuntime::isCoolingDown(PlayerBotGoalArbiter::TopLevelGoal goal,
 	std::chrono::steady_clock::time_point now) const
 {

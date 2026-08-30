@@ -13,6 +13,7 @@
 
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <ostream>
 #include <set>
 #include <string>
@@ -95,6 +96,38 @@ struct PlayerBotNavigationStep {
 	std::vector<std::string> dialogue;
 };
 
+struct PlayerBotNavigationRiskProfile {
+	double healthLossCost = 1000.0;
+	double maximumHealthLossPerSecond = 0.08;
+	double maximumRouteHealthLoss = 0.50;
+};
+
+inline bool playerBotNavigationRiskAccepts(const PlayerBotNavigationRiskProfile& risk, uint32_t dangerCost,
+	                                         double maximumHealthLossPerSecond)
+{
+	return dangerCost <= static_cast<uint32_t>(risk.maximumRouteHealthLoss * risk.healthLossCost) &&
+	       maximumHealthLossPerSecond <= risk.maximumHealthLossPerSecond;
+}
+
+struct PlayerBotNavigationCostPolicy {
+	PlayerBotNavigationRiskProfile risk;
+	std::function<double(const Position&)> expectedHealthLossPerSecond;
+	uint32_t topologyExposureMs = 16000;
+
+	bool enabled() const { return static_cast<bool>(expectedHealthLossPerSecond) && risk.healthLossCost > 0; }
+	double dangerAt(const Position& position) const
+	{
+		return expectedHealthLossPerSecond ? expectedHealthLossPerSecond(position) : 0;
+	}
+	uint32_t dangerCost(const Position& position, uint32_t exposureMs) const;
+};
+
+struct PlayerBotNavigationCostSummary {
+	uint32_t movementCost = 0;
+	uint32_t dangerCost = 0;
+	double maximumHealthLossPerSecond = 0;
+};
+
 class PlayerBotNavigator
 {
 	public:
@@ -102,22 +135,30 @@ class PlayerBotNavigator
 		                               const std::set<Position>& blockedPositions,
 		                               std::deque<PlayerBotNavigationStep>& steps, uint64_t& expandedNodes,
 		                               uint64_t maximumExpandedNodes = playerBotNavigationMaximumExpandedNodes,
-		                               Position* closestPosition = nullptr) const;
+		                               Position* closestPosition = nullptr,
+		                               const PlayerBotNavigationCostPolicy* costPolicy = nullptr,
+		                               PlayerBotNavigationCostSummary* costSummary = nullptr) const;
 		PlayerBotNavigationResult plan(Player& player, const Position& destination, const std::set<Position>& blockedPositions,
 		                               std::deque<PlayerBotNavigationStep>& steps,
 		                               uint64_t& expandedNodes,
 		                               uint64_t maximumExpandedNodes = playerBotNavigationMaximumExpandedNodes,
-		                               Position* closestPosition = nullptr) const;
+		                               Position* closestPosition = nullptr,
+		                               const PlayerBotNavigationCostPolicy* costPolicy = nullptr,
+		                               PlayerBotNavigationCostSummary* costSummary = nullptr) const;
 		PlayerBotNavigationResult planFrom(Player& player, const Position& start, const Position& destination,
 		                                   const std::set<Position>& blockedPositions,
 		                                   std::deque<PlayerBotNavigationStep>& steps, uint64_t& expandedNodes,
 		                                   uint64_t maximumExpandedNodes = playerBotNavigationMaximumExpandedNodes,
-		                                   Position* closestPosition = nullptr) const;
+		                                   Position* closestPosition = nullptr,
+		                                   const PlayerBotNavigationCostPolicy* costPolicy = nullptr,
+		                                   PlayerBotNavigationCostSummary* costSummary = nullptr) const;
 		PlayerBotNavigationResult planFrom(Player& player, const Position& start, const PlayerBotNavigationGoal& goal,
 		                                   const std::set<Position>& blockedPositions,
 		                                   std::deque<PlayerBotNavigationStep>& steps, uint64_t& expandedNodes,
 		                                   uint64_t maximumExpandedNodes = playerBotNavigationMaximumExpandedNodes,
-		                                   Position* closestPosition = nullptr) const;
+		                                   Position* closestPosition = nullptr,
+		                                   const PlayerBotNavigationCostPolicy* costPolicy = nullptr,
+		                                   PlayerBotNavigationCostSummary* costSummary = nullptr) const;
 		bool resolveMove(Player& player, const Position& from, Direction direction,
 		                 const std::set<Position>& blockedPositions, PlayerBotNavigationStep& step) const;
 };

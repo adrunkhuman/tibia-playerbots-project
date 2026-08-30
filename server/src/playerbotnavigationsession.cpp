@@ -19,13 +19,17 @@ void PlayerBotNavigationSession::clear()
 	worldChangePending = false;
 	target = PlayerBotNavigationGoal();
 	blockedStepCount = 0;
+	pendingRouteBlocker.reset();
+	pendingRouteBlockerId.reset();
+	requiredRouteBlockerIds.clear();
 }
 
 void PlayerBotNavigationSession::adopt(const PlayerBotNavigationGoal& goal, std::deque<PlayerBotNavigationStep> newSteps)
 {
-	clear();
 	target = goal;
 	steps = std::move(newSteps);
+	movementPending = false;
+	worldChangePending = false;
 }
 
 void PlayerBotNavigationSession::prepareGoal(const PlayerBotNavigationGoal& goal)
@@ -36,6 +40,9 @@ void PlayerBotNavigationSession::prepareGoal(const PlayerBotNavigationGoal& goal
 	steps.clear();
 	target = goal;
 	blockedStepCount = 0;
+	clearRequiredRouteBlockers();
+	pendingRouteBlocker.reset();
+	pendingRouteBlockerId.reset();
 }
 
 void PlayerBotNavigationSession::installRoute(const PlayerBotNavigationGoal& goal,
@@ -58,6 +65,9 @@ PlayerBotPendingMovementResult PlayerBotNavigationSession::observeMovement(
 		if (!steps.empty()) {
 			steps.pop_front();
 		}
+		clearRequiredRouteBlockers();
+		pendingRouteBlocker.reset();
+		pendingRouteBlockerId.reset();
 		return PlayerBotPendingMovementResult::Completed;
 	}
 	if (actionPending && now - stepStarted < timeout) {
@@ -103,6 +113,11 @@ std::set<Position> PlayerBotNavigationSession::activeBlockedPositions(std::chron
 	std::set<Position> active;
 	for (auto it = temporarilyBlockedPositions.begin(); it != temporarilyBlockedPositions.end();) {
 		if (it->second <= now) {
+			if (pendingRouteBlocker && *pendingRouteBlocker == it->first) {
+				if (pendingRouteBlockerId) requiredRouteBlockerIds.erase(*pendingRouteBlockerId);
+				pendingRouteBlocker.reset();
+				pendingRouteBlockerId.reset();
+			}
 			it = temporarilyBlockedPositions.erase(it);
 		} else {
 			active.insert(it->first);
@@ -115,6 +130,28 @@ std::set<Position> PlayerBotNavigationSession::activeBlockedPositions(std::chron
 void PlayerBotNavigationSession::suppress(const Position& position, std::chrono::steady_clock::time_point expires)
 {
 	temporarilyBlockedPositions[position] = expires;
+}
+
+bool PlayerBotNavigationSession::avoidPendingRouteBlocker(
+	uint32_t blockerId, const Position& position, std::chrono::steady_clock::time_point now,
+	std::chrono::steady_clock::duration suppression)
+{
+	if (!movementPending || position != stepTarget) return false;
+	movementPending = false;
+	steps.clear();
+	temporarilyBlockedPositions[position] = now + suppression;
+	requiredRouteBlockerIds.erase(blockerId);
+	pendingRouteBlocker = position;
+	pendingRouteBlockerId = blockerId;
+	return true;
+}
+
+void PlayerBotNavigationSession::confirmRequiredRouteBlocker()
+{
+	if (pendingRouteBlocker && pendingRouteBlockerId &&
+	    temporarilyBlockedPositions.find(*pendingRouteBlocker) != temporarilyBlockedPositions.end()) {
+		requiredRouteBlockerIds.insert(*pendingRouteBlockerId);
+	}
 }
 
 std::optional<PlayerBotNavigationOscillation> PlayerBotNavigationSession::observeProgress(
@@ -174,9 +211,10 @@ std::optional<PlayerBotNavigationOscillation> PlayerBotNavigationSession::observ
 	return PlayerBotNavigationOscillation{suppressedTarget, suppressedExpected, previousPosition};
 }
 
-bool PlayerBotNavigationSession::isRouteCritical(const Position& position,
+bool PlayerBotNavigationSession::isRouteCritical(uint32_t blockerId, const Position& position,
 	                                               std::chrono::steady_clock::time_point now) const
 {
-	return (movementPending && position == stepTarget) ||
-	       (now < blockedTargetExpires && position == blockedTarget);
+	const auto blocked = temporarilyBlockedPositions.find(position);
+	return requiredRouteBlockerIds.find(blockerId) != requiredRouteBlockerIds.end() &&
+	       blocked != temporarilyBlockedPositions.end() && now < blocked->second;
 }

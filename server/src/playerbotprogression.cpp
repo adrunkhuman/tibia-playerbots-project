@@ -17,7 +17,8 @@ using namespace playerbot;
 
 namespace {
 	constexpr uint64_t maximumRewardRouteNodes = 100000;
-	constexpr uint64_t maximumRewardRouteAttemptNodes = 10000;
+	constexpr uint64_t maximumRewardRouteAttemptNodes = 50000;
+	constexpr size_t maximumSimpleRewardRouteSteps = 1024;
 
 	std::string rewardItemSignature(const Item& item)
 	{
@@ -38,7 +39,8 @@ namespace {
 }
 
 void PlayerBotController::emitCombatReadiness(const Player& player, const Position& position, const char* result,
-                                              const std::string& recovery, const std::string& terminalReason) const
+	                                          const std::string& recovery, const std::string& terminalReason,
+	                                          uint32_t minimumFreeCapacity) const
 {
 	Item* left = player.getInventoryItem(CONST_SLOT_LEFT);
 	Item* right = player.getInventoryItem(CONST_SLOT_RIGHT);
@@ -62,20 +64,20 @@ void PlayerBotController::emitCombatReadiness(const Player& player, const Positi
 	       << ",\"armor_item_id\":" << (armor ? std::to_string(armor->getID()) : "null")
 	       << ",\"armor\":" << (armor ? armor->getArmor() : 0) << '}'
 	       << ",{\"name\":\"health_potions\",\"ready\":" <<
-	          (inventoryPolicy.inventoryItemCount(player, potionItemId) > healthPotionReturnThreshold ? "true" : "false")
+	          (inventoryPolicy.inventoryItemCount(player, potionItemId) > huntPotionReturnThreshold ? "true" : "false")
 	       << ",\"item_id\":" << potionItemId
 	       << ",\"count\":" << inventoryPolicy.inventoryItemCount(player, potionItemId)
-	       << ",\"return_threshold\":" << healthPotionReturnThreshold
-	       << ",\"restock_target\":" << healthPotionRestockTarget << '}'
+	       << ",\"return_threshold\":" << huntPotionReturnThreshold
+	       << ",\"restock_target\":" << huntPotionRestockTarget << '}'
 	       << ",{\"name\":\"food\",\"required\":false,\"ready\":true"
 	       << ",\"count\":" << food.count << ",\"preferred\":" << preferredFoodCount
 	       << ",\"reclaimable_weight\":" << food.weight
 	       << ",\"preference_utility\":" <<
 	          std::max<int32_t>(0, static_cast<int32_t>(preferredFoodCount -
 	              std::min<uint32_t>(preferredFoodCount, food.count))) * foodPreferenceUtility << '}'
-	       << ",{\"name\":\"free_capacity\",\"ready\":" << (usableCapacity >= returnCapacityThreshold ? "true" : "false")
+	       << ",{\"name\":\"free_capacity\",\"ready\":" << (usableCapacity >= minimumFreeCapacity ? "true" : "false")
 	       << ",\"current\":" << player.getFreeCapacity() << ",\"reclaimable_food\":" << food.weight
-	       << ",\"effective\":" << usableCapacity << ",\"minimum\":" << returnCapacityThreshold << "}]"
+	       << ",\"effective\":" << usableCapacity << ",\"minimum\":" << minimumFreeCapacity << "}]"
 	       << ",\"selected_recovery\":" << (recovery.empty() ? "null" : jsonString(recovery))
 	       << ",\"terminal_reason\":" << (terminalReason.empty() ? "null" : jsonString(terminalReason));
 	emit("combat_readiness", position, fields.str());
@@ -86,7 +88,7 @@ PlayerBotEquipmentReadinessInput PlayerBotController::equipmentReadinessInput(co
 	const Item* backpack = player.getInventoryItem(CONST_SLOT_BACKPACK);
 	const uint16_t potionItemId = recoveryPotionItemId(player.getVocationId());
 	return {backpack && backpack->getContainer(),
-	        inventoryPolicy.inventoryItemCount(player, potionItemId) > healthPotionReturnThreshold,
+	        inventoryPolicy.inventoryItemCount(player, potionItemId) > huntPotionReturnThreshold,
 	        inventoryPolicy.effectiveFreeCapacity(player), returnCapacityThreshold};
 }
 
@@ -186,7 +188,7 @@ void PlayerBotController::processReadinessEquipment(Player* player, const Positi
 	ensureCombatReady(player, position, "readiness_upgrade_incomplete");
 }
 
-bool PlayerBotController::ensureCombatReady(Player* player, const Position& position, const char* reason)
+bool PlayerBotController::ensureCombatReady(Player* player, const Position& position, const char* reason, bool requireCapacity)
 {
 	if (!player || !equipmentPolicy.requiresKnightCombatReadiness(PlayerBotEquipmentAdapter::player(*player))) {
 		return true;
@@ -195,15 +197,18 @@ bool PlayerBotController::ensureCombatReady(Player* player, const Position& posi
 	EquipmentUpgrade upgrade{};
 	const PlayerBotEquipmentPlayerSnapshot playerFacts = PlayerBotEquipmentAdapter::player(*player);
 	const EquipmentLoadout loadout = PlayerBotEquipmentAdapter::loadout(*player);
+	PlayerBotEquipmentReadinessInput readinessInput = equipmentReadinessInput(*player);
+	if (!requireCapacity) readinessInput.minimumFreeCapacity = 0;
 	const PlayerBotEquipmentReadiness readiness = equipmentPolicy.combatReadiness(
-		playerFacts, loadout, PlayerBotEquipmentAdapter::findCarriedUpgrade(equipmentPolicy, *player, carriedUpgrade, upgrade), equipmentReadinessInput(*player));
+		playerFacts, loadout, PlayerBotEquipmentAdapter::findCarriedUpgrade(equipmentPolicy, *player, carriedUpgrade, upgrade), readinessInput);
 	if (readiness.ready) {
 		if (std::strcmp(reason, "readiness_continuous_check") != 0) {
 			emitCombatReadiness(*player, position, "ready", {}, {});
 		}
 		return true;
 	}
-	emitCombatReadiness(*player, position, "recovery", readiness.recovery, readiness.terminalReason);
+	emitCombatReadiness(*player, position, "recovery", readiness.recovery, readiness.terminalReason,
+		readinessInput.minimumFreeCapacity);
 	if (readiness.recovery == "equip_carried") {
 		if (!beginReadinessEquipment(player, position, reason)) schedule(navigationDecisionDelay(*player));
 		return false;
@@ -400,10 +405,14 @@ bool PlayerBotController::isRewardClaimed(const Player& player, uint16_t uniqueI
 
 bool PlayerBotController::planSimpleRewardApproach(Player& player, const Position& rewardPosition, Position& approachPosition,
                               std::deque<PlayerBotNavigationStep>& approachSteps, uint64_t& expandedNodes,
-	                          uint64_t maximumExpandedNodes)
+	                          uint64_t maximumExpandedNodes, uint32_t& routeSteps, uint32_t& dangerCost,
+	                          double& maximumDanger)
 {
 	const Position currentPosition = player.getPosition();
 	expandedNodes = 0;
+	routeSteps = 0;
+	dangerCost = 0;
+	maximumDanger = 0;
 	if (Position::areInRange<1, 1, 0>(currentPosition, rewardPosition)) {
 		approachPosition = currentPosition;
 		approachSteps.clear();
@@ -428,14 +437,86 @@ bool PlayerBotController::planSimpleRewardApproach(Player& player, const Positio
 		return Position::getDistanceX(currentPosition, left) + Position::getDistanceY(currentPosition, left) <
 		       Position::getDistanceX(currentPosition, right) + Position::getDistanceY(currentPosition, right);
 	});
+	const PlayerBotNavigationRiskProfile risk;
+	const uint32_t maximumDangerCost = static_cast<uint32_t>(risk.maximumRouteHealthLoss * risk.healthLossCost);
+	bool selected = false;
+	bool selectedSafe = false;
+	uint64_t selectedCost = std::numeric_limits<uint64_t>::max();
+	const PlayerBotNavigationCostPolicy costPolicy = navigationCostPolicy(player);
+	const PlayerBotNavigator navigator;
+	const PlayerBotTopology& topology = PlayerBotTopology::instance();
+	const bool canUseRope = g_game.findItemOfType(&player, playerbot::ropeItemId, true) != nullptr;
+	const bool canUseShovel = g_game.findItemOfType(&player, 2554, true) != nullptr;
+	auto completeRoute = [&](const Position& destination, uint64_t nodeBudget) {
+		PlayerBotNavigationRoutePlan plan;
+		plan.metrics.attempted = true;
+		plan.metrics.result = PlayerBotNavigationResult::Reached;
+		plan.metrics.dangerAware = costPolicy.enabled();
+		Position segmentStart = currentPosition;
+		std::set<Position> portalDestinations;
+		while (segmentStart != destination) {
+			const auto topologyRoute = topology.route(segmentStart, destination, {}, canUseRope, canUseShovel,
+			                                                 player.getLevel(), &costPolicy);
+			if (!topologyRoute) { plan.metrics.result = PlayerBotNavigationResult::Unreachable; break; }
+			const Position segmentDestination = topologyRoute->waypoint;
+			std::deque<PlayerBotNavigationStep> segment;
+			uint64_t segmentNodes = 0;
+			PlayerBotNavigationCostSummary segmentCost;
+			const PlayerBotNavigationResult result = navigator.planFrom(
+			    player, segmentStart, segmentDestination, {}, segment, segmentNodes,
+			    nodeBudget > plan.metrics.expandedNodes ? nodeBudget - plan.metrics.expandedNodes : 0,
+			    &plan.metrics.closestPosition, &costPolicy, &segmentCost);
+			plan.metrics.expandedNodes += segmentNodes;
+			if (result != PlayerBotNavigationResult::Reached) { plan.metrics.result = result; break; }
+			plan.metrics.movementCost = static_cast<uint32_t>(std::min<uint64_t>(
+			    static_cast<uint64_t>(plan.metrics.movementCost) + segmentCost.movementCost,
+			    std::numeric_limits<uint32_t>::max()));
+			plan.metrics.dangerCost = static_cast<uint32_t>(std::min<uint64_t>(
+			    static_cast<uint64_t>(plan.metrics.dangerCost) + segmentCost.dangerCost,
+			    std::numeric_limits<uint32_t>::max()));
+			plan.metrics.maximumHealthLossPerSecond = std::max(
+			    plan.metrics.maximumHealthLossPerSecond, segmentCost.maximumHealthLossPerSecond);
+			plan.steps.insert(plan.steps.end(), segment.begin(), segment.end());
+			if (!topologyRoute->portal) { segmentStart = segmentDestination; continue; }
+			const PlayerBotTopologyPortal& portal = *topologyRoute->portal;
+			if (!portalDestinations.insert(portal.destination).second) {
+				plan.metrics.result = PlayerBotNavigationResult::Unreachable;
+				break;
+			}
+			PlayerBotNavigationStep step;
+			switch (portal.action) {
+				case PlayerBotTopologyPortalAction::Move: step.action = PlayerBotNavigationAction::Move; break;
+				case PlayerBotTopologyPortalAction::Use: step.action = PlayerBotNavigationAction::Use; break;
+				case PlayerBotTopologyPortalAction::UseDoor: step.action = PlayerBotNavigationAction::UseDoor; break;
+				case PlayerBotTopologyPortalAction::UseRope: step.action = PlayerBotNavigationAction::UseRope; break;
+				case PlayerBotTopologyPortalAction::UseShovel: step.action = PlayerBotNavigationAction::UseShovel; break;
+			}
+			step.direction = portal.direction;
+			step.target = portal.target;
+			step.expectedPosition = portal.destination;
+			step.itemId = portal.itemId;
+			step.topologyPortal = true;
+			plan.steps.push_back(step);
+			const uint32_t portalDanger = costPolicy.dangerCost(portal.destination, 1000);
+			plan.metrics.dangerCost = static_cast<uint32_t>(std::min<uint64_t>(
+			    static_cast<uint64_t>(plan.metrics.dangerCost) + portalDanger,
+			    std::numeric_limits<uint32_t>::max()));
+			plan.metrics.maximumHealthLossPerSecond = std::max(
+			    plan.metrics.maximumHealthLossPerSecond, costPolicy.dangerAt(portal.destination));
+			segmentStart = portal.destination;
+			if (plan.metrics.expandedNodes >= nodeBudget) { plan.metrics.result = PlayerBotNavigationResult::NodeLimit; break; }
+		}
+		plan.metrics.steps = plan.steps.size();
+		return plan;
+	};
 	for (const Position& candidate : candidates) {
 			if (expandedNodes >= maximumExpandedNodes) break;
 			std::deque<PlayerBotNavigationStep> steps;
 			uint64_t candidateExpandedNodes = 0;
 			const auto startedAt = std::chrono::steady_clock::now();
 			const PlayerBotNavigationRoutePlan routePlan = candidate == currentPosition ? PlayerBotNavigationRoutePlan{} :
-				planNavigationRoute(player, candidate, {}, std::min<uint64_t>(
-					maximumRewardRouteAttemptNodes, maximumExpandedNodes - expandedNodes));
+				completeRoute(candidate, std::min<uint64_t>(maximumRewardRouteAttemptNodes,
+				    maximumExpandedNodes - expandedNodes));
 			const PlayerBotNavigationResult planResult = candidate == currentPosition ? PlayerBotNavigationResult::Reached : routePlan.metrics.result;
 			if (candidate != currentPosition) {
 				steps = routePlan.steps;
@@ -454,14 +535,23 @@ bool PlayerBotController::planSimpleRewardApproach(Player& player, const Positio
 				       step.action == PlayerBotNavigationAction::UseShovel ||
 				       step.action == PlayerBotNavigationAction::NpcTravel;
 			});
-			if (!simple || steps.size() > 120) {
+			if (!simple || steps.size() > maximumSimpleRewardRouteSteps) {
 				continue;
 			}
+			const bool safe = routePlan.metrics.dangerCost <= maximumDangerCost &&
+			                  routePlan.metrics.maximumHealthLossPerSecond <= risk.maximumHealthLossPerSecond;
+			const uint64_t weightedCost = static_cast<uint64_t>(routePlan.metrics.steps) * 10 + routePlan.metrics.dangerCost;
+			if (selected && ((!safe && selectedSafe) || (safe == selectedSafe && weightedCost >= selectedCost))) continue;
+			selected = true;
+			selectedSafe = safe;
+			selectedCost = weightedCost;
 			approachPosition = candidate;
 			approachSteps = std::move(steps);
-			return true;
+			dangerCost = routePlan.metrics.dangerCost;
+			maximumDanger = routePlan.metrics.maximumHealthLossPerSecond;
+			routeSteps = candidate == currentPosition ? 0 : static_cast<uint32_t>(routePlan.metrics.steps);
 	}
-	return false;
+	return selected;
 }
 
 void PlayerBotController::emitRewardCandidate(const PlayerBotRewardPlan& candidate, const Position& position, const char* result,
@@ -486,6 +576,8 @@ void PlayerBotController::emitRewardCandidate(const PlayerBotRewardPlan& candida
 	       << ",\"sell_value\":" << candidate.sellValue
 	       << ",\"equipment_upgrade_count\":" << candidate.equipmentUpgradeCount
 	       << ",\"travel_steps\":" << candidate.travelSteps
+	       << ",\"travel_danger_cost\":" << candidate.travelDangerCost
+	       << ",\"maximum_travel_danger\":" << candidate.maximumTravelDanger
 	       << ",\"destination\":{\"x\":" << candidate.itemPosition.x
 	       << ",\"y\":" << candidate.itemPosition.y << ",\"z\":"
 	       << static_cast<uint16_t>(candidate.itemPosition.z) << '}';
@@ -698,20 +790,27 @@ bool PlayerBotController::findPickupReward(Player& player, const Position& posit
 	std::map<uint16_t, std::deque<PlayerBotNavigationStep>> plannedRoutes;
 	uint64_t rewardRouteNodes = 0;
 	const PlayerBotRewardPlannerSnapshot routeSnapshot{player.getFreeCapacity(), pickupRewardBaseUtility,
-	                                                    economicPickupBaseUtility, huntGoalUtility, candidates};
+	                                                    economicPickupBaseUtility, huntGoalUtility,
+	                                                    PlayerBotNavigationRiskProfile{}.maximumHealthLossPerSecond,
+	                                                    static_cast<uint32_t>(PlayerBotNavigationRiskProfile{}.maximumRouteHealthLoss *
+	                                                        PlayerBotNavigationRiskProfile{}.healthLossCost), candidates};
 	const std::vector<size_t> routeCandidates = rewardPlanner.routeCandidates(routeSnapshot);
+	auto routeWithinTolerance = [&routeSnapshot](const PlayerBotRouteEstimate& route) {
+		return route.maximumDanger <= routeSnapshot.maximumTravelDanger &&
+		       route.dangerCost <= routeSnapshot.maximumTravelDangerCost;
+	};
 	auto routeCandidate = [&](size_t candidateIndex) {
 		if (rewardRouteNodes >= maximumRewardRouteNodes) return;
 		PlayerBotRewardCandidateSnapshot& candidate = candidates[candidateIndex];
 		std::deque<PlayerBotNavigationStep> steps;
 		if (!planSimpleRewardApproach(player, candidate.plan.itemPosition, candidate.route.approachPosition, steps,
-		                               candidate.route.expandedNodes, maximumRewardRouteNodes - rewardRouteNodes)) {
+		                               candidate.route.expandedNodes, maximumRewardRouteNodes - rewardRouteNodes,
+		                               candidate.route.steps, candidate.route.dangerCost, candidate.route.maximumDanger)) {
 			rewardRouteNodes += candidate.route.expandedNodes;
 			return;
 		}
 		rewardRouteNodes += candidate.route.expandedNodes;
 		candidate.route.reachable = true;
-		candidate.route.steps = static_cast<uint32_t>(steps.size());
 		plannedRoutes.emplace(candidate.plan.uniqueId, std::move(steps));
 	};
 
@@ -727,9 +826,10 @@ bool PlayerBotController::findPickupReward(Player& player, const Position& posit
 		const size_t nearestIndex = *nearestIt;
 		routeCandidate(nearestIndex);
 		int32_t incumbentUtility = routeSnapshot.huntUtility;
-		if (candidates[nearestIndex].route.reachable) {
+		if (candidates[nearestIndex].route.reachable && routeWithinTolerance(candidates[nearestIndex].route)) {
 			PlayerBotRewardPlan routed = candidates[nearestIndex].plan;
 			routed.travelSteps = candidates[nearestIndex].route.steps;
+			routed.travelDangerCost = candidates[nearestIndex].route.dangerCost;
 			incumbentUtility = std::max(incumbentUtility, rewardPlanner.utility(routed, routeSnapshot));
 		}
 
@@ -740,14 +840,19 @@ bool PlayerBotController::findPickupReward(Player& player, const Position& posit
 				break;
 			}
 			routeCandidate(candidateIndex);
-			if (!candidates[candidateIndex].route.reachable) continue;
+			if (!candidates[candidateIndex].route.reachable || !routeWithinTolerance(candidates[candidateIndex].route)) continue;
 			PlayerBotRewardPlan routed = candidates[candidateIndex].plan;
 			routed.travelSteps = candidates[candidateIndex].route.steps;
+			routed.travelDangerCost = candidates[candidateIndex].route.dangerCost;
 			incumbentUtility = std::max(incumbentUtility, rewardPlanner.utility(routed, routeSnapshot));
 		}
 	}
 	const PlayerBotRewardPlannerSnapshot snapshot{player.getFreeCapacity(), pickupRewardBaseUtility,
-	                                              economicPickupBaseUtility, huntGoalUtility, std::move(candidates)};
+	                                              economicPickupBaseUtility, huntGoalUtility,
+	                                              PlayerBotNavigationRiskProfile{}.maximumHealthLossPerSecond,
+	                                              static_cast<uint32_t>(PlayerBotNavigationRiskProfile{}.maximumRouteHealthLoss *
+	                                                  PlayerBotNavigationRiskProfile{}.healthLossCost),
+	                                              std::move(candidates)};
 	const PlayerBotRewardDecision decision = rewardPlanner.select(snapshot);
 	for (const auto& outcome : decision.outcomes) {
 		emitRewardCandidate(outcome.plan, position, outcome.result, outcome.reason);
@@ -795,7 +900,9 @@ void PlayerBotController::emitGoalCandidate(const Player& player, const GoalCand
 	}
 	if (reward) {
 		fields << ",\"candidate_id\":" << reward->uniqueId << ",\"item_id\":" << reward->itemId
-		       << ",\"benefit\":" << reward->benefit << ",\"travel_steps\":" << reward->travelSteps;
+		       << ",\"benefit\":" << reward->benefit << ",\"travel_steps\":" << reward->travelSteps
+		       << ",\"travel_danger_cost\":" << reward->travelDangerCost
+		       << ",\"maximum_travel_danger\":" << reward->maximumTravelDanger;
 	}
 	if (departure) {
 		fields << ",\"npc_id\":" << departure->npcId << ",\"town\":\"thais\",\"town_id\":" << oracleTownId
@@ -815,6 +922,14 @@ void PlayerBotController::emitGoalCandidate(const Player& player, const GoalCand
 			fields << ",\"mana_gain\":" << forecast->gain << ",\"mana_tick_interval\":" << forecast->interval
 			       << ",\"mana_tick_remaining\":" << forecast->remaining;
 		}
+	}
+	if (candidate.goal == TopLevelGoal::SellLoot && sellLootPlan) {
+		const LocalSellLootPlan& plan = *sellLootPlan;
+		fields << ",\"npc_id\":" << plan.providerId << ",\"item_id\":" << plan.itemId << ",\"count\":" << plan.count
+		       << ",\"expected_revenue\":" << plan.expectedRevenue << ",\"liquidity_urgency\":" << plan.liquidityUrgency
+		       << ",\"fare\":" << plan.fare << ",\"round_trip_risk\":" << plan.roundTripRisk
+		       << ",\"round_trip_time_cost\":" << plan.roundTripTime << ",\"foregone_hunt_profit\":" << plan.foregoneHuntProfit
+		       << ",\"route_steps\":" << plan.routeSteps << ",\"route_validations\":" << plan.routeValidations;
 	}
 	emit("goal_candidate", position, fields.str());
 }
@@ -837,7 +952,9 @@ void PlayerBotController::beginPickupReward(Player& player, const Position& posi
 	                                                                    "highest_known_utility_reachable_reward")
 	       << ",\"item_id\":" << selected.itemId << ",\"root_item_id\":" << selected.rootItemId
 	       << ",\"benefit\":" << selected.benefit << ",\"known_utility\":" << selected.knownUtility
-	       << ",\"travel_steps\":" << selected.travelSteps;
+	       << ",\"travel_steps\":" << selected.travelSteps
+	       << ",\"travel_danger_cost\":" << selected.travelDangerCost
+	       << ",\"maximum_travel_danger\":" << selected.maximumTravelDanger;
 	emit("strategy_selection", position, fields.str());
 	say(player, selected.resumeEquipment ? "Equipping a previously claimed reward." :
 	                                         "Going to claim a useful equipment reward.");
@@ -860,7 +977,10 @@ bool PlayerBotController::selectTopLevelGoal(Player& player, const Position& pos
 	const bool pickupCoolingDown = progressionRuntime.isCoolingDown(TopLevelGoal::PickupReward, now);
 	const bool pickupFound = !pickupCoolingDown && findPickupReward(player, position, reward, rewardSteps);
 	const PlayerBotRewardPlannerSnapshot rewardSnapshot{
-		0, pickupRewardBaseUtility, economicPickupBaseUtility, huntGoalUtility, {},
+		0, pickupRewardBaseUtility, economicPickupBaseUtility, huntGoalUtility,
+		PlayerBotNavigationRiskProfile{}.maximumHealthLossPerSecond,
+		static_cast<uint32_t>(PlayerBotNavigationRiskProfile{}.maximumRouteHealthLoss *
+		    PlayerBotNavigationRiskProfile{}.healthLossCost), {},
 	};
 	const int32_t pickupUtility = pickupFound ? rewardPlanner.utility(reward, rewardSnapshot) : 0;
 	PlayerBotSpellTrainingPlan spellTraining;
@@ -874,10 +994,11 @@ bool PlayerBotController::selectTopLevelGoal(Player& player, const Position& pos
 	const bool magicTrainingCoolingDown = progressionRuntime.isCoolingDown(TopLevelGoal::MagicTraining, now);
 	const char* magicTrainingReason = magicTrainingCoolingDown ? "cooldown" :
 	                                  survivalRuntime.magicTrainingReason(survivalSnapshot(player));
+	const bool sellLootCoolingDown = progressionRuntime.isCoolingDown(TopLevelGoal::SellLoot, now);
 	const uint16_t potionItemId = recoveryPotionItemId(player.getVocationId());
 	const uint32_t potionCount = inventoryPolicy.inventoryItemCount(player, potionItemId);
-	const uint32_t missingPotions = potionCount <= healthPotionReturnThreshold ?
-	                                  healthPotionRestockTarget - potionCount : 0;
+	const uint32_t missingPotions = potionCount <= huntPotionReturnThreshold ?
+	                                  huntPotionRestockTarget - potionCount : 0;
 	const uint32_t sellable = saleableItemCount(player);
 	const bool lowCapacity = inventoryPolicy.effectiveFreeCapacity(player) < returnCapacityThreshold;
 	const bool criticalHealing = survivalRuntime.needsHealing(survivalSnapshot(player)) && missingPotions != 0;
@@ -892,6 +1013,8 @@ bool PlayerBotController::selectTopLevelGoal(Player& player, const Position& pos
 		equipmentPurchaseCoolingDown, fixtureDriver.observeEquipmentOffer(true).available, equipmentFound,
 		equipmentFound ? PlayerBotEquipmentPolicy::decisionRuleName(equipment->rule) : "",
 		magicTrainingCoolingDown, magicTrainingReason ? magicTrainingReason : "",
+		sellLootCoolingDown, sellLootPlan.has_value(), sellLootPlan ? sellLootPlan->utility : 0,
+		sellLootPlan ? "local_positive_plan" : "no_opened_depot_plan",
 	};
 	const PlayerBotGoalArbiter::GoalDecision decision = progressionRuntime.selectGoal(snapshot);
 	emitGoalCandidate(player, decision.candidate(TopLevelGoal::Departure), decision.id, position, decisionReason, nullptr,
@@ -902,6 +1025,7 @@ bool PlayerBotController::selectTopLevelGoal(Player& player, const Position& pos
 	emitGoalCandidate(player, decision.candidate(TopLevelGoal::BuyEquipment), decision.id, position, decisionReason, nullptr, nullptr,
 	                  equipmentFound ? &*equipment : nullptr);
 	emitGoalCandidate(player, decision.candidate(TopLevelGoal::MagicTraining), decision.id, position, decisionReason);
+	emitGoalCandidate(player, decision.candidate(TopLevelGoal::SellLoot), decision.id, position, decisionReason);
 	emitGoalCandidate(player, decision.candidate(TopLevelGoal::Hunt), decision.id, position, decisionReason);
 	if (fixtureDriver.equipmentStorageObservation().pause) {
 		return false;
@@ -932,6 +1056,9 @@ bool PlayerBotController::selectTopLevelGoal(Player& player, const Position& pos
 		fields << ",\"npc_id\":" << equipment->npcId << ",\"item_id\":" << equipment->itemId
 		       << ",\"price\":" << equipment->price << ",\"rule\":"
 	       << jsonString(PlayerBotEquipmentPolicy::decisionRuleName(equipment->rule));
+	} else if (selected.goal == TopLevelGoal::SellLoot && sellLootPlan) {
+		fields << ",\"npc_id\":" << sellLootPlan->providerId << ",\"item_id\":" << sellLootPlan->itemId
+		       << ",\"count\":" << sellLootPlan->count;
 	}
 	emit("goal_selection", position, fields.str());
 	if (selected.goal == TopLevelGoal::Departure) {
@@ -946,7 +1073,10 @@ bool PlayerBotController::selectTopLevelGoal(Player& player, const Position& pos
 		beginService(&player, position, "goal_selected");
 	} else if (selected.goal == TopLevelGoal::MagicTraining) {
 		schedule(SCHEDULER_MINTICKS);
+	} else if (selected.goal == TopLevelGoal::SellLoot) {
+		setCyclePhase(CyclePhase::DepositLoot, position, "sell_loot_selected");
 	} else {
+		sellLootPlan.reset();
 		startHunt(&player, position, "goal_selected");
 	}
 	return true;

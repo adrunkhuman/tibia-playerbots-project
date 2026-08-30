@@ -23,6 +23,10 @@ struct PlayerBotNavigationPlanMetrics {
 	Position waypoint;
 	size_t steps = 0;
 	double estimatedTravelSeconds = 0;
+	uint32_t movementCost = 0;
+	uint32_t dangerCost = 0;
+	double maximumHealthLossPerSecond = 0;
+	bool dangerAware = false;
 	std::chrono::microseconds elapsed = std::chrono::microseconds::zero();
 	bool attempted = false;
 };
@@ -129,7 +133,12 @@ class PlayerBotNavigationRuntime
 
 		size_t routeSize() const { return session.routeSize(); }
 		bool hasPendingWork() const { return session.hasPendingWork(); }
-		bool isRouteCritical(const Position& position, std::chrono::steady_clock::time_point now) const { return session.isRouteCritical(position, now); }
+		bool avoidPendingRouteBlocker(uint32_t blockerId, const Position& position, std::chrono::steady_clock::time_point now,
+		                              std::chrono::steady_clock::duration suppression)
+		{
+			return session.avoidPendingRouteBlocker(blockerId, position, now, suppression);
+		}
+		bool isRouteCritical(uint32_t blockerId, const Position& position, std::chrono::steady_clock::time_point now) const { return session.isRouteCritical(blockerId, position, now); }
 		std::set<Position> activeBlockedPositions(std::chrono::steady_clock::time_point now) { return session.activeBlockedPositions(now); }
 		bool hasActiveRouteBlock(std::chrono::steady_clock::time_point now) const { return session.hasActiveRouteBlock(now); }
 		bool oscillationDetected() const { return session.oscillationDetected(); }

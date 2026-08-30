@@ -32,7 +32,7 @@
 			Invoke-DatabaseCommand -Query "DELETE FROM player_items WHERE player_id = (SELECT id FROM players WHERE name = 'Bot One') AND (pid = 10 OR itemtype IN (7618, 8704)); INSERT INTO player_items (player_id, sid, pid, itemtype, count, attributes) SELECT id, 9900, 10, 2398, 1, X'' FROM players WHERE name = 'Bot One';"
 			Invoke-Compose up --no-deps --detach server
 			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST SLOTTED_LOOT_SELLER_PASS' | Out-Null
-			$sellerLogs = Wait-ForLog -Pattern '"decision_reason":"service_complete"'
+			$sellerLogs = Wait-ForLog -Pattern '"action":"deposit","result":"complete"'
 			Assert-SlottedLootEvents -Logs $sellerLogs -SellerAvailable
 		}
 
@@ -43,7 +43,7 @@
 			Invoke-DatabaseCommand -Query "DELETE FROM player_items WHERE player_id = (SELECT id FROM players WHERE name = 'Bot One') AND (pid = 10 OR itemtype IN (7618, 8704)); INSERT INTO player_items (player_id, sid, pid, itemtype, count, attributes) SELECT id, 9900, 10, 2398, 1, X'' FROM players WHERE name = 'Bot One';"
 			Invoke-Compose up --no-deps --detach server
 			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST SLOTTED_LOOT_NO_SELLER_PASS' | Out-Null
-			$noSellerLogs = Wait-ForLog -Pattern '"decision_reason":"service_complete"'
+			$noSellerLogs = Wait-ForLog -Pattern '"action":"deposit","result":"complete"'
 			Assert-SlottedLootEvents -Logs $noSellerLogs
 		}
 
@@ -57,8 +57,27 @@
 			Invoke-Compose stop server
 			Invoke-Compose up --detach server
 			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST SLOTTED_LOOT_NO_SELLER_PASS' | Out-Null
-			$restartLogs = Wait-ForLog -Pattern '"decision_reason":"service_complete"'
+			$restartLogs = Wait-ForLog -Pattern '"action":"deposit","result":"complete"'
 			Assert-SlottedLootEvents -Logs $restartLogs -Restarted
+		}
+	}
+
+	if ($SellLoot) {
+		Invoke-Scenario -Name "sell_loot" -DefaultTimeoutSeconds 240 -Body {
+			Invoke-Compose down --volumes --remove-orphans
+			$env:PLAYERBOT_GAMEPLAY_MODE = "sell_loot"
+			$env:PLAYERBOT_HUNT_DURATION_SECONDS = "5"
+			Invoke-DatabaseCommand -Query "SET @bot = (SELECT id FROM players WHERE name = 'Bot One'); SET @backpack = (SELECT sid FROM player_items WHERE player_id = @bot AND pid = 3); DELETE FROM player_items WHERE player_id = @bot AND itemtype = 7618; INSERT INTO player_items (player_id, sid, pid, itemtype, count, attributes) SELECT @bot, COALESCE(MAX(sid), 100) + 1, @backpack, 7618, 10, X'' FROM player_items WHERE player_id = @bot;"
+			Invoke-Compose up --detach
+			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST SELL_LOOT_PASS' | Out-Null
+			$logs = Wait-ForLog -Pattern '"goal":"sell_loot","result":"success"'
+			$events = @(ConvertFrom-PlayerbotLogs -Logs $logs)
+			$plan = @($events | Where-Object { $_.event -eq "sell_loot_plan" -and $_.result -eq "candidate" -and $_.item_id -eq 7735 -and $_.count -eq 10 -and $_.utility -gt 300 })
+			$withdraw = @($events | Where-Object { $_.event -eq "sell_loot_withdraw" -and $_.result -eq "success" -and $_.item_id -eq 7735 })
+			$sales = @($events | Where-Object { $_.event -eq "action_result" -and $_.action -eq "sell" -and $_.result -eq "success" -and $_.item_id -eq 7735 -and $_.count -eq 10 })
+			if ($plan.Count -ne 1 -or $withdraw.Count -ne 10 -or $sales.Count -ne 1) {
+				throw "Local SellLoot did not produce one plan, ten verified withdrawals, and one planned sale. plan=$($plan.Count), withdraw=$($withdraw.Count), sales=$($sales.Count)."
+			}
 		}
 	}
 

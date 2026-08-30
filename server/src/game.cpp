@@ -5024,7 +5024,10 @@ bool Game::reload(ReloadTypes_t reloadType)
 	auto rebuildPlayerBotTopology = [this]() {
 		if (!g_config.getBoolean(ConfigManager::PLAYERBOT_ENABLED)) return;
 		PlayerBotTopology::instance().build(map);
-		PlayerBotHuntRegionPlanner::invalidateCache();
+		PlayerBotHuntRegionPlanner::rebuildAtlas();
+	};
+	auto rebuildPlayerBotAtlas = []() {
+		if (g_config.getBoolean(ConfigManager::PLAYERBOT_ENABLED)) PlayerBotHuntRegionPlanner::rebuildAtlas();
 	};
 	switch (reloadType) {
 		case RELOAD_TYPE_ACTIONS: {
@@ -5048,9 +5051,7 @@ bool Game::reload(ReloadTypes_t reloadType)
 		}
 		case RELOAD_TYPE_MONSTERS: {
 			const bool reloaded = g_monsters.reload();
-			if (reloaded) {
-				PlayerBotHuntRegionPlanner::invalidateCache();
-			}
+			if (reloaded) rebuildPlayerBotAtlas();
 			return reloaded;
 		}
 		case RELOAD_TYPE_MOVEMENTS: return g_moveEvents->reload();
@@ -5070,7 +5071,7 @@ bool Game::reload(ReloadTypes_t reloadType)
 				std::cout << "[Error - Game::reload] Failed to reload monsters." << std::endl;
 				std::terminate();
 			}
-			PlayerBotHuntRegionPlanner::invalidateCache();
+			rebuildPlayerBotAtlas();
 			return true;
 		}
 

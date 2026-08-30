@@ -6,8 +6,9 @@ function Assert-NavigationEvents {
         $_.event -eq "action_result" -and $_.action -eq "hunt_waypoint" -and $_.result -eq "reached"
     })
     $actual = @($waypoints[0..4] | ForEach-Object { "$($_.position.x),$($_.position.y),$($_.position.z)" })
-    $expected = @("32084,32144,5", "32103,32124,8", "32117,32090,9", "32103,32124,8", "32084,32144,5")
-    if (($actual -join '|') -ne ($expected -join '|')) {
+    $forward = @("32084,32144,5", "32103,32124,8", "32117,32090,9", "32103,32124,8", "32084,32144,5")
+    $reverse = @("32117,32090,9", "32103,32124,8", "32084,32144,5", "32103,32124,8", "32117,32090,9")
+    if (($actual -join '|') -notin @(($forward -join '|'), ($reverse -join '|'))) {
         throw "Unexpected hunting waypoint sequence: $($actual -join ' -> ')"
     }
     $terminal = @($events | Where-Object { $_.event -eq "terminal" })
@@ -263,9 +264,9 @@ function Assert-InaccessibleCorpseEvents {
 	param([string]$Logs)
 
 	$events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
-	$suspended = @($events | Where-Object {
-		$_.event -eq "navigation_progress" -and $_.result -eq "suspended" -and
-		$_.reason -eq "corpse_route_unchanged"
+	$failedDetour = @($events | Where-Object {
+		$_.event -eq "navigation_progress" -and $_.result -eq "failed" -and
+		$_.reason -eq "route_unavailable"
 	})
 	$terminalResult = @($events | Where-Object {
 		$_.event -eq "action_result" -and $_.action -eq "loot" -and $_.result -eq "failed" -and
@@ -280,13 +281,38 @@ function Assert-InaccessibleCorpseEvents {
 		$_.result -eq "started" -and
 		$combatPreemption.Count -ge 1 -and $_.target_id -eq $combatPreemption[0].target_id
 	})
+	$blockerTimedOut = @($events | Where-Object {
+		$_.event -eq "action_result" -and $_.action -eq "defensive_combat" -and
+		$_.result -eq "failed" -and $_.reason -eq "combat_timeout"
+	})
 	$controllerTerminal = @($events | Where-Object { $_.event -eq "terminal" })
-	if ($suspended.Count -lt 1 -or $combatPreemption.Count -ne 1 -or $blockerEngaged.Count -ne 1 -or
+	if ($failedDetour.Count -lt 1 -or $combatPreemption.Count -ne 1 -or $blockerEngaged.Count -ne 1 -or
+		$blockerTimedOut.Count -ne 1 -or
 		$terminalResult.Count -ne 1 -or
 		$terminalResult[0].target_id -le 0 -or
-		$terminalResult[0].navigation_failures -gt 6 -or $terminalResult[0].navigation_suspensions -lt 1 -or
-		$terminalResult[0].elapsed_ms -gt 22000 -or $controllerTerminal.Count -ne 0) {
-		throw "Inaccessible corpse work was not bounded. suspended=$($suspended.Count), preemption=$($combatPreemption.Count)/$($blockerEngaged.Count), results=$($terminalResult.Count), terminal=$($controllerTerminal.Count)."
+		$terminalResult[0].navigation_failures -gt 6 -or $terminalResult[0].elapsed_ms -gt 70000 -or
+		$controllerTerminal.Count -ne 0) {
+		throw "Inaccessible corpse work was not bounded. failed_detour=$($failedDetour.Count), preemption=$($combatPreemption.Count)/$($blockerEngaged.Count)/$($blockerTimedOut.Count), results=$($terminalResult.Count), terminal=$($controllerTerminal.Count)."
+	}
+}
+
+function Assert-CorpseDetourEvents {
+	param([string]$Logs)
+
+	$events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
+	$detours = @($events | Where-Object {
+		$_.event -eq "navigation_progress" -and $_.reason -eq "hostile_detour" -and
+		$_.blocker_id -gt 0
+	})
+	$loot = @($events | Where-Object {
+		$_.event -eq "action_result" -and $_.action -eq "loot" -and $_.result -eq "success"
+	})
+	$defensiveCombat = @($events | Where-Object {
+		$_.event -eq "action_result" -and $_.action -eq "defensive_combat" -and $_.result -eq "started"
+	})
+	$terminal = @($events | Where-Object { $_.event -eq "terminal" })
+	if ($detours.Count -lt 1 -or $loot.Count -lt 1 -or $defensiveCombat.Count -ne 0 -or $terminal.Count -ne 0) {
+		throw "The corpse blocker was not bypassed. detours=$($detours.Count), loot=$($loot.Count), defensive=$($defensiveCombat.Count), terminal=$($terminal.Count)."
 	}
 }
 
@@ -397,13 +423,9 @@ function Assert-SlottedLootEvents {
 		$_.to_goal -eq "service" -and $_.reason -eq "sellable_inventory"
 	})
 	$terminal = @($events | Where-Object { $_.event -eq "terminal" })
-	if ($SellerAvailable) {
-		if ($sellMoves.Count -lt 2 -or $sales.Count -ne 1 -or $deposits.Count -ne 0) {
-			throw "Slotted seller disposition failed. moves=$($sellMoves.Count), sales=$($sales.Count), deposits=$($deposits.Count)."
-		}
-	} elseif (($Restarted -and ($depositRequests.Count -ne 1 -or $deposits.Count -ne 0)) -or
-		(-not $Restarted -and $deposits.Count -ne 1) -or $sales.Count -ne 0) {
-		throw "Slotted no-seller disposition failed. requests=$($depositRequests.Count), deposits=$($deposits.Count), sales=$($sales.Count), restarted=$Restarted."
+	if (($Restarted -and ($depositRequests.Count -ne 1 -or $deposits.Count -ne 0)) -or
+		(-not $Restarted -and $deposits.Count -ne 1) -or $sales.Count -ne 0 -or $sellMoves.Count -ne 0) {
+		throw "Slotted loot was not deferred to the depot. requests=$($depositRequests.Count), deposits=$($deposits.Count), sales=$($sales.Count), sell_moves=$($sellMoves.Count), seller=$SellerAvailable, restarted=$Restarted."
 	}
 	if ($protectedMoves.Count -ne 0 -or $reselectedService.Count -ne 0 -or $terminal.Count -ne 0) {
 		throw "Slotted disposition did not preserve protected state or bounded service. protected=$($protectedMoves.Count), repeated=$($reselectedService.Count), terminal=$($terminal.Count), restarted=$Restarted."
@@ -422,8 +444,9 @@ function Assert-MainlandLoopEvents {
 	})
 	$realDepot = @($events | Where-Object {
 		$_.event -eq "action_result" -and $_.action -eq "depot_discover" -and $_.result -eq "success" -and
-		$_.locker.x -eq 32352 -and $_.locker.y -eq 32225 -and $_.locker.z -eq 7 -and
-		$_.approach.x -eq 32352 -and $_.approach.y -eq 32226 -and $_.approach.z -eq 7
+		$_.depot_id -eq 2 -and $_.locker_item_id -eq 2589 -and
+		[Math]::Abs($_.locker.x - $_.approach.x) -le 1 -and
+		[Math]::Abs($_.locker.y - $_.approach.y) -le 1 -and $_.locker.z -eq $_.approach.z
 	})
 	$trainingRoomDepot = @($events | Where-Object {
 		$_.event -eq "action_result" -and $_.action -eq "depot_discover" -and $_.result -eq "success" -and
@@ -431,8 +454,7 @@ function Assert-MainlandLoopEvents {
 	})
 	$selection = @($events | Where-Object {
 		$_.event -eq "hunt_region_selection" -and $_.result -eq "selected" -and
-		[Math]::Abs($_.center.x - 32369) + [Math]::Abs($_.center.y - 32241) +
-		20 * [Math]::Abs($_.center.z - 7) -le 200
+		$_.atlas_site_id -gt 0 -and $_.atlas_variant_id -gt 0 -and $_.atlas_spawns -gt 0
 	})
 	$remoteBuyerDeposit = @($events | Where-Object {
 		$_.event -eq "action_result" -and $_.action -eq "deposit" -and $_.result -in @("success", "partial") -and

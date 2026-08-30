@@ -23,9 +23,10 @@ namespace {
 			case PlayerBotGoalArbiter::TopLevelGoal::LearnSpell: return 3;
 			case PlayerBotGoalArbiter::TopLevelGoal::BuyEquipment: return 4;
 			case PlayerBotGoalArbiter::TopLevelGoal::MagicTraining: return 5;
-			case PlayerBotGoalArbiter::TopLevelGoal::Hunt: return 6;
+			case PlayerBotGoalArbiter::TopLevelGoal::SellLoot: return 6;
+			case PlayerBotGoalArbiter::TopLevelGoal::Hunt: return 7;
 		}
-		return 7;
+		return 8;
 	}
 }
 
@@ -46,6 +47,16 @@ PlayerBotGoalArbiter::GoalDecision PlayerBotGoalArbiter::decide(std::vector<Goal
 	});
 
 	for (GoalCandidate& candidate : candidates) {
+		if (candidate.goal == TopLevelGoal::SellLoot) {
+			const auto service = std::find_if(candidates.begin(), candidates.end(), [](const GoalCandidate& higherPriority) {
+				return higherPriority.goal == TopLevelGoal::Service;
+			});
+			if (service != candidates.end() && service->feasible) {
+				candidate.feasible = false;
+				candidate.reason = "deferred_mandatory_service";
+			}
+			continue;
+		}
 		if (candidate.goal != TopLevelGoal::Hunt) {
 			continue;
 		}
@@ -121,6 +132,7 @@ const char* PlayerBotGoalArbiter::goalName(TopLevelGoal goal)
 		case TopLevelGoal::LearnSpell: return "learn_spell";
 		case TopLevelGoal::BuyEquipment: return "buy_equipment";
 		case TopLevelGoal::MagicTraining: return "magic_training";
+		case TopLevelGoal::SellLoot: return "sell_loot";
 		case TopLevelGoal::Hunt: return "hunt";
 	}
 	return "unknown";
@@ -133,6 +145,7 @@ std::chrono::steady_clock::time_point& PlayerBotGoalArbiter::cooldownUntil(TopLe
 		case TopLevelGoal::LearnSpell: return spellTrainingCooldownUntil;
 		case TopLevelGoal::BuyEquipment: return equipmentPurchaseCooldownUntil;
 		case TopLevelGoal::MagicTraining: return magicTrainingCooldownUntil;
+		case TopLevelGoal::SellLoot: return sellLootCooldownUntil;
 		default: throw std::logic_error("goal has no cooldown");
 	}
 }
@@ -144,6 +157,7 @@ const std::chrono::steady_clock::time_point& PlayerBotGoalArbiter::cooldownUntil
 		case TopLevelGoal::LearnSpell: return spellTrainingCooldownUntil;
 		case TopLevelGoal::BuyEquipment: return equipmentPurchaseCooldownUntil;
 		case TopLevelGoal::MagicTraining: return magicTrainingCooldownUntil;
+		case TopLevelGoal::SellLoot: return sellLootCooldownUntil;
 		default: throw std::logic_error("goal has no cooldown");
 	}
 }

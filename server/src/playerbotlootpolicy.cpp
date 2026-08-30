@@ -66,6 +66,7 @@ PlayerBotLootReplacement PlayerBotLootPolicy::replacementFor(const PlayerBotLoot
 		return leftDensity == rightDensity ? left.itemId < right.itemId : leftDensity < rightDensity;
 	});
 	uint64_t totalDiscardedValue = 0;
+	bool lowerDensity = true;
 	for (const PlayerBotLootCargoSnapshot& candidate : candidates) {
 		if (candidate.unitWeight == 0) continue;
 		const uint32_t count = std::min<uint32_t>(candidate.count,
@@ -76,6 +77,9 @@ PlayerBotLootReplacement PlayerBotLootPolicy::replacementFor(const PlayerBotLoot
 			replacement.count = static_cast<uint8_t>(count);
 		}
 		totalDiscardedValue += static_cast<uint64_t>(count) * candidate.unitValue;
+		lowerDensity = lowerDensity &&
+			static_cast<uint64_t>(incoming.unitValue) * candidate.unitWeight >
+			static_cast<uint64_t>(candidate.unitValue) * incoming.unitWeight;
 		const uint32_t releasedWeight = count * candidate.unitWeight;
 		if (releasedWeight >= requiredWeight) {
 			requiredWeight = 0;
@@ -84,8 +88,8 @@ PlayerBotLootReplacement PlayerBotLootPolicy::replacementFor(const PlayerBotLoot
 		requiredWeight -= releasedWeight;
 	}
 	replacement.discardedValue = totalDiscardedValue;
-	const uint64_t incomingValue = static_cast<uint64_t>(incoming.unitValue) * incoming.count;
 	replacement.viable = incomingWeight != 0 && incomingWeight > inventory.freeCapacity && replacement.count != 0 &&
-	                    requiredWeight == 0 && incomingValue > totalDiscardedValue;
+	                    requiredWeight == 0 && lowerDensity &&
+	                    static_cast<uint64_t>(incoming.unitValue) * incoming.count > totalDiscardedValue;
 	return replacement;
 }

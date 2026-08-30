@@ -33,6 +33,9 @@ PlayerBotNavigationRuntimeOutcome PlayerBotNavigationRuntime::process(const Play
 
 	outcome.movementResult = session.observeMovement(input.currentPosition, input.actionPending, input.timing.now,
 	                                                input.timing.stepTimeout, input.timing.blockSuppression);
+	if (outcome.movementResult == PlayerBotPendingMovementResult::Mismatch && session.stepFailureCount() >= 3) {
+		session.confirmRequiredRouteBlocker();
+	}
 	if (outcome.movementResult == PlayerBotPendingMovementResult::Waiting) {
 		outcome.command = PlayerBotNavigationRuntimeCommand::Retry;
 		outcome.stepFailureCount = session.stepFailureCount();
@@ -66,7 +69,9 @@ PlayerBotNavigationRuntimeOutcome PlayerBotNavigationRuntime::observePlan(Player
 	if (observation.plan.metrics.result != PlayerBotNavigationResult::Reached ||
 	    (!observation.startsNavigation && observation.plan.steps.empty())) {
 		outcome.routeUnavailable = true;
-		if (session.activeBlockedPositions(observation.now).empty()) ++fixedTargetRouteFailures;
+		const std::set<Position> activeBlockers = session.activeBlockedPositions(observation.now);
+		if (activeBlockers.empty()) ++fixedTargetRouteFailures;
+		else session.confirmRequiredRouteBlocker();
 		outcome.fixedTargetRouteFailures = fixedTargetRouteFailures;
 		outcome.fixedTargetRouteExhausted = fixedTargetRouteFailures >= 20;
 		outcome.command = outcome.fixedTargetRouteExhausted ? PlayerBotNavigationRuntimeCommand::Fail :

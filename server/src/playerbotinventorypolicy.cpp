@@ -17,6 +17,24 @@
 
 using namespace playerbot;
 
+uint32_t playerbot::recoveryPotionRouteReserve(uint16_t vocationId, int32_t maximumHealth,
+	                                            uint32_t routeDangerCost, uint32_t healthLossCost)
+{
+	if (maximumHealth <= 0 || routeDangerCost == 0 || healthLossCost == 0) return healthPotionReturnThreshold;
+	const uint64_t expectedHealthLoss =
+		(static_cast<uint64_t>(maximumHealth) * routeDangerCost + healthLossCost - 1) / healthLossCost;
+	const uint32_t minimumHealing = static_cast<uint32_t>(std::max(1, recoveryPotionMinimumHealing(vocationId)));
+	const uint64_t routePotions = (expectedHealthLoss + minimumHealing - 1) / minimumHealing;
+	return static_cast<uint32_t>(std::min<uint64_t>(
+		std::numeric_limits<uint32_t>::max(), std::max<uint64_t>(healthPotionReturnThreshold, routePotions)));
+}
+
+uint32_t playerbot::recoveryPotionRestockTargetForReserve(uint32_t returnReserve)
+{
+	return std::max(healthPotionRestockTarget,
+	                returnReserve == std::numeric_limits<uint32_t>::max() ? returnReserve : returnReserve + 1);
+}
+
 PlayerBotInventoryPolicy::PlayerBotInventoryPolicy(const PlayerBotInventoryPolicy::SellValues& sellValues,
                                                     EquipmentUpgradePredicate equipmentUpgrade) :
 	sellValues(sellValues), equipmentUpgrade(std::move(equipmentUpgrade))

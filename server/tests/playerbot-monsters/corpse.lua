@@ -38,7 +38,7 @@ registerCorpseTestMonster("Playerbot Defensive Threat", {}, nil, false, 1)
 registerCorpseTestMonster("Playerbot Corpse Blocker", {}, nil, false, 100000)
 registerCorpseTestMonster("Playerbot Level Eight Target", {}, nil, false, 1, nil, 1)
 registerCorpseTestMonster("Playerbot Food Value Corpse", {
-    {id = 2826, chance = 100000, maxCount = 1},
+	{id = ITEM_PLATINUM_COIN, chance = 100000, maxCount = 1},
 })
 registerCorpseTestMonster("Playerbot Food Cap Corpse", {
 	{id = 2666, chance = 100000, maxCount = 1},

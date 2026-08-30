@@ -26,6 +26,7 @@ class PlayerBotGoalArbiter {
 			LearnSpell,
 			BuyEquipment,
 			MagicTraining,
+			SellLoot,
 			Hunt,
 		};
 
@@ -69,6 +70,7 @@ class PlayerBotGoalArbiter {
 		std::chrono::steady_clock::time_point spellTrainingCooldownUntil;
 		std::chrono::steady_clock::time_point equipmentPurchaseCooldownUntil;
 		std::chrono::steady_clock::time_point magicTrainingCooldownUntil;
+		std::chrono::steady_clock::time_point sellLootCooldownUntil;
 };
 
 #endif

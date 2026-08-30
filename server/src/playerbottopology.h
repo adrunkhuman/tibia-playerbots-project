@@ -15,6 +15,7 @@
 
 class Map;
 struct PlayerBotNavigationGoal;
+struct PlayerBotNavigationCostPolicy;
 
 class PlayerBotTopologyDistances {
 	friend class PlayerBotTopology;
@@ -45,6 +46,8 @@ struct PlayerBotTopologyPortal {
 struct PlayerBotTopologyRoute {
 	Position waypoint;
 	std::optional<PlayerBotTopologyPortal> portal;
+	uint32_t dangerCost = 0;
+	double maximumHealthLossPerSecond = 0;
 };
 
 class PlayerBotTopology
@@ -59,7 +62,8 @@ class PlayerBotTopology
 		std::optional<PlayerBotTopologyRoute> route(const Position& start, const Position& destination,
 		                                                const std::set<Position>& blockedPositions,
 		                                                bool canUseRope = true, bool canUseShovel = true,
-		                                                uint32_t playerLevel = std::numeric_limits<uint32_t>::max()) const;
+		                                                uint32_t playerLevel = std::numeric_limits<uint32_t>::max(),
+		                                                const PlayerBotNavigationCostPolicy* costPolicy = nullptr) const;
 		PlayerBotTopologyDistances distancesFrom(const Position& start, bool canUseRope = true,
 		                                               bool canUseShovel = true,
 		                                               uint32_t playerLevel = std::numeric_limits<uint32_t>::max()) const;
@@ -67,6 +71,7 @@ class PlayerBotTopology
 		                                   const Position& destination) const;
 		std::optional<uint32_t> distanceTo(const PlayerBotTopologyDistances& distances,
 		                                   const PlayerBotNavigationGoal& goal) const;
+		const std::vector<PlayerBotTopologyPortal>& portals() const { return topologyPortals; }
 		size_t tileCount() const { return walkNodes.size(); }
 		uint32_t componentCount() const { return components; }
 		uint32_t nodeCount() const { return static_cast<uint32_t>(edges.size()); }
@@ -81,6 +86,7 @@ class PlayerBotTopology
 		std::unordered_map<uint64_t, uint32_t> walkNodes;
 		std::vector<uint32_t> nodeComponents;
 		std::vector<std::vector<Edge>> edges;
+		std::vector<PlayerBotTopologyPortal> topologyPortals;
 		uint32_t components = 0;
 		uint64_t topologyGeneration = 0;
 };

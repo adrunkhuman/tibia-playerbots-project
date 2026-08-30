@@ -37,6 +37,7 @@ param(
 	[switch]$MainlandRewards,
 	[switch]$Depot,
 	[switch]$SlottedLoot,
+	[switch]$SellLoot,
 	[switch]$MainlandLoop,
 	[switch]$SpellTraining,
 	[switch]$SpellUse,
@@ -65,7 +66,7 @@ $gameplayComposeFile = Join-Path $projectRoot "server\compose.playerbot-gameplay
 $composeArguments = @("compose", "-f", $composeFile, "-f", $gameplayComposeFile)
 $scenarioCatalog = @(
 	"cycle",
-	"carlin_local_service", "mainland_loop", "slotted_loot_seller", "slotted_loot_no_seller", "slotted_loot_deposit_restart",
+	"carlin_local_service", "mainland_loop", "slotted_loot_seller", "slotted_loot_no_seller", "slotted_loot_deposit_restart", "sell_loot",
 	"real_depot", "real_depot_restart_approach", "real_depot_restart_locker", "real_depot_restart_chest",
 	"real_depot_restart_deposit", "real_depot_restart_depart", "real_depot_partial_move", "real_depot_rejected_move",
 	"pickup_progression", "pickup_progression_bundle", "pickup_progression_nested", "pickup_progression_resume",
@@ -83,7 +84,7 @@ $scenarioCatalog = @(
 	"magic_training_pz", "magic_training_absent", "magic_training_expired", "magic_training_failed",
 	"magic_training_service", "magic_training_progression", "magic_training_post_hunt",
 	"magic_training_post_hunt_no_overflow", "magic_training_restart", "magic_training_hunt",
-	"corpse", "corpse_inaccessible", "death", "healing", "healing_resupply", "value"
+	"corpse", "corpse_detour", "corpse_inaccessible", "death", "healing", "healing_resupply", "value"
 )
 $scenarioCatalogSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
 foreach ($scenarioName in $scenarioCatalog) {
@@ -91,8 +92,8 @@ foreach ($scenarioName in $scenarioCatalog) {
 		throw "Duplicate gameplay scenario name: $scenarioName"
 	}
 }
-if ($scenarioCatalog.Count -ne 81) {
-	throw "The gameplay scenario catalog must contain 81 scenarios; found $($scenarioCatalog.Count)."
+if ($scenarioCatalog.Count -ne 83) {
+	throw "The gameplay scenario catalog must contain 83 scenarios; found $($scenarioCatalog.Count)."
 }
 $requestedScenarioNames = @($Scenario | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
 $exactScenarioSelection = $requestedScenarioNames.Count -gt 0
@@ -147,7 +148,7 @@ if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
 $focusedScenarioRequested = $FullNavigation -or $TargetPursuit -or $CorpseLoot -or $DeathTelemetry -or $Healing -or $ValueLoot -or
 	$PickupProgression -or $GoalArbitration -or $OracleDeparture -or $StaminaProjection -or $HuntRegionPlanning -or
 	$AdaptiveChallenge -or
-	$CombatReadiness -or $EquipmentOffers -or $EquipmentPurchases -or $MainlandRewards -or $Depot -or $SlottedLoot -or $MainlandLoop -or $SpellTraining -or $SpellUse -or $SpellCalibration -or $MagicTraining -or $MagicTrainingCase
+	$CombatReadiness -or $EquipmentOffers -or $EquipmentPurchases -or $MainlandRewards -or $Depot -or $SlottedLoot -or $SellLoot -or $MainlandLoop -or $SpellTraining -or $SpellUse -or $SpellCalibration -or $MagicTraining -or $MagicTrainingCase
 if ($Focused -and -not $focusedScenarioRequested) {
 	throw "-Focused requires at least one focused scenario switch."
 }
@@ -155,7 +156,7 @@ if (-not $Focused) {
 	$FullNavigation = $TargetPursuit = $CorpseLoot = $DeathTelemetry = $Healing = $ValueLoot = $true
 	$PickupProgression = $GoalArbitration = $OracleDeparture = $StaminaProjection = $HuntRegionPlanning = $true
 	$AdaptiveChallenge = $CombatReadiness = $EquipmentOffers = $EquipmentPurchases = $MainlandRewards = $true
-	$Depot = $SlottedLoot = $MainlandLoop = $SpellTraining = $SpellUse = $SpellCalibration = $MagicTraining = $true
+	$Depot = $SlottedLoot = $SellLoot = $MainlandLoop = $SpellTraining = $SpellUse = $SpellCalibration = $MagicTraining = $true
 }
 
 try {

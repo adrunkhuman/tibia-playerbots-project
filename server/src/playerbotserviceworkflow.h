@@ -15,6 +15,7 @@
 #include <string>
 
 enum class PlayerBotServiceStage : uint8_t { Discover, SellLoot, BuyPotions, Bank, Complete, Failed };
+enum class PlayerBotServiceIntent : uint8_t { Resupply, LiquidateCarriedLoot };
 enum class PlayerBotServiceCommandType : uint8_t {
 	None, ValidateProviderRoute, NavigateProvider, Speak, Sell, Buy, DepositAll, Withdraw, OpenBackpack, MoveSlottedSale, Complete, Fail, Wait,
 };
@@ -45,6 +46,9 @@ struct PlayerBotServiceRouteObservation {
 	PlayerBotServiceRouteResult result = PlayerBotServiceRouteResult::NotObserved;
 	uint32_t steps = 0;
 	uint64_t expandedNodes = 0;
+	uint32_t dangerCost = 0;
+	double maximumDanger = 0;
+	bool requiresNpcTravel = false;
 };
 
 struct PlayerBotServiceDiscovery {
@@ -90,6 +94,8 @@ struct PlayerBotServiceObservation {
 	uint32_t goldCoinWeight = 0;
 	uint16_t healthPotionItemId = 0;
 	uint32_t healthPotionWeight = 0;
+	uint32_t healthPotionReturnThreshold = PlayerBotDispositionPolicy::potionReturnThreshold;
+	uint32_t healthPotionRestockTarget = PlayerBotDispositionPolicy::potionRestockTarget;
 	std::map<uint32_t, PlayerBotServiceProviderObservation> providers;
 	std::vector<PlayerBotServiceDiscovery> discoveries;
 	uint32_t maximumAttempts = 0;
@@ -103,11 +109,23 @@ struct PlayerBotServiceSnapshot {
 	uint32_t npcId = 0;
 };
 
+struct PlayerBotServiceLiquidationPlan {
+	uint32_t providerId = 0;
+	uint16_t itemId = 0;
+	uint32_t count = 0;
+	uint32_t price = 0;
+	uint8_t subType = 0;
+	uint32_t maximumRouteSteps = 0;
+};
+
 class PlayerBotServiceWorkflow
 {
 	public:
-		void reset();
+		void reset(PlayerBotServiceIntent intent = PlayerBotServiceIntent::Resupply);
+		void setLiquidationPlan(PlayerBotServiceLiquidationPlan plan) { liquidationPlan = plan; }
+		const std::optional<PlayerBotServiceLiquidationPlan>& liquidation() const { return liquidationPlan; }
 		PlayerBotServiceStage stage() const { return serviceStage; }
+		PlayerBotServiceIntent intent() const { return serviceIntent; }
 		PlayerBotServiceSnapshot snapshot() const { return {serviceStage, npcSession.targetId()}; }
 		const std::set<uint32_t>& unavailableProviders() const { return unavailableProviderIds; }
 		void setProviderUtilityProfile(PlayerBotProviderUtilityProfile profile) { providerUtilityProfile = profile; }
@@ -142,6 +160,7 @@ class PlayerBotServiceWorkflow
 		PlayerBotProviderUtilityPolicy providerUtilityPolicy;
 		PlayerBotProviderUtilityProfile providerUtilityProfile;
 		PlayerBotServiceStage serviceStage = PlayerBotServiceStage::Discover;
+		PlayerBotServiceIntent serviceIntent = PlayerBotServiceIntent::Resupply;
 		std::vector<PlayerBotEconomyProvider> shopProviders;
 		std::vector<PlayerBotEconomyProvider> bankProviders;
 		uint16_t pendingSlottedItem = 0;
@@ -156,6 +175,8 @@ class PlayerBotServiceWorkflow
 		std::set<Position> rejectedApproaches;
 		std::set<uint32_t> unavailableProviderIds;
 		std::map<uint32_t, uint32_t> providerRouteCosts;
+		std::set<uint32_t> providersRequiringNpcTravel;
+		std::optional<PlayerBotServiceLiquidationPlan> liquidationPlan;
 };
 
 #endif

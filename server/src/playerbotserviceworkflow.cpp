@@ -4,13 +4,15 @@
 
 namespace {
 	constexpr uint32_t npcReplyDelay = 1000;
+	constexpr uint32_t maximumShopTransactionAmount = 100;
 }
 
-void PlayerBotServiceWorkflow::reset()
+void PlayerBotServiceWorkflow::reset(PlayerBotServiceIntent intent)
 {
 	npcSession.reset();
 	serviceSession.reset();
 	serviceStage = PlayerBotServiceStage::Discover;
+	serviceIntent = intent;
 	shopProviders.clear();
 	bankProviders.clear();
 	pendingSlottedItem = 0;
@@ -25,6 +27,8 @@ void PlayerBotServiceWorkflow::reset()
 	rejectedApproaches.clear();
 	unavailableProviderIds.clear();
 	providerRouteCosts.clear();
+	providersRequiringNpcTravel.clear();
+	liquidationPlan.reset();
 }
 
 bool PlayerBotServiceWorkflow::reportNpcReply(uint32_t playerId, uint32_t replyingPlayerId, uint32_t npcId, uint8_t type)
@@ -125,6 +129,7 @@ PlayerBotServiceCommand PlayerBotServiceWorkflow::approachProvider(const PlayerB
 {
 	if (provider.inRange) {
 		providerRouteCosts[npcSession.targetId()] = 0;
+		providersRequiringNpcTravel.erase(npcSession.targetId());
 		pendingApproachRoute.reset();
 		selectedApproach.reset();
 		return {};
@@ -155,7 +160,16 @@ PlayerBotServiceCommand PlayerBotServiceWorkflow::approachProvider(const PlayerB
 			return command;
 		}
 		if (observation.approachRoute.result == PlayerBotServiceRouteResult::Reached) {
+			if (liquidationPlan && (observation.approachRoute.requiresNpcTravel ||
+			    observation.approachRoute.steps > liquidationPlan->maximumRouteSteps)) {
+				return rejectCurrentProvider();
+			}
 			providerRouteCosts[npcSession.targetId()] = observation.approachRoute.steps;
+			if (observation.approachRoute.requiresNpcTravel) {
+				providersRequiringNpcTravel.insert(npcSession.targetId());
+			} else {
+				providersRequiringNpcTravel.erase(npcSession.targetId());
+			}
 			selectedApproach = *pendingApproachRoute;
 			pendingApproachRoute.reset();
 			return {PlayerBotServiceCommandType::Wait, PlayerBotServiceOutcome::Success};
@@ -298,6 +312,7 @@ PlayerBotServiceCommand PlayerBotServiceWorkflow::verifyShop(const PlayerBotServ
 	const PlayerBotServiceVerification result = serviceSession.verifyShopTransaction(count, observation.money, observation.bankBalance,
 		purchase, observation.maximumAttempts);
 	if (result.result == PlayerBotServiceVerificationResult::Success) {
+		if (!purchase && liquidationPlan) serviceStage = PlayerBotServiceStage::Complete;
 		npcSession.setStep(PlayerBotNpcConversationStep::Ready);
 		npcSession.resetRetries();
 		PlayerBotServiceCommand command{PlayerBotServiceCommandType::Wait, PlayerBotServiceOutcome::Success};
@@ -394,11 +409,43 @@ PlayerBotServiceCommand PlayerBotServiceWorkflow::advanceImpl(const PlayerBotSer
 	if (serviceStage == PlayerBotServiceStage::Complete) return {PlayerBotServiceCommandType::Complete, PlayerBotServiceOutcome::Success};
 	observeProviders(observation.shops, observation.bankers);
 	if (serviceStage == PlayerBotServiceStage::Discover) {
-		if (shopProviders.empty()) { serviceStage = PlayerBotServiceStage::Failed; return {PlayerBotServiceCommandType::Fail, PlayerBotServiceOutcome::Unavailable}; }
-		serviceStage = PlayerBotServiceStage::SellLoot;
+		serviceStage = serviceIntent == PlayerBotServiceIntent::LiquidateCarriedLoot ?
+			PlayerBotServiceStage::SellLoot : PlayerBotServiceStage::BuyPotions;
 	}
 	if (serviceStage == PlayerBotServiceStage::SellLoot) {
 		if (serviceSession.hasShopTransaction()) return verifyShop(observation, false);
+		if (liquidationPlan) {
+			const PlayerBotServiceLiquidationPlan& plan = *liquidationPlan;
+			const PlayerBotEconomyProvider* selected = provider(plan.providerId, true);
+			if (!selected || unavailableProviderIds.find(plan.providerId) != unavailableProviderIds.end()) {
+				serviceStage = PlayerBotServiceStage::Failed;
+				return {PlayerBotServiceCommandType::Fail, PlayerBotServiceOutcome::Unavailable, plan.providerId};
+			}
+			auto offer = std::find_if(selected->offers.begin(), selected->offers.end(), [&plan](const auto& value) {
+				return value.itemId == plan.itemId && value.sellPrice == plan.price && value.subType == plan.subType;
+			});
+			if (offer == selected->offers.end()) {
+				serviceStage = PlayerBotServiceStage::Failed;
+				return {PlayerBotServiceCommandType::Fail, PlayerBotServiceOutcome::Unavailable, plan.providerId};
+			}
+			targetProvider(plan.providerId);
+			PlayerBotServiceCommand focus = establishNpc(observation, true);
+			if (focus.type != PlayerBotServiceCommandType::None) return focus;
+			const uint32_t backpack = observation.backpackSaleCounts.count(plan.itemId) ? observation.backpackSaleCounts.at(plan.itemId) : 0;
+			if (backpack < plan.count) {
+				serviceStage = PlayerBotServiceStage::Failed;
+				return {PlayerBotServiceCommandType::Fail, PlayerBotServiceOutcome::Unavailable, plan.providerId};
+			}
+			const uint32_t inventory = observation.inventoryCounts.count(plan.itemId) ? observation.inventoryCounts.at(plan.itemId) : 0;
+			const PlayerBotServiceTransaction transaction{plan.itemId, plan.count, inventory, observation.money,
+				observation.bankBalance, plan.price, plan.subType};
+			serviceSession.beginShopTransaction(transaction);
+			PlayerBotServiceCommand command{PlayerBotServiceCommandType::Sell, PlayerBotServiceOutcome::Pending,
+				plan.providerId, plan.itemId, plan.count};
+			command.subType = plan.subType;
+			command.transaction = transaction;
+			return command;
+		}
 		const PlayerBotEconomyProvider* selected = nullptr;
 		uint16_t itemId = 0;
 		uint32_t price = 0;
@@ -406,6 +453,7 @@ PlayerBotServiceCommand PlayerBotServiceWorkflow::advanceImpl(const PlayerBotSer
 		int64_t selectedUtility = std::numeric_limits<int64_t>::min();
 		for (const auto& shop : shopProviders) for (const auto& offer : shop.offers) {
 			if (unavailableProviderIds.find(shop.id) != unavailableProviderIds.end()) continue;
+			if (providersRequiringNpcTravel.find(shop.id) != providersRequiringNpcTravel.end()) continue;
 			auto count = observation.inventoryCounts.find(offer.itemId);
 			if (offer.sellPrice == 0 || count == observation.inventoryCounts.end() || count->second == 0) continue;
 			const uint32_t backpackCount = observation.backpackSaleCounts.count(offer.itemId) ?
@@ -456,22 +504,24 @@ PlayerBotServiceCommand PlayerBotServiceWorkflow::advanceImpl(const PlayerBotSer
 		if (serviceSession.hasShopTransaction()) return verifyShop(observation, true);
 		const uint16_t itemId = observation.healthPotionItemId;
 		const uint32_t count = observation.inventoryCounts.count(itemId) ? observation.inventoryCounts.at(itemId) : 0;
-		if (count >= PlayerBotDispositionPolicy::potionRestockTarget) { serviceStage = PlayerBotServiceStage::Bank; return advanceImpl(observation, catalog, disposition); }
+		if (count >= observation.healthPotionRestockTarget) { serviceStage = PlayerBotServiceStage::Bank; return advanceImpl(observation, catalog, disposition); }
 		const PlayerBotEconomyProvider* selected = offerProvider(itemId, true, observation.currentPosition, catalog);
 		if (!selected) { serviceStage = PlayerBotServiceStage::Failed; return {PlayerBotServiceCommandType::Fail, PlayerBotServiceOutcome::Unavailable}; }
 		auto offer = std::find_if(selected->offers.begin(), selected->offers.end(), [itemId](const auto& value) { return value.itemId == itemId && value.buyPrice != 0; });
 		if (offer == selected->offers.end()) { serviceStage = PlayerBotServiceStage::Failed; return {PlayerBotServiceCommandType::Fail, PlayerBotServiceOutcome::Unavailable}; }
 		const auto restock = disposition.restock({count, observation.freeCapacity, observation.money, observation.bankBalance}, offer->buyPrice,
-		                                         observation.healthPotionWeight);
+		                                         observation.healthPotionWeight, observation.healthPotionReturnThreshold,
+		                                         observation.healthPotionRestockTarget);
 		if (restock.insufficientFunds) { serviceStage = PlayerBotServiceStage::Failed; return {PlayerBotServiceCommandType::Fail, PlayerBotServiceOutcome::InsufficientFunds}; }
 		if (restock.amount == 0) { serviceStage = PlayerBotServiceStage::Bank; return advanceImpl(observation, catalog, disposition); }
 		targetProvider(selected->id);
 		PlayerBotServiceCommand focus = establishNpc(observation, true);
 		if (focus.type != PlayerBotServiceCommandType::None) return focus;
-		const PlayerBotServiceTransaction transaction{itemId, restock.amount, count, observation.money, observation.bankBalance,
+		const uint32_t amount = std::min(restock.amount, maximumShopTransactionAmount);
+		const PlayerBotServiceTransaction transaction{itemId, amount, count, observation.money, observation.bankBalance,
 			offer->buyPrice, offer->subType};
 		serviceSession.beginShopTransaction(transaction);
-		PlayerBotServiceCommand command{PlayerBotServiceCommandType::Buy, PlayerBotServiceOutcome::Pending, selected->id, itemId, restock.amount};
+		PlayerBotServiceCommand command{PlayerBotServiceCommandType::Buy, PlayerBotServiceOutcome::Pending, selected->id, itemId, amount};
 		command.subType = offer->subType;
 		command.transaction = transaction;
 		return command;

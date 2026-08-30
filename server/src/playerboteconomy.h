@@ -68,7 +68,9 @@ class PlayerBotDispositionPolicy
 		uint32_t protectedReserve(uint16_t itemId, bool food, uint16_t potionItemId) const;
 		uint32_t sellQuantity(const PlayerBotEconomyInventorySnapshot& inventory, uint16_t reserve) const;
 		PlayerBotEconomyRestockDecision restock(const PlayerBotEconomyInventorySnapshot& inventory,
-		                                         uint32_t unitPrice, uint32_t unitWeight) const;
+		                                         uint32_t unitPrice, uint32_t unitWeight,
+		                                         uint32_t returnThreshold = potionReturnThreshold,
+		                                         uint32_t restockTarget = potionRestockTarget) const;
 		uint32_t bankWithdrawal(const PlayerBotEconomyInventorySnapshot& inventory, uint32_t coinWeight) const;
 };
 
