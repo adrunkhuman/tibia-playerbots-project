@@ -99,28 +99,41 @@ commands. Other runtime map or transition mutations do not invalidate it
 automatically; use one of those supported reloads or restart the server before
 relying on topology-based planning again.
 
-Hunt regions come from all loaded hostile, attackable spawns. The shared cache
-groups overlapping eight-tile spawn kernels through spatial buckets. Each
-controller scores the global region set in bounded batches using health,
-equipment, weapon, defense, skill, cooldowns, observed performance, and an
-optimistic projected-XP bound. It validates suitable candidates incrementally
-through normal navigation. Once the best proven reachable candidate cannot be
-beaten by any unvalidated optimistic bound, remaining route checks are deferred.
-The selected region is therefore the best proven candidate under the bound; the
-planner does not calculate a complete route-adjusted ordering of every suitable
-region. Navigation remains behind the destination/reachability interface so a
-later navigator can replace tile planning without changing hunt selection.
+Hunt regions come from all loaded hostile, attackable spawns. At startup, the
+shared atlas groups same-floor spawn pockets, joins reciprocal locally connected
+floor transitions into sites, and exposes pocket, neighborhood, and whole-site
+variants. Each controller scores all topology-reachable variants in batches of
+256 using health, equipment, skill, cooldowns, observed performance, clear time,
+patrol time, and projected XP. It then validates at most eight score-ranked
+candidates through normal navigation. Forward and return routes run on separate
+scheduler turns with one `100000`-node budget per turn, so one hunt decision does
+not synchronously pathfind the whole shortlist.
+
+Before moving toward an active-region patrol point, the controller validates the
+complete outbound route on one scheduler turn and the complete route from that
+point back to the selected hunt-return endpoint on the next. Both routes must
+have danger cost at most `500` and peak expected health loss at most `0.08` per
+second. An unsafe waypoint is skipped before movement. The controller installs
+the validated outbound route directly and restarts both checks after displacement
+or a replan request. The validated return route sets the potion reserve for that
+waypoint. `hunt_supply_reserve` uses source `selected_return_route` for the
+initial reserve and `patrol_return_route` when a waypoint requires an increase.
+Navigation remains behind the destination/reachability interface so a later
+navigator can replace tile planning without changing hunt selection.
 
 The bot switches from transit to active hunting when any patrol point in the
 selected region enters normal client view range on the current floor. It does
 not wait to stand on the first patrol point. Outside that area it still ignores
 non-attacking transit monsters; inside it proactively targets the selected
-region's monster types.
+region's monster types. During transit, one to three adjacent attackers retain
+normal detour and route-blocker handling; four force defensive combat. A visible
+non-adjacent ranged attacker is engaged through bounded target-approach routing
+instead of being allowed to attack indefinitely at range.
 
-Resetting navigation clears only the current route and recovery state. It does
-not cancel an active hunt-region plan. The controller cancels hunt planning when
-it leaves the hunt phase or when an explicit interruption, such as Oracle
-departure, replaces the hunt.
+Resetting navigation clears the current route, recovery state, and patrol-route
+approval. It does not cancel an active hunt-region plan. The controller cancels
+hunt planning when it leaves the hunt phase or when an explicit interruption,
+such as Oracle departure, replaces the hunt.
 
 One scan uses an immutable combat, recovery, resource, and frontier snapshot for
 every scoring batch. Position, level, stamina, cooldown exclusions, map revision,
@@ -435,14 +448,21 @@ utility are observable, but food does not yet select a separate acquisition
 goal. Later goal arbitration can weigh measured regeneration benefit against
 travel, capacity, and service costs without restoring a hard requirement.
 
-An opened depot is scanned for loot with a positive local NPC sell price after
-deposit. A reachable sale that requires no NPC travel is deterministic service
-work: the bot withdraws one bounded batch, sells it, then continues potion and
-banking service. Its sale revenue is available for that resupply. Utility does
-not arbitrate local sales against hunting; it is reserved for future travel that
-has a fare or otherwise leaves the local service area. If one batch cannot fund
-required potions, the bot returns to the depot and tries the next local batch
-before reporting insufficient funds.
+After deposit, the bot scans bounded windows across its depot chests for loot
+with a positive NPC sell price. Fluid containers and splashes are excluded
+because their subtypes are not interchangeable sale quantities. It groups
+compatible items into one capacity-bounded manifest and compares walking and
+NPC-travel routes to one source depot and seller. The trip must remain safe,
+profitable after fare and travel time, and affordable before sale proceeds.
+Route validation examines one candidate per scheduler turn and rotates through
+all item windows and candidates.
+
+The bot travels physically to the selected depot, opens the planned locker and
+chest, withdraws and verifies each manifest batch, then travels to the seller
+through normal movement and NPC dialogue. It replans after each trip. A stale,
+unsafe, or unavailable optional liquidation route is deferred rather than
+stopping the bot. Local sales use the same workflow without a travel fare, and
+their proceeds remain available for potion and banking service.
 
 The bot identifies only server-classified corpse containers and checks normal
 corpse ownership. It opens the corpse through normal item use before inspecting
@@ -535,8 +555,9 @@ events are emitted by that controller.
 | Spell casting | `action_result` with `action="cast_spell"` records the need, semantic `policy_candidate`, selected method, mana reserve, normal-path request, engine result, observed outcome, fallback, captured engine bounds, monotonic observation age, target class, distinct synchronous spell-victim count, measured Haste condition ticks, and controller-local calibration counts, range, conservative value, ranking estimate, confidence, and evidence reason. `spell_calibration` separates `classifier_helper` and `profile_math` fixture evidence; `spell_calibration_eviction` records bounded-profile replacement. `legal_candidates` contains only normal-path casts confirmed by resource evidence. |
 | Magic training | `goal_candidate`, `goal_selection`, and `goal_result` expose overflow arbitration. `action_result` with `action="magic_training"` emits a requested `engine_path` record and a success or failure `engine_verification` record with spell, reserve, current/maximum/predicted/lost mana, aggregated gain, aligned interval/remaining time, loaded cost, mana delta, and magic progression. `magic_training_fixture` with `source="authoritative_forecast"` is controlled fixture evidence, not a live cast. |
 | Actions | `action_result`, `target_changed`, `service_discovered`, `service_provider_rejected`, `npc_reply`, `npc_capability_audit`, and `stuck` record externally relevant attempts, discovery health, provider fallback, and outcomes. |
-| Hunting | `hunt_region_candidate`, `hunt_region_scan`, `hunt_region_selection`, `hunt_region_outcome`, `hunt_challenge_frontier`, `hunt_scope_exhausted`, and `hunt_region_patrol` expose planner inputs, recovery assumptions, optimistic-bound route deferral, active-combat and kill evidence, frontier updates, and bounded exhaustion. |
+| Hunting | `hunt_region_candidate`, `hunt_region_scan`, `hunt_region_selection`, `hunt_region_outcome`, `hunt_challenge_frontier`, `hunt_scope_exhausted`, `hunt_region_patrol`, `hunt_supply_reserve`, and `hunt_area_entered` expose planner inputs, recovery assumptions, bounded shortlist and patrol validation, active-combat and kill evidence, reserve changes, area activation, frontier updates, and bounded exhaustion. `action_result` with `action="hunt_waypoint"` records patrol completion. |
 | Navigation | `navigation_progress` records bounded recovery such as oscillation suppression; `npc_travel` records verified travel success or failure. Lifecycle records include loaded shop-provider, spell-trainer, travel-offer, and opaque travel-offer counts. |
+| Liquidation | `sell_loot_candidate`, `sell_loot_plan`, `sell_loot_defer`, and `sell_loot_withdraw` expose source depot and seller selection, manifest batches, revenue, fare, time and danger costs, utility, bounded scan progress, defer reasons, and verified inventory/depot deltas. |
 | Health | `summary` reports cumulative timing, action, failure, stuck, and suppression counters every 60 seconds. |
 
 `action_result` records with `action="item_disposition"` report moves of
@@ -571,9 +592,10 @@ scored, suitable, and reachable candidate counts plus the retry delay and either
 standable candidate counts. Success records the actual `depot_id`, locker and
 approach positions, weighted distance, route steps, expanded nodes, route danger,
 and whether the route is a risk fallback. Discovery prefers routes within the
-normal risk limits. If none qualify, it revalidates the lowest-risk executable
+normal limits: danger cost at most `500` and peak expected health loss at most
+`0.08` per second. If none qualify, it revalidates the lowest-risk executable
 route instead of stopping in the dangerous area. `unsafe_routes` reports how
-many executable candidates exceeded the normal limits.
+many executable candidates exceeded those limits.
 `unavailable` records `no_local_locker`, `no_standable_approach`, or
 `no_reachable_locker`; `continuing` records
 `route_validation_budget_exhausted` while the bounded candidate queue remains.

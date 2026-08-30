@@ -41,6 +41,7 @@ F.equipmentPurchaseItemId = 2379
 F.movedProviderPurchaseItemId = 2648
 F.slottedLootItemId = 2398
 F.sellLootItemId = 7634
+F.remoteSellLootItemId = 2151
 F.emptyPotionFlaskItemId = 7636
 F.mainlandRewardItemId = 2483
 F.mainlandRewardStorage = 50076

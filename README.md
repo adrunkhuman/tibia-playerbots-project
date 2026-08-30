@@ -133,7 +133,8 @@ The gameplay suite is local and PowerShell-based. It boots scenario worlds with
 fixture monsters and asserts on the event stream, covering corpse handling,
 value looting, healing, death recovery, goal arbitration and interruption,
 reward claiming, Oracle departure, equipment purchasing, spell training, and
-spell use.
+spell use. Focused scenarios also cover target approach, adaptive hunt planning,
+depot risk recovery, and local or remote loot liquidation.
 
 ```powershell
 pwsh -File scripts/test-playerbot-gameplay.ps1 -FullNavigation -CorpseLoot
@@ -141,11 +142,14 @@ pwsh -File scripts/test-playerbot-gameplay.ps1 -Focused -EquipmentPurchases
 pwsh -File scripts/test-playerbot-gameplay.ps1 -Focused -MainlandRewards
 pwsh -File scripts/test-playerbot-gameplay.ps1 -Focused -SpellTraining
 pwsh -File scripts/test-playerbot-gameplay.ps1 -Focused -SpellUse
+pwsh -File scripts/test-playerbot-gameplay.ps1 -Focused -SellLoot
 ```
 
-Gameplay fixtures use fixed destinations and do not prove whole-map navigation
-or dynamic hunting-region selection. Client compatibility is checked manually
-against the list in `AGENTS.md`; a successful login alone proves nothing.
+Most gameplay fixtures use controlled destinations. Hunt-region planning,
+hunt-area arrival, service-route, and target-approach modes exercise dynamic
+planning on the loaded map, but they do not replace a long-running progression
+soak. Client compatibility is checked manually against the list in `AGENTS.md`;
+a successful login alone proves nothing.
 
 ## Deferred
 

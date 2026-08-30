@@ -37,7 +37,7 @@ the changed behavior:
 
 | Switch | Coverage |
 | ------ | -------- |
-| `-FullNavigation` | Complete fixed A-B-C-B-A fixture route and temporary blockage recovery. |
+| `-FullNavigation` | Complete fixed A-B-C-B-A route, temporary blockage recovery, real Carlin service routing, mutable shovel portals, and forced patrol-route failure recovery. |
 | `-TargetApproach` | Same-floor routed engagement, unreachable-target patrol fallback, and encountered-attacker replacement. |
 | `-CorpseLoot` | Non-corpse, empty, guaranteed-loot, and container death items; open-before-inspect ordering, suspended-route retry, and bounded inaccessible-corpse timeout. |
 | `-DeathTelemetry` | Death context, exponential relog, fresh controller state, abandonment, and removal. |
@@ -47,13 +47,14 @@ the changed behavior:
 | `-GoalArbitration` | Pickup, service, hunt, and critical-healing precedence across safe boundaries. |
 | `-OracleDeparture` | Tagged Oracle route, dialogue, vocation/town/position verification, and restart persistence. |
 | `-StaminaProjection` | Premium bonus, low-stamina penalty, and ordinary stamina projections. |
-| `-HuntRegionPlanning` | Cached scanner batching, threat rejection, reachability, cooldowns, and observed correction. |
+| `-HuntRegionPlanning` | Cached atlas batching, threat rejection, reachability, selected-return reserve, cooldowns, and observed correction. |
 | `-AdaptiveChallenge` | Synthetic frontier and planner-helper fixture covering idle and no-kill exclusion, sparse-combat escalation, hysteresis, recovery backoff, equipment/recovery prediction, lethal rejection, local exhaustion, terminal finality, and no post-terminal controller events. It does not validate real combat sampling or long-running hunt behavior. |
 | `-CombatReadiness` | Equipment, the one-potion return threshold and 10-potion restock target, optional-food hunting, generic food consumption and reclaimable capacity, low-wealth banking, carried-upgrade retention through service, and restart reconstruction. It does not cover the terminal case where total funds cannot buy enough potions to exceed the return threshold. |
 | `-EquipmentPurchases` | Justified purchase and equip verification, clean restart persistence, carried-upgrade recovery, displaced-item-space rejection, and rejected transactions. |
 | `-MainlandRewards` | Real Thais reward object from a teleported, high-capacity fixture; scale-armor claim and equip, displaced-item and bundle preservation, restart reconstruction, and non-null battle-axe rejection evidence. It does not prove normal traversal, realistic capacity limits, or a specific rejection reason. |
 | `-Depot` | Real Thais locker/chest discovery from Naji, including exact nearest-locker selection, carried-upgrade equipment, displaced and inferior equipment deposits, nested loot, move verification, retries, and restart checkpoints. |
 | `-SlottedLoot` | Invalid-slot loot sale through a live seller, direct depot fallback without an eligible seller, protected-equipment retention, move verification, and interrupted-deposit restart recovery. |
+| `-SellLoot` | Local and remote-depot liquidation, capacity-bounded manifests, verified withdrawal, seller travel, sale ordering, and proceeds-funded resupply. The workflow excludes fluid containers and splashes; current fixtures do not seed those item types. |
 | `-MainlandLoop` | Two real Thais hunt/depot cycles, local services, depot fallback for remote-buyer loot, restart recovery, and teleport exclusion. |
 | `-SpellTraining` | Loaded spell-offer trainer discovery, reserve-backed affordability rejection, normal spell dialogue/payment, and restart persistence. |
 | `-SpellUse` | Light Healing preemption, Haste, Whirlwind Throw, unlearned-spell potion fallback, and mana-reserve melee fallback. |
@@ -70,6 +71,14 @@ Target-approach changes also require
 `pwsh -File scripts/test-playerbot-gameplay.ps1 -TargetApproach -Focused`.
 `-TargetApproach` runs `target_approach`, `target_approach_unreachable`, and
 `target_attacker_priority`.
+
+Use `-Scenario <name>` for one catalog entry. New focused names include
+`sell_loot`, `sell_loot_remote_depot`, `depot_risk_fallback`,
+`hunt_region_planning`, `hunt_area_arrival`, `carlin_service_route`,
+`mutable_portal_route`, and `patrol_recovery`. `hunt_area_arrival` proves that a
+selected real region activates before its first waypoint. `patrol_recovery`
+proves bounded forced route-failure handling on a fixed route; it does not inject
+an unsafe active-region patrol route or verify reserve growth across waypoints.
 
 Use `-Focused` with one or more scenario switches to skip the baseline. Use
 `-SkipBuild` only with a known-current `angelion-server:latest` image; it does
@@ -118,7 +127,9 @@ docker compose -f server/compose.yaml logs --follow --no-log-prefix server
 
 Inspect `hunt_region_candidate`, `hunt_region_scan`, `hunt_region_selection`,
 `hunt_region_outcome`, `hunt_challenge_frontier`, `hunt_scope_exhausted`,
-`hunt_region_patrol`, and `navigation_progress` events.
+`hunt_region_patrol`, `hunt_supply_reserve`, `hunt_area_entered`,
+`navigation_progress`, and `action_result` events whose `action` is
+`hunt_waypoint`.
 Remove the environment override and recreate the server afterward.
 
 Focused tests prove deterministic frontier transitions, not soak stability. The

@@ -47,6 +47,7 @@ struct PlayerBotServiceRouteObservation {
 	uint32_t steps = 0;
 	uint64_t expandedNodes = 0;
 	uint32_t dangerCost = 0;
+	uint64_t fare = 0;
 	double maximumDanger = 0;
 	bool requiresNpcTravel = false;
 };
@@ -109,13 +110,20 @@ struct PlayerBotServiceSnapshot {
 	uint32_t npcId = 0;
 };
 
-struct PlayerBotServiceLiquidationPlan {
-	uint32_t providerId = 0;
+struct PlayerBotServiceLiquidationBatch {
 	uint16_t itemId = 0;
 	uint32_t count = 0;
 	uint32_t price = 0;
 	uint8_t subType = 0;
+};
+
+struct PlayerBotServiceLiquidationPlan {
+	uint32_t providerId = 0;
+	std::vector<PlayerBotServiceLiquidationBatch> batches;
+	size_t nextBatch = 0;
 	uint32_t maximumRouteSteps = 0;
+	uint64_t maximumFare = 0;
+	bool allowNpcTravel = false;
 };
 
 class PlayerBotServiceWorkflow

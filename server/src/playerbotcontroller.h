@@ -315,7 +315,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		void finishMagicTraining(Player& player, const Position& position, const char* result, const char* reason);
 
 		uint32_t saleableItemCount(const Player& player) const;
-		bool planLocalSellLoot(Player& player, Container& chest, const Position& position);
+		bool planSellLootTrip(Player& player, uint16_t currentDepotId, const Position& position);
 		bool processSellLootWithdrawal(Player& player, const Position& position);
 		void deferSellLoot(Player& player, const Position& position, const char* reason);
 
@@ -386,6 +386,11 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		std::optional<PlayerBotNavigationRoutePlan> planNpcTravelRoute(Player& player, const Position& destination,
 		                                                               const std::set<Position>& blockedPositions,
 		                                                               uint64_t maximumExpandedNodes) const;
+		std::optional<PlayerBotNavigationRoutePlan> planNpcTravelRoute(Player& player, const Position& source,
+		                                                               const Position& destination,
+		                                                               const std::set<Position>& blockedPositions,
+		                                                               uint64_t maximumExpandedNodes,
+		                                                               bool estimateOnly = false) const;
 
 		uint32_t navigationDecisionDelay(const Player& player) const;
 
@@ -396,11 +401,15 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		bool processNavigation(Player* player, const Position& currentPosition, const Position& destination,
 		                       PlayerBotNavigationRuntimeOutcome* navigationOutcome = nullptr,
 		                       uint64_t maximumExpandedNodes = playerBotNavigationMaximumExpandedNodes,
-		                       bool sameFloorOnly = false);
+		                       bool sameFloorOnly = false,
+		                       const PlayerBotNavigationRiskProfile* risk = nullptr,
+		                       bool allowRoutePlanning = true);
 		bool processNavigation(Player* player, const Position& currentPosition, const PlayerBotNavigationGoal& goal,
 		                       PlayerBotNavigationRuntimeOutcome* navigationOutcome = nullptr,
 		                       uint64_t maximumExpandedNodes = playerBotNavigationMaximumExpandedNodes,
-		                       bool npcApproach = false, bool sameFloorOnly = false);
+		                       bool npcApproach = false, bool sameFloorOnly = false,
+		                       const PlayerBotNavigationRiskProfile* risk = nullptr,
+		                       bool allowRoutePlanning = true);
 		bool processNpcApproach(Player* player, const Position& currentPosition, Npc* npc,
 		                        const Position& coarseDestination, bool& unavailable);
 		void observeNavigationPlan(const Position& destination, std::deque<PlayerBotNavigationStep> steps);
@@ -474,32 +483,44 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		PlayerBotDeparturePlanner departurePlanner;
 		std::map<uint16_t, std::string> rewardInspectionFingerprints;
 		PlayerBotServiceWorkflow serviceWorkflow;
-		struct LocalSellLootPlan {
-			uint32_t providerId = 0;
+		struct SellLootBatch {
 			uint16_t itemId = 0;
 			uint32_t count = 0;
 			uint32_t price = 0;
 			uint8_t subType = 0;
+			uint32_t withdrawn = 0;
+		};
+		struct SellLootPlan {
+			uint16_t sourceDepotId = 0;
+			uint32_t providerId = 0;
+			std::vector<SellLootBatch> batches;
+			Position sourceApproach;
+			size_t withdrawalBatch = 0;
 			uint32_t routeSteps = 0;
 			uint32_t routeDanger = 0;
-			uint32_t expectedRevenue = 0;
+			uint64_t expectedRevenue = 0;
 			uint32_t liquidityUrgency = 0;
-			uint32_t fare = 0;
+			uint64_t fare = 0;
 			uint32_t roundTripRisk = 0;
 			uint32_t roundTripTime = 0;
 			uint32_t foregoneHuntProfit = 0;
-			int32_t utility = 0;
+			int64_t utility = 0;
 			uint32_t scannedItems = 0;
 			uint32_t routeValidations = 0;
-			uint32_t withdrawn = 0;
+			bool sourceAllowNpcTravel = false;
+			uint64_t sourceFare = 0;
+			bool sellerAllowNpcTravel = false;
 			bool withdrawalPending = false;
 			uint32_t withdrawalInventoryBefore = 0;
 			uint32_t withdrawalDepotBefore = 0;
 			uint8_t withdrawalRequested = 0;
 		};
-		std::optional<LocalSellLootPlan> sellLootPlan;
+		std::optional<SellLootPlan> sellLootPlan;
 		size_t sellLootItemScanOffset = 0;
+		size_t sellLootItemScanRemaining = 0;
 		size_t sellLootRouteScanOffset = 0;
+		size_t sellLootRouteScanRemaining = 0;
+		bool sellLootSearchPending = false;
 		std::optional<PlayerBotTopologyDistances> serviceTopologyDistances;
 		Position serviceTopologyOrigin;
 		bool serviceTopologyCanUseRope = false;
@@ -508,6 +529,17 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		uint64_t serviceTopologyGeneration = 0;
 		PlayerBotNavigationRuntime navigationRuntime;
 		bool huntRegionReached = false;
+		size_t huntRouteCandidateIndex = 0;
+		size_t huntRouteCandidatesValidated = 0;
+		std::optional<PlayerBotHuntRegion> huntRouteValidationCandidate;
+		std::vector<uint64_t> huntRouteRejectedVariants;
+		Position huntReturnDestination;
+		uint32_t huntReturnRouteDangerCost = 0;
+		std::optional<Position> huntPatrolValidationDestination;
+		std::optional<Position> huntPatrolValidationOrigin;
+		std::optional<PlayerBotNavigationRoutePlan> huntPatrolOutboundPlan;
+		std::set<Position> huntPatrolPreflightBlockedPositions;
+		std::optional<Position> huntPatrolValidatedDestination;
 		uint32_t huntPotionReturnThreshold = playerbot::healthPotionReturnThreshold;
 		uint32_t huntPotionRestockTarget = playerbot::healthPotionRestockTarget;
 		struct {

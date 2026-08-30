@@ -9,7 +9,7 @@ function F.login.onLogin(player)
 
 	local mode = os.getenv("PLAYERBOT_GAMEPLAY_MODE") or "cycle"
 	F.selectHealthPotion(player)
-    assert(mode == "mainland" or mode == "carlin_local_service" or mode == "cycle" or mode == "depot" or mode == "depot_risk_fallback" or mode == "slotted_loot_seller" or mode == "slotted_loot_no_seller" or mode == "sell_loot" or mode == "navigation" or mode == "navigation_recovery" or mode == "carlin_service_route" or mode == "mutable_portal_route" or mode == "patrol_recovery" or mode == "target_approach" or mode == "target_approach_unreachable" or mode == "target_attacker_priority" or mode == "hunt_area_arrival" or mode == "corpse" or mode == "corpse_detour" or mode == "corpse_inaccessible" or mode == "death" or mode == "healing" or mode == "spell_use" or
+    assert(mode == "mainland" or mode == "carlin_local_service" or mode == "cycle" or mode == "depot" or mode == "depot_risk_fallback" or mode == "slotted_loot_seller" or mode == "slotted_loot_no_seller" or mode == "sell_loot" or mode == "sell_loot_remote_depot" or mode == "navigation" or mode == "navigation_recovery" or mode == "carlin_service_route" or mode == "mutable_portal_route" or mode == "patrol_recovery" or mode == "target_approach" or mode == "target_approach_unreachable" or mode == "target_attacker_priority" or mode == "hunt_area_arrival" or mode == "corpse" or mode == "corpse_detour" or mode == "corpse_inaccessible" or mode == "death" or mode == "healing" or mode == "spell_use" or
         mode == "healing_resupply" or mode == "value" or mode == "progression" or mode == "progression_bundle" or
         mode == "progression_nested" or mode == "progression_resume" or mode == "progression_nested_resume" or
         mode == "progression_space" or mode == "arbitration" or mode == "arbitration_interrupt" or mode == "departure" or
@@ -506,6 +506,22 @@ function F.login.onLogin(player)
         F.suppressNearbyMonsters(player:getId())
         addEvent(F.verifySellLoot, 500, player:getId(), 480)
         print("PLAYERBOT_GAMEPLAY_TEST SELL_LOOT_START")
+        return true
+    end
+    if mode == "sell_loot_remote_depot" then
+        local thais = Town(F.thaisTownId)
+        assert(thais and player:setTown(thais) and player:setVocation(4), "remote sell loot fixture could not select Thais")
+        assert(player:teleportTo(Position(32345, 32225, 7)), "remote sell loot fixture could not reach the Thais depot")
+        assert(player:getDepotChest(F.PlayerbotThaisLockerDepotId(), true), "remote sell loot fixture could not open the empty Thais depot")
+        F.removeAll(player, F.smallHealthPotionItemId)
+        F.removeAll(player, F.healthPotionItemId)
+        F.removeAll(player, F.meatItemId)
+        assert(player:addItem(F.meatItemId, 2), "remote sell loot fixture could not prepare food")
+        assert(player:setStorageValue(50100, player:getMoney() + 1), "remote sell loot fixture could not require service")
+        addEvent(F.fundRemoteSellLoot, 500, player:getId())
+        F.suppressNearbyMonsters(player:getId())
+        addEvent(F.verifyRemoteSellLoot, 500, player:getId(), 1200)
+        print("PLAYERBOT_GAMEPLAY_TEST SELL_LOOT_REMOTE_DEPOT_START")
         return true
     end
     if mode == "stamina_bonus" or mode == "stamina_boundary" or mode == "stamina_normal" then

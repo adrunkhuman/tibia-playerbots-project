@@ -926,8 +926,9 @@ void PlayerBotController::emitGoalCandidate(const Player& player, const GoalCand
 		}
 	}
 	if (candidate.goal == TopLevelGoal::SellLoot && sellLootPlan) {
-		const LocalSellLootPlan& plan = *sellLootPlan;
-		fields << ",\"npc_id\":" << plan.providerId << ",\"item_id\":" << plan.itemId << ",\"count\":" << plan.count
+		const SellLootPlan& plan = *sellLootPlan;
+		fields << ",\"npc_id\":" << plan.providerId << ",\"source_depot_id\":" << plan.sourceDepotId
+		       << ",\"manifest_batches\":" << plan.batches.size()
 		       << ",\"expected_revenue\":" << plan.expectedRevenue << ",\"liquidity_urgency\":" << plan.liquidityUrgency
 		       << ",\"fare\":" << plan.fare << ",\"round_trip_risk\":" << plan.roundTripRisk
 		       << ",\"round_trip_time_cost\":" << plan.roundTripTime << ",\"foregone_hunt_profit\":" << plan.foregoneHuntProfit
@@ -1015,8 +1016,9 @@ bool PlayerBotController::selectTopLevelGoal(Player& player, const Position& pos
 		equipmentPurchaseCoolingDown, fixtureDriver.observeEquipmentOffer(true).available, equipmentFound,
 		equipmentFound ? PlayerBotEquipmentPolicy::decisionRuleName(equipment->rule) : "",
 		magicTrainingCoolingDown, magicTrainingReason ? magicTrainingReason : "",
-		sellLootCoolingDown, sellLootPlan.has_value(), sellLootPlan ? sellLootPlan->utility : 0,
-		sellLootPlan ? "local_positive_plan" : "no_opened_depot_plan",
+		sellLootCoolingDown, sellLootPlan.has_value(), sellLootPlan ? static_cast<int32_t>(std::clamp<int64_t>(
+			sellLootPlan->utility, std::numeric_limits<int32_t>::min(), std::numeric_limits<int32_t>::max())) : 0,
+		sellLootPlan ? "profitable_liquidation_trip" : "no_profitable_liquidation_trip",
 	};
 	const PlayerBotGoalArbiter::GoalDecision decision = progressionRuntime.selectGoal(snapshot);
 	emitGoalCandidate(player, decision.candidate(TopLevelGoal::Departure), decision.id, position, decisionReason, nullptr,
@@ -1059,8 +1061,8 @@ bool PlayerBotController::selectTopLevelGoal(Player& player, const Position& pos
 		       << ",\"price\":" << equipment->price << ",\"rule\":"
 	       << jsonString(PlayerBotEquipmentPolicy::decisionRuleName(equipment->rule));
 	} else if (selected.goal == TopLevelGoal::SellLoot && sellLootPlan) {
-		fields << ",\"npc_id\":" << sellLootPlan->providerId << ",\"item_id\":" << sellLootPlan->itemId
-		       << ",\"count\":" << sellLootPlan->count;
+		fields << ",\"npc_id\":" << sellLootPlan->providerId << ",\"source_depot_id\":" << sellLootPlan->sourceDepotId
+		       << ",\"manifest_batches\":" << sellLootPlan->batches.size();
 	}
 	emit("goal_selection", position, fields.str());
 	if (selected.goal == TopLevelGoal::Departure) {

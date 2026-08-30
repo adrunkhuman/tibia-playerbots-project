@@ -25,6 +25,7 @@ struct PlayerBotNavigationPlanMetrics {
 	double estimatedTravelSeconds = 0;
 	uint32_t movementCost = 0;
 	uint32_t dangerCost = 0;
+	uint64_t fare = 0;
 	double maximumHealthLossPerSecond = 0;
 	bool dangerAware = false;
 	std::chrono::microseconds elapsed = std::chrono::microseconds::zero();
@@ -75,6 +76,7 @@ struct PlayerBotNavigationRuntimeOutcome {
 	std::set<Position> blockedPositions;
 	PlayerBotNavigationPlanMetrics plan;
 	bool routeUnavailable = false;
+	bool routeUnsafe = false;
 	uint32_t fixedTargetRouteFailures = 0;
 	bool fixedTargetRouteExhausted = false;
 	PlayerBotNavigationRuntimeCommand command = PlayerBotNavigationRuntimeCommand::None;

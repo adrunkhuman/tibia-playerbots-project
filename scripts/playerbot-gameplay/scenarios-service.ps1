@@ -73,7 +73,7 @@
 			$logs = Wait-ForLog -Pattern '"goal":"service","result":"success","reason":"service_complete"'
 			$events = @(ConvertFrom-PlayerbotLogs -Logs $logs)
 			$saleItemIds = @(7634, 7635)
-			$plan = @($events | Where-Object { $_.event -eq "sell_loot_plan" -and $_.result -eq "candidate" -and $_.item_id -in $saleItemIds })
+			$plan = @($events | Where-Object { $_.event -eq "sell_loot_plan" -and $_.result -eq "candidate" -and $_.source_depot_id -eq 2 -and $_.manifest_batches -eq 2 })
 			$withdraw = @($events | Where-Object { $_.event -eq "sell_loot_withdraw" -and $_.result -eq "success" -and $_.item_id -in $saleItemIds })
 			$sales = @($events | Where-Object { $_.event -eq "action_result" -and $_.action -eq "sell" -and $_.result -eq "success" -and $_.item_id -in $saleItemIds })
 			$purchases = @($events | Where-Object { $_.event -eq "action_result" -and $_.action -eq "buy_potions" -and $_.result -eq "success" -and $_.count -eq 2 })
@@ -81,9 +81,29 @@
 			$sellGoals = @($events | Where-Object { $_.event -eq "goal_selection" -and $_.to_goal -eq "sell_loot" })
 			$terminals = @($events | Where-Object { $_.event -eq "terminal" })
 			$soldUnits = ($sales | Measure-Object -Property count -Sum).Sum
-			if ($plan.Count -ne 2 -or $withdraw.Count -ne 2 -or $sales.Count -ne 2 -or $soldUnits -ne 19 -or $purchases.Count -ne 1 -or $retries.Count -ne 1 -or
+			if ($plan.Count -ne 1 -or $withdraw.Count -ne 2 -or $sales.Count -ne 2 -or $soldUnits -ne 19 -or $purchases.Count -ne 1 -or $retries.Count -ne 0 -or
 				$sellGoals.Count -ne 0 -or $terminals.Count -ne 0 -or [datetime]$sales[0].ts -ge [datetime]$purchases[0].ts) {
-				throw "Local sales did not accumulate enough funds before normal service. plan=$($plan.Count), withdraw=$($withdraw.Count), sales=$($sales.Count), retries=$($retries.Count), purchases=$($purchases.Count), sell_goals=$($sellGoals.Count), terminals=$($terminals.Count)."
+				throw "Manifest sale did not accumulate enough funds before normal service. plan=$($plan.Count), withdraw=$($withdraw.Count), sales=$($sales.Count), retries=$($retries.Count), purchases=$($purchases.Count), sell_goals=$($sellGoals.Count), terminals=$($terminals.Count)."
+			}
+		}
+
+		Invoke-Scenario -Name "sell_loot_remote_depot" -DefaultTimeoutSeconds 600 -Body {
+			Invoke-Compose down --volumes --remove-orphans
+			$env:PLAYERBOT_GAMEPLAY_MODE = "sell_loot_remote_depot"
+			$env:PLAYERBOT_HUNT_DURATION_SECONDS = "5"
+			Invoke-DatabaseCommand -Query "SET @bot = (SELECT id FROM players WHERE name = 'Bot One'); DELETE FROM player_items WHERE player_id = @bot AND itemtype IN (2148, 2152, 2160, 7618); INSERT INTO player_depotitems (player_id, sid, pid, itemtype, count, attributes) VALUES (@bot, 101, 4, 2151, 10, ''); UPDATE players SET balance = 0 WHERE id = @bot;"
+			Invoke-Compose up --detach
+			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST SELL_LOOT_REMOTE_DEPOT_PASS' | Out-Null
+			$logs = Wait-ForLog -Pattern '"action":"sell","result":"success","item_id":2151,"count":10'
+			$events = @(ConvertFrom-PlayerbotLogs -Logs $logs)
+			$plan = @($events | Where-Object { $_.event -eq "sell_loot_plan" -and $_.result -eq "candidate" -and $_.source_depot_id -eq 4 -and $_.manifest_batches -eq 1 -and $_.route_validations -eq 1 })
+			$discover = @($events | Where-Object { $_.event -eq "action_result" -and $_.action -eq "depot_discover" -and $_.result -eq "success" -and $_.depot_id -eq 4 })
+			$withdraw = @($events | Where-Object { $_.event -eq "sell_loot_withdraw" -and $_.result -eq "success" -and $_.item_id -eq 2151 -and $_.count -eq 10 })
+			$sales = @($events | Where-Object { $_.event -eq "action_result" -and $_.action -eq "sell" -and $_.result -eq "success" -and $_.item_id -eq 2151 -and $_.count -eq 10 })
+			$terminals = @($events | Where-Object { $_.event -eq "terminal" })
+			if ($plan.Count -ne 1 -or $discover.Count -lt 1 -or $withdraw.Count -ne 1 -or $sales.Count -ne 1 -or $terminals.Count -ne 0 -or
+				[datetime]$discover[0].ts -ge [datetime]$withdraw[0].ts -or [datetime]$withdraw[0].ts -ge [datetime]$sales[0].ts) {
+				throw "Remote liquidation did not travel to the selected depot before withdrawal and sale. plan=$($plan.Count), discover=$($discover.Count), withdraw=$($withdraw.Count), sales=$($sales.Count), terminals=$($terminals.Count)."
 			}
 		}
 	}

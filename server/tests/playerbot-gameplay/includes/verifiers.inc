@@ -254,6 +254,25 @@ function F.verifySellLoot(playerId, attempts)
     print("PLAYERBOT_GAMEPLAY_TEST SELL_LOOT_PASS")
 end
 
+function F.verifyRemoteSellLoot(playerId, attempts)
+    local player = Player(playerId)
+    assert(player and not player:isRemoved(), "Bot One disappeared during remote depot liquidation")
+    local chest = player:getDepotChest(F.carlinTownId, false)
+    local complete = chest and player:getItemCount(F.remoteSellLootItemId) == 0 and
+        chest:getItemCountById(F.remoteSellLootItemId) == 0 and player:getMoney() > player:getStorageValue(50100)
+    if not complete and attempts > 0 then
+        addEvent(F.verifyRemoteSellLoot, 500, playerId, attempts - 1)
+        return
+    end
+    assert(complete, "remote depot liquidation did not withdraw and sell the planned manifest")
+    print("PLAYERBOT_GAMEPLAY_TEST SELL_LOOT_REMOTE_DEPOT_PASS")
+end
+
+function F.fundRemoteSellLoot(playerId)
+    local player = Player(playerId)
+    assert(player and player:addItem(2152, 3), "remote depot liquidation could not add the travel fund")
+end
+
 function F.verifyHealingResupply(playerId, attempts)
     local player = Player(playerId)
     assert(player and not player:isRemoved(), "Bot One disappeared during the healing resupply test")
