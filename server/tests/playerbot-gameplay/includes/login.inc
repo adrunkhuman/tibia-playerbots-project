@@ -13,7 +13,8 @@ function F.login.onLogin(player)
         mode == "healing_resupply" or mode == "value" or mode == "progression" or mode == "progression_bundle" or
         mode == "progression_nested" or mode == "progression_resume" or mode == "progression_nested_resume" or
         mode == "progression_space" or mode == "arbitration" or mode == "arbitration_interrupt" or mode == "departure" or
-        mode == "departure_interrupt" or mode == "departure_recovery" or mode == "spell_training" or mode == "stamina_bonus" or
+        mode == "departure_interrupt" or mode == "departure_recovery" or mode == "spell_training" or
+        mode == "spell_training_shortlist" or mode == "stamina_bonus" or
         mode == "stamina_boundary" or mode == "stamina_normal" or mode == "hunt_planning" or mode == "spell_calibration" or
         mode == "readiness_ready" or mode == "adaptive_challenge" or mode == "readiness_upgrade" or
         mode == "readiness_missing_weapon" or mode == "readiness_supplies" or mode == "readiness_no_food" or
@@ -587,7 +588,8 @@ function F.login.onLogin(player)
     end
     if mode == "spell_training" then
         if player:getStorageValue(F.spellTrainingStorage) == 1 then
-            assert(player:hasLearnedSpell("Find Person"), "spell training did not persist across restart")
+            assert(player:hasLearnedSpell("Light Healing") and not player:hasLearnedSpell("Find Person"),
+                "spell training priority did not persist across restart")
             assert(player:setStorageValue(F.fixtureReadyStorage, 1), "spell training restart fixture could not signal readiness")
             print("PLAYERBOT_GAMEPLAY_TEST SPELL_TRAINING_RESTART_PASS")
             return true
@@ -596,9 +598,9 @@ function F.login.onLogin(player)
         assert(thais and player:setTown(thais), "spell training fixture could not select Thais")
         assert(player:setVocation(4), "spell training fixture could not select Knight")
 		F.selectHealthPotion(player)
-        local requiredExperience = Game.getExperienceForLevel(8) - player:getExperience()
+        local requiredExperience = Game.getExperienceForLevel(9) - player:getExperience()
         if requiredExperience > 0 then player:addExperience(requiredExperience) end
-        assert(player:getLevel() == 8, "spell training fixture could not select level 8")
+        assert(player:getLevel() == 9, "spell training fixture could not select level 9")
 		local trainer = Npc("Gregor")
 		assert(trainer, "spell training fixture could not find Gregor")
 		local trainerPosition = trainer:getPosition()
@@ -609,6 +611,10 @@ function F.login.onLogin(player)
         F.removeAll(player, F.meatItemId)
         assert(player:addItem(F.potionItemId, 10), "spell training fixture could not supply potions")
         assert(player:addItem(F.meatItemId, 2), "spell training fixture could not supply food")
+        player:removeCondition(CONDITION_REGENERATION)
+        local food = Condition(CONDITION_REGENERATION, CONDITIONID_DEFAULT)
+        food:setParameter(CONDITION_PARAM_TICKS, 1200000)
+        assert(player:addCondition(food), "spell training fixture could not fill the food timer")
         local totalMoney = player:getMoney() + player:getBankBalance()
         if totalMoney < 300 then assert(player:addMoney(300 - totalMoney), "spell training fixture could not fund Bot One") end
         if totalMoney > 300 then assert(player:removeTotalMoney(totalMoney - 300), "spell training fixture could not normalize funding") end
@@ -617,6 +623,29 @@ function F.login.onLogin(player)
         addEvent(F.verifySpellTraining, 500, player:getId(), 360)
         assert(player:setStorageValue(F.fixtureReadyStorage, 1), "spell training fixture could not signal readiness")
         print("PLAYERBOT_GAMEPLAY_TEST SPELL_TRAINING_START")
+        return true
+    end
+    if mode == "spell_training_shortlist" then
+        local carlin = Town(F.carlinTownId)
+        assert(carlin and player:setTown(carlin) and player:setVocation(4),
+            "spell trainer shortlist fixture could not select the Carlin Knight")
+        local requiredExperience = Game.getExperienceForLevel(9) - player:getExperience()
+        if requiredExperience > 0 then player:addExperience(requiredExperience) end
+        assert(player:getLevel() >= 9 and player:forgetSpell("Light Healing"),
+            "spell trainer shortlist fixture could not prepare Light Healing")
+        F.removeAllHealthPotions(player)
+        assert(player:addItem(F.healthPotionItemId, 10),
+            "spell trainer shortlist fixture could not supply health potions")
+        local totalMoney = player:getMoney() + player:getBankBalance()
+        if totalMoney > 0 then assert(player:removeTotalMoney(totalMoney),
+            "spell trainer shortlist fixture could not clear funding") end
+        assert(player:addMoney(100) and player:getMoney() + player:getBankBalance() == 100,
+            "spell trainer shortlist fixture could not set unaffordable funding")
+        assert(Npc("Trisha") and player:teleportTo(Position(32679, 31683, 7)),
+            "spell trainer shortlist fixture could not reach the Carlin mage guild")
+        assert(player:setStorageValue(F.fixtureReadyStorage, 1),
+            "spell trainer shortlist fixture could not signal readiness")
+        print("PLAYERBOT_GAMEPLAY_TEST SPELL_TRAINING_SHORTLIST_START")
         return true
     end
     if mode == "progression_nested" then

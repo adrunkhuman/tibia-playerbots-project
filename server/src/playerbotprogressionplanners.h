@@ -144,6 +144,8 @@ struct PlayerBotSpellOfferSnapshot {
 	bool premium = false;
 	bool inScope = false;
 	bool registryMatches = false;
+	bool implementedUse = false;
+	uint8_t learningPriority = 255;
 	bool vocationEligible = false;
 	bool levelEligible = false;
 	bool premiumEligible = false;

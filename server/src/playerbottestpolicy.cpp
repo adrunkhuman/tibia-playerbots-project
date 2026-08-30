@@ -33,7 +33,9 @@ const playerbot::PlayerBotTestPolicy& playerbot::playerBotTestPolicyFromEnvironm
 			 std::strcmp(gameplayMode, "arbitration_interrupt") == 0 ||
 			 std::strcmp(gameplayMode, "departure") == 0 ||
 			 std::strcmp(gameplayMode, "departure_recovery") == 0 ||
-			 std::strcmp(gameplayMode, "spell_training") == 0 || std::strcmp(gameplayMode, "equipment_shadow") == 0 ||
+			 std::strcmp(gameplayMode, "spell_training") == 0 ||
+			 std::strcmp(gameplayMode, "spell_training_shortlist") == 0 ||
+			 std::strcmp(gameplayMode, "equipment_shadow") == 0 ||
 			 std::strcmp(gameplayMode, "equipment_shadow_unaffordable") == 0 ||
 			 std::strcmp(gameplayMode, "equipment_shadow_no_upgrade") == 0 ||
 			 std::strcmp(gameplayMode, "equipment_buy") == 0 ||
@@ -130,6 +132,7 @@ const playerbot::PlayerBotTestPolicy& playerbot::playerBotTestPolicyFromEnvironm
 			adaptiveChallengeFixture,
 			gameplayMode && (std::strcmp(gameplayMode, "mainland_reward") == 0 ||
 			                 std::strcmp(gameplayMode, "spell_training") == 0 ||
+			                 std::strcmp(gameplayMode, "spell_training_shortlist") == 0 ||
 			                 std::strncmp(gameplayMode, "equipment_buy", 13) == 0),
 			spellCalibrationFixture,
 			magicTrainingFixture,

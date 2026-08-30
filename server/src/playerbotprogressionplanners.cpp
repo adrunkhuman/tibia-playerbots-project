@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <limits>
 #include <set>
+#include <tuple>
 
 bool PlayerBotDeparturePlanner::hasCompleted(const PlayerBotDeparturePlannerSnapshot& snapshot) const
 {
@@ -34,6 +35,7 @@ PlayerBotSpellTrainingDecision PlayerBotSpellTrainingPlanner::select(const Playe
 	for (size_t offerIndex = 0; offerIndex < snapshot.offers.size(); ++offerIndex) {
 		const auto& offer = snapshot.offers[offerIndex];
 		const char* rejection = !offer.inScope ? "outside_thais_scope" : !offer.registryMatches ? "spell_registry_mismatch" :
+		                        !offer.implementedUse ? "no_implemented_use" :
 		                        !offer.vocationEligible ? "vocation_ineligible" : !offer.levelEligible ? "level_ineligible" :
 		                        !offer.premiumEligible ? "premium_ineligible" : offer.known ? "already_learned" :
 		                        !offer.suppliesReady ? "supply_reserve_unmet" : !snapshot.reserveAvailable ? "recovery_reserve_unavailable" :
@@ -47,9 +49,12 @@ PlayerBotSpellTrainingDecision PlayerBotSpellTrainingPlanner::select(const Playe
 		}
 		PlayerBotSpellTrainingPlan candidate{offer.npcId, offer.npcPosition, offer.route.approachPosition, offer.spellName,
 		                                    offer.keyword, offer.price, offer.level, offer.premium, offer.route.steps, snapshot.reserve};
-		if (!decision.selected || candidate.price < decision.selected->price ||
-		    (candidate.price == decision.selected->price && (candidate.travelSteps < decision.selected->travelSteps ||
-		     (candidate.travelSteps == decision.selected->travelSteps && candidate.spellName < decision.selected->spellName)))) {
+		const PlayerBotSpellOfferSnapshot* selectedOffer = decision.selectedOfferIndex ?
+		    &snapshot.offers[*decision.selectedOfferIndex] : nullptr;
+		if (!selectedOffer ||
+		    std::tie(offer.learningPriority, offer.level, offer.price, candidate.travelSteps, offer.spellName, offer.npcId) <
+		        std::tie(selectedOffer->learningPriority, selectedOffer->level, selectedOffer->price,
+		                 decision.selected->travelSteps, selectedOffer->spellName, selectedOffer->npcId)) {
 			decision.selected = std::move(candidate);
 			decision.selectedOfferIndex = offerIndex;
 		}

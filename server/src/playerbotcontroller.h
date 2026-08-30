@@ -308,7 +308,8 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 
 		uint64_t spellTrainingReserve(const Player& player) const;
 		void emitSpellCandidate(const Npc& npc, const NpcSpellOffer& offer, const Position& position, const char* result,
-		                        const char* reason, uint64_t reserve = 0, uint32_t travelSteps = 0) const;
+		                        const char* reason, uint64_t reserve = 0, uint32_t travelSteps = 0,
+		                        std::optional<uint8_t> learningPriority = std::nullopt) const;
 		bool findSpellTraining(Player& player, const Position& position, PlayerBotSpellTrainingPlan& plan,
 		                       std::deque<PlayerBotNavigationStep>& steps);
 		void beginSpellTraining(Player& player, const Position& position, PlayerBotSpellTrainingPlan plan,

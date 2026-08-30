@@ -72,6 +72,7 @@ enum class PlayerBotSpellEvidence : uint8_t {
 
 const PlayerBotSpellDescriptor* playerBotSpellDescriptor(const char* name);
 const std::array<PlayerBotSpellDescriptor, 6>& playerBotSpellDescriptors();
+std::optional<uint8_t> playerBotSpellLearningPriority(const char* name);
 const char* playerBotSpellRoleName(PlayerBotSpellRole role);
 PlayerBotSpellEnvelope playerBotSpellEnvelope(const Player& player, const PlayerBotSpellDescriptor& descriptor);
 PlayerBotSpellEvidence playerBotClassifySpellObservation(PlayerBotSpellRole role, const PlayerBotSpellObservation& observation,
