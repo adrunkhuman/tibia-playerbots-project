@@ -90,6 +90,6 @@ PlayerBotLootReplacement PlayerBotLootPolicy::replacementFor(const PlayerBotLoot
 	replacement.discardedValue = totalDiscardedValue;
 	replacement.viable = incomingWeight != 0 && incomingWeight > inventory.freeCapacity && replacement.count != 0 &&
 	                    requiredWeight == 0 && lowerDensity &&
-	                    static_cast<uint64_t>(incoming.unitValue) * incoming.count > totalDiscardedValue;
+	                    (incoming.currency || static_cast<uint64_t>(incoming.unitValue) * incoming.count > totalDiscardedValue);
 	return replacement;
 }

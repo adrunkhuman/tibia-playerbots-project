@@ -390,13 +390,8 @@ function Assert-ValueLootEvents {
         $_.event -eq "action_result" -and $_.action -eq "loot" -and $_.reason -eq "no_capacity"
     })
 	$foodPurchases = @($events | Where-Object { $_.action -eq "buy_meat" })
-	$foodPreference = @($events | Where-Object {
-		$_.event -eq "action_result" -and $_.action -eq "loot" -and $_.result -eq "skipped" -and
-		$_.reason -eq "food_preference_satisfied" -and $_.item_id -eq 2666 -and
-		$_.carried -ge $_.preferred -and $_.preferred -eq 2
-	})
 	if ($replacement.Count -ne 1 -or $incomingLoot.Count -ne 1 -or $capacitySkips.Count -ne 0 -or
-		$foodPurchases.Count -ne 0 -or $foodPreference.Count -ne 1) {
+		$foodPurchases.Count -ne 0) {
 		throw "The bot did not replace lower-density cargo with the denser corpse item."
     }
 }

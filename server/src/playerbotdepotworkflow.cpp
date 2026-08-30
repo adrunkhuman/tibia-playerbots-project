@@ -45,6 +45,11 @@ PlayerBotDepotCommand PlayerBotDepotWorkflow::advance(const PlayerBotDepotObserv
 		session.clearMove();
 		session.openChest();
 	}
+	if (observation.actionResult == PlayerBotDepotActionResult::RejectedMoveDiscarded && session.hasPendingMove()) {
+		session.clearMove();
+		session.resetAttempts();
+		session.deposit();
+	}
 	if (session.hasPendingMove() && observation.move.observed) {
 		const PlayerBotDepotMoveVerification verification = session.verifyMove(
 			observation.move.inventoryCount, observation.move.destinationCount, maximumDiscoveryAttempts);

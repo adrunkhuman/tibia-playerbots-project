@@ -21,7 +21,12 @@ enum class PlayerBotDepotCommandType : uint8_t {
 };
 enum class PlayerBotDepotOutcome : uint8_t { Pending, Ready, Success, Retry, Moved, Partial, Deferred, Rejected, Unavailable };
 enum class PlayerBotDepotRouteResult : uint8_t { NotObserved, Reached, Unreachable };
-enum class PlayerBotDepotActionResult : uint8_t { None, SelectedLockerUnavailable, MoveDestinationUnavailable };
+enum class PlayerBotDepotActionResult : uint8_t {
+	None,
+	SelectedLockerUnavailable,
+	MoveDestinationUnavailable,
+	RejectedMoveDiscarded,
+};
 
 struct PlayerBotDepotScan {
 	bool observed = false;

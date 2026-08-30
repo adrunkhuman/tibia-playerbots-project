@@ -380,10 +380,10 @@ unusable partial reserve. The cycle deposits carried money and withdraws up to
 merely because none is carried.
 Hunting ends after the configured duration or below 30 oz
 effective free capacity. Effective capacity is physical free capacity plus the
-weight of carried standard food, because that cargo can be consumed or replaced
-without service. A backpack may therefore have no physical capacity and remain
-hunt-ready when its reclaimable food weight keeps effective capacity above the
-reserve. Remaining top-level backpack loot is moved through a reachable depot
+weight of carried standard food and currency, because food can be consumed or
+replaced and currency must not cause a service return. A backpack may therefore
+have no physical capacity and remain hunt-ready when its reclaimable cargo keeps
+effective capacity above the reserve. Remaining top-level backpack loot is moved through a reachable depot
 locker into that player's real depot chest. Depot locality and locker identity
 are independent: discovery enumerates
 all map-indexed lockers, then validates that each candidate still has its indexed
@@ -411,7 +411,8 @@ depot deposit, and cargo replacement until two-handed tradeoffs are supported.
 
 Item value comes from loaded shop offers. Currency uses intrinsic value; other
 loot must have a known buyer. Corpse contents are ranked by value per weight,
-and more valuable loot may replace lower-density sellable cargo. Once two food
+and currency may replace lower-density sellable cargo even when the discarded
+cargo has a higher total value. Physical capacity still limits the move. Once two food
 items are carried, further food is skipped. Any food remains replaceable by a
 more valuable known item because the preference is not a reserve. Known
 unequipped equipment is also replaceable; equipped gear is outside the backpack
@@ -420,6 +421,10 @@ are not replacement candidates. Food count, weight, reclaimable capacity, and pr
 utility are observable, but food does not yet select a separate acquisition
 goal. Later goal arbitration can weigh measured regeneration benefit against
 travel, capacity, and service costs without restoring a hard requirement.
+
+An opened depot is scanned for a local positive-value SellLoot plan after
+deposit, including when mandatory potion or banking service must run first. The
+plan remains available for goal selection after that service completes.
 
 The bot identifies only server-classified corpse containers and checks normal
 corpse ownership. It opens the corpse through normal item use before inspecting
@@ -553,6 +558,12 @@ approach positions, weighted distance, route steps, and expanded nodes.
 Unavailable records include the retry attempt and currently suppressed approach
 count; the fourth unavailable round emits the normal `depot_unavailable`
 terminal event.
+
+An unchanged backpack deposit retries three times. After the third rejection,
+the bot moves the blocked item to its current tile through normal item movement,
+verifies the inventory and ground deltas, emits `result="discarded"` with
+`reason="depot_rejected"`, and continues the deposit workflow. Rejected slotted
+deposits remain deferred rather than discarded.
 
 Target pursuit uses `action_result` with `action="target_pursuit"`.
 `result="started"` includes `target_id` and `last_seen_position`;

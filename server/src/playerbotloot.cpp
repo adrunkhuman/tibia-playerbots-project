@@ -175,7 +175,8 @@ void PlayerBotController::lootCorpse(Player* player, const Position& currentPosi
 				                                static_cast<uint8_t>(item->getItemCount()), static_cast<uint8_t>(index),
 				                                item->getBaseWeight(), inventoryPolicy.itemUnitValue(item->getID()),
 				                                inventoryCount,
-				                                PlayerBotInventoryPolicy::isFoodItem(item->getID())});
+				                                PlayerBotInventoryPolicy::isFoodItem(item->getID()),
+				                                PlayerBotInventoryPolicy::isCurrencyItem(item->getID())});
 			}
 		}
 	}
@@ -244,7 +245,8 @@ void PlayerBotController::lootCorpse(Player* player, const Position& currentPosi
 	}
 
 	if (command.outcome == PlayerBotLootOutcome::NoCapacity) {
-		huntCoordinator.observeCapacityPressure(now);
+		const uint64_t incomingWeight = static_cast<uint64_t>(command.item.unitWeight) * command.item.availableCount;
+		if (incomingWeight > inventoryPolicy.huntFreeCapacity(*player)) huntCoordinator.observeCapacityPressure(now);
 		std::ostringstream fields;
 		fields << "\"action\":\"loot\",\"result\":\"skipped\",\"reason\":\"no_capacity\""
 		       << ",\"item_id\":" << command.item.itemId << ",\"count\":" << static_cast<uint32_t>(command.item.availableCount)

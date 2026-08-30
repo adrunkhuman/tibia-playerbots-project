@@ -64,6 +64,11 @@ bool PlayerBotInventoryPolicy::isFoodItem(uint16_t itemId)
 	       (itemId >= 12415 && itemId <= 12418) || (itemId >= 12637 && itemId <= 12639);
 }
 
+bool PlayerBotInventoryPolicy::isCurrencyItem(uint16_t itemId)
+{
+	return Item::items[itemId].worth != 0;
+}
+
 PlayerBotFoodInventory PlayerBotInventoryPolicy::foodInventory(const Player& player) const
 {
 	uint64_t count = 0;
@@ -92,6 +97,30 @@ uint32_t PlayerBotInventoryPolicy::effectiveFreeCapacity(const Player& player) c
 {
 	return static_cast<uint32_t>(std::min<uint64_t>(
 	    static_cast<uint64_t>(player.getFreeCapacity()) + foodInventory(player).weight,
+	    std::numeric_limits<uint32_t>::max()));
+}
+
+uint32_t PlayerBotInventoryPolicy::currencyInventoryWeight(const Player& player) const
+{
+	uint64_t weight = 0;
+	std::function<void(const Item&)> inspect = [&](const Item& item) {
+		if (isCurrencyItem(item.getID())) {
+			weight += static_cast<uint64_t>(item.getItemCount()) * item.getBaseWeight();
+		}
+		if (const Container* container = item.getContainer()) {
+			for (const Item* child : container->getItemList()) inspect(*child);
+		}
+	};
+	for (int32_t slot = CONST_SLOT_FIRST; slot <= CONST_SLOT_LAST; ++slot) {
+		if (const Item* item = player.getInventoryItem(static_cast<slots_t>(slot))) inspect(*item);
+	}
+	return static_cast<uint32_t>(std::min<uint64_t>(weight, std::numeric_limits<uint32_t>::max()));
+}
+
+uint32_t PlayerBotInventoryPolicy::huntFreeCapacity(const Player& player) const
+{
+	return static_cast<uint32_t>(std::min<uint64_t>(
+	    static_cast<uint64_t>(effectiveFreeCapacity(player)) + currencyInventoryWeight(player),
 	    std::numeric_limits<uint32_t>::max()));
 }
 
