@@ -8,6 +8,34 @@ function F.login.onLogin(player)
     end
 
 	local mode = os.getenv("PLAYERBOT_GAMEPLAY_MODE") or "cycle"
+    -- These two cases target pickupRewardStorage, not the other named reward
+    -- fixtures. Keep the finite fixture set isolated without filtering map discovery.
+    if mode == "progression" or mode == "arbitration" then
+        local restarting = mode == "progression" and player:getStorageValue(F.pickupRewardStorage) == 1
+        for _, storage in ipairs({F.mainlandRewardStorage, F.economicRewardStorage, F.nestedRewardStorage}) do
+            if restarting then
+                assert(player:getStorageValue(storage) == 1,
+                    "fixture did not persist competing reward isolation: " .. storage)
+            else
+                assert(player:setStorageValue(storage, 1),
+                    "fixture could not suppress competing reward: " .. storage)
+            end
+        end
+    -- The nearby currency reward otherwise consumes the magic-training window
+    -- or preempts the intended readiness work. Leave these cases' other rewards alone.
+    elseif mode == "readiness_low_wealth" or
+        mode == "magic_training_haste" or mode == "magic_training_great_light" or mode == "magic_training_light" or
+        mode == "magic_training_refresh" or mode == "magic_training_failed" or mode == "magic_training_restart" or
+        mode == "magic_training_hunt" or mode == "magic_training_post_hunt" or mode == "magic_training_post_hunt_no_overflow" then
+        local restarting = mode == "magic_training_restart" and player:getStorageValue(50098) == 1
+        if restarting then
+            assert(player:getStorageValue(F.economicRewardStorage) == 1,
+                "fixture did not persist the claimed nearby currency reward")
+        else
+            assert(player:setStorageValue(F.economicRewardStorage, 1),
+                "fixture could not suppress the nearby currency reward")
+        end
+    end
 	F.selectHealthPotion(player)
     assert(mode == "mainland" or mode == "carlin_local_service" or mode == "cycle" or mode == "depot" or mode == "depot_risk_fallback" or mode == "slotted_loot_seller" or mode == "slotted_loot_no_seller" or mode == "sell_loot" or mode == "sell_loot_remote_depot" or mode == "navigation" or mode == "navigation_recovery" or mode == "carlin_service_route" or mode == "mutable_portal_route" or mode == "patrol_recovery" or mode == "target_approach" or mode == "target_approach_unreachable" or mode == "target_attacker_priority" or mode == "hunt_area_arrival" or mode == "corpse" or mode == "corpse_detour" or mode == "corpse_inaccessible" or mode == "death" or mode == "healing" or mode == "spell_use" or
         mode == "healing_resupply" or mode == "value" or mode == "progression" or mode == "progression_bundle" or
@@ -259,6 +287,13 @@ function F.login.onLogin(player)
         end
         local thais = Town(F.thaisTownId)
         assert(thais and player:setTown(thais) and player:setVocation(4), "magic training fixture could not select Thais Knight")
+        F.selectHealthPotion(player)
+        if mode ~= "magic_training_service" and mode ~= "magic_training_progression" then
+            -- Exclude incidental healing service; priority fixtures own their reserves.
+            -- Restart returns above so it uses persisted inventory instead of reseeding.
+            F.removeAll(player, F.potionItemId)
+            assert(player:addItem(F.potionItemId, 2), "magic training fixture could not seed the selected potion reserve")
+        end
         local requiredExperience = Game.getExperienceForLevel(20) - player:getExperience()
         if requiredExperience > 0 then player:addExperience(requiredExperience) end
         assert(player:getLevel() == 20, "magic training fixture could not select the required level")
@@ -593,6 +628,10 @@ function F.login.onLogin(player)
             addEvent(F.triggerArbitrationInterrupt, 500, player:getId())
             print("PLAYERBOT_GAMEPLAY_TEST GOAL_ARBITRATION_INTERRUPT_START")
         else
+            -- Keep ordinary cash service below the intended reward's utility.
+            -- Missing potions instead make reserve restocking the higher-priority goal.
+            F.removeAll(player, F.potionItemId)
+            assert(player:addItem(F.potionItemId, 10), "goal arbitration fixture could not prepare its potion reserve")
             print("PLAYERBOT_GAMEPLAY_TEST GOAL_ARBITRATION_START")
         end
         return true

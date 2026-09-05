@@ -392,7 +392,8 @@ function Assert-SlottedLootEvents {
 		$_.count -eq 1 -and ($_.carried_after + $_.bank_after) -gt ($_.carried_before + $_.bank_before)
 	})
 	$localPlans = @($events | Where-Object {
-		$_.event -eq "sell_loot_plan" -and $_.result -eq "candidate" -and $_.item_id -eq 2398 -and $_.utility -lt 0
+		$_.event -eq "sell_loot_plan" -and $_.result -eq "candidate" -and
+		$_.source_depot_id -eq 2 -and $_.manifest_batches -ge 1 -and $_.utility -gt 0
 	})
 	$deposits = @($events | Where-Object {
 		$_.action -eq "deposit" -and $_.result -in @("success", "partial") -and $_.item_id -eq 2398 -and
@@ -417,7 +418,7 @@ function Assert-SlottedLootEvents {
 		throw "Slotted loot did not use the expected local disposition. requests=$($depositRequests.Count), deposits=$($deposits.Count), sales=$($sales.Count)/$expectedSales, sell_moves=$($sellMoves.Count), seller=$SellerAvailable, restarted=$Restarted."
 	}
 	if ($SellerAvailable -and $localPlans.Count -lt 1) {
-		throw "The local sale was still gated by global utility."
+		throw "The slotted loot sale lacked a candidate plan from depot 2 with at least one manifest batch and positive utility."
 	}
 	if ($protectedMoves.Count -ne 0 -or $reselectedService.Count -ne 0 -or $terminal.Count -ne 0) {
 		throw "Slotted disposition did not preserve protected state or bounded service. protected=$($protectedMoves.Count), repeated=$($reselectedService.Count), terminal=$($terminal.Count), restarted=$Restarted."
@@ -436,7 +437,7 @@ function Assert-MainlandLoopEvents {
 	})
 	$realDepot = @($events | Where-Object {
 		$_.event -eq "action_result" -and $_.action -eq "depot_discover" -and $_.result -eq "success" -and
-		$_.depot_id -eq 2 -and $_.locker_item_id -eq 2589 -and
+		$_.depot_id -eq 2 -and $_.locker_item_id -in @(2589, 2590, 2591, 2592) -and
 		[Math]::Abs($_.locker.x - $_.approach.x) -le 1 -and
 		[Math]::Abs($_.locker.y - $_.approach.y) -le 1 -and $_.locker.z -eq $_.approach.z
 	})

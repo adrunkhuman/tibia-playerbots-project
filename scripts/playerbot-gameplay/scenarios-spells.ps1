@@ -162,7 +162,8 @@
 				Invoke-DatabaseCommand -Query "UPDATE players SET mana = $($cast.mana_after) WHERE name = 'Bot One'"
 				Invoke-Compose up --detach server
 				Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST MAGIC_TRAINING_RESTART_START' | Out-Null
-				$restartLogs = Wait-ForLatestServerGenerationLog -Pattern '"event":"goal_candidate".*"goal":"magic_training".*"reason":"next_tick_not_overflow"'
+				# Complete the startup decision before checking its guard and selected goal.
+				$restartLogs = Wait-ForLatestServerGenerationLog -Pattern '"event":"goal_selection".*"decision_id":1,"decision_reason":"startup"'
 				Assert-MagicTrainingEvents -Logs $restartLogs -Mode "restart"
 			}
 		}

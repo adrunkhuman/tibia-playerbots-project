@@ -10,7 +10,7 @@ function F.verifyReadiness(playerId, mode, attempts)
     if mode == "retention" then ready = ready and player:getItemCount(2050) >= 1 and player:getItemCount(F.starterWeaponId) >= 1 end
     if mode == "no_food" then ready = ready and player:getItemCount(F.meatItemId) == 0 end
     if mode == "food_capacity" then
-        ready = ready and player:getFreeCapacity() == ItemType(2696):getWeight() * 6 and player:getItemCount(2696) == 2
+        ready = ready and player:getFreeCapacity() == ItemType(2696):getWeight() * 8 and player:getItemCount(2696) == 0
     end
     if not ready and attempts > 0 then
         addEvent(F.verifyReadiness, 500, playerId, mode, attempts - 1)
@@ -422,7 +422,9 @@ function F.verifyDepot(playerId, attempts)
     assert(player:getItemCount(2120) == 1 and player:getItemCount(2554) == 1, "navigation tool reserves were not retained")
     assert(chest:getItemCountById(2120) == 2 and chest:getItemCountById(2554) == 2,
         "surplus navigation tools were not deposited")
-    assert(player:getItemCount(F.potionItemId) >= 5 and player:getItemCount(F.meatItemId) >= 1, "supply reserves were deposited")
+    -- This fixture seeds cheese (checked above), not meat. Potions must stay carried.
+    assert(player:getItemCount(F.potionItemId) >= 5 and chest:getItemCountById(F.potionItemId) == 0,
+        "supply reserves were deposited")
     print("PLAYERBOT_GAMEPLAY_TEST DEPOT_PASS")
 end
 

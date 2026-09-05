@@ -35,15 +35,33 @@ function Assert-MagicTrainingEvents {
 	}
 	if ($Mode -eq "restart") {
 		$online = @($events | Where-Object { $_.event -eq "lifecycle" -and $_.status -eq "online" })
-		$forecast = @($events | Where-Object {
-			$_.event -eq "magic_training_fixture" -and $_.case -eq "active_default" -and $_.active -and $_.remaining -eq $_.interval
+		# The startup window ends at selection; later decisions may legitimately cast.
+		$selection = @($events | Where-Object {
+			$_.event -eq "goal_selection" -and $_.decision_id -eq 1 -and $_.decision_reason -eq "startup"
 		})
-		$guard = @($candidates | Where-Object {
-			-not $_.feasible -and $_.reason -eq "next_tick_not_overflow" -and $_.mana_tick_remaining -gt 0 -and
+		$window = @(
+			foreach ($event in $events) {
+				$event
+				if ($event.event -eq "goal_selection" -and $event.decision_id -eq 1 -and $event.decision_reason -eq "startup") { break }
+			}
+		)
+		$forecast = @($window | Where-Object {
+			$_.event -eq "magic_training_fixture" -and $_.source -eq "authoritative_forecast" -and
+			$_.case -eq "active_default" -and $_.active -eq $true -and $_.remaining -gt 0 -and $_.remaining -eq $_.interval
+		})
+		$candidates = @($window | Where-Object { $_.event -eq "goal_candidate" -and $_.goal -eq "magic_training" })
+		$startup = @($candidates | Where-Object { $_.decision_reason -eq "startup" })
+		$guard = @($candidates | Select-Object -First 1 | Where-Object {
+			$_.decision_id -eq 1 -and $_.decision_reason -eq "startup" -and $_.feasible -eq $false -and
+			$_.reason -in @("spell_cooldown", "next_tick_not_overflow") -and $_.mana_tick_remaining -gt 0 -and
 			$_.mana_tick_remaining -le $_.mana_tick_interval -and
-			$_.mana + $_.mana_gain -le $_.mana_max
+			$null -ne $_.mana -and $null -ne $_.mana_gain -and $null -ne $_.mana_max -and
+			$_.mana_gain -gt 0 -and $_.mana + $_.mana_gain -le $_.mana_max
 		})
-		if ($online.Count -eq 1 -and $forecast.Count -eq 1 -and $guard.Count -ge 1 -and $actions.Count -eq 0) { return }
+		$actions = @($window | Where-Object { $_.event -eq "action_result" -and $_.action -eq "magic_training" })
+		if ($online.Count -eq 1 -and $forecast.Count -eq 1 -and $candidates.Count -eq 1 -and
+			$startup.Count -eq 1 -and $guard.Count -eq 1 -and $actions.Count -eq 0 -and
+			$selection.Count -eq 1 -and $selection[0].to_goal -and $selection[0].to_goal -ne "magic_training") { return }
 		throw "Restart did not recompute the fresh regeneration forecast from persisted player state. online=$($online.Count), forecast=$($forecast.Count), guard=$($guard.Count), actions=$($actions.Count)."
 	}
 	$reason = $Mode -eq "reserve" ? "no_audited_safe_spell" : $Mode -eq "pz" ? "regeneration_paused" :

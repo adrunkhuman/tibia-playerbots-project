@@ -445,6 +445,8 @@ function Invoke-Scenario {
 	$script:currentScenarioDeadline = [DateTime]::UtcNow.AddSeconds($currentWaitTimeoutSeconds)
 	$startedAt = [DateTime]::UtcNow
 	try {
+		# Checkpoint scenarios must opt in; a prior case must not pause this bot.
+		$env:PLAYERBOT_DEPOT_RESTART_PHASE = ""
 		Invoke-TimedStep -Name $Name -Body $Body
 		Add-ScenarioResult -Name $Name -Status "pass"
 	}

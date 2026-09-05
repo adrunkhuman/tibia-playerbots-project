@@ -138,15 +138,23 @@
 		Invoke-Scenario -Name "real_depot" -DefaultTimeoutSeconds 240 -Body {
 			Invoke-Compose down --volumes --remove-orphans
 			$env:PLAYERBOT_GAMEPLAY_MODE = "depot"
-			$env:PLAYERBOT_DEPOT_RESTART_PHASE = ""
+			# Stop before optional liquidation can withdraw freshly deposited cargo.
+			$env:PLAYERBOT_DEPOT_RESTART_PHASE = "depart"
 			$env:PLAYERBOT_DEPOT_MOVE_CASE = "normal"
 			Invoke-Compose up --detach
 			Invoke-DatabaseCommand -Query "INSERT INTO player_depotitems (player_id, sid, pid, itemtype, count, attributes) SELECT id, 9001, 2, 2684, 7, X'' FROM players WHERE name = 'Rook Tester'"
-			$firstCycleLogs = Wait-ForLog -Pattern '"action":"deposit","result":"complete"'
+			$firstCycleLogs = Wait-ForLog -Pattern '"action":"depot_restart_checkpoint","result":"paused","phase":"depart"'
 			Assert-DepotEvents -Logs $firstCycleLogs -ExpectedDepositedCount 2 -ExpectedEquipmentDeposits 2 -ExpectedToolDeposits 4
 
 			Invoke-Compose stop server
-			Invoke-Compose up --detach server
+			# The checkpoint suppresses restart cargo in checkpoint-only cases. Re-arm
+			# normal second-cycle seeding only after this cycle is safely persisted.
+			Invoke-DatabaseCommand -Query "UPDATE player_storage JOIN players ON players.id = player_storage.player_id SET player_storage.value = 0 WHERE players.name = 'Bot One' AND player_storage.key = 50095 AND player_storage.value = 2"
+			$fixtureState = Invoke-DatabaseScalar -Query "SELECT value FROM player_storage JOIN players ON players.id = player_storage.player_id WHERE players.name = 'Bot One' AND player_storage.key = 50095"
+			if ($fixtureState -ne 0) { throw "Could not re-arm real_depot second-cycle cargo." }
+			$env:PLAYERBOT_DEPOT_RESTART_PHASE = ""
+			# Changed fixture environment creates a new container with fresh logs.
+			Invoke-Compose up --detach --force-recreate server
 			$secondCycleLogs = Wait-ForLatestServerGenerationLog -Pattern '"action":"deposit","result":"complete"'
 			Assert-DepotEvents -Logs $secondCycleLogs -ExpectedDepositedCount 1 -ExpectedEquipmentDeposits 0
 			$sentinelCount = Invoke-DatabaseScalar -Query "SELECT COALESCE(SUM(count), 0) FROM player_depotitems JOIN players ON players.id = player_depotitems.player_id WHERE players.name = 'Rook Tester' AND pid = 2 AND itemtype = 2684"

@@ -1,5 +1,50 @@
 # Testing
 
+See [Linux validation baseline](linux-validation.md) for migration evidence,
+known gameplay failures, and the test-isolation follow-up.
+
+Use PowerShell 7+ (`pwsh`) on Windows or Linux. The same scripts, scenario
+catalog, and assertions apply on both platforms. Linux needs Docker Engine and
+Compose v2; bootstrap also requires a locally built `client/otclient`.
+Commands containing `$env:` or `Remove-Item` below run inside PowerShell, not Bash.
+The `pwsh -File ...` commands work from either shell at the repository root.
+
+If Docker requires elevation on your Linux setup, run Docker commands and the
+gameplay driver from an explicitly authorized elevated shell; the scripts do not
+elevate themselves or require changes to socket permissions or group membership.
+Elevated test runs can leave root-owned failure artifacts. The suite resets the
+disposable `angelion` database and removes its stack unless `-KeepStack` is set;
+do not run it alongside a normal development session. A failed daemon-access preflight does not attempt stack cleanup.
+
+The spell contract check needs neither Docker nor elevation:
+
+```powershell
+pwsh -File scripts/test-knight-spell-contract.ps1
+```
+
+Run the non-Docker telemetry assertion regressions:
+
+```powershell
+pwsh -File scripts/test-playerbot-navigation-assertions.ps1
+pwsh -File scripts/test-playerbot-readiness-assertions.ps1
+pwsh -File scripts/test-playerbot-log-parsing.ps1
+pwsh -File scripts/test-playerbot-scenario-isolation.ps1
+pwsh -File scripts/test-playerbot-magic-training-assertions.ps1
+```
+
+On Linux, pure contract checks require a C++17 compiler; fixture-isolation checks
+require Lua or LuaJIT. Run these from the repository root:
+
+```sh
+sh server/tests/playerbot_contracts.sh
+lua scripts/test-playerbot-fixture-isolation.lua
+lua scripts/test-playerbot-depot-fixture.lua
+```
+
+`server/tests/playerbotdepotworkflow_test.cpp` includes its compile command and
+requires the server development headers. These checks supplement, not replace,
+live gameplay validation.
+
 ## Server smoke test
 
 For server, infrastructure, or cross-stack changes, run:
