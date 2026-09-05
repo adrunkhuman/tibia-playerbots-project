@@ -444,9 +444,23 @@ function Invoke-Scenario {
 	$script:currentWaitTimeoutSeconds = if ($timeoutOverridden) { $TimeoutSeconds } else { $DefaultTimeoutSeconds }
 	$script:currentScenarioDeadline = [DateTime]::UtcNow.AddSeconds($currentWaitTimeoutSeconds)
 	$startedAt = [DateTime]::UtcNow
+	# Scenario-owned settings only; defaults match the gameplay Compose stack.
+	$scenarioDefaults = @{
+		PLAYERBOT_GAMEPLAY_MODE = "cycle"
+		PLAYERBOT_HUNT_DURATION_SECONDS = "1500"
+		PLAYERBOT_RELOG_DELAY_SECONDS = "5"
+		PLAYERBOT_MAX_CONSECUTIVE_DEATHS = "3"
+		PLAYERBOT_DEPOT_RESTART_PHASE = ""
+		PLAYERBOT_DEPOT_MOVE_CASE = "normal"
+	}
+	$incomingEnvironment = @{}
+	foreach ($key in $scenarioDefaults.Keys) {
+		$incomingEnvironment[$key] = [Environment]::GetEnvironmentVariable($key)
+	}
 	try {
-		# Checkpoint scenarios must opt in; a prior case must not pause this bot.
-		$env:PLAYERBOT_DEPOT_RESTART_PHASE = ""
+		foreach ($key in $scenarioDefaults.Keys) {
+			[Environment]::SetEnvironmentVariable($key, $scenarioDefaults[$key])
+		}
 		Invoke-TimedStep -Name $Name -Body $Body
 		Add-ScenarioResult -Name $Name -Status "pass"
 	}
@@ -456,6 +470,11 @@ function Invoke-Scenario {
 		Add-ScenarioResult -Name $Name -Status $status -ErrorMessage $_.Exception.Message -ArtifactPath $artifactPath
 		if (-not $ContinueOnFailure) {
 			throw
+		}
+	}
+	finally {
+		foreach ($key in $incomingEnvironment.Keys) {
+			[Environment]::SetEnvironmentVariable($key, $incomingEnvironment[$key])
 		}
 	}
 }
