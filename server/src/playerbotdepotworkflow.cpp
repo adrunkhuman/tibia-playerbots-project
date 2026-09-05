@@ -2,6 +2,7 @@
 
 #include "creature.h"
 #include "playerbotdepotworkflow.h"
+#include "playerbotnavigation.h"
 
 void PlayerBotDepotWorkflow::reset()
 {
@@ -75,7 +76,7 @@ PlayerBotDepotCommand PlayerBotDepotWorkflow::advance(const PlayerBotDepotObserv
 			if (session.isApproachRejected(candidate.approachPosition)) { ++suppressedApproaches; continue; }
 			recordCandidate(candidate);
 		}
-		sortCandidates();
+		sortCandidates(observation.currentPosition);
 	}
 	if (session.stage() == PlayerBotDepotStage::Approach && observation.atApproach) {
 		session.openLocker();
@@ -194,10 +195,15 @@ void PlayerBotDepotWorkflow::recordUnsafeCandidate(const PlayerBotDepotObservati
 	}
 }
 
-void PlayerBotDepotWorkflow::sortCandidates()
+void PlayerBotDepotWorkflow::sortCandidates(const Position& origin)
 {
-	std::sort(discoveryCandidates.begin(), discoveryCandidates.end(), [](const auto& left, const auto& right) {
+	std::sort(discoveryCandidates.begin(), discoveryCandidates.end(), [&origin](const auto& left, const auto& right) {
+		// Topology costs collapse all approaches in a walk node. Break equal costs
+		// spatially without replacing between-node routing or validating every route.
+		const uint32_t leftLocal = playerBotNavigationDistance(origin, left.approachPosition);
+		const uint32_t rightLocal = playerBotNavigationDistance(origin, right.approachPosition);
 		return left.distance != right.distance ? left.distance < right.distance :
+		       leftLocal != rightLocal ? leftLocal < rightLocal :
 		       left.depotId != right.depotId ? left.depotId < right.depotId :
 		       left.lockerPosition != right.lockerPosition ? left.lockerPosition < right.lockerPosition :
 		       left.approachPosition < right.approachPosition;

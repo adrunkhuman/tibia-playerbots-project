@@ -965,7 +965,25 @@ void PlayerBotController::beginPickupReward(Player& player, const Position& posi
 
 bool PlayerBotController::selectTopLevelGoal(Player& player, const Position& position, const char* decisionReason)
 {
-	if (departurePlanner.required(departureSnapshot(player))) {
+	std::string completedHuntReason;
+	completedHuntReason.swap(pendingHuntCompletionReason);
+	// Carry the hunt outcome across depot work, but never relabel an explicit interruption.
+	if (!completedHuntReason.empty() && (std::strcmp(decisionReason, "service_complete") == 0 ||
+	                                   std::strcmp(decisionReason, "depot_deposit_complete") == 0)) {
+		decisionReason = completedHuntReason.c_str();
+	}
+	const uint16_t potionItemId = recoveryPotionItemId(player.getVocationId());
+	const uint32_t potionCount = inventoryPolicy.inventoryItemCount(player, potionItemId);
+	const uint32_t missingPotions = potionCount <= huntPotionReturnThreshold ?
+	                                  huntPotionRestockTarget - potionCount : 0;
+	const bool criticalHealing = survivalRuntime.needsHealing(survivalSnapshot(player)) && missingPotions != 0;
+	const auto requiredGoal = PlayerBotGoalPlanner::requiredGoal(
+	    departurePlanner.required(departureSnapshot(player)), criticalHealing);
+	if (requiredGoal == TopLevelGoal::Service) {
+		beginService(&player, position, "healing_supply_missing");
+		return true;
+	}
+	if (requiredGoal == TopLevelGoal::Departure) {
 		return forceOracleDeparture(player, position, decisionReason);
 	}
 	refreshItemValues();
@@ -998,13 +1016,8 @@ bool PlayerBotController::selectTopLevelGoal(Player& player, const Position& pos
 	const char* magicTrainingReason = magicTrainingCoolingDown ? "cooldown" :
 	                                  survivalRuntime.magicTrainingReason(survivalSnapshot(player));
 	const bool sellLootCoolingDown = progressionRuntime.isCoolingDown(TopLevelGoal::SellLoot, now);
-	const uint16_t potionItemId = recoveryPotionItemId(player.getVocationId());
-	const uint32_t potionCount = inventoryPolicy.inventoryItemCount(player, potionItemId);
-	const uint32_t missingPotions = potionCount <= huntPotionReturnThreshold ?
-	                                  huntPotionRestockTarget - potionCount : 0;
 	const uint32_t sellable = saleableItemCount(player);
 	const bool lowCapacity = inventoryPolicy.huntFreeCapacity(player) < returnCapacityThreshold;
-	const bool criticalHealing = survivalRuntime.needsHealing(survivalSnapshot(player)) && missingPotions != 0;
 	const PlayerBotGoalPlannerSnapshot snapshot{
 		departurePlanner.required(departureSnapshot(player)), departureEligible, departureFound,
 		player.getVocation()->getId() != 0, player.getLevel() < oracleMinimumLevel,

@@ -413,8 +413,9 @@ effective capacity above the reserve. Remaining top-level backpack loot is moved
 locker into that player's real depot chest. Depot locality and locker identity
 are independent: discovery enumerates
 all map-indexed lockers, then validates that each candidate still has its indexed
-depot ID. It ranks all standable adjacent squares by weighted current-position
-distance, locker ID, locker position, and approach position. It validates at
+depot ID. It ranks standable adjacent squares by topology distance, then breaks
+equal costs by floor-weighted distance from the current position, depot ID,
+locker position, and approach position. It validates at
 most two routes per scheduler decision and resumes the sorted queue on the next
 decision. A moved player rebuilds the queue from a new anchor. Failed approaches
 are suppressed for two seconds, then become

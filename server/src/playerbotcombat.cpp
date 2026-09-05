@@ -881,11 +881,8 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 		const double travelSeconds = routePlan.metrics.estimatedTravelSeconds > 0 ?
 		    routePlan.metrics.estimatedTravelSeconds : routePlan.metrics.steps * player.getStepDuration() / 1000.0;
 		if (travelSeconds > 0) {
-			const double projectedPerSecond = routed.availableHuntSeconds > 0 ?
-			    routed.projectedExperience / routed.availableHuntSeconds : 0;
-			routed.estimatedTravelSeconds = travelSeconds;
-			routed.availableHuntSeconds = std::max(0.0, duration - travelSeconds);
-			routed.projectedExperience = projectedPerSecond * routed.availableHuntSeconds;
+			routed.reconcileTravel(duration, travelSeconds,
+			    projectedHuntStaminaMultiplier(player, std::max(0.0, duration - travelSeconds)));
 		}
 		if (routePlan.metrics.result != PlayerBotNavigationResult::Reached) {
 			routed.suitable = false;
@@ -978,6 +975,7 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 
 void PlayerBotController::beginHuntCycle(Player* player, const Position& position, const char* reason)
 {
+	pendingHuntCompletionReason.clear();
 	const uint32_t duration = static_cast<uint32_t>(std::max<int32_t>(1, g_config.getNumber(ConfigManager::PLAYERBOT_HUNT_DURATION_SECONDS)));
 	huntCoordinator.beginHuntCycle(std::chrono::steady_clock::now(), duration);
 	huntRegionReached = false;

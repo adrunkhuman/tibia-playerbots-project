@@ -14,6 +14,7 @@
 #include "playerbotcombatprofile.h"
 #include "position.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -113,6 +114,17 @@ struct PlayerBotHuntRegion {
 	bool inChallengeBand = false;
 	bool predictedLethal = false;
 	std::string rejectionReason;
+
+	void reconcileTravel(double durationSeconds, double travelSeconds, double staminaMultiplier)
+	{
+		estimatedTravelSeconds = travelSeconds;
+		availableHuntSeconds = std::max(0.0, durationSeconds - travelSeconds);
+		staminaExperienceMultiplier = staminaMultiplier;
+		projectedExperience = experiencePerMinute * observedCorrection *
+		                      staminaExperienceMultiplier * availableHuntSeconds / 60.0;
+		// The scorer uses projected experience directly; route danger is an acceptance gate.
+		score = projectedExperience;
+	}
 };
 
 struct PlayerBotHuntRegionPerformance {

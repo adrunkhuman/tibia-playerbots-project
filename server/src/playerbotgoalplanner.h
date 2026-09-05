@@ -45,6 +45,20 @@ struct PlayerBotGoalPlannerSnapshot {
 
 class PlayerBotGoalPlanner {
 	public:
+		static std::optional<PlayerBotGoalArbiter::TopLevelGoal> requiredGoal(
+		    bool departureRequired, bool criticalHealing)
+		{
+			if (!departureRequired) return std::nullopt;
+			return criticalHealing ? PlayerBotGoalArbiter::TopLevelGoal::Service :
+			                         PlayerBotGoalArbiter::TopLevelGoal::Departure;
+		}
+
+		static bool shouldContinueRecovery(PlayerBotGoalArbiter::TopLevelGoal activeGoal, bool needsHealing)
+		{
+			// Service includes the depot trip, not only the NPC transaction phase.
+			return activeGoal == PlayerBotGoalArbiter::TopLevelGoal::Service && needsHealing;
+		}
+
 		std::vector<PlayerBotGoalArbiter::GoalCandidate> candidates(const PlayerBotGoalPlannerSnapshot& snapshot) const;
 		PlayerBotGoalArbiter::GoalCandidate departureCandidate(const PlayerBotGoalPlannerSnapshot& snapshot) const;
 		PlayerBotGoalArbiter::GoalCandidate serviceCandidate(const PlayerBotGoalPlannerSnapshot& snapshot) const;
