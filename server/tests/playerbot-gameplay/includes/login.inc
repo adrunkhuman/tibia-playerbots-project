@@ -570,6 +570,8 @@ function F.login.onLogin(player)
         return true
     end
     if mode == "death" then
+        -- The previous killer remains at the depot, outside the temple cleanup.
+        F.cleanupDeathMonster()
         F.deathLoginCount = F.deathLoginCount + 1
         F.removeNearbyMonsters(player)
         local position = player:getPosition()
@@ -578,7 +580,7 @@ function F.login.onLogin(player)
             addEvent(F.prepareDeath, 100, player:getId())
             print("PLAYERBOT_GAMEPLAY_TEST DEATH_START " .. F.deathLoginCount)
         else
-            addEvent(F.prepareDeath, 1500, player:getId())
+            addEvent(F.waitForDeathService, 250, player:getId(), 120)
             print("PLAYERBOT_GAMEPLAY_TEST DEATH_RECOVERY_STATE_PASS")
         end
         return true

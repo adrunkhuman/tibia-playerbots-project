@@ -29,6 +29,7 @@ pwsh -File scripts/test-playerbot-navigation-assertions.ps1
 pwsh -File scripts/test-playerbot-readiness-assertions.ps1
 pwsh -File scripts/test-playerbot-log-parsing.ps1
 pwsh -File scripts/test-playerbot-scenario-isolation.ps1
+pwsh -File scripts/test-playerbot-death-scenario.ps1
 pwsh -File scripts/test-playerbot-magic-training-assertions.ps1
 ```
 
@@ -39,6 +40,7 @@ require Lua or LuaJIT. Run these from the repository root:
 sh server/tests/playerbot_contracts.sh
 lua scripts/test-playerbot-fixture-isolation.lua
 lua scripts/test-playerbot-depot-fixture.lua
+lua scripts/test-playerbot-death-fixture.lua
 ```
 
 `server/tests/playerbotdepotworkflow_test.cpp` includes its compile command and
@@ -142,6 +144,21 @@ pwsh -File scripts/test-playerbot-gameplay.ps1 -Healing -Focused -SkipBuild
 
 The driver includes Compose status and the last 80 server-log lines in timeout
 failures. Docker builds reuse a persistent BuildKit `ccache` mount.
+
+Each selected scenario owns six environment settings: `PLAYERBOT_GAMEPLAY_MODE`
+(default `cycle`), `PLAYERBOT_HUNT_DURATION_SECONDS` (`1500`),
+`PLAYERBOT_RELOG_DELAY_SECONDS` (`5`), `PLAYERBOT_MAX_CONSECUTIVE_DEATHS` (`3`),
+`PLAYERBOT_DEPOT_RESTART_PHASE` (empty), and `PLAYERBOT_DEPOT_MOVE_CASE` (`normal`).
+`Invoke-Scenario` applies these defaults before the body; individual cases may
+then override them. It restores incoming values after success or failure.
+Skipped scenarios do not touch the environment. Suite CLI options (including
+`-TimeoutSeconds`) and unrelated environment settings remain unchanged; this
+is test-harness ownership, not a change to production configuration.
+
+The death fixture's third kill waits for `service_discovered` after the second
+recovered controller reports online. The driver releases a DB-only fixture marker;
+Lua polls it for at most 30 seconds. The scenario's overall 45-second deadline and
+existing recovery/terminal assertions remain unchanged.
 
 Independent scenarios still receive a fresh database and server process. The
 database container remains healthy between them to avoid repeated MariaDB and

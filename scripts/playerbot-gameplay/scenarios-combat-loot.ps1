@@ -37,6 +37,17 @@
 			$env:PLAYERBOT_MAX_CONSECUTIVE_DEATHS = "2"
 			Invoke-Compose up --detach
 			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST DEATH_RECOVERY_STATE_PASS' | Out-Null
+			$deathMilestone = @{ Recovered = $false }
+			Wait-ForPlayerbotEvent -Predicate {
+				if ($_.bot -ne "Bot One") { return $false }
+				if ($_.event -eq "lifecycle" -and $_.status -eq "online" -and
+					$_.recovered -eq $true -and $_.recovery_count -eq 2) {
+					$deathMilestone.Recovered = $true
+				}
+				$deathMilestone.Recovered -and $_.event -eq "service_discovered"
+			} | Out-Null
+			# DB-only fixture signal: Lua polls SQL rather than cached player storage.
+			Invoke-DatabaseCommand -Query "INSERT INTO player_storage (player_id, ``key``, value) SELECT id, 50099, 1 FROM players WHERE name = 'Bot One' ON DUPLICATE KEY UPDATE value = 1"
 			$deathLogs = Wait-ForPlayerbotEvent -Predicate {
 				$_.event -eq "lifecycle" -and $_.status -eq "recovery_abandoned" -and $_.reason -eq "death_loop_limit"
 			}

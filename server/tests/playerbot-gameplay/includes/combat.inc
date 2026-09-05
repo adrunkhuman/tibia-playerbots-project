@@ -61,6 +61,14 @@ function F.spawnTargetPriorityAttacker(playerId, targetId)
 	print("PLAYERBOT_GAMEPLAY_TEST TARGET_PRIORITY_ATTACKERS " .. targetId .. " " .. attackerIds[1] .. " " .. attackerIds[2])
 end
 
+function F.cleanupDeathMonster()
+    local monster = F.deathMonsterId ~= 0 and Monster(F.deathMonsterId) or nil
+    if monster and not monster:isRemoved() then
+        assert(monster:remove(), "death fixture could not remove its previous killer")
+    end
+    F.deathMonsterId = 0
+end
+
 function F.spawnDeathMonster(playerId)
     local player = Player(playerId)
     assert(player and not player:isRemoved(), "Bot One disappeared before death telemetry test")
@@ -74,7 +82,9 @@ function F.spawnDeathMonster(playerId)
         local tile = Tile(position)
         if tile and tile:isWalkable() then
             local monster = Game.createMonster(F.deathMonsterName, position, true, true)
-            assert(monster and monster:selectTarget(player), "death test monster could not target Bot One")
+            assert(monster, "death test monster could not spawn")
+            F.deathMonsterId = monster:getId()
+            assert(monster:selectTarget(player), "death test monster could not target Bot One")
             print("PLAYERBOT_GAMEPLAY_TEST DEATH_THREAT_SPAWNED")
             return
         end
@@ -196,6 +206,26 @@ function F.cleanupSpellTargets()
     end
     F.spellTargetId = 0
     F.spellSecondaryTargetId = 0
+end
+
+-- The harness releases this DB-only marker after observing service_discovered on
+-- the second recovered controller. Read SQL, not the player's cached storage.
+function F.waitForDeathService(playerId, attempts)
+    local player = Player(playerId)
+    assert(player and not player:isRemoved(), "Bot One disappeared while waiting for recovered service")
+    local marker = db.storeQuery("SELECT `value` FROM `player_storage` WHERE `player_id` = " ..
+        player:getGuid() .. " AND `key` = " .. F.fixtureReadyStorage)
+    local ready = false
+    if marker ~= false then
+        ready = result.getNumber(marker, "value") == 1
+        result.free(marker)
+    end
+    if ready then
+        F.prepareDeath(playerId)
+        return
+    end
+    assert(attempts > 1, "timed out waiting for recovered service evidence before final death")
+    addEvent(F.waitForDeathService, 250, playerId, attempts - 1)
 end
 
 function F.prepareDeath(playerId)

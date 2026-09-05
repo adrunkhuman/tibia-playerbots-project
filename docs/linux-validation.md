@@ -36,8 +36,14 @@ migration green. Reproduce them independently before changing gameplay policy.
 | `combat_readiness_low_wealth` | Sale cargo goes to the depot before service; the fixture expects 56 gp including proceeds but observes a 50 gp withdrawal. Isolate sale/service inputs. |
 | `magic_training_progression` | Equipment/service work consumes the funds intended for spell learning. Isolate the learning/affordability contract. |
 | `magic_training_post_hunt`, `magic_training_post_hunt_no_overflow` | The controller visits the depot before arbitration. Tests expect immediate post-hunt `Idle` arbitration; the detour also changes mana overflow. Decide intended hunt-end behavior first. |
-| `death` | The third fixture kill can precede service discovery after recovery. Replace the fixed delay with a bounded milestone wait. |
 | `real_depot` Lua verifier | After deposit completion, optional liquidation can withdraw a tool before the asynchronous inventory verifier runs. Separate deposit-boundary inventory checks from post-departure activity. A passing PowerShell scenario alone does not resolve this verifier race. |
+
+The first isolation follow-up validated `mainland_loop`,
+`real_depot_rejected_move`, `pickup_progression_bundle`, `goal_arbitration`,
+`magic_training_restart`, and `healing_resupply` with per-scenario environment
+reset/restore. `death` initially timed out because its prior killer survived at
+the depot. After fixture-owned killer cleanup and milestone-gated third death,
+the isolated death rerun passed in 34.6 seconds with its 45-second limit unchanged.
 
 The ordinary `corpse` scenario has both passing and failing traces: a defensive
 attacker classification previously prevented normal looting. The latest targeted
