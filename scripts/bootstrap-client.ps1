@@ -1,3 +1,5 @@
+#Requires -Version 7.0
+
 param(
     [switch]$Force
 )
@@ -7,7 +9,7 @@ $ErrorActionPreference = "Stop"
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $clientRoot = Join-Path $projectRoot "client"
 $thingsRoot = Join-Path $clientRoot "data\things\860"
-$executable = Join-Path $clientRoot "otclient_gl_x64.exe"
+$executable = Join-Path $clientRoot $(if ($IsLinux) { "otclient" } else { "otclient_gl_x64.exe" })
 $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) "angelion-client-$PID"
 
 $expectedExecutableHash = "3054ec603454cc71536851da979d11a02546f0348473b1f2a931ae4c10bf6b55"
@@ -29,10 +31,17 @@ if (-not (Test-Path -LiteralPath $clientRoot)) {
     throw "Client source directory not found: $clientRoot"
 }
 
+if (-not $IsWindows -and -not $IsLinux) {
+    throw "Client bootstrap supports Windows and Linux only."
+}
+if ($IsLinux -and -not (Test-Path -LiteralPath $executable -PathType Leaf)) {
+    throw "Build the Linux client at $executable first. Bootstrap installs assets, not a Linux executable."
+}
+
 New-Item -ItemType Directory -Path $tempRoot | Out-Null
 
 try {
-    if ($Force -or -not (Test-ExpectedHash -Path $executable -Expected $expectedExecutableHash)) {
+    if ($IsWindows -and ($Force -or -not (Test-ExpectedHash -Path $executable -Expected $expectedExecutableHash))) {
         if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
             throw "GitHub CLI is required to access the private client runtime release."
         }

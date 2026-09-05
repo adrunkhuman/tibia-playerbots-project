@@ -336,6 +336,8 @@ function Save-ScenarioFailureArtifacts {
 	$directory = Join-Path (Join-Path $FailureArtifactsPath $scenarioRunId) $safeName
 	$collectionErrors = [System.Collections.Generic.List[string]]::new()
 	try {
+		# .NET file APIs use the process directory, not PowerShell's current location.
+		$directory = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($directory)
 		[void][System.IO.Directory]::CreateDirectory($directory)
 	}
 	catch {

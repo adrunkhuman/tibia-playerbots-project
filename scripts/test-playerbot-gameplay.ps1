@@ -1,3 +1,5 @@
+#Requires -Version 7.0
+
 <#
 .SYNOPSIS
 Runs disposable playerbot gameplay scenarios against the local Compose stack.
@@ -159,12 +161,13 @@ if (-not $Focused) {
 	$Depot = $SlottedLoot = $SellLoot = $MainlandLoop = $SpellTraining = $SpellUse = $SpellCalibration = $MagicTraining = $true
 }
 
-try {
-	& docker info *> $null
-	if ($LASTEXITCODE -ne 0) {
-		throw "Docker is not running."
-	}
+# Fail before entering stack cleanup when the daemon is unavailable or access is denied.
+& docker info *> $null
+if ($LASTEXITCODE -ne 0) {
+	throw "Docker is unavailable or access is denied. Start Docker and use an explicitly authorized shell with daemon access; this script does not elevate privileges."
+}
 
+try {
 	if ($SkipBuild) {
 		& docker image inspect angelion-server:latest *> $null
 		if ($LASTEXITCODE -ne 0) {

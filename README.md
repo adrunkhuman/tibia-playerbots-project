@@ -97,9 +97,12 @@ changing either subtree.
 
 ## Running it
 
-The supported local environment uses Docker Desktop and PowerShell 7+. GitHub
-CLI authentication is needed only when the bootstrap script must download the
-pinned private client executable.
+Use PowerShell 7+ (`pwsh`) with Docker Desktop on Windows or Docker Engine with
+Compose v2 on Linux. Linux bootstrap uses a locally built `client/otclient` and
+installs the same verified assets; it does not download a Windows executable.
+GitHub CLI authentication is needed only to download the pinned Windows runtime.
+See [client runtime](docs/client-runtime.md) and [testing](docs/testing.md) for
+Linux usage and Docker privilege limits.
 
 ```powershell
 pwsh -File scripts/bootstrap-client.ps1
@@ -107,7 +110,8 @@ docker compose -f server/compose.yaml up --build --detach
 docker compose -f server/compose.yaml logs --follow server
 ```
 
-Launch `client/launch-angelion-redemption.cmd`. Ports `7171` and `7172` bind to
+On Windows, launch `client/launch-angelion-redemption.cmd`; on Linux, run
+`(cd client && ./otclient)` from a POSIX shell. Ports `7171` and `7172` bind to
 localhost only.
 
 The tracked accounts are local development defaults:
