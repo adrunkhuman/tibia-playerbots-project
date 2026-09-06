@@ -390,23 +390,22 @@ function F.verifyService(playerId, initialDepotBagCount, initialDepotSaleItemCou
     print("PLAYERBOT_GAMEPLAY_TEST SERVICE_PASS")
 end
 
-function F.verifyDepot(playerId, attempts)
+function F.verifyDepot(playerId, attempts, expectedLoot, expectedPriorGold)
     local player = Player(playerId)
     if not player or player:isRemoved() then
         if attempts > 0 then
-            addEvent(F.verifyDepot, 500, playerId, attempts - 1)
+            addEvent(F.verifyDepot, 500, playerId, attempts - 1, expectedLoot, expectedPriorGold)
         end
         return
     end
     local chest = player:getDepotChest(F.PlayerbotThaisLockerDepotId(), false)
-    local restartPhase = os.getenv("PLAYERBOT_DEPOT_RESTART_PHASE") or ""
-    local expectedLoot = restartPhase ~= "" and 2 or player:getStorageValue(F.depotFixtureStorage) == 2 and 3 or 2
-    local priorGoldPersists = restartPhase == "" or restartPhase == "deposit" or restartPhase == "depart"
-    local expectedPriorGold = priorGoldPersists and 1 or 0
-    local complete = chest and chest:getItemCountById(F.depotLootItemId) == expectedLoot and
+    -- Depart sets this one-shot marker and pauses in the same dispatcher turn.
+    -- Counts alone can match before equipment/tool deposits finish on restart.
+    local complete = player:getStorageValue(50096) == 1 and chest and
+        chest:getItemCountById(F.depotLootItemId) == expectedLoot and
         chest:getItemCountById(ITEM_GOLD_COIN) == expectedPriorGold
     if not complete and attempts > 0 then
-        addEvent(F.verifyDepot, 500, playerId, attempts - 1)
+        addEvent(F.verifyDepot, 500, playerId, attempts - 1, expectedLoot, expectedPriorGold)
         return
     end
     assert(complete, "real Thais depot did not retain prior contents and nested loot")
@@ -426,6 +425,8 @@ function F.verifyDepot(playerId, attempts)
     assert(player:getItemCount(F.potionItemId) >= 5 and chest:getItemCountById(F.potionItemId) == 0,
         "supply reserves were deposited")
     print("PLAYERBOT_GAMEPLAY_TEST DEPOT_PASS")
+    -- A paused controller emits no later telemetry to flush this pipe-backed stream.
+    io.flush()
 end
 
 function F.verifyDepotRiskFallback(playerId, attempts)

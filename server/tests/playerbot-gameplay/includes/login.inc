@@ -481,6 +481,11 @@ function F.login.onLogin(player)
         food:setParameter(CONDITION_PARAM_TICKS, 1200000)
         assert(player:addCondition(food), "depot fixture could not fill the food timer")
         local fixtureState = player:getStorageValue(F.depotFixtureStorage)
+        local restartPhase = os.getenv("PLAYERBOT_DEPOT_RESTART_PHASE") or ""
+        local verifierPhase = os.getenv("PLAYERBOT_DEPOT_VERIFIER_PHASE") or ""
+        local expectedLoot = fixtureState == 0 and 3 or 2
+        local expectedPriorGold = (verifierPhase == "approach" or verifierPhase == "locker" or
+            verifierPhase == "chest") and 0 or 1
         if fixtureState == -1 then
             for _, slot in ipairs({CONST_SLOT_HEAD, CONST_SLOT_ARMOR, CONST_SLOT_RIGHT, CONST_SLOT_LEFT, CONST_SLOT_LEGS, CONST_SLOT_FEET}) do
                 local item = player:getSlotItem(slot)
@@ -511,14 +516,15 @@ function F.login.onLogin(player)
             assert(backpack:addItem(2120, 1) and backpack:addItem(2120, 1) and
                 backpack:addItem(2554, 1) and backpack:addItem(2554, 1),
                 "depot fixture could not seed surplus navigation tools")
-            local restartPhase = os.getenv("PLAYERBOT_DEPOT_RESTART_PHASE") or ""
             assert(player:setStorageValue(F.depotFixtureStorage, restartPhase == "" and 0 or 2), "depot fixture state could not persist")
         elseif fixtureState == 0 then
             local backpack = player:getSlotItem(CONST_SLOT_BACKPACK)
             assert(backpack and backpack:addItem(F.depotLootItemId, 1), "depot fixture could not seed second-cycle loot")
             assert(player:setStorageValue(F.depotFixtureStorage, 2), "depot second-cycle state could not persist")
         end
-        addEvent(F.verifyDepot, 500, player:getId(), 360)
+        if restartPhase == "depart" and os.getenv("PLAYERBOT_DEPOT_MOVE_CASE") ~= "rejected" then
+            addEvent(F.verifyDepot, 500, player:getId(), 360, expectedLoot, expectedPriorGold)
+        end
         print("PLAYERBOT_GAMEPLAY_TEST DEPOT_START")
         return true
     end

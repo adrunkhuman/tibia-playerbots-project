@@ -29,6 +29,7 @@ pwsh -File scripts/test-playerbot-navigation-assertions.ps1
 pwsh -File scripts/test-playerbot-readiness-assertions.ps1
 pwsh -File scripts/test-playerbot-log-parsing.ps1
 pwsh -File scripts/test-playerbot-scenario-isolation.ps1
+pwsh -File scripts/test-playerbot-depot-scenario.ps1
 pwsh -File scripts/test-playerbot-death-scenario.ps1
 pwsh -File scripts/test-playerbot-magic-training-assertions.ps1
 ```
@@ -41,6 +42,21 @@ sh server/tests/playerbot_contracts.sh
 lua scripts/test-playerbot-fixture-isolation.lua
 lua scripts/test-playerbot-depot-fixture.lua
 lua scripts/test-playerbot-death-fixture.lua
+```
+
+The depot Lua regression checks login-time inventory expectations, bounded waiting
+for the Depart pause, and lost inventory/reserve failures. The PowerShell depot
+regression checks pause, verification, and stopped-database rearm ordering.
+Recovery uses `--no-deps` to keep provisioning from changing saved inventory;
+the Lua success marker is flushed explicitly because the paused bot emits no
+later telemetry.
+`PLAYERBOT_DEPOT_VERIFIER_PHASE` is Lua-fixture-only: it preserves the original
+restart phase's prior-gold expectation while recovery pauses at Depart.
+
+Run the affected live depot scenarios without the longer risk-fallback fixture:
+
+```powershell
+pwsh -File scripts/test-playerbot-gameplay.ps1 -Scenario real_depot,real_depot_restart_approach,real_depot_restart_locker,real_depot_restart_chest,real_depot_restart_deposit,real_depot_restart_depart,real_depot_partial_move,real_depot_rejected_move
 ```
 
 `server/tests/playerbotdepotworkflow_test.cpp` includes its compile command and
@@ -99,7 +115,7 @@ the changed behavior:
 | `-CombatReadiness` | Equipment, the one-potion return threshold and 10-potion restock target, optional-food hunting, generic food consumption and reclaimable capacity, low-wealth banking, carried-upgrade retention through service, and restart reconstruction. It does not cover the terminal case where total funds cannot buy enough potions to exceed the return threshold. |
 | `-EquipmentPurchases` | Justified purchase and equip verification, clean restart persistence, carried-upgrade recovery, displaced-item-space rejection, and rejected transactions. |
 | `-MainlandRewards` | Real Thais reward object from a teleported, high-capacity fixture; scale-armor claim and equip, displaced-item and bundle preservation, restart reconstruction, and non-null battle-axe rejection evidence. It does not prove normal traversal, realistic capacity limits, or a specific rejection reason. |
-| `-Depot` | Real Thais locker/chest discovery from Naji, including exact nearest-locker selection, carried-upgrade equipment, displaced and inferior equipment deposits, one carried rope and shovel, surplus tool deposits, nested loot, move verification, retries, and restart checkpoints. |
+| `-Depot` | Real Thais locker/chest discovery from Naji, including exact nearest-locker selection, carried-upgrade equipment, displaced and inferior equipment deposits, one carried rope and shovel, surplus tool deposits, nested loot, move verification, retries, and restart checkpoints. Both normal cycles, all five checkpoint recoveries, and partial moves verify completed inventory while paused at Depart, before optional selling. Rejected moves retain separate exact delta/retry/discard assertions. |
 | `-SlottedLoot` | Invalid-slot loot sale through a live seller, direct depot fallback without an eligible seller, protected-equipment retention, move verification, and interrupted-deposit restart recovery. |
 | `-SellLoot` | Local and remote-depot liquidation, capacity-bounded manifests, verified withdrawal, seller travel, sale ordering, and proceeds-funded resupply. The workflow excludes fluid containers and splashes; current fixtures do not seed those item types. |
 | `-MainlandLoop` | Two real Thais hunt/depot cycles, local services, depot fallback for remote-buyer loot, restart recovery, and teleport exclusion. |
@@ -148,7 +164,8 @@ failures. Docker builds reuse a persistent BuildKit `ccache` mount.
 Each selected scenario owns six environment settings: `PLAYERBOT_GAMEPLAY_MODE`
 (default `cycle`), `PLAYERBOT_HUNT_DURATION_SECONDS` (`1500`),
 `PLAYERBOT_RELOG_DELAY_SECONDS` (`5`), `PLAYERBOT_MAX_CONSECUTIVE_DEATHS` (`3`),
-`PLAYERBOT_DEPOT_RESTART_PHASE` (empty), and `PLAYERBOT_DEPOT_MOVE_CASE` (`normal`).
+`PLAYERBOT_DEPOT_RESTART_PHASE` (empty), `PLAYERBOT_DEPOT_VERIFIER_PHASE` (empty),
+and `PLAYERBOT_DEPOT_MOVE_CASE` (`normal`).
 `Invoke-Scenario` applies these defaults before the body; individual cases may
 then override them. It restores incoming values after success or failure.
 Skipped scenarios do not touch the environment. Suite CLI options (including
