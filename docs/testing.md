@@ -1,8 +1,5 @@
 # Testing
 
-See [Linux validation baseline](linux-validation.md) for migration evidence,
-known gameplay failures, and the test-isolation follow-up.
-
 Use PowerShell 7+ (`pwsh`) on Windows or Linux. The same scripts, scenario
 catalog, and assertions apply on both platforms. Linux needs Docker Engine and
 Compose v2; bootstrap also requires a locally built `client/otclient`.

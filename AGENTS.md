@@ -99,7 +99,9 @@ git subtree pull --prefix=client redemption-upstream main --squash
 
 - Never commit `Tibia.dat`, `Tibia.spr`, OTClient executables, logs, screenshots,
   minimap caches, or database volumes.
-- Restore the pinned client runtime and assets with:
+- Use PowerShell 7+ (`pwsh`) on Windows or Linux. On Windows, bootstrap restores
+  the pinned client runtime and assets. On Linux, first build `client/otclient`;
+  bootstrap installs verified assets and leaves that executable untouched:
 
 ```powershell
 pwsh -File scripts/bootstrap-client.ps1
@@ -114,7 +116,8 @@ pwsh -File scripts/bootstrap-client.ps1
 
 ## Server And Database
 
-- Docker Compose is the supported local server environment.
+- Docker Compose is the supported local server environment: Docker Desktop on
+  Windows, or Docker Engine with Compose v2 on Linux.
 - Keep the Compose project name `angelion` so resources do not depend on the
   checkout directory name.
 - Keep ports `7171` and `7172` bound to `127.0.0.1` unless external exposure is
@@ -178,6 +181,10 @@ pwsh -File scripts/bootstrap-client.ps1
   its container assertions together with any Compose rename.
 
 ## Verification
+
+See `docs/testing.md` for focused scenarios and non-Docker regression checks.
+Persistence tests must restart or recreate only the server with `--no-deps`;
+rerunning provisioning can refill equipment slots and invalidate saved-state checks.
 
 For server, infrastructure, or cross-stack changes, run at minimum:
 
