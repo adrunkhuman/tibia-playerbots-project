@@ -403,7 +403,13 @@ carried-gold reserve. If total gold cannot raise stock above the return
 threshold, service stops with `insufficient_potion_funds` without buying an
 unusable partial reserve. The cycle deposits carried money and withdraws up to
 100 gp without exceeding the bot's total available gold. It does not buy food
-merely because none is carried.
+merely because none is carried. The low-wealth regression isolates this banking
+contract with 56 bank gp, zero carried gp, ten selected health potions, and no
+sale cargo. Initial free capacity is 10 oz (1000 native units), below the 30 oz
+readiness threshold. Depositing the displaced 25 oz club restores 35 oz, above
+the 30 oz return threshold, without sale cargo; currency weight is reclaimable.
+It verifies a normal 56 gp withdrawal and retention of equipped
+upgrade 2384 before hunting; dedicated liquidation scenarios cover selling.
 Hunting ends after the configured duration or below 30 oz
 effective free capacity. Effective capacity is physical free capacity plus the
 weight of carried standard food and currency, because food can be consumed or
@@ -413,8 +419,9 @@ effective capacity above the reserve. Remaining top-level backpack loot is moved
 locker into that player's real depot chest. Depot locality and locker identity
 are independent: discovery enumerates
 all map-indexed lockers, then validates that each candidate still has its indexed
-depot ID. It ranks all standable adjacent squares by weighted current-position
-distance, locker ID, locker position, and approach position. It validates at
+depot ID. It ranks standable adjacent squares by topology distance, then breaks
+equal costs by floor-weighted distance from the current position, depot ID,
+locker position, and approach position. It validates at
 most two routes per scheduler decision and resumes the sorted queue on the next
 decision. A moved player rebuilds the queue from a new anchor. Failed approaches
 are suppressed for two seconds, then become

@@ -1,3 +1,5 @@
+#Requires -Version 7.0
+
 <#
 .SYNOPSIS
 Runs disposable playerbot gameplay scenarios against the local Compose stack.
@@ -117,6 +119,7 @@ $previousMode = $env:PLAYERBOT_GAMEPLAY_MODE
 $previousRelogDelay = $env:PLAYERBOT_RELOG_DELAY_SECONDS
 $previousMaximumDeaths = $env:PLAYERBOT_MAX_CONSECUTIVE_DEATHS
 $previousDepotRestartPhase = $env:PLAYERBOT_DEPOT_RESTART_PHASE
+$previousDepotVerifierPhase = $env:PLAYERBOT_DEPOT_VERIFIER_PHASE
 $previousDepotMoveCase = $env:PLAYERBOT_DEPOT_MOVE_CASE
 $timeoutOverridden = $PSBoundParameters.ContainsKey("TimeoutSeconds")
 $timings = [ordered]@{}
@@ -159,12 +162,13 @@ if (-not $Focused) {
 	$Depot = $SlottedLoot = $SellLoot = $MainlandLoop = $SpellTraining = $SpellUse = $SpellCalibration = $MagicTraining = $true
 }
 
-try {
-	& docker info *> $null
-	if ($LASTEXITCODE -ne 0) {
-		throw "Docker is not running."
-	}
+# Fail before entering stack cleanup when the daemon is unavailable or access is denied.
+& docker info *> $null
+if ($LASTEXITCODE -ne 0) {
+	throw "Docker is unavailable or access is denied. Start Docker and use an explicitly authorized shell with daemon access; this script does not elevate privileges."
+}
 
+try {
 	if ($SkipBuild) {
 		& docker image inspect angelion-server:latest *> $null
 		if ($LASTEXITCODE -ne 0) {
@@ -225,6 +229,7 @@ finally {
 		$env:PLAYERBOT_RELOG_DELAY_SECONDS = $previousRelogDelay
 		$env:PLAYERBOT_MAX_CONSECUTIVE_DEATHS = $previousMaximumDeaths
 		$env:PLAYERBOT_DEPOT_RESTART_PHASE = $previousDepotRestartPhase
+		$env:PLAYERBOT_DEPOT_VERIFIER_PHASE = $previousDepotVerifierPhase
 		$env:PLAYERBOT_DEPOT_MOVE_CASE = $previousDepotMoveCase
 		foreach ($timing in $timings.GetEnumerator()) {
 			"PLAYERBOT_GAMEPLAY_TIMING $($timing.Key)=$([Math]::Round($timing.Value.TotalSeconds, 2))s"

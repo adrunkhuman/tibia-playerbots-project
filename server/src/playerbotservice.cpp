@@ -485,6 +485,7 @@ void PlayerBotController::setCyclePhase(CyclePhase phase, const Position& positi
 
 void PlayerBotController::beginReturn(Player* player, const Position& position, const char* reason)
 {
+	pendingHuntCompletionReason.clear();
 	const auto traversalTarget = huntCoordinator.traversalTarget();
 	const uint32_t previousTarget = traversalTarget ? traversalTarget->id : 0;
 	g_game.playerCancelAttackAndFollow(playerId);
@@ -548,6 +549,7 @@ void PlayerBotController::finishHuntAndReturn(Player* player, const Position& po
 	     "\"decision_id\":" + std::to_string(progressionRuntime.decisionId()) +
 	         ",\"goal\":\"hunt\",\"result\":\"success\",\"reason\":" + jsonString(reason));
 	beginReturn(player, position, reason);
+	pendingHuntCompletionReason = reason;
 }
 
 void PlayerBotController::refreshItemValues()
@@ -1339,6 +1341,10 @@ bool PlayerBotController::pauseDepotFixtureForRestart(Player& player, DepotResta
 	if (!fixtureDriver.depotRestartObservation(player, checkpoint).pause) {
 		return false;
 	}
+	if (checkpoint == DepotRestartCheckpoint::Depart) {
+		player.closeContainer(depotChestContainerId);
+		player.closeContainer(depotLockerContainerId);
+	}
 	const char* phase = checkpoint == DepotRestartCheckpoint::Approach ? "approach" :
 	                    checkpoint == DepotRestartCheckpoint::Locker ? "locker" :
 	                    checkpoint == DepotRestartCheckpoint::Chest ? "chest" :
@@ -1534,6 +1540,7 @@ void PlayerBotController::processDeposit(Player* player, const Position& current
 		fields << "\"action\":\"deposit\",\"result\":\"complete\",\"depot_id\":" << command.snapshot.selected.depotId
 		       << ",\"container_id\":" << static_cast<uint32_t>(depotChestContainerId) << ",\"cycle\":" << huntCoordinator.completedHuntCycles();
 		emit("action_result", currentPosition, fields.str());
+		if (pauseDepotFixtureForRestart(*player, DepotRestartCheckpoint::Depart, currentPosition)) return;
 		Container* chest = player->getContainerByID(depotChestContainerId);
 		bool selectedAfterDeposit = false;
 		if (!fixtureDepot.synthetic && chest) {
@@ -1571,7 +1578,6 @@ void PlayerBotController::processDeposit(Player* player, const Position& current
 		}
 		player->closeContainer(depotChestContainerId);
 		player->closeContainer(depotLockerContainerId);
-		if (pauseDepotFixtureForRestart(*player, DepotRestartCheckpoint::Depart, currentPosition)) return;
 		if (selectedAfterDeposit) {
 			schedule(SCHEDULER_MINTICKS);
 			return;

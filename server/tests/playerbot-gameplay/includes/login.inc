@@ -8,6 +8,34 @@ function F.login.onLogin(player)
     end
 
 	local mode = os.getenv("PLAYERBOT_GAMEPLAY_MODE") or "cycle"
+    -- These two cases target pickupRewardStorage, not the other named reward
+    -- fixtures. Keep the finite fixture set isolated without filtering map discovery.
+    if mode == "progression" or mode == "arbitration" then
+        local restarting = mode == "progression" and player:getStorageValue(F.pickupRewardStorage) == 1
+        for _, storage in ipairs({F.mainlandRewardStorage, F.economicRewardStorage, F.nestedRewardStorage}) do
+            if restarting then
+                assert(player:getStorageValue(storage) == 1,
+                    "fixture did not persist competing reward isolation: " .. storage)
+            else
+                assert(player:setStorageValue(storage, 1),
+                    "fixture could not suppress competing reward: " .. storage)
+            end
+        end
+    -- The nearby currency reward otherwise consumes the magic-training window
+    -- or preempts the intended readiness work. Leave these cases' other rewards alone.
+    elseif mode == "readiness_low_wealth" or mode == "magic_training_progression" or
+        mode == "magic_training_haste" or mode == "magic_training_great_light" or mode == "magic_training_light" or
+        mode == "magic_training_refresh" or mode == "magic_training_failed" or mode == "magic_training_restart" or
+        mode == "magic_training_hunt" or mode == "magic_training_post_hunt" or mode == "magic_training_post_hunt_no_overflow" then
+        local restarting = mode == "magic_training_restart" and player:getStorageValue(50098) == 1
+        if restarting then
+            assert(player:getStorageValue(F.economicRewardStorage) == 1,
+                "fixture did not persist the claimed nearby currency reward")
+        else
+            assert(player:setStorageValue(F.economicRewardStorage, 1),
+                "fixture could not suppress the nearby currency reward")
+        end
+    end
 	F.selectHealthPotion(player)
     assert(mode == "mainland" or mode == "carlin_local_service" or mode == "cycle" or mode == "depot" or mode == "depot_risk_fallback" or mode == "slotted_loot_seller" or mode == "slotted_loot_no_seller" or mode == "sell_loot" or mode == "sell_loot_remote_depot" or mode == "navigation" or mode == "navigation_recovery" or mode == "carlin_service_route" or mode == "mutable_portal_route" or mode == "patrol_recovery" or mode == "target_approach" or mode == "target_approach_unreachable" or mode == "target_attacker_priority" or mode == "hunt_area_arrival" or mode == "corpse" or mode == "corpse_detour" or mode == "corpse_inaccessible" or mode == "death" or mode == "healing" or mode == "spell_use" or
         mode == "healing_resupply" or mode == "value" or mode == "progression" or mode == "progression_bundle" or
@@ -259,6 +287,13 @@ function F.login.onLogin(player)
         end
         local thais = Town(F.thaisTownId)
         assert(thais and player:setTown(thais) and player:setVocation(4), "magic training fixture could not select Thais Knight")
+        F.selectHealthPotion(player)
+        if mode ~= "magic_training_service" and mode ~= "magic_training_progression" then
+            -- Exclude incidental healing service; priority fixtures own their reserves.
+            -- Restart returns above so it uses persisted inventory instead of reseeding.
+            F.removeAll(player, F.potionItemId)
+            assert(player:addItem(F.potionItemId, 2), "magic training fixture could not seed the selected potion reserve")
+        end
         local requiredExperience = Game.getExperienceForLevel(20) - player:getExperience()
         if requiredExperience > 0 then player:addExperience(requiredExperience) end
         assert(player:getLevel() == 20, "magic training fixture could not select the required level")
@@ -304,9 +339,9 @@ function F.login.onLogin(player)
             player:forgetSpell("Find Person")
             F.removeAll(player, F.potionItemId)
             F.removeAll(player, F.meatItemId)
-            assert(player:addItem(F.potionItemId, 5) and player:addItem(F.meatItemId, 1), "magic training progression fixture could not prepare service reserves")
-            assert(player:removeMoney(player:getMoney()) and player:addMoney(100) and player:setBankBalance(305), "magic training progression fixture could not normalize spell training funds")
-            assert(player:getMoney() == 100 and player:getBankBalance() == 305, "magic training progression fixture has the wrong service and spell-training reserves")
+            assert(player:addItem(F.potionItemId, 10) and player:addItem(F.meatItemId, 2), "magic training progression fixture could not prepare service reserves")
+            assert(player:removeMoney(player:getMoney()) and player:addMoney(100) and player:setBankBalance(500), "magic training progression fixture could not normalize spell training funds")
+            assert(player:getMoney() == 100 and player:getBankBalance() == 500, "magic training progression fixture has the wrong service and spell-training reserves")
             local trainer = Npc("Gregor")
             assert(trainer, "magic training progression fixture could not find Gregor")
             local trainerPosition = trainer:getPosition()
@@ -356,12 +391,14 @@ function F.login.onLogin(player)
         elseif mode == "readiness_low_wealth" then
             local money = player:getMoney()
             if money > 0 then assert(player:removeMoney(money), "low-wealth fixture could not clear carried money") end
-            assert(player:setBankBalance(50), "low-wealth fixture could not set the bank balance")
+            assert(player:setBankBalance(56), "low-wealth fixture could not set the bank balance")
             local backpack = player:getSlotItem(CONST_SLOT_BACKPACK)
             assert(backpack and backpack:addItem(F.pickupRewardId, 1), "low-wealth fixture could not add a carried upgrade")
-            assert(backpack:addItem(F.saleItemId, 1) and backpack:addItem(F.saleItemId, 1) and backpack:addItem(F.saleItemId, 1), "low-wealth fixture could not add saleable capacity cargo")
+            F.removeAll(player, F.saleItemId) -- Banking must not depend on liquidation proceeds.
+            -- Start below readiness; depositing the displaced 25 oz club restores 35 oz,
+            -- above the 30 oz return threshold, without depending on sale cargo.
             local usedCapacity = player:getCapacity() - player:getFreeCapacity()
-            assert(player:setCapacity(usedCapacity), "low-wealth fixture could not exhaust physical capacity")
+            assert(player:setCapacity(usedCapacity + 1000), "low-wealth fixture could not set 10 oz free capacity")
             addEvent(F.verifyLowWealth, 500, player:getId(), 240)
         elseif mode == "readiness_food_capacity" then
             F.removeAll(player, F.meatItemId)
@@ -446,6 +483,11 @@ function F.login.onLogin(player)
         food:setParameter(CONDITION_PARAM_TICKS, 1200000)
         assert(player:addCondition(food), "depot fixture could not fill the food timer")
         local fixtureState = player:getStorageValue(F.depotFixtureStorage)
+        local restartPhase = os.getenv("PLAYERBOT_DEPOT_RESTART_PHASE") or ""
+        local verifierPhase = os.getenv("PLAYERBOT_DEPOT_VERIFIER_PHASE") or ""
+        local expectedLoot = fixtureState == 0 and 3 or 2
+        local expectedPriorGold = (verifierPhase == "approach" or verifierPhase == "locker" or
+            verifierPhase == "chest") and 0 or 1
         if fixtureState == -1 then
             for _, slot in ipairs({CONST_SLOT_HEAD, CONST_SLOT_ARMOR, CONST_SLOT_RIGHT, CONST_SLOT_LEFT, CONST_SLOT_LEGS, CONST_SLOT_FEET}) do
                 local item = player:getSlotItem(slot)
@@ -476,14 +518,15 @@ function F.login.onLogin(player)
             assert(backpack:addItem(2120, 1) and backpack:addItem(2120, 1) and
                 backpack:addItem(2554, 1) and backpack:addItem(2554, 1),
                 "depot fixture could not seed surplus navigation tools")
-            local restartPhase = os.getenv("PLAYERBOT_DEPOT_RESTART_PHASE") or ""
             assert(player:setStorageValue(F.depotFixtureStorage, restartPhase == "" and 0 or 2), "depot fixture state could not persist")
         elseif fixtureState == 0 then
             local backpack = player:getSlotItem(CONST_SLOT_BACKPACK)
             assert(backpack and backpack:addItem(F.depotLootItemId, 1), "depot fixture could not seed second-cycle loot")
             assert(player:setStorageValue(F.depotFixtureStorage, 2), "depot second-cycle state could not persist")
         end
-        addEvent(F.verifyDepot, 500, player:getId(), 360)
+        if restartPhase == "depart" and os.getenv("PLAYERBOT_DEPOT_MOVE_CASE") ~= "rejected" then
+            addEvent(F.verifyDepot, 500, player:getId(), 360, expectedLoot, expectedPriorGold)
+        end
         print("PLAYERBOT_GAMEPLAY_TEST DEPOT_START")
         return true
     end
@@ -535,6 +578,8 @@ function F.login.onLogin(player)
         return true
     end
     if mode == "death" then
+        -- The previous killer remains at the depot, outside the temple cleanup.
+        F.cleanupDeathMonster()
         F.deathLoginCount = F.deathLoginCount + 1
         F.removeNearbyMonsters(player)
         local position = player:getPosition()
@@ -543,7 +588,7 @@ function F.login.onLogin(player)
             addEvent(F.prepareDeath, 100, player:getId())
             print("PLAYERBOT_GAMEPLAY_TEST DEATH_START " .. F.deathLoginCount)
         else
-            addEvent(F.prepareDeath, 1500, player:getId())
+            addEvent(F.waitForDeathService, 250, player:getId(), 120)
             print("PLAYERBOT_GAMEPLAY_TEST DEATH_RECOVERY_STATE_PASS")
         end
         return true
@@ -593,6 +638,10 @@ function F.login.onLogin(player)
             addEvent(F.triggerArbitrationInterrupt, 500, player:getId())
             print("PLAYERBOT_GAMEPLAY_TEST GOAL_ARBITRATION_INTERRUPT_START")
         else
+            -- Keep ordinary cash service below the intended reward's utility.
+            -- Missing potions instead make reserve restocking the higher-priority goal.
+            F.removeAll(player, F.potionItemId)
+            assert(player:addItem(F.potionItemId, 10), "goal arbitration fixture could not prepare its potion reserve")
             print("PLAYERBOT_GAMEPLAY_TEST GOAL_ARBITRATION_START")
         end
         return true

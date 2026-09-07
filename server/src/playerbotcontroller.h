@@ -474,6 +474,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		PlayerBotDepotWorkflow depotWorkflow;
 		PlayerBotHuntCoordinator huntCoordinator;
 		PlayerBotProgressionRuntime progressionRuntime;
+		std::string pendingHuntCompletionReason;
 		PlayerBotRewardPlanner rewardPlanner;
 		PlayerBotEquipmentProviderPlanner equipmentProviderPlanner;
 		size_t equipmentProviderScanOffset = 0;

@@ -113,7 +113,7 @@ class PlayerBotDepotWorkflow
 		void clearDiscovery();
 		void recordCandidate(PlayerBotDepotCandidate candidate);
 		void recordUnsafeCandidate(const PlayerBotDepotObservation& observation);
-		void sortCandidates();
+		void sortCandidates(const Position& origin);
 		bool hasCandidates() const { return !discoveryCandidates.empty(); }
 		bool hasNextCandidate() const;
 		std::optional<PlayerBotDepotCandidate> takeNextCandidate();

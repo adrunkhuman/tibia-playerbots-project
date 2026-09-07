@@ -1,5 +1,65 @@
 # Testing
 
+Use PowerShell 7+ (`pwsh`) on Windows or Linux. The same scripts, scenario
+catalog, and assertions apply on both platforms. Linux needs Docker Engine and
+Compose v2; bootstrap also requires a locally built `client/otclient`.
+Commands containing `$env:` or `Remove-Item` below run inside PowerShell, not Bash.
+The `pwsh -File ...` commands work from either shell at the repository root.
+
+If Docker requires elevation on your Linux setup, run Docker commands and the
+gameplay driver from an explicitly authorized elevated shell; the scripts do not
+elevate themselves or require changes to socket permissions or group membership.
+Elevated test runs can leave root-owned failure artifacts. The suite resets the
+disposable `angelion` database and removes its stack unless `-KeepStack` is set;
+do not run it alongside a normal development session. A failed daemon-access preflight does not attempt stack cleanup.
+
+The spell contract check needs neither Docker nor elevation:
+
+```powershell
+pwsh -File scripts/test-knight-spell-contract.ps1
+```
+
+Run the non-Docker telemetry assertion regressions:
+
+```powershell
+pwsh -File scripts/test-playerbot-navigation-assertions.ps1
+pwsh -File scripts/test-playerbot-readiness-assertions.ps1
+pwsh -File scripts/test-playerbot-log-parsing.ps1
+pwsh -File scripts/test-playerbot-scenario-isolation.ps1
+pwsh -File scripts/test-playerbot-depot-scenario.ps1
+pwsh -File scripts/test-playerbot-death-scenario.ps1
+pwsh -File scripts/test-playerbot-magic-training-assertions.ps1
+```
+
+On Linux, pure contract checks require a C++17 compiler; fixture-isolation checks
+require Lua or LuaJIT. Run these from the repository root:
+
+```sh
+sh server/tests/playerbot_contracts.sh
+lua scripts/test-playerbot-fixture-isolation.lua
+lua scripts/test-playerbot-depot-fixture.lua
+lua scripts/test-playerbot-death-fixture.lua
+```
+
+The depot Lua regression checks login-time inventory expectations, bounded waiting
+for the Depart pause, and lost inventory/reserve failures. The PowerShell depot
+regression checks pause, verification, and stopped-database rearm ordering.
+Recovery uses `--no-deps` to keep provisioning from changing saved inventory;
+the Lua success marker is flushed explicitly because the paused bot emits no
+later telemetry.
+`PLAYERBOT_DEPOT_VERIFIER_PHASE` is Lua-fixture-only: it preserves the original
+restart phase's prior-gold expectation while recovery pauses at Depart.
+
+Run the affected live depot scenarios without the longer risk-fallback fixture:
+
+```powershell
+pwsh -File scripts/test-playerbot-gameplay.ps1 -Scenario real_depot,real_depot_restart_approach,real_depot_restart_locker,real_depot_restart_chest,real_depot_restart_deposit,real_depot_restart_depart,real_depot_partial_move,real_depot_rejected_move
+```
+
+`server/tests/playerbotdepotworkflow_test.cpp` includes its compile command and
+requires the server development headers. These checks supplement, not replace,
+live gameplay validation.
+
 ## Server smoke test
 
 For server, infrastructure, or cross-stack changes, run:
@@ -52,7 +112,7 @@ the changed behavior:
 | `-CombatReadiness` | Equipment, the one-potion return threshold and 10-potion restock target, optional-food hunting, generic food consumption and reclaimable capacity, low-wealth banking, carried-upgrade retention through service, and restart reconstruction. It does not cover the terminal case where total funds cannot buy enough potions to exceed the return threshold. |
 | `-EquipmentPurchases` | Justified purchase and equip verification, clean restart persistence, carried-upgrade recovery, displaced-item-space rejection, and rejected transactions. |
 | `-MainlandRewards` | Real Thais reward object from a teleported, high-capacity fixture; scale-armor claim and equip, displaced-item and bundle preservation, restart reconstruction, and non-null battle-axe rejection evidence. It does not prove normal traversal, realistic capacity limits, or a specific rejection reason. |
-| `-Depot` | Real Thais locker/chest discovery from Naji, including exact nearest-locker selection, carried-upgrade equipment, displaced and inferior equipment deposits, one carried rope and shovel, surplus tool deposits, nested loot, move verification, retries, and restart checkpoints. |
+| `-Depot` | Real Thais locker/chest discovery from Naji, including exact nearest-locker selection, carried-upgrade equipment, displaced and inferior equipment deposits, one carried rope and shovel, surplus tool deposits, nested loot, move verification, retries, and restart checkpoints. Both normal cycles, all five checkpoint recoveries, and partial moves verify completed inventory while paused at Depart, before optional selling. Rejected moves retain separate exact delta/retry/discard assertions. |
 | `-SlottedLoot` | Invalid-slot loot sale through a live seller, direct depot fallback without an eligible seller, protected-equipment retention, move verification, and interrupted-deposit restart recovery. |
 | `-SellLoot` | Local and remote-depot liquidation, capacity-bounded manifests, verified withdrawal, seller travel, sale ordering, and proceeds-funded resupply. The workflow excludes fluid containers and splashes; current fixtures do not seed those item types. |
 | `-MainlandLoop` | Two real Thais hunt/depot cycles, local services, depot fallback for remote-buyer loot, restart recovery, and teleport exclusion. |
@@ -86,6 +146,33 @@ not prove that the image matches the worktree. `-KeepStack` preserves the final
 stack for debugging. `-TimeoutSeconds` accepts `30` through `3600` and replaces
 each scenario's fail-fast deadline.
 
+`combat_readiness_low_wealth` isolates banking from selling: zero carried gold,
+56 gp in the bank, ten selected health potions, a carried upgrade (2384), and
+no rabbit sale cargo. Setup leaves 10 oz free capacity (`usedCapacity + 1000`
+in native units), below the 30 oz readiness threshold. Depositing the displaced
+25 oz club (2382) restores 35 oz, above the 30 oz return threshold. This forces
+readiness → equip → depot → bank without sale proceeds or a zero-capacity dead
+end; withdrawn currency weight remains reclaimable.
+It requires exactly one normal 56 gp withdrawal (bank
+56 → 0), the Lua-verified 56 gp carried balance and equipped upgrade, a hunt
+start, and no sale or terminal event. Liquidation remains in `sell_loot` and
+`sell_loot_remote_depot`: their assertions check manifest withdrawal and sales;
+the local case also checks proceeds-funded potion resupply.
+
+`magic_training_progression` seeds ten selected health potions, two meat,
+100 carried gp and 500 bank gp. This leaves the 100 gp reserve plus the
+500 gp Great Light price. Only nearby currency reward 50082 is marked claimed.
+The scenario ends at `learn_spell` selection over feasible magic training
+(utilities 550 and 350); it does not wait for NPC dialogue or spell payment.
+`magic_training_reserve` and `magic_training_service` retain their intentional
+low-mana and capacity/service setups.
+
+Local regressions: `lua scripts/test-playerbot-fixture-isolation.lua` and
+`pwsh -File scripts/test-playerbot-readiness-assertions.ps1`. Live coverage uses
+`-Focused -CombatReadiness` and `-Focused -MagicTraining -MagicTrainingCase`
+with each of `magic_training_progression`, `magic_training_reserve`, and
+`magic_training_service` on `scripts/test-playerbot-gameplay.ps1`.
+
 Use `-MagicTrainingCase <name>` with `-Focused` to run one case from the
 16-scenario magic-training matrix without paying for the other server
 recreations. PowerShell validates the case name from the supported mode list.
@@ -97,6 +184,22 @@ pwsh -File scripts/test-playerbot-gameplay.ps1 -Healing -Focused -SkipBuild
 
 The driver includes Compose status and the last 80 server-log lines in timeout
 failures. Docker builds reuse a persistent BuildKit `ccache` mount.
+
+Each selected scenario owns six environment settings: `PLAYERBOT_GAMEPLAY_MODE`
+(default `cycle`), `PLAYERBOT_HUNT_DURATION_SECONDS` (`1500`),
+`PLAYERBOT_RELOG_DELAY_SECONDS` (`5`), `PLAYERBOT_MAX_CONSECUTIVE_DEATHS` (`3`),
+`PLAYERBOT_DEPOT_RESTART_PHASE` (empty), `PLAYERBOT_DEPOT_VERIFIER_PHASE` (empty),
+and `PLAYERBOT_DEPOT_MOVE_CASE` (`normal`).
+`Invoke-Scenario` applies these defaults before the body; individual cases may
+then override them. It restores incoming values after success or failure.
+Skipped scenarios do not touch the environment. Suite CLI options (including
+`-TimeoutSeconds`) and unrelated environment settings remain unchanged; this
+is test-harness ownership, not a change to production configuration.
+
+The death fixture's third kill waits for `service_discovered` after the second
+recovered controller reports online. The driver releases a DB-only fixture marker;
+Lua polls it for at most 30 seconds. The scenario's overall 45-second deadline and
+existing recovery/terminal assertions remain unchanged.
 
 Independent scenarios still receive a fresh database and server process. The
 database container remains healthy between them to avoid repeated MariaDB and

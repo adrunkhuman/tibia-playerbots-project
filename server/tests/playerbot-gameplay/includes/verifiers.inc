@@ -10,7 +10,7 @@ function F.verifyReadiness(playerId, mode, attempts)
     if mode == "retention" then ready = ready and player:getItemCount(2050) >= 1 and player:getItemCount(F.starterWeaponId) >= 1 end
     if mode == "no_food" then ready = ready and player:getItemCount(F.meatItemId) == 0 end
     if mode == "food_capacity" then
-        ready = ready and player:getFreeCapacity() == ItemType(2696):getWeight() * 6 and player:getItemCount(2696) == 2
+        ready = ready and player:getFreeCapacity() == ItemType(2696):getWeight() * 8 and player:getItemCount(2696) == 0
     end
     if not ready and attempts > 0 then
         addEvent(F.verifyReadiness, 500, playerId, mode, attempts - 1)
@@ -32,14 +32,14 @@ end
 function F.verifyLowWealth(playerId, attempts)
     local player = Player(playerId)
     assert(player and not player:isRemoved(), "Bot One disappeared during low-wealth fixture")
-    if (player:getMoney() ~= 56 or player:getBankBalance() ~= 0 or
-        player:getSlotItem(CONST_SLOT_LEFT):getId() ~= F.pickupRewardId) and attempts > 0 then
+    local weapon = player:getSlotItem(CONST_SLOT_LEFT)
+    local ready = player:getMoney() == 56 and player:getBankBalance() == 0 and
+        weapon and weapon:getId() == F.pickupRewardId and player:getItemCount(F.saleItemId) == 0
+    if not ready and attempts > 0 then
         addEvent(F.verifyLowWealth, 500, playerId, attempts - 1)
         return
     end
-    assert(player:getMoney() == 56 and player:getBankBalance() == 0 and
-        player:getSlotItem(CONST_SLOT_LEFT):getId() == F.pickupRewardId,
-        "service did not carry the available gold below the normal reserve")
+    assert(ready, "service did not retain the upgrade and carry exactly 56 gold without sale cargo")
     print("PLAYERBOT_GAMEPLAY_TEST READINESS_LOW_WEALTH_PASS")
 end
 
@@ -390,23 +390,22 @@ function F.verifyService(playerId, initialDepotBagCount, initialDepotSaleItemCou
     print("PLAYERBOT_GAMEPLAY_TEST SERVICE_PASS")
 end
 
-function F.verifyDepot(playerId, attempts)
+function F.verifyDepot(playerId, attempts, expectedLoot, expectedPriorGold)
     local player = Player(playerId)
     if not player or player:isRemoved() then
         if attempts > 0 then
-            addEvent(F.verifyDepot, 500, playerId, attempts - 1)
+            addEvent(F.verifyDepot, 500, playerId, attempts - 1, expectedLoot, expectedPriorGold)
         end
         return
     end
     local chest = player:getDepotChest(F.PlayerbotThaisLockerDepotId(), false)
-    local restartPhase = os.getenv("PLAYERBOT_DEPOT_RESTART_PHASE") or ""
-    local expectedLoot = restartPhase ~= "" and 2 or player:getStorageValue(F.depotFixtureStorage) == 2 and 3 or 2
-    local priorGoldPersists = restartPhase == "" or restartPhase == "deposit" or restartPhase == "depart"
-    local expectedPriorGold = priorGoldPersists and 1 or 0
-    local complete = chest and chest:getItemCountById(F.depotLootItemId) == expectedLoot and
+    -- Depart sets this one-shot marker and pauses in the same dispatcher turn.
+    -- Counts alone can match before equipment/tool deposits finish on restart.
+    local complete = player:getStorageValue(50096) == 1 and chest and
+        chest:getItemCountById(F.depotLootItemId) == expectedLoot and
         chest:getItemCountById(ITEM_GOLD_COIN) == expectedPriorGold
     if not complete and attempts > 0 then
-        addEvent(F.verifyDepot, 500, playerId, attempts - 1)
+        addEvent(F.verifyDepot, 500, playerId, attempts - 1, expectedLoot, expectedPriorGold)
         return
     end
     assert(complete, "real Thais depot did not retain prior contents and nested loot")
@@ -422,8 +421,12 @@ function F.verifyDepot(playerId, attempts)
     assert(player:getItemCount(2120) == 1 and player:getItemCount(2554) == 1, "navigation tool reserves were not retained")
     assert(chest:getItemCountById(2120) == 2 and chest:getItemCountById(2554) == 2,
         "surplus navigation tools were not deposited")
-    assert(player:getItemCount(F.potionItemId) >= 5 and player:getItemCount(F.meatItemId) >= 1, "supply reserves were deposited")
+    -- This fixture seeds cheese (checked above), not meat. Potions must stay carried.
+    assert(player:getItemCount(F.potionItemId) >= 5 and chest:getItemCountById(F.potionItemId) == 0,
+        "supply reserves were deposited")
     print("PLAYERBOT_GAMEPLAY_TEST DEPOT_PASS")
+    -- A paused controller emits no later telemetry to flush this pipe-backed stream.
+    io.flush()
 end
 
 function F.verifyDepotRiskFallback(playerId, attempts)

@@ -3,24 +3,32 @@
 ## Bootstrap
 
 The OTClient executable and Tibia DAT/SPR assets are excluded from Git. Install
-and verify the pinned runtime with:
+and verify the runtime assets with PowerShell 7+ on Windows or Linux:
 
 ```powershell
 pwsh -File scripts/bootstrap-client.ps1
 ```
 
-GitHub CLI authentication is required only when the private executable must be
-downloaded. The script verifies SHA-256 for the executable, asset archive,
-`Tibia.dat`, and `Tibia.spr`; do not weaken these checks.
+On Windows, GitHub CLI authentication is required only when the pinned private
+executable must be downloaded. On Linux, build `client/otclient` locally first;
+bootstrap requires that file and leaves it untouched, including with `-Force`.
+No Linux binary is published or downloaded, and the local build has no pinned
+hash. The script preserves SHA-256 verification for the Windows executable,
+asset archive, `Tibia.dat`, and `Tibia.spr`. `-Force` reinstalls assets on both
+platforms and the executable on Windows only.
 
 | File | Runtime path |
 | ---- | ------------ |
-| OTClient | `client/otclient_gl_x64.exe` |
+| OTClient (Windows) | `client/otclient_gl_x64.exe` |
+| OTClient (Linux local build) | `client/otclient` |
 | DAT | `client/data/things/860/Tibia.dat` |
 | SPR | `client/data/things/860/Tibia.spr` |
 
-Launch `client/launch-angelion-redemption.cmd`. The isolated profile is
-`angelion-redemption`.
+On Windows, launch `client/launch-angelion-redemption.cmd`. On Linux, run
+`(cd client && ./otclient)` from a POSIX shell, or `Push-Location client;
+./otclient; Pop-Location` in PowerShell. The isolated profile remains
+`angelion-redemption`. Bootstrap does not validate native build dependencies,
+executable permissions, display/input behavior, or in-game compatibility.
 
 ## Compatibility contract
 
@@ -43,9 +51,9 @@ feature boundaries in `client/modules/game_features/features.lua`.
 ## Asset boundary
 
 Client asset auto-installation is disabled. `scripts/bootstrap-client.ps1` is
-the only supported runtime source; the client's auto-install documentation
+the supported asset installer (and Windows runtime source); the client's auto-install documentation
 describes an upstream capability, not project behavior.
 
 Never commit `Tibia.dat`, `Tibia.spr`, OTClient executables, logs, screenshots,
-or minimap caches. When changing the runtime, update the durable private release
-asset, expected hashes, and this documentation together.
+or minimap caches. When changing the pinned Windows runtime or assets, update
+the durable private release asset, expected hashes, and this documentation together.

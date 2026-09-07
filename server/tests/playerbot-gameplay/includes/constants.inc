@@ -55,6 +55,7 @@ F.depotFixtureStorage = 50095
 F.spellTrainingStorage = 50097
 F.fixtureReadyStorage = 50099
 F.deathLoginCount = 0
+F.deathMonsterId = 0
 F.spellTargetId = 0
 F.spellSecondaryTargetId = 0
 F.spellSupportObserved = false

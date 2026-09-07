@@ -138,16 +138,26 @@
 		Invoke-Scenario -Name "real_depot" -DefaultTimeoutSeconds 240 -Body {
 			Invoke-Compose down --volumes --remove-orphans
 			$env:PLAYERBOT_GAMEPLAY_MODE = "depot"
-			$env:PLAYERBOT_DEPOT_RESTART_PHASE = ""
+			# Stop before optional liquidation can withdraw freshly deposited cargo.
+			$env:PLAYERBOT_DEPOT_RESTART_PHASE = "depart"
 			$env:PLAYERBOT_DEPOT_MOVE_CASE = "normal"
 			Invoke-Compose up --detach
 			Invoke-DatabaseCommand -Query "INSERT INTO player_depotitems (player_id, sid, pid, itemtype, count, attributes) SELECT id, 9001, 2, 2684, 7, X'' FROM players WHERE name = 'Rook Tester'"
-			$firstCycleLogs = Wait-ForLog -Pattern '"action":"deposit","result":"complete"'
+			Wait-ForLog -Pattern '"action":"depot_restart_checkpoint","result":"paused","phase":"depart"' | Out-Null
+			$firstCycleLogs = Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST DEPOT_PASS'
 			Assert-DepotEvents -Logs $firstCycleLogs -ExpectedDepositedCount 2 -ExpectedEquipmentDeposits 2 -ExpectedToolDeposits 4
 
 			Invoke-Compose stop server
-			Invoke-Compose up --detach server
-			$secondCycleLogs = Wait-ForLatestServerGenerationLog -Pattern '"action":"deposit","result":"complete"'
+			# The checkpoint suppresses restart cargo in checkpoint-only cases. Re-arm
+			# normal second-cycle seeding only after this cycle is safely persisted.
+			Invoke-DatabaseCommand -Query "UPDATE player_storage JOIN players ON players.id = player_storage.player_id SET player_storage.value = 0 WHERE players.name = 'Bot One' AND player_storage.key = 50095 AND player_storage.value = 2"
+			$fixtureState = Invoke-DatabaseScalar -Query "SELECT value FROM player_storage JOIN players ON players.id = player_storage.player_id WHERE players.name = 'Bot One' AND player_storage.key = 50095"
+			if ($fixtureState -ne 0) { throw "Could not re-arm real_depot second-cycle cargo." }
+			Invoke-DatabaseCommand -Query "UPDATE player_storage JOIN players ON players.id = player_storage.player_id SET player_storage.value = 0 WHERE players.name = 'Bot One' AND player_storage.key = 50096"
+			# Fresh logs, no provisioning: recovery must load only the saved inventory.
+			Invoke-Compose up --no-deps --detach --force-recreate server
+			Wait-ForLatestServerGenerationLog -Pattern '"action":"depot_restart_checkpoint","result":"paused","phase":"depart"' | Out-Null
+			$secondCycleLogs = Wait-ForLatestServerGenerationLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST DEPOT_PASS'
 			Assert-DepotEvents -Logs $secondCycleLogs -ExpectedDepositedCount 1 -ExpectedEquipmentDeposits 0
 			$sentinelCount = Invoke-DatabaseScalar -Query "SELECT COALESCE(SUM(count), 0) FROM player_depotitems JOIN players ON players.id = player_depotitems.player_id WHERE players.name = 'Rook Tester' AND pid = 2 AND itemtype = 2684"
 			if ($sentinelCount -ne 7) {
@@ -175,8 +185,12 @@
 					throw "Depot $phase restart checkpoint did not pause exactly once. checkpoint=$($checkpointEvents.Count), transition=$($pausedTransitions.Count)."
 				}
 				Invoke-Compose stop server
-				Invoke-Compose up --detach server
-				$recoveryLogs = Wait-ForLatestServerGenerationLog -Pattern '"action":"deposit","result":"complete"'
+				Invoke-DatabaseCommand -Query "UPDATE player_storage JOIN players ON players.id = player_storage.player_id SET player_storage.value = 0 WHERE players.name = 'Bot One' AND player_storage.key = 50096"
+				$env:PLAYERBOT_DEPOT_VERIFIER_PHASE = $phase
+				$env:PLAYERBOT_DEPOT_RESTART_PHASE = "depart"
+				Invoke-Compose up --no-deps --detach --force-recreate server
+				Wait-ForLatestServerGenerationLog -Pattern '"action":"depot_restart_checkpoint","result":"paused","phase":"depart"' | Out-Null
+				$recoveryLogs = Wait-ForLatestServerGenerationLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST DEPOT_PASS'
 				Assert-DepotRecoveryEvents -Logs $recoveryLogs -Phase $phase
 			}
 		}
@@ -184,10 +198,11 @@
 		Invoke-Scenario -Name "real_depot_partial_move" -DefaultTimeoutSeconds 120 -Body {
 			Invoke-Compose down --volumes --remove-orphans
 			$env:PLAYERBOT_GAMEPLAY_MODE = "depot"
-			$env:PLAYERBOT_DEPOT_RESTART_PHASE = ""
+			$env:PLAYERBOT_DEPOT_RESTART_PHASE = "depart"
 			$env:PLAYERBOT_DEPOT_MOVE_CASE = "partial"
 			Invoke-Compose up --detach
-			$partialLogs = Wait-ForLog -Pattern '"action":"deposit","result":"complete","depot_id":2'
+			Wait-ForLog -Pattern '"action":"depot_restart_checkpoint","result":"paused","phase":"depart"' | Out-Null
+			$partialLogs = Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST DEPOT_PASS'
 			$events = @(ConvertFrom-PlayerbotLogs -Logs $partialLogs)
 			$partial = @($events | Where-Object {
 				$_.action -eq "deposit" -and $_.result -eq "partial" -and $_.item_id -eq 2684 -and

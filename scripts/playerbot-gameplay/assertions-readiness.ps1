@@ -1,3 +1,22 @@
+function Assert-LowWealthEvents {
+    param([string]$Logs)
+
+    $events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
+    $withdrawals = @($events | Where-Object { $_.action -eq 'bank_withdraw' })
+    $upgrades = @($events | Where-Object { $_.action -eq 'equip_readiness' -and $_.result -eq 'success' })
+    $hunts = @($events | Where-Object { $_.event -eq 'action_result' -and $_.action -eq 'hunt_cycle' -and $_.result -eq 'started' })
+    $forbidden = @($events | Where-Object { $_.action -eq 'sell' -or $_.event -eq 'terminal' })
+    if ($withdrawals.Count -ne 1 -or $withdrawals[0].event -ne 'action_result' -or
+        $withdrawals[0].result -ne 'success' -or $withdrawals[0].count -ne 56 -or
+        $withdrawals[0].bank_before -ne 56 -or $withdrawals[0].bank_after -ne 0 -or
+        $upgrades.Count -ne 1 -or $upgrades[0].event -ne 'action_result' -or
+        $upgrades[0].result -ne 'success' -or $upgrades[0].item_id -ne 2384 -or
+        $hunts.Count -lt 1 -or $forbidden.Count -ne 0 -or
+        $Logs -notmatch '(?m)^PLAYERBOT_GAMEPLAY_TEST READINESS_LOW_WEALTH_PASS\r?$') {
+        throw 'Low-wealth banking did not retain the upgrade and carry exactly 56 gp into hunting without sales.'
+    }
+}
+
 function Assert-CombatReadinessEvents {
     param([string]$Logs, [string]$Mode)
 
@@ -52,18 +71,26 @@ function Assert-CombatReadinessEvents {
         if ($equip.Count -ne 1) { throw "Carried legal weapon was not equipped and verified." }
     }
 	if ($Mode -eq "food_capacity") {
-		$capacity = @($latest.requirements | Where-Object {
-			$_.name -eq "free_capacity" -and $_.ready -and $_.current -lt $_.minimum -and
-			$_.reclaimable_food -ge 3200 -and $_.effective -ge $_.minimum
+		$initial = $readiness[0]
+		$capacity = @($initial.requirements | Where-Object {
+			$_.name -eq "free_capacity" -and $_.ready -and $_.current -eq 0 -and
+			$_.reclaimable_food -eq 3200 -and $_.effective -ge $_.minimum
 		})
-		$food = @($latest.requirements | Where-Object {
-			$_.name -eq "food" -and $_.count -eq 8 -and $_.reclaimable_weight -ge 3200
+		$food = @($initial.requirements | Where-Object {
+			$_.name -eq "food" -and $_.count -eq 8 -and $_.reclaimable_weight -eq 3200
 		})
-		$service = @($events | Where-Object { $_.selected_recovery -eq "service" })
+		$service = @($events | Where-Object { $_.selected_recovery -eq "service" -or $_.action -eq "buy_meat" })
 		$hunts = @($events | Where-Object { $_.action -eq "hunt_cycle" -and $_.result -eq "started" })
-		$eaten = @($events | Where-Object { $_.action -eq "eat" -and $_.result -eq "success" -and $_.item_id -eq 2696 })
-		if ($capacity.Count -ne 1 -or $food.Count -ne 1 -or $service.Count -ne 0 -or $hunts.Count -lt 1 -or $eaten.Count -ne 6) {
+		$eaten = @($events | Where-Object { $_.action -eq "eat" })
+		if ($capacity.Count -ne 1 -or $food.Count -ne 1 -or $service.Count -ne 0 -or $hunts.Count -lt 1 -or $eaten.Count -ne 8) {
 			throw "Food weight did not remain reclaimable when physical capacity was exhausted."
+		}
+		for ($i = 0; $i -lt 8; $i++) {
+			$eat = $eaten[$i]
+			if ($eat.event -ne "action_result" -or $eat.result -ne "success" -or $eat.item_id -ne 2696 -or
+				$eat.count -ne 1 -or $eat.inventory_count -ne (7 - $i) -or $eat.food_ticks -le 0) {
+				throw "Food consumption did not verify all eight initial cheeses in order."
+			}
 		}
 	}
     if ($Mode -eq "retention") {

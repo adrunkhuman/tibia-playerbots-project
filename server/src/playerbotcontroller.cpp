@@ -1429,8 +1429,8 @@ void PlayerBotController::navigate()
 		schedule(blockedRouteRetryInterval);
 		return;
 	}
-	const bool waitingForRecovery = turnRouter.cyclePhase() == CyclePhase::Service &&
-	                                survivalRuntime.needsHealing(survivalSnapshot(*player));
+	const bool waitingForRecovery = PlayerBotGoalPlanner::shouldContinueRecovery(
+	    progressionRuntime.activeGoal(), survivalRuntime.needsHealing(survivalSnapshot(*player)));
 	if (!accessingReward && !progressionRuntime.session().active(PlayerBotProgressionProcedure::OracleDeparture) &&
 	    departurePlanner.required(departureSnapshot(*player)) && !waitingForRecovery) {
 		if (selectTopLevelGoal(*player, currentPosition, "level_eight_interrupt")) {
