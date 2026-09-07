@@ -23,7 +23,7 @@ function F.login.onLogin(player)
         end
     -- The nearby currency reward otherwise consumes the magic-training window
     -- or preempts the intended readiness work. Leave these cases' other rewards alone.
-    elseif mode == "readiness_low_wealth" or
+    elseif mode == "readiness_low_wealth" or mode == "magic_training_progression" or
         mode == "magic_training_haste" or mode == "magic_training_great_light" or mode == "magic_training_light" or
         mode == "magic_training_refresh" or mode == "magic_training_failed" or mode == "magic_training_restart" or
         mode == "magic_training_hunt" or mode == "magic_training_post_hunt" or mode == "magic_training_post_hunt_no_overflow" then
@@ -339,9 +339,9 @@ function F.login.onLogin(player)
             player:forgetSpell("Find Person")
             F.removeAll(player, F.potionItemId)
             F.removeAll(player, F.meatItemId)
-            assert(player:addItem(F.potionItemId, 5) and player:addItem(F.meatItemId, 1), "magic training progression fixture could not prepare service reserves")
-            assert(player:removeMoney(player:getMoney()) and player:addMoney(100) and player:setBankBalance(305), "magic training progression fixture could not normalize spell training funds")
-            assert(player:getMoney() == 100 and player:getBankBalance() == 305, "magic training progression fixture has the wrong service and spell-training reserves")
+            assert(player:addItem(F.potionItemId, 10) and player:addItem(F.meatItemId, 2), "magic training progression fixture could not prepare service reserves")
+            assert(player:removeMoney(player:getMoney()) and player:addMoney(100) and player:setBankBalance(500), "magic training progression fixture could not normalize spell training funds")
+            assert(player:getMoney() == 100 and player:getBankBalance() == 500, "magic training progression fixture has the wrong service and spell-training reserves")
             local trainer = Npc("Gregor")
             assert(trainer, "magic training progression fixture could not find Gregor")
             local trainerPosition = trainer:getPosition()
@@ -391,12 +391,14 @@ function F.login.onLogin(player)
         elseif mode == "readiness_low_wealth" then
             local money = player:getMoney()
             if money > 0 then assert(player:removeMoney(money), "low-wealth fixture could not clear carried money") end
-            assert(player:setBankBalance(50), "low-wealth fixture could not set the bank balance")
+            assert(player:setBankBalance(56), "low-wealth fixture could not set the bank balance")
             local backpack = player:getSlotItem(CONST_SLOT_BACKPACK)
             assert(backpack and backpack:addItem(F.pickupRewardId, 1), "low-wealth fixture could not add a carried upgrade")
-            assert(backpack:addItem(F.saleItemId, 1) and backpack:addItem(F.saleItemId, 1) and backpack:addItem(F.saleItemId, 1), "low-wealth fixture could not add saleable capacity cargo")
+            F.removeAll(player, F.saleItemId) -- Banking must not depend on liquidation proceeds.
+            -- Start below readiness; depositing the displaced 25 oz club restores 35 oz,
+            -- above the 30 oz return threshold, without depending on sale cargo.
             local usedCapacity = player:getCapacity() - player:getFreeCapacity()
-            assert(player:setCapacity(usedCapacity), "low-wealth fixture could not exhaust physical capacity")
+            assert(player:setCapacity(usedCapacity + 1000), "low-wealth fixture could not set 10 oz free capacity")
             addEvent(F.verifyLowWealth, 500, player:getId(), 240)
         elseif mode == "readiness_food_capacity" then
             F.removeAll(player, F.meatItemId)

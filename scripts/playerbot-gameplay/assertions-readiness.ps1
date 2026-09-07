@@ -1,3 +1,22 @@
+function Assert-LowWealthEvents {
+    param([string]$Logs)
+
+    $events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
+    $withdrawals = @($events | Where-Object { $_.action -eq 'bank_withdraw' })
+    $upgrades = @($events | Where-Object { $_.action -eq 'equip_readiness' -and $_.result -eq 'success' })
+    $hunts = @($events | Where-Object { $_.event -eq 'action_result' -and $_.action -eq 'hunt_cycle' -and $_.result -eq 'started' })
+    $forbidden = @($events | Where-Object { $_.action -eq 'sell' -or $_.event -eq 'terminal' })
+    if ($withdrawals.Count -ne 1 -or $withdrawals[0].event -ne 'action_result' -or
+        $withdrawals[0].result -ne 'success' -or $withdrawals[0].count -ne 56 -or
+        $withdrawals[0].bank_before -ne 56 -or $withdrawals[0].bank_after -ne 0 -or
+        $upgrades.Count -ne 1 -or $upgrades[0].event -ne 'action_result' -or
+        $upgrades[0].result -ne 'success' -or $upgrades[0].item_id -ne 2384 -or
+        $hunts.Count -lt 1 -or $forbidden.Count -ne 0 -or
+        $Logs -notmatch '(?m)^PLAYERBOT_GAMEPLAY_TEST READINESS_LOW_WEALTH_PASS\r?$') {
+        throw 'Low-wealth banking did not retain the upgrade and carry exactly 56 gp into hunting without sales.'
+    }
+}
+
 function Assert-CombatReadinessEvents {
     param([string]$Logs, [string]$Mode)
 

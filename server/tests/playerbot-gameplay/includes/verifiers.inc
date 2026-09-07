@@ -32,14 +32,14 @@ end
 function F.verifyLowWealth(playerId, attempts)
     local player = Player(playerId)
     assert(player and not player:isRemoved(), "Bot One disappeared during low-wealth fixture")
-    if (player:getMoney() ~= 56 or player:getBankBalance() ~= 0 or
-        player:getSlotItem(CONST_SLOT_LEFT):getId() ~= F.pickupRewardId) and attempts > 0 then
+    local weapon = player:getSlotItem(CONST_SLOT_LEFT)
+    local ready = player:getMoney() == 56 and player:getBankBalance() == 0 and
+        weapon and weapon:getId() == F.pickupRewardId and player:getItemCount(F.saleItemId) == 0
+    if not ready and attempts > 0 then
         addEvent(F.verifyLowWealth, 500, playerId, attempts - 1)
         return
     end
-    assert(player:getMoney() == 56 and player:getBankBalance() == 0 and
-        player:getSlotItem(CONST_SLOT_LEFT):getId() == F.pickupRewardId,
-        "service did not carry the available gold below the normal reserve")
+    assert(ready, "service did not retain the upgrade and carry exactly 56 gold without sale cargo")
     print("PLAYERBOT_GAMEPLAY_TEST READINESS_LOW_WEALTH_PASS")
 end
 

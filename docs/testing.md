@@ -149,6 +149,33 @@ not prove that the image matches the worktree. `-KeepStack` preserves the final
 stack for debugging. `-TimeoutSeconds` accepts `30` through `3600` and replaces
 each scenario's fail-fast deadline.
 
+`combat_readiness_low_wealth` isolates banking from selling: zero carried gold,
+56 gp in the bank, ten selected health potions, a carried upgrade (2384), and
+no rabbit sale cargo. Setup leaves 10 oz free capacity (`usedCapacity + 1000`
+in native units), below the 30 oz readiness threshold. Depositing the displaced
+25 oz club (2382) restores 35 oz, above the 30 oz return threshold. This forces
+readiness → equip → depot → bank without sale proceeds or a zero-capacity dead
+end; withdrawn currency weight remains reclaimable.
+It requires exactly one normal 56 gp withdrawal (bank
+56 → 0), the Lua-verified 56 gp carried balance and equipped upgrade, a hunt
+start, and no sale or terminal event. Liquidation remains in `sell_loot` and
+`sell_loot_remote_depot`: their assertions check manifest withdrawal and sales;
+the local case also checks proceeds-funded potion resupply.
+
+`magic_training_progression` seeds ten selected health potions, two meat,
+100 carried gp and 500 bank gp. This leaves the 100 gp reserve plus the
+500 gp Great Light price. Only nearby currency reward 50082 is marked claimed.
+The scenario ends at `learn_spell` selection over feasible magic training
+(utilities 550 and 350); it does not wait for NPC dialogue or spell payment.
+`magic_training_reserve` and `magic_training_service` retain their intentional
+low-mana and capacity/service setups.
+
+Local regressions: `lua scripts/test-playerbot-fixture-isolation.lua` and
+`pwsh -File scripts/test-playerbot-readiness-assertions.ps1`. Live coverage uses
+`-Focused -CombatReadiness` and `-Focused -MagicTraining -MagicTrainingCase`
+with each of `magic_training_progression`, `magic_training_reserve`, and
+`magic_training_service` on `scripts/test-playerbot-gameplay.ps1`.
+
 Use `-MagicTrainingCase <name>` with `-Focused` to run one case from the
 16-scenario magic-training matrix without paying for the other server
 recreations. PowerShell validates the case name from the supported mode list.

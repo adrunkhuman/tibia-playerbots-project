@@ -193,19 +193,7 @@
 			Invoke-Compose up --detach
 			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST READINESS_LOW_WEALTH_PASS' | Out-Null
 			$lowWealthLogs = Wait-ForLog -Pattern '"action":"hunt_cycle".*"result":"started"'
-			$events = @(ConvertFrom-PlayerbotLogs -Logs $lowWealthLogs)
-			$withdrawal = @($events | Where-Object {
-				$_.action -eq "bank_withdraw" -and $_.result -eq "success" -and $_.count -eq 56 -and
-				$_.bank_before -eq 56 -and $_.bank_after -eq 0
-			})
-			$upgrade = @($events | Where-Object {
-				$_.action -eq "equip_readiness" -and $_.result -eq "success" -and $_.item_id -eq 2384
-			})
-			$soldUpgrade = @($events | Where-Object { $_.action -eq "sell" -and $_.item_id -eq 2384 })
-			if ($withdrawal.Count -lt 1 -or $upgrade.Count -ne 1 -or $soldUpgrade.Count -ne 0 -or
-				@($events | Where-Object { $_.event -eq "terminal" }).Count -ne 0) {
-				throw "Low-wealth service did not withdraw the available balance and resume hunting."
-			}
+			Assert-LowWealthEvents -Logs $lowWealthLogs
 		}
 		Invoke-Scenario -Name "combat_readiness_food_capacity" -DefaultTimeoutSeconds 60 -Body {
 			Invoke-Compose down --volumes --remove-orphans

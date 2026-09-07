@@ -403,7 +403,13 @@ carried-gold reserve. If total gold cannot raise stock above the return
 threshold, service stops with `insufficient_potion_funds` without buying an
 unusable partial reserve. The cycle deposits carried money and withdraws up to
 100 gp without exceeding the bot's total available gold. It does not buy food
-merely because none is carried.
+merely because none is carried. The low-wealth regression isolates this banking
+contract with 56 bank gp, zero carried gp, ten selected health potions, and no
+sale cargo. Initial free capacity is 10 oz (1000 native units), below the 30 oz
+readiness threshold. Depositing the displaced 25 oz club restores 35 oz, above
+the 30 oz return threshold, without sale cargo; currency weight is reclaimable.
+It verifies a normal 56 gp withdrawal and retention of equipped
+upgrade 2384 before hunting; dedicated liquidation scenarios cover selling.
 Hunting ends after the configured duration or below 30 oz
 effective free capacity. Effective capacity is physical free capacity plus the
 weight of carried standard food and currency, because food can be consumed or

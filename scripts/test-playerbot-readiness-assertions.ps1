@@ -42,4 +42,40 @@ $events = @(New-FoodFixture); $events[0].requirements[2].count = 2; Test-Fixture
 $events = @(New-FoodFixture); $events[1].result = 'failed'; Test-Fixture $events $true
 $events = @(New-FoodFixture); Test-Fixture ($events + @{ action = 'buy_meat'; result = 'success' }) $true
 $events = @(New-FoodFixture); Test-Fixture ($events + @{ event = 'combat_readiness'; selected_recovery = 'service' }) $true
-Write-Host 'Food-capacity assertion regressions passed.'
+function New-LowWealthFixture {
+    @(
+        @{ event = 'action_result'; action = 'bank_withdraw'; result = 'success'; count = 56; bank_before = 56; bank_after = 0 }
+        @{ event = 'action_result'; action = 'equip_readiness'; result = 'success'; item_id = 2384 }
+        @{ event = 'action_result'; action = 'hunt_cycle'; result = 'started' }
+    )
+}
+function Test-LowWealthFixture([array]$Events, [bool]$Reject, [bool]$VerifiedInventory = $true) {
+    $logs = ($Events | ForEach-Object {
+        $_.component = 'playerbot'; $_.bot = 'Bot One'
+        $_ | ConvertTo-Json -Depth 8 -Compress
+    }) -join "`n"
+    if ($VerifiedInventory) { $logs += "`nPLAYERBOT_GAMEPLAY_TEST READINESS_LOW_WEALTH_PASS" }
+    try { Assert-LowWealthEvents -Logs $logs }
+    catch { if ($Reject) { return }; throw }
+    if ($Reject) { throw 'Invalid low-wealth fixture unexpectedly passed.' }
+}
+Test-LowWealthFixture (New-LowWealthFixture) $false
+Test-LowWealthFixture (@(@{ event = 'action_result'; action = 'equip_readiness'; result = 'requested'; item_id = 2384 }) + @(New-LowWealthFixture)) $false
+foreach ($field in @('count', 'bank_before', 'bank_after', 'event', 'result')) {
+    $events = @(New-LowWealthFixture); $events[0][$field] = 50
+    Test-LowWealthFixture $events $true
+    $events = @(New-LowWealthFixture); $events[0].Remove($field)
+    Test-LowWealthFixture $events $true
+}
+foreach ($index in 0..2) {
+    $events = @(New-LowWealthFixture)
+    Test-LowWealthFixture @($events | Select-Object -SkipIndex $index) $true
+}
+$events = @(New-LowWealthFixture); Test-LowWealthFixture ($events + $events[0]) $true
+$events = @(New-LowWealthFixture); $events[1].item_id = 2382; Test-LowWealthFixture $events $true
+foreach ($item in @(2384, 2699)) {
+    Test-LowWealthFixture (@(New-LowWealthFixture) + @{ event = 'action_result'; action = 'sell'; item_id = $item; result = 'success' }) $true
+}
+Test-LowWealthFixture (@(New-LowWealthFixture) + @{ event = 'terminal' }) $true
+Test-LowWealthFixture (New-LowWealthFixture) $true $false
+Write-Host 'Food-capacity and low-wealth assertion regressions passed.'

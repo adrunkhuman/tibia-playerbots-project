@@ -16,14 +16,13 @@ scenario passes. Commands and prerequisites are in [testing.md](testing.md) and
   coverage; in-game testing remains necessary. Client fixes remain separate from
   the tooling work.
 
-The last full 87-scenario run reported **75 passed, 8 failed assertions, and
-4 timeouts**. Subsequent targeted runs validate corrections; they do not replace
-a fresh full-suite result. The 22-case follow-up passed 20 cases initially.
-After fixture corrections, all five depot restart checkpoints and arbitration
-passed a seven-case rerun; `real_depot` then passed its final one-case rerun.
-Thus all 22 selected cases have passing follow-up evidence, across separate runs.
-The selection includes all five full-navigation cases, all three corpse cases,
-restart log consumers, and the affected depot/service/progression scenarios.
+The final full 87-scenario run reported **85 passed, 2 failed assertions,
+0 timeouts, and 0 skipped**. It rebuilt the server and ran with
+`-ContinueOnFailure`. Only `magic_training_post_hunt` and
+`magic_training_post_hunt_no_overflow` failed. These known gameplay-policy
+mismatches are deferred from the Linux migration; the suite is not fully green.
+Hunt-area arrival, all navigation and corpse cases, and the corrected economic,
+restart, and depot fixtures passed this run.
 
 ## Remaining work outside portability
 
@@ -32,9 +31,6 @@ migration green. Reproduce them independently before changing gameplay policy.
 
 | Scenario | Observed problem / next decision |
 | --- | --- |
-| `hunt_area_arrival` | The selected destination is reachable, but patrol safety rejects the later route. Define bounded safe-region fallback without relaxing danger limits. |
-| `combat_readiness_low_wealth` | Sale cargo goes to the depot before service; the fixture expects 56 gp including proceeds but observes a 50 gp withdrawal. Isolate sale/service inputs. |
-| `magic_training_progression` | Equipment/service work consumes the funds intended for spell learning. Isolate the learning/affordability contract. |
 | `magic_training_post_hunt`, `magic_training_post_hunt_no_overflow` | The controller visits the depot before arbitration. Tests expect immediate post-hunt `Idle` arbitration; the detour also changes mana overflow. Decide intended hunt-end behavior first. |
 
 The first isolation follow-up validated `mainland_loop`,
@@ -53,9 +49,32 @@ All six normal/restart scenarios passed the final targeted run; partial and
 rejected moves passed the preceding run. Production depot/selling policy is
 unchanged.
 
-The ordinary `corpse` scenario has both passing and failing traces: a defensive
-attacker classification previously prevented normal looting. The latest targeted
-run passed all three corpse cases; this does not establish timing stability.
+The economic-fixture follow-up passed `magic_training_progression`,
+`magic_training_reserve`, and `magic_training_service`. Progression now starts
+with 600 total gp, ten selected potions, and two meat; the nearby currency reward
+is suppressed. This proves learning-goal priority, not completed spell payment.
+
+The low-wealth contract deliberately separates banking from liquidation: it seeds
+56 bank gp rather than requiring 50 gp plus rabbit-sale proceeds. Its initial
+zero-capacity setup could not recover the 30 oz threshold after depositing only
+the displaced 25 oz club. Removing capacity pressure instead allowed unrelated
+reward/equipment work to run first. The final fixture starts with 10 oz free,
+forcing readiness service while allowing the club deposit to restore 35 oz.
+Local regressions and the final live rerun passed. The live scenario completed
+in 22.3 seconds, verifying the exact 56 gp withdrawal, retained upgrade, hunt
+resumption, and absence of sales or terminal events. Reproduce with:
+
+```sh
+pwsh -File scripts/test-playerbot-gameplay.ps1 -Scenario combat_readiness_low_wealth -SkipBuild
+```
+
+Docker approval is required on the current machine; no permission workaround
+is part of this work.
+
+Earlier runs exposed hunt-area patrol safety and ordinary-corpse attacker
+classification failures. Both scenarios passed the final full run. Retain these
+observations if either recurs; a single passing run does not establish timing
+stability.
 
 ## Test isolation follow-up
 

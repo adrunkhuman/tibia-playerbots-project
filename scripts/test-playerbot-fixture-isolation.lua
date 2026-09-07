@@ -15,7 +15,7 @@ dofile(loginPath)
 local selectedMode
 os.getenv = function() return selectedMode end
 local isolated = {
-    progression = true, readiness_low_wealth = true, arbitration = true,
+    progression = true, readiness_low_wealth = true, arbitration = true, magic_training_progression = true,
     magic_training_haste = true, magic_training_great_light = true, magic_training_light = true,
     magic_training_refresh = true, magic_training_failed = true, magic_training_restart = true,
     magic_training_hunt = true, magic_training_post_hunt = true, magic_training_post_hunt_no_overflow = true,
@@ -133,6 +133,86 @@ for _, missing in ipairs({50076, 50082, 50083}) do
     assert(not success and tostring(failure):find("did not persist", 1, true),
         "restart accepted missing competing reward isolation")
 end
+-- Complete the economic/priority login paths with player/world boundary doubles.
+Town = function() return {} end
+Game = {getExperienceForLevel = function() return 0 end}
+Condition = function() return {setParameter = function() end} end
+Npc = function() return {getPosition = function() return Position(1, 2, 7) end} end
+F.verifyLowWealth = function() end
+local function economicLogin(mode)
+    selectedMode = mode
+    local inventory = {[7618] = 7, [F.meatItemId] = 3, [F.saleItemId] = 3}
+    local storage, spells = {}, {}
+    local vocation, money, bank, mana, capacity, scheduled = 0, 17, 23, 0, 10000, 0
+    local backpack = {addItem = function(_, id, amount)
+        inventory[id] = (inventory[id] or 0) + amount
+        return true
+    end}
+    local player = {
+        getName = function() return F.botName end,
+        getId = function() return 3 end,
+        getLevel = function() return mode == 'readiness_low_wealth' and 1 or 20 end,
+        getExperience = function() return 0 end,
+        getVocation = function() return {getId = function() return vocation end} end,
+        setVocation = function(_, id) vocation = id; return true end,
+        getStorageValue = function(_, key) return storage[key] or -1 end,
+        setStorageValue = function(_, key, value) storage[key] = value; return true end,
+        getSlotItem = function(_, slot) if slot == CONST_SLOT_BACKPACK then return backpack end end,
+        getItemCount = function(_, id) return inventory[id] or 0 end,
+        addItem = backpack.addItem,
+        removeItem = function(_, id, amount) inventory[id] = inventory[id] - amount; return true end,
+        getMoney = function() return money end,
+        removeMoney = function(_, amount) money = money - amount; return true end,
+        addMoney = function(_, amount) money = money + amount; return true end,
+        getBankBalance = function() return bank end,
+        setBankBalance = function(_, amount) bank = amount; return true end,
+        getCapacity = function() return capacity end,
+        getFreeCapacity = function() return 2000 end,
+        setCapacity = function(_, amount)
+            if mode == 'readiness_low_wealth' then
+                assert(amount == 9000, 'low-wealth setup must leave 1000 units (10 oz) free')
+            end
+            capacity = amount
+            return true
+        end,
+        setTown = function() return true end,
+        teleportTo = function() return true end,
+        forgetSpell = function(_, name) spells[name] = nil end,
+        learnSpell = function(_, name) spells[name] = true; return true end,
+        setMaxMana = function() return true end,
+        getMaxMana = function() return 1000 end,
+        getMana = function() return mana end,
+        addMana = function(_, amount) mana = mana + amount; return true end,
+        removeCondition = function() end,
+        addCondition = function() return true end,
+    }
+    addEvent = function(callback)
+        assert(callback == F.verifyLowWealth)
+        scheduled = scheduled + 1
+    end
+    assert(F.login.onLogin(player), mode .. ' login failed')
+    assert(F.potionItemId == 7618)
+    assert(storage[50082] == ((mode == 'readiness_low_wealth' or mode == 'magic_training_progression') and 1 or nil))
+    for _, key in ipairs({50076, 50083, 64120}) do assert(storage[key] == nil) end
+    if mode == 'readiness_low_wealth' then
+        assert(money == 0 and bank == 56 and inventory[F.saleItemId] == 0)
+        assert(inventory[F.pickupRewardId] == 1 and inventory[7618] == 10 and capacity == 9000 and scheduled == 1)
+        local freeCapacity = capacity - 8000 -- Initial used capacity from the player double.
+        assert(freeCapacity == 1000 and freeCapacity < 3000 and freeCapacity + 2500 == 3500)
+    elseif mode == 'magic_training_progression' then
+        assert(money == 100 and bank == 500 and inventory[7618] == 10 and inventory[F.meatItemId] == 2)
+        assert(spells.Light and not spells['Great Light'] and not spells['Find Person'])
+        assert(capacity == 10000 and mana == 1000 and scheduled == 0)
+    else
+        assert(bank == 23 and inventory[F.meatItemId] == 3 and scheduled == 0)
+        assert(inventory[7618] == (mode == 'magic_training_service' and 7 or 2))
+        assert(capacity == (mode == 'magic_training_service' and 1 or 10000))
+        assert(mana == (mode == 'magic_training_reserve' and 39 or 1000))
+    end
+end
+for _, mode in ipairs({'readiness_low_wealth', 'magic_training_progression', 'magic_training_reserve', 'magic_training_service'}) do
+    economicLogin(mode)
+end
 -- Exercise the real magic reserve setup, stopping before unrelated level/spell APIs.
 Town = function() return {} end
 Game = {getExperienceForLevel = function() error(boundary) end}
@@ -176,4 +256,22 @@ for mode in pairs(modes) do
 end
 -- Persisted counts must not be repaired, even if empty or below the return threshold.
 for _, potions in ipairs({0, 1, 2, 7}) do magicReserve("magic_training_restart", true, potions) end
-print("PASS fixture isolation: " .. count .. " modes, rapier setup/restart, magic reserves/restart, other-player guard, failed writes")
+dofile('server/tests/playerbot-gameplay/includes/verifiers.inc')
+local function verifyWealth(money, bank, weapon, cargo)
+    Player = function() return {
+        isRemoved = function() return false end,
+        getMoney = function() return money end,
+        getBankBalance = function() return bank end,
+        getSlotItem = function() return weapon and {getId = function() return weapon end} end,
+        getItemCount = function(_, id) assert(id == F.saleItemId); return cargo end,
+    } end
+    return pcall(F.verifyLowWealth, 3, 0)
+end
+assert(verifyWealth(56, 0, 2384, 0))
+assert(not verifyWealth(50, 0, 2384, 0))
+assert(not verifyWealth(57, 0, 2384, 0))
+assert(not verifyWealth(56, 1, 2384, 0))
+assert(not verifyWealth(56, 0, 2382, 0))
+assert(not verifyWealth(56, 0, nil, 0))
+assert(not verifyWealth(56, 0, 2384, 1))
+print("PASS fixture isolation: " .. count .. " modes, rapier setup/restart, economic login/verification, magic reserves/service/restart, other-player guard, failed writes")
