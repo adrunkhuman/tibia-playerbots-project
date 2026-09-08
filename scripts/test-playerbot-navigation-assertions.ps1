@@ -1,6 +1,6 @@
 #Requires -Version 7.0
 
-param()
+param([string]$DangerRetreatLogPath)
 
 $ErrorActionPreference = "Stop"
 
@@ -30,6 +30,44 @@ function Assert-Rejected {
         return
     }
     throw "$Name unexpectedly passed."
+}
+
+$dangerStart = @{ event = "objective_transition"; to = "return_to_depot"; reason = "hunt_region_observed_danger";
+    position = @{ x = 100; y = 100; z = 7 } }
+$dangerEnd = @{ event = "objective_transition"; to = "deposit_loot";
+    position = @{ x = 105; y = 100; z = 7 } }
+$blocker = @{ event = "target_changed"; target_id = 42; reason = "defensive_path_blocker"; route_critical = $true }
+Assert-DangerRetreatEvents -Logs (ConvertTo-FixtureLogs @($dangerStart, $dangerEnd))
+Assert-DangerRetreatEvents -Logs (ConvertTo-FixtureLogs @($dangerStart, $blocker, $dangerEnd))
+Assert-Rejected "Adjacent attacker after danger" {
+    Assert-DangerRetreatEvents -Logs (ConvertTo-FixtureLogs @($dangerStart,
+        @{ event = "target_changed"; target_id = 42; reason = "defensive_attacker"; route_critical = $false }, $dangerEnd))
+} "Danger retreat failed: optional combat"
+Assert-Rejected "Spent blocker reacquired" {
+    Assert-DangerRetreatEvents -Logs (ConvertTo-FixtureLogs @($dangerStart, $blocker, $blocker, $dangerEnd))
+} "Danger retreat failed: blocker reacquired"
+Assert-Rejected "Incomplete retreat" {
+    Assert-DangerRetreatEvents -Logs (ConvertTo-FixtureLogs @($dangerStart))
+} "Danger retreat failed: no complete"
+$online = @{ event = "lifecycle"; status = "online"; recovered = $true; recovery_count = 1 }
+Assert-DangerRetreatEvents -Logs (ConvertTo-FixtureLogs @($dangerStart, $online, $dangerEnd))
+foreach ($failure in @(
+    @{ event = "lifecycle"; status = "dead"; health = 0; objective = "return_to_depot";
+        killer_name = "Valkyrie"; killer_type = "monster"; position = $dangerStart.position }
+    @{ event = "lifecycle"; status = "removed"; position = $dangerStart.position }
+    @{ event = "lifecycle"; status = "recovery_abandoned"; reason = "death_loop_limit"; death_count = 3 }
+    @{ event = "terminal"; reason = "controlled_player_dead"; position = $dangerStart.position }
+)) {
+    Assert-Rejected "Retreat failure $($failure.event)/$($failure.status) before later arrival" {
+        Assert-DangerRetreatEvents -Logs (ConvertTo-FixtureLogs @($dangerStart, $failure, $online, $dangerEnd))
+    } "Danger retreat failed: death or terminal"
+}
+Assert-Rejected "Stationary retreat" {
+    Assert-DangerRetreatEvents -Logs (ConvertTo-FixtureLogs @($dangerStart,
+        @{ event = "objective_transition"; to = "deposit_loot"; position = $dangerStart.position }))
+} "Danger retreat failed: no movement"
+if ($DangerRetreatLogPath) {
+    Assert-DangerRetreatEvents -Logs (Get-Content -Raw -LiteralPath $DangerRetreatLogPath)
 }
 
 function New-MainlandFixture {

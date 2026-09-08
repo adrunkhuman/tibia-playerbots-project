@@ -473,6 +473,9 @@ void PlayerBotController::setCyclePhase(CyclePhase phase, const Position& positi
 	if (turnRouter.cyclePhase() == CyclePhase::Hunt && phase != CyclePhase::Hunt) {
 		huntCoordinator.cancelPlanning();
 	}
+	if (phase == CyclePhase::Hunt || phase == CyclePhase::DepositLoot) {
+		huntCoordinator.finishDangerRetreat();
+	}
 	turnRouter.setCyclePhase(phase);
 	std::ostringstream fields;
 	fields << "\"from\":" << jsonString(previous) << ",\"to\":" << jsonString(cyclePhaseName())

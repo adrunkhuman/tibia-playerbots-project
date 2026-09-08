@@ -1,3 +1,49 @@
+function Assert-DangerRetreatEvents {
+    param([string]$Logs)
+
+    $active = $false
+    $completed = 0
+    $moved = $false
+    $origin = ""
+    $attempted = [System.Collections.Generic.HashSet[long]]::new()
+    foreach ($event in @(ConvertFrom-PlayerbotLogs -Logs $Logs)) {
+        if ($event.event -eq "objective_transition" -and $event.to -eq "return_to_depot" -and
+            $event.reason -eq "hunt_region_observed_danger") {
+            if (-not $active) {
+                $attempted.Clear()
+                $origin = "$($event.position.x),$($event.position.y),$($event.position.z)"
+                $moved = $false
+            }
+            $active = $true
+        }
+        if (-not $active) { continue }
+        if ($event.event -in @("death", "terminal") -or
+            ($event.event -eq "lifecycle" -and $event.status -in @("dead", "removed", "recovery_abandoned"))) {
+            throw "Danger retreat failed: death or terminal event before depot arrival."
+        }
+        if ($event.event -eq "target_changed" -and $null -ne $event.target_id) {
+            if ($event.reason -ne "defensive_path_blocker" -or $event.route_critical -ne $true) {
+                throw "Danger retreat failed: optional combat selected."
+            }
+            if (-not $attempted.Add([long]$event.target_id)) {
+                throw "Danger retreat failed: blocker reacquired."
+            }
+        }
+        if ($null -ne $event.position -and
+            "$($event.position.x),$($event.position.y),$($event.position.z)" -ne $origin) {
+            $moved = $true
+        }
+        if ($event.event -eq "objective_transition" -and $event.to -eq "deposit_loot") {
+            if (-not $moved) { throw "Danger retreat failed: no movement before depot arrival." }
+            $completed++
+            $active = $false
+        }
+    }
+    if ($active -or $completed -eq 0) {
+        throw "Danger retreat failed: no complete danger return."
+    }
+}
+
 function Assert-NavigationEvents {
     param([string]$Logs)
 

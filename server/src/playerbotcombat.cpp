@@ -378,7 +378,7 @@ bool PlayerBotController::attackDefensiveThreat(Player* player, const Position& 
 		       Position::areInRange<1, 1, 0>(currentPosition, creature->getPosition());
 	});
 	const bool overwhelmed = adjacentAttackers >= 4;
-	if (!overwhelmed) {
+	if (!overwhelmed || huntCoordinator.retreatingFromDanger()) {
 		for (Creature* creature : spectators) {
 			if (!creature->getMonster() || creature->isRemoved() || creature->isDead() ||
 			    !player->canSee(creature->getPosition()) ||
@@ -468,6 +468,11 @@ void PlayerBotController::processDefensiveCombat(Player* player, const Position&
 {
 	const auto defensive = huntCoordinator.defensiveTarget();
 	Creature* target = defensive ? g_game.getCreatureByID(defensive->id) : nullptr;
+	if (huntCoordinator.retreatingFromDanger() && target && target->getPosition() != defensive->position) {
+		finishDefensiveCombat(player, currentPosition, "skipped", "danger_retreat_blocker_moved");
+		schedule(navigationInterval);
+		return;
+	}
 	PlayerBotCombatTargetSnapshot observed;
 	if (target) observed = {true, target->isRemoved(), target->isDead(), player->canSee(target->getPosition()), player->canSeeCreature(target),
 	                        Position::areInRange<1, 1, 0>(currentPosition, target->getPosition()), target->getAttackedCreature() == player,

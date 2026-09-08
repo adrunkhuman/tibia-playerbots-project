@@ -3,6 +3,7 @@
 #include "playerbothuntcoordinator.h"
 #include "playerbotequipmentpolicy.h"
 
+#include <algorithm>
 #include <utility>
 
 PlayerBotHuntCoordinator::PlayerBotHuntCoordinator(
@@ -15,19 +16,27 @@ PlayerBotHuntCoordinator::PlayerBotHuntCoordinator(
 std::optional<PlayerBotCombatDecision> PlayerBotHuntCoordinator::selectTraversalAttack(
 	std::vector<PlayerBotTraversalCandidate> candidates, const Position& currentPosition, std::chrono::steady_clock::time_point now)
 {
+	if (dangerRetreat.active()) return std::nullopt;
 	return combatRuntime.selectTraversalAttack(std::move(candidates), currentPosition, now);
 }
 
 std::optional<PlayerBotCombatDecision> PlayerBotHuntCoordinator::selectDefensiveAttack(
 	std::vector<PlayerBotDefensiveTarget> candidates, const Position& currentPosition) const
 {
+	candidates.erase(std::remove_if(candidates.begin(), candidates.end(), [this](const PlayerBotDefensiveTarget& target) {
+		return !dangerRetreat.allowsDefense(target.id, target.routeCritical);
+	}), candidates.end());
 	return combatRuntime.selectDefensiveAttack(std::move(candidates), currentPosition);
 }
 
 PlayerBotCombatDecision PlayerBotHuntCoordinator::confirmCombatAttack(const PlayerBotCombatDecision& command, bool accepted,
 	std::chrono::steady_clock::time_point now)
 {
-	return combatRuntime.confirmAttack(command, accepted, now);
+	const auto result = combatRuntime.confirmAttack(command, accepted, now);
+	if (accepted && result.command == PlayerBotCombatCommand::AttackDefensive) {
+		dangerRetreat.beginDefense(command.target.id, now);
+	}
+	return result;
 }
 
 PlayerBotCombatDecision PlayerBotHuntCoordinator::advanceCombat(const PlayerBotCombatSnapshot& snapshot) { return combatRuntime.advance(snapshot); }
