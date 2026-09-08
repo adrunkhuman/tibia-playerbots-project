@@ -66,14 +66,14 @@
 	<!-- Liberty Bay -->
 	<raid name="Pirates LBCity" file="libertybay/PiratesLBCity.xml" interval2="500" margin="100"/>
 	<raid name="Pirates LBPlantations" file="libertybay/PiratesLBPlantations.xml" interval2="500" margin="100"/> 
-	<raid name="Quaras LBCity" file="libertybay/Quaras.xml" interval2="500" margin="50" />
+	<raid name="Quaras LBCity" file="libertybay/quaras.xml" interval2="500" margin="50" />
     <raid name="Quaras LBPlantations" file="libertybay/QuarasPlantations.xml" interval2="500" margin="50" />
     <raid name="Flamingos Laguna" file="libertybay/FlamingosLagunaIslands.xml" interval2="500" margin="80" />
-    <raid name="Morgaroth" file="libertybay/Morgaroth.xml" interval2="1440" margin="90" />
+    <raid name="Morgaroth" file="libertybay/morgaroth.xml" interval2="1440" margin="90" />
     <raid name="PiratesBoss" file="libertybay/PiratesBoss.xml" interval2="500" margin="90"/>
-    <raid name="Ferumbras" file="libertybay/Ferumbras.xml" interval2="1440" margin="90" />
+    <raid name="Ferumbras" file="libertybay/ferumbras.xml" interval2="1440" margin="90" />
     <raid name="TigerMeriana" file="libertybay/TigerMeriana.xml" interval2="500" margin="100"/> 
-	<raid name="TortoisesTreasureIsland" file="libertybay/Tortoises.xml" interval2="500" margin="80" />
+	<raid name="TortoisesTreasureIsland" file="libertybay/tortoises.xml" interval2="500" margin="80" />
 
     <!-- Port Hope -->
     <raid name="ApeRaidPortHope" file="porthope/ApeRaidPH.xml" interval2="500" margin="60"/>
