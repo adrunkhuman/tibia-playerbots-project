@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "playerbotcombatruntime.h"
+#include "playerbotdangerretreat.h"
 #include "playerbothuntruntime.h"
 #include "playerbotlootworkflow.h"
 
@@ -81,6 +82,14 @@ class PlayerBotHuntCoordinator
 		int64_t lootElapsedMilliseconds(std::chrono::steady_clock::time_point now) const;
 		std::chrono::steady_clock::time_point lootNavigationRetryAt() const;
 
+		void beginDangerRetreat() { dangerRetreat.begin(); }
+		void finishDangerRetreat() { dangerRetreat.finish(); }
+		bool retreatingFromDanger() const { return dangerRetreat.active(); }
+		bool dangerDefenseExpired(std::chrono::steady_clock::time_point now) const
+		{
+			return hasDefensiveCombat() && dangerRetreat.defenseExpired(now);
+		}
+
 		void cancelPlanning();
 		bool planningStartRequired(std::chrono::steady_clock::time_point now) const;
 		bool planningActive() const;
@@ -129,6 +138,7 @@ class PlayerBotHuntCoordinator
 		void applyCooldown(const std::optional<PlayerBotHuntRuntimeCooldownCommand>& command,
 		                   std::chrono::steady_clock::time_point now);
 
+		PlayerBotDangerRetreat dangerRetreat;
 		PlayerBotCombatRuntime combatRuntime;
 		PlayerBotLootWorkflow lootWorkflow;
 		PlayerBotHuntRuntime huntRuntime;

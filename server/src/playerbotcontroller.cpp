@@ -1414,10 +1414,18 @@ void PlayerBotController::navigate()
 	if (huntCoordinator.huntActive() && turnRouter.cyclePhase() == CyclePhase::Hunt) {
 		const auto now = std::chrono::steady_clock::now();
 		if (huntCoordinator.observeHuntDanger(player->getMaxHealth(), now, huntRegionCooldown)) {
+			huntCoordinator.beginDangerRetreat();
+			if (huntCoordinator.hasDefensiveCombat()) {
+				finishDefensiveCombat(player, currentPosition, "skipped", "hunt_region_observed_danger");
+			}
 			beginService(player, currentPosition, "hunt_region_observed_danger");
 			schedule(navigationInterval);
 			return;
 		}
+	}
+	// Healing may consume consecutive turns; it must not extend blocker combat.
+	if (huntCoordinator.dangerDefenseExpired(std::chrono::steady_clock::now())) {
+		finishDefensiveCombat(player, currentPosition, "skipped", "danger_retreat_combat_budget");
 	}
 	const bool accessingReward = progressionRuntime.session().active(PlayerBotProgressionProcedure::PickupReward) &&
 	                             (progressionRuntime.reward().stage() == PlayerBotRewardStage::VerifyReward ||
@@ -1431,7 +1439,7 @@ void PlayerBotController::navigate()
 	}
 	const bool waitingForRecovery = PlayerBotGoalPlanner::shouldContinueRecovery(
 	    progressionRuntime.activeGoal(), survivalRuntime.needsHealing(survivalSnapshot(*player)));
-	if (!accessingReward && !progressionRuntime.session().active(PlayerBotProgressionProcedure::OracleDeparture) &&
+	if (!huntCoordinator.retreatingFromDanger() && !accessingReward && !progressionRuntime.session().active(PlayerBotProgressionProcedure::OracleDeparture) &&
 	    departurePlanner.required(departureSnapshot(*player)) && !waitingForRecovery) {
 		if (selectTopLevelGoal(*player, currentPosition, "level_eight_interrupt")) {
 			schedule(SCHEDULER_MINTICKS);

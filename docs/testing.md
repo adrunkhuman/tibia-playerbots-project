@@ -60,6 +60,45 @@ pwsh -File scripts/test-playerbot-gameplay.ps1 -Scenario real_depot,real_depot_r
 requires the server development headers. These checks supplement, not replace,
 live gameplay validation.
 
+## Danger retreat
+
+`hunt_region_observed_danger` cancels both hunt and defensive targets and starts
+an escape return. Navigation resets, healing, and repeated service requests do
+not end retreat. Healing keeps its normal priority; optional adjacent attackers
+(including crowds) cannot start combat, and level-eight departure waits until
+retreat ends. Depot arrival or a new hunt restores ordinary defensive policy.
+
+Navigation still tries a detour first. Only a confirmed route-critical blocker
+may be attacked during retreat, without chase, once per creature per return.
+Its budget is five seconds, checked on the next running scheduler turn before
+healing. Exhaustion emits `danger_retreat_combat_budget`; movement of the blocker
+emits `danger_retreat_blocker_moved`. Both release combat and resume navigation.
+This bounds engagement, not successful escape: a trapped bot can still fail to
+find a route or die. Ordinary hunt, loot, and non-danger return defense are unchanged.
+
+`sh server/tests/playerbot_contracts.sh` checks optional-attacker rejection,
+blocker budgets, no reacquisition, repeated-retreat retention, and reset behavior.
+The live navigation/loot/defense/healing regression command is:
+
+```powershell
+pwsh -File scripts/test-playerbot-gameplay.ps1 -FullNavigation -CorpseLoot -TargetApproach -Healing -Focused
+```
+
+These existing fixtures do not deterministically trigger observed hunt danger
+followed by an adjacent attacker. A normal-stack observation must still verify
+that the danger transition is followed by movement toward the depot rather than
+`defensive_attacker` selection, with no reacquisition of a spent blocker. There is
+no dedicated live danger fixture yet. Check a captured normal-stack log with:
+
+```powershell
+pwsh -File scripts/test-playerbot-navigation-assertions.ps1 -DangerRetreatLogPath /tmp/danger-retreat-live.log
+```
+
+The assertion requires a complete danger return with movement and no optional
+combat, repeated blocker selection, or terminal event before depot arrival.
+Its synthetic positive/negative regressions run without the log-path argument;
+they validate telemetry assertions, not live monster behavior.
+
 ## Server smoke test
 
 For server, infrastructure, or cross-stack changes, run:

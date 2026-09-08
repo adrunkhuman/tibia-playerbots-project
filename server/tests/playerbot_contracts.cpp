@@ -5,10 +5,55 @@
 #include <iostream>
 
 #include "playerbotgoalplanner.h"
+#include "playerbotdangerretreat.h"
 #include "playerbothuntregions.h"
 #include "playerbotturnrouter.h"
 
 namespace {
+void dangerRetreat()
+{
+	PlayerBotDangerRetreat retreat;
+	const auto now = std::chrono::steady_clock::time_point{};
+	assert(!retreat.active());
+	assert(retreat.allowsDefense(42, false));
+	retreat.begin();
+	assert(retreat.active());
+	// Adjacent attackers (including a crowd) never override escape without
+	// navigation's failed-detour evidence. Repeated turns cannot reacquire them.
+	for (int turn = 0; turn < 100; ++turn) {
+		for (uint32_t id = 42; id < 46; ++id) assert(!retreat.allowsDefense(id, false));
+	}
+	assert(retreat.allowsDefense(42, true));
+	retreat.beginDefense(42, now);
+	assert(!retreat.defenseExpired(now + std::chrono::seconds(4)));
+	assert(retreat.defenseExpired(now + std::chrono::seconds(5)));
+	assert(!retreat.allowsDefense(42, true));
+	// Re-entering service must not renew a spent combat budget.
+	retreat.begin();
+	assert(!retreat.allowsDefense(42, true));
+	assert(retreat.defenseExpired(now + std::chrono::seconds(75)));
+	assert(retreat.allowsDefense(43, true));
+	retreat.beginDefense(43, now + std::chrono::seconds(75));
+	assert(!retreat.defenseExpired(now + std::chrono::seconds(79)));
+	assert(retreat.defenseExpired(now + std::chrono::seconds(80)));
+	assert(!retreat.allowsDefense(42, true));
+	retreat.finish();
+	assert(!retreat.active());
+	assert(!retreat.defenseExpired(now + std::chrono::hours(1)));
+	assert(retreat.allowsDefense(42, false));
+	retreat.begin();
+	assert(retreat.allowsDefense(42, true));
+	assert(!retreat.allowsDefense(42, false));
+
+	PlayerBotTurnRouter router;
+	assert(router.route({}) == PlayerBotTurnCommand::ReturnToDepot);
+	router.pause();
+	assert(router.route({}) == PlayerBotTurnCommand::None);
+	router.start();
+	router.stop();
+	assert(router.route({}) == PlayerBotTurnCommand::None);
+}
+
 void projection()
 {
 	PlayerBotHuntRegion region;
@@ -84,6 +129,7 @@ void oracleRecovery()
 
 int main()
 {
+	dangerRetreat();
 	projection();
 	oracleRecovery();
 	std::cout << "playerbot contracts passed\n";
