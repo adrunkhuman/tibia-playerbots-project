@@ -30,6 +30,7 @@
 #include <X11/Xresource.h>
 #include <X11/cursorfont.h>
 #include <algorithm>
+#include <clocale>
 #include <cmath>
 #include <cstdlib>
 #include <unistd.h>
@@ -531,6 +532,12 @@ void X11Window::internalCreateWindow()
 
 bool X11Window::internalSetupWindowInput()
 {
+    // Xlib input methods use LC_CTYPE to interpret keyboard text.
+    if (!std::setlocale(LC_CTYPE, "")) {
+        g_logger.error("Unable to initialize the keyboard locale");
+        return false;
+    }
+
     //  create input context (to have better key input handling)
     if (!XSupportsLocale()) {
         g_logger.error("X11 doesn't support the current locale");
@@ -544,7 +551,11 @@ bool X11Window::internalSetupWindowInput()
         return false;
     }
 
-    m_xic = XCreateIC(m_xim, XNInputStyle, XIMPreeditNothing | XIMStatusNothing, XNClientWindow, m_window, NULL);
+    m_xic = XCreateIC(m_xim,
+        XNInputStyle, XIMPreeditNothing | XIMStatusNothing,
+        XNClientWindow, m_window,
+        XNFocusWindow, m_window,
+        nullptr);
     if (!m_xic) {
         g_logger.error("Unable to create the input context");
         return false;
@@ -1054,9 +1065,13 @@ void X11Window::poll()
                 break;
             case FocusIn:
                 m_focused = true;
+                if (m_xic)
+                    XSetICFocus(m_xic);
                 releaseAllKeys();
                 break;
             case FocusOut:
+                if (m_xic)
+                    XUnsetICFocus(m_xic);
                 m_focused = false;
                 releaseAllKeys();
                 break;
