@@ -2,6 +2,7 @@
 #include "otpch.h"
 
 #include "playerbotprogressionplanners.h"
+#include "playerbotsupplypolicy.h"
 
 #include <algorithm>
 #include <limits>
@@ -34,12 +35,14 @@ PlayerBotSpellTrainingDecision PlayerBotSpellTrainingPlanner::select(const Playe
 	PlayerBotSpellTrainingDecision decision;
 	for (size_t offerIndex = 0; offerIndex < snapshot.offers.size(); ++offerIndex) {
 		const auto& offer = snapshot.offers[offerIndex];
+		const uint64_t reserve = offer.reserve.value_or(snapshot.reserve);
+		const bool reserveAvailable = offer.reserve ? *offer.reserve != UINT64_MAX : snapshot.reserveAvailable;
 		const char* rejection = !offer.inScope ? "outside_thais_scope" : !offer.registryMatches ? "spell_registry_mismatch" :
 		                        !offer.implementedUse ? "no_implemented_use" :
 		                        !offer.vocationEligible ? "vocation_ineligible" : !offer.levelEligible ? "level_ineligible" :
 		                        !offer.premiumEligible ? "premium_ineligible" : offer.known ? "already_learned" :
-		                        !offer.suppliesReady ? "supply_reserve_unmet" : !snapshot.reserveAvailable ? "recovery_reserve_unavailable" :
-		                        snapshot.totalMoney < snapshot.reserve + offer.price ? "unaffordable_after_reserves" :
+		                        !offer.suppliesReady ? "supply_reserve_unmet" : !reserveAvailable ? "recovery_reserve_unavailable" :
+		                        !playerBotAffordableAfterReserve(snapshot.totalMoney, reserve, offer.price) ? "unaffordable_after_reserves" :
 		                        !offer.route.reachable ? "trainer_unreachable" :
 		                        offer.route.dangerCost > snapshot.maximumRouteDangerCost ? "route_danger_above_tolerance" :
 		                        offer.route.maximumDanger > snapshot.maximumRouteDanger ? "route_peak_danger_above_tolerance" : nullptr;
@@ -48,7 +51,7 @@ PlayerBotSpellTrainingDecision PlayerBotSpellTrainingPlanner::select(const Playe
 			continue;
 		}
 		PlayerBotSpellTrainingPlan candidate{offer.npcId, offer.npcPosition, offer.route.approachPosition, offer.spellName,
-		                                    offer.keyword, offer.price, offer.level, offer.premium, offer.route.steps, snapshot.reserve};
+		                                    offer.keyword, offer.price, offer.level, offer.premium, offer.route.steps, reserve, offer.potionReserve};
 		const PlayerBotSpellOfferSnapshot* selectedOffer = decision.selectedOfferIndex ?
 		    &snapshot.offers[*decision.selectedOfferIndex] : nullptr;
 		if (!selectedOffer ||

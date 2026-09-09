@@ -340,8 +340,14 @@ function Assert-HuntRegionPlanningEvents {
 		$_.event -eq "hunt_region_scan" -and $_.phase -eq "selected" -and $_.decision_latency_us -gt 0
     })
     $selectedCandidate = if ($selection) { @($candidates | Where-Object { $_.region_id -eq $selection.region_id }) } else { @() }
-	$reachableCandidates = @($candidates | Where-Object { $_.suitable -and $_.reachable })
-    $bestScore = if ($reachableCandidates.Count -gt 0) { ($reachableCandidates | Measure-Object -Property score -Maximum).Maximum } else { $null }
+	$reachableCandidates = @($candidates | Where-Object { $_.suitable -and $_.reachable -and $_.route_validated })
+	$budgetCandidates = @($reachableCandidates | Where-Object { $_.supply_budget_fits })
+	$minimumPotions = if ($reachableCandidates.Count -gt 0) { ($reachableCandidates | Measure-Object -Property supply_expected_potions -Minimum).Minimum } else { $null }
+	$preferredCandidates = if ($budgetCandidates.Count -gt 0) { $budgetCandidates } else {
+		@($reachableCandidates | Where-Object { $_.supply_expected_potions -eq $minimumPotions })
+	}
+    $bestScore = if ($preferredCandidates.Count -gt 0) { ($preferredCandidates | Measure-Object -Property score -Maximum).Maximum } else { $null }
+	$selectionRule = if ($budgetCandidates.Count -gt 0) { 'supply_budget_then_xp' } else { 'lowest_potion_consumption_then_xp' }
 	$completedTopology = @($completed | Where-Object {
 		$_.topology_time_us -ge 0
 	})
@@ -360,6 +366,10 @@ function Assert-HuntRegionPlanningEvents {
 	if ($build.Count -lt 2 -or $hit.Count -lt 1 -or $cancelled.Count -ne 1 -or $staleRevision.Count -ne 1 -or
 		$topologyScans.Count -lt 1 -or $routeValidations.Count -lt 1 -or -not $selection -or $selectedCandidate.Count -ne 1 -or
 		$bestScore -eq $null -or [Math]::Abs($selectedCandidate[0].score - $bestScore) -gt 0.01 -or
+		$reachableCandidates.Count -gt 8 -or $selection.selection_rule -ne $selectionRule -or
+		-not $selectedCandidate[0].route_validated -or
+		($budgetCandidates.Count -gt 0 -and -not $selectedCandidate[0].supply_budget_fits) -or
+		($budgetCandidates.Count -eq 0 -and $selectedCandidate[0].supply_expected_potions -ne $minimumPotions) -or
 		-not $selectedCandidate[0].topology_reachable -or $selectedCandidate[0].topology_travel_steps -lt 1 -or
 		-not $selectedCandidate[0].reachable -or $selectedCandidate[0].route_danger_cost -lt 0 -or
 		$outsideLocalFixture.Count -lt 1 -or $completedTopology.Count -lt 1 -or
@@ -396,6 +406,25 @@ function Assert-HuntAreaArrivalEvents {
 	if ($entry.Count -ne 1 -or -not $target -or $targetsBeforeEntry -ne 0 -or $waypointsBeforeCombat -ne 0 -or
 		$target.target_name -notin $monsterNames -or $terminal.Count -ne 0) {
 		throw "Hunt-area arrival did not start matching combat before the first waypoint. entry=$($entry.Count), target=$($targetIndex -ge 0), prior_targets=$targetsBeforeEntry, prior_waypoints=$waypointsBeforeCombat, selected=$($selected.Count), terminal=$($terminal.Count)."
+	}
+}
+
+function Assert-SupplyBudgetEvents {
+	param([string]$Logs)
+	$fixtures = @(ConvertFrom-PlayerbotLogs -Logs $Logs | Where-Object {
+		$_.event -eq 'supply_budget_fixture' -and $_.source -eq 'synthetic_runtime_candidates'
+	})
+	$scarce = @($fixtures | Where-Object { $_.potions -eq 2 -and $_.duration_seconds -eq 900 -and $_.selected_variant -eq 1 -and $_.budget_fits -and $_.expected_potions -eq 1 -and $_.scored_candidates -eq 2 -and $_.selection_rule -eq 'supply_budget_then_xp' })
+	$plentiful = @($fixtures | Where-Object { $_.potions -eq 10 -and $_.duration_seconds -eq 900 -and $_.selected_variant -eq 2 -and $_.budget_fits -and $_.expected_potions -eq 8 -and $_.scored_candidates -eq 2 -and $_.selection_rule -eq 'supply_budget_then_xp' })
+	$overBudget = @($fixtures | Where-Object {
+		$_.potions -eq 2 -and $_.duration_seconds -eq 1500 -and $_.scored_candidates -eq 2 -and
+		$_.easy_expected_potions -eq 2 -and $_.costly_expected_potions -eq 12 -and
+		$_.easy_budget_fits -eq $false -and $_.costly_budget_fits -eq $false -and
+		$_.selected_variant -eq 1 -and $_.budget_fits -eq $false -and $_.expected_potions -eq 2 -and
+		$_.selection_rule -eq 'lowest_potion_consumption_then_xp'
+	})
+	if ($fixtures.Count -ne 3 -or $scarce.Count -ne 1 -or $plentiful.Count -ne 1 -or $overBudget.Count -ne 1) {
+		throw 'Duration-budget runtime selection failed the scarce/plentiful/all-over-budget supply contrast.'
 	}
 }
 

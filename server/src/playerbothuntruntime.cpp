@@ -11,7 +11,7 @@ PlayerBotHuntRuntime::PlayerBotHuntRuntime(std::vector<Position> fallbackPatrol)
 PlayerBotHuntPlanningSnapshot PlayerBotHuntRuntime::snapshot(const PlayerBotHuntRuntimePlayerObservation& player, uint64_t revision)
 {
 	return {player.position, player.level, player.health, player.staminaMinutes, revision, player.topologyGeneration, player.excludedVariants,
-	        player.canUseRope, player.canUseShovel};
+	        player.canUseRope, player.canUseShovel, player.potions, player.mana};
 }
 
 bool PlayerBotHuntRuntime::planningStartRequired(std::chrono::steady_clock::time_point now) const

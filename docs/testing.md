@@ -29,6 +29,7 @@ pwsh -File scripts/test-playerbot-scenario-isolation.ps1
 pwsh -File scripts/test-playerbot-depot-scenario.ps1
 pwsh -File scripts/test-playerbot-death-scenario.ps1
 pwsh -File scripts/test-playerbot-magic-training-assertions.ps1
+pwsh -File scripts/test-playerbot-supply-assertions.ps1
 ```
 
 On Linux, pure contract checks require a C++17 compiler; fixture-isolation checks
@@ -39,6 +40,8 @@ sh server/tests/playerbot_contracts.sh
 lua scripts/test-playerbot-fixture-isolation.lua
 lua scripts/test-playerbot-depot-fixture.lua
 lua scripts/test-playerbot-death-fixture.lua
+lua scripts/test-playerbot-transit-fixture.lua
+lua scripts/test-playerbot-supply-fixture.lua
 ```
 
 The depot Lua regression checks login-time inventory expectations, bounded waiting
@@ -60,24 +63,142 @@ pwsh -File scripts/test-playerbot-gameplay.ps1 -Scenario real_depot,real_depot_r
 requires the server development headers. These checks supplement, not replace,
 live gameplay validation.
 
-## Danger retreat
+## Hunt supply budgets and early Exura
 
-`hunt_region_observed_danger` cancels both hunt and defensive targets and starts
-an escape return. Navigation resets, healing, and repeated service requests do
-not end retreat. Healing keeps its normal priority; optional adjacent attackers
-(including crowds) cannot start combat, and level-eight departure waits until
-retreat ends. Depot arrival or a new hunt restores ordinary defensive policy.
+Hunt selection keeps lethal, adaptive-challenge, topology, and route gates first.
+Among safe candidates, it prefers a duration budget that fits carried potions
+minus emergency and route reserves, then projected XP. If none fits, it chooses
+the lowest expected potion consumption among safe candidates, with XP breaking
+ties. This is not a new hunt eligibility gate: existing readiness and emergency
+return rules still apply. A budget is not permission to spend the reserve.
 
-Navigation still tries a detour first. Only a confirmed route-critical blocker
-may be attacked during retreat, without chase, once per creature per return.
-Its budget is five seconds, checked on the next running scheduler turn before
-healing. Exhaustion emits `danger_retreat_combat_budget`; movement of the blocker
-emits `danger_retreat_blocker_moved`. Both release combat and resume navigation.
-This bounds engagement, not successful escape: a trapped bot can still fail to
-find a route or die. Ordinary hunt, loot, and non-danger return defense are unchanged.
+The uncalibrated static estimate uses spawn probabilities and intervals, existing
+combat/clear throughput, and conservative local-crowd inflation. Each modeled
+crowd's fight damage is divided by that same crowd's summed isolated damage;
+the largest local ratio is applied to spawn-rate damage, with a floor of one.
+Two identical attackers therefore inflate their already-summed damage by 1.5,
+not three. It estimates whole potions over the hunt time remaining after travel,
+using minimum healing. It credits only legal Exura's audited minimum and the active default regeneration
+condition. Regeneration uses whole ticks during estimated combat time, expires
+after its current lifetime, and gets no travel credit. Exura retains its mana
+reserve and receives at most one mana pool of credit, not repeated refill cycles.
+No current-health spending, future food, looted supplies, other spells, equipment
+regeneration, expected profit, or observed supply calibration is assumed.
 
-`sh server/tests/playerbot_contracts.sh` checks optional-attacker rejection,
-blocker budgets, no reacquisition, repeated-retreat retention, and reset behavior.
+The existing 256-candidate scoring turns and eight-route shortlist remain bounded.
+Route validation now compares the safe shortlist instead of accepting its first
+safe entry: at most one outbound or return path per turn. Actual travel time and
+outbound/return potion reserves update the budget before final selection. This
+can take more turns and does not promise the whole-map optimum. Potion changes
+or mana loss invalidate the planning snapshot.
+
+`hunt_region_candidate` reports `supply_estimate_source=static_duration_budget`,
+`supply_budget_fits`, `supply_expected_damage`, `supply_regeneration_healing`,
+`supply_spell_healing`, `supply_expected_potions`, `supply_reserved_potions`, and
+`supply_routine_potions`. `score` remains projected XP; it is not a composite
+supply score. `route_validated=true` candidate events carry the revised budget.
+Selections report `selection_rule=supply_budget_then_xp` or
+`lowest_potion_consumption_then_xp`.
+
+Affordable, legally offered Light Healing precedes optional goals and cash
+rebalancing. Mandatory departure, capacity, and healing-supply service remain
+higher priority. Exura retains 100 gold and more than the emergency/route potion
+threshold, rather than funding a ten-potion restock. Other spells keep the full
+restock reserve. The selected reserve is checked again before NPC payment; no
+spell is granted and datapack eligibility is unchanged. Goal candidates explain
+this as `priority_recovery_spell` or `deferred_recovery_spell`; the selected
+training plan also reports `potion_reserve`.
+
+Non-Docker coverage: `sh server/tests/playerbot_contracts.sh` checks duration,
+scarce/plentiful and all-over-budget selection, XP tie-breaking, safety precedence,
+route reserve growth and travel-time reconciliation, finite regeneration, Exura
+legality/mana bounds, exact affordability, and goal priority.
+The supply assertion regression above rejects incorrect selection, payment,
+priority, and missing live verification evidence. The supply Lua regression
+checks the live verifier's exact potion/payment counts and bounded wait.
+
+Parent/live validation (resets the disposable test stack):
+
+```powershell
+pwsh -File scripts/test-playerbot-gameplay.ps1 -Scenario adaptive_challenge,spell_training_low_supplies,spell_training_low_supplies_unaffordable,spell_training,spell_training_shortlist,hunt_region_planning
+```
+
+`adaptive_challenge` additionally runs deterministic synthetic candidate facts
+through the real bounded hunt scoring session/runtime: two potions select the
+one-potion, lower-XP candidate; ten select the eight-potion, higher-XP candidate.
+The all-over-budget case keeps two potions but extends the horizon to 25 minutes:
+the easy candidate needs two potions, the costly one twelve, and neither fits.
+The runtime must still select the easy candidate, not stop or revert to max XP.
+Its `supply_budget_fixture` events include the horizon, both candidates' estimates
+and budget-fit flags, and the selection rule. Their source is
+`synthetic_runtime_candidates`, not measured live combat consumption. The two new spell fixtures use
+the real trainer and payment path: two potions plus 270 gold learn Exura and
+retain both potions/100 gold; 269 gold rejects it. Existing spell persistence,
+shortlist, adaptive-challenge, and hunt-planning assertions remain in place.
+Map extraction, actual route integration, and real combat consumption still need
+live validation; the synthetic contrast alone does not establish sustainable XP.
+
+## Transit combat and danger retreat
+
+Travel to a hunt area, progression destinations, service/depot returns (including
+ordinary returns), and corpse approaches prefer movement and detours. A crowd
+alone never permits stop-and-fight. Deliberate combat inside the reached hunt
+area remains separate; fixed fallback patrol fixtures remain deliberate hunts
+from startup. Navigation must confirm failed-detour, route-critical
+blocker evidence before transit combat can start; target telemetry retains
+`route_critical:true` and `defensive_path_blocker`.
+
+Each blocker gets one no-chase attempt per transit episode, with a five-second
+wall-clock budget checked before healing on each running scheduler turn.
+Healing keeps its normal priority but cannot renew combat. Exhaustion emits
+`transit_combat_budget`; movement of the blocker emits `transit_blocker_moved`.
+Neither permits reacquisition in the same episode. Navigation resets, repeated
+turns, and intermediate arrivals (including coarse/local NPC approach legs) do
+not renew attempts. Hunt-area entry, a new goal decision, or a cycle-phase
+transition ends the episode. Existing combat is
+released with `transit_goal_changed` before it can preempt a new transit goal.
+Loot retries and deadlines retain their existing bounds.
+
+`hunt_region_observed_danger` still cancels hunt/defensive targets and defers
+level-eight departure until depot arrival or a new hunt. It now uses the same
+combat policy as ordinary transit, rather than a separate escape exception.
+These bounds do not guarantee escape: an enclosed bot can still fail to find a
+route or die. Route-risk calibration and supply/healing decisions are unchanged.
+
+`sh server/tests/playerbot_contracts.sh` checks transit classification, optional
+crowd rejection, wall-clock budgets across healing turns, no reacquisition,
+episode retention across coarse/local approach arrivals, and semantic completion/
+new-goal resets. The deterministic live
+`transit_return` fixture starts at `(32105,32191,8)` in the hall north of the
+synthetic depot stall at `(32105,32195,8)`. Four stationary adjacent attackers
+occupy the north/west tiles, leaving the straight southward route empty. This
+geometry was checked against `World.otbm` and `items.otb`; the local Lua test uses
+those ground-only tiles rather than an all-walkable mock. The fixture requires
+normal return movement and depot arrival within 30 seconds with all attackers
+untouched and no target selection:
+
+```powershell
+pwsh -File scripts/test-playerbot-gameplay.ps1 -Scenario transit_return
+```
+
+The fixture fails rather than skips if the map lacks the required open geometry.
+Its log assertion has positive and adversarial non-Docker checks in
+`scripts/test-playerbot-navigation-assertions.ps1`. Live execution remains needed
+to validate the fixture geometry and server integration.
+`corpse_inaccessible` requires a failed detour before exactly one confirmed
+route-critical, no-chase blocker engagement. It must clear the target with
+`skipped/transit_combat_budget` after five seconds (at most one additional
+one-second scheduler turn), not wait for the old `failed/combat_timeout` result.
+The assertion also requires suspension, resumed corpse navigation with retained
+failure counts, and further route failure before one `corpse_inaccessible`
+result. The original limits remain: at most six navigation failures and 70 seconds,
+without reacquisition or a controller terminal event. Replay a captured JSONL log
+without Docker with:
+
+```powershell
+pwsh -File scripts/test-playerbot-navigation-assertions.ps1 -InaccessibleCorpseLogPath /tmp/corpse-inaccessible.jsonl
+```
+
 The live navigation/loot/defense/healing regression command is:
 
 ```powershell

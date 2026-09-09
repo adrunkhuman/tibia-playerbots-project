@@ -1,4 +1,20 @@
 	if ($SpellTraining) {
+		foreach ($lowSupplyCase in @('spell_training_low_supplies', 'spell_training_low_supplies_unaffordable')) {
+			Invoke-Scenario -Name $lowSupplyCase -DefaultTimeoutSeconds 180 -Body {
+				Invoke-Compose down --volumes --remove-orphans
+				$env:PLAYERBOT_GAMEPLAY_MODE = $lowSupplyCase
+				$env:PLAYERBOT_HUNT_DURATION_SECONDS = '900'
+				Invoke-Compose up --detach
+				$unaffordable = $lowSupplyCase -eq 'spell_training_low_supplies_unaffordable'
+				if ($unaffordable) {
+					$logs = Wait-ForLog -Pattern '"spell":"Light Healing".*"reason":"unaffordable_after_reserves"'
+				} else {
+					Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST SPELL_TRAINING_LOW_SUPPLIES_PASS' | Out-Null
+					$logs = Wait-ForLog -Pattern '"action":"learn_spell","result":"success"'
+				}
+				Assert-LowSupplySpellTrainingEvents -Logs $logs -Unaffordable:$unaffordable
+			}
+		}
 		Invoke-Scenario -Name "spell_training" -DefaultTimeoutSeconds 180 -Body {
 			Invoke-Compose down --volumes --remove-orphans
 			$env:PLAYERBOT_GAMEPLAY_MODE = "spell_training"

@@ -29,6 +29,7 @@ bool PlayerBotHuntPlanningSession::invalidated(const PlayerBotHuntPlanningSnapsh
 {
 	return current.playerPosition != planningSnapshot.playerPosition || current.playerLevel != planningSnapshot.playerLevel ||
 	       current.currentHealth < planningSnapshot.currentHealth || current.staminaMinutes != planningSnapshot.staminaMinutes ||
+	       current.potions != planningSnapshot.potions || current.mana < planningSnapshot.mana ||
 	       current.topologyGeneration != planningSnapshot.topologyGeneration ||
 	       current.canUseRope != planningSnapshot.canUseRope || current.canUseShovel != planningSnapshot.canUseShovel ||
 	       current.excludedVariants != planningSnapshot.excludedVariants || current.cacheRevision != planningSnapshot.cacheRevision;
@@ -60,10 +61,7 @@ PlayerBotHuntPlanningProgress PlayerBotHuntPlanningSession::completeScoring()
 		++yieldCount;
 		return PlayerBotHuntPlanningProgress::ScoringYield;
 	}
-	std::stable_sort(scoredRegions.begin(), scoredRegions.end(), [](const PlayerBotHuntRegion& left, const PlayerBotHuntRegion& right) {
-		if (left.suitable != right.suitable) return left.suitable;
-		return left.score > right.score;
-	});
+	std::stable_sort(scoredRegions.begin(), scoredRegions.end(), playerBotPreferHuntRegion);
 	uint32_t regionId = 1;
 	for (PlayerBotHuntRegion& region : scoredRegions) {
 		region.id = regionId++;

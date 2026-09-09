@@ -42,14 +42,6 @@ bool playerBotPredictedLethal(int32_t currentHealth, double predictedDamage)
 	return currentHealth <= 0 || predictedDamage >= currentHealth;
 }
 
-bool playerBotPreferHuntRegion(const PlayerBotHuntRegion& left, const PlayerBotHuntRegion& right)
-{
-	const bool leftAvailable = left.suitable && left.reachable;
-	const bool rightAvailable = right.suitable && right.reachable;
-	if (leftAvailable != rightAvailable) return leftAvailable;
-	return left.score > right.score;
-}
-
 bool playerBotHuntScopeExhausted(const std::vector<PlayerBotHuntRegion>& regions)
 {
 	return std::none_of(regions.begin(), regions.end(), [](const PlayerBotHuntRegion& region) {

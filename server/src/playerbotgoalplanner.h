@@ -41,6 +41,7 @@ struct PlayerBotGoalPlannerSnapshot {
 	bool sellLootPlanAvailable = false;
 	int32_t sellLootUtility = 0;
 	std::string sellLootReason;
+	bool recoverySpellPlanAvailable = false;
 };
 
 class PlayerBotGoalPlanner {

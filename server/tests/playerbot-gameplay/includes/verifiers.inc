@@ -103,6 +103,20 @@ function F.verifyOracleDeparture(playerId, attempts)
     print("PLAYERBOT_GAMEPLAY_TEST ORACLE_DEPARTURE_PASS")
 end
 
+function F.verifyLowSupplySpellTraining(playerId, attempts)
+    local player = Player(playerId)
+    assert(player and not player:isRemoved(), "Bot One disappeared during low-supply spell training")
+    if not player:hasLearnedSpell("Light Healing") and attempts > 0 then
+        addEvent(F.verifyLowSupplySpellTraining, 100, playerId, attempts - 1)
+        return
+    end
+    assert(player:hasLearnedSpell("Light Healing") and not player:hasLearnedSpell("Find Person"),
+        "low-supply training did not prioritize Light Healing")
+    assert(player:getMoney() + player:getBankBalance() == 100 and player:getItemCount(F.potionItemId) == 2,
+        "low-supply training did not retain the exact emergency reserves")
+    print("PLAYERBOT_GAMEPLAY_TEST SPELL_TRAINING_LOW_SUPPLIES_PASS")
+end
+
 function F.verifySpellTraining(playerId, attempts)
     local player = Player(playerId)
     assert(player and not player:isRemoved(), "Bot One disappeared during spell training")

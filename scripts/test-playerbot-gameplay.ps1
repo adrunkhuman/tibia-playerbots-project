@@ -67,7 +67,7 @@ $composeFile = Join-Path $projectRoot "server\compose.yaml"
 $gameplayComposeFile = Join-Path $projectRoot "server\compose.playerbot-gameplay.yaml"
 $composeArguments = @("compose", "-f", $composeFile, "-f", $gameplayComposeFile)
 $scenarioCatalog = @(
-	"cycle",
+	"cycle", "transit_return",
 	"carlin_local_service", "mainland_loop", "slotted_loot_seller", "slotted_loot_no_seller", "slotted_loot_deposit_restart", "sell_loot", "sell_loot_remote_depot",
 	"real_depot", "depot_risk_fallback", "real_depot_restart_approach", "real_depot_restart_locker", "real_depot_restart_chest",
 	"real_depot_restart_deposit", "real_depot_restart_depart", "real_depot_partial_move", "real_depot_rejected_move",
@@ -81,7 +81,7 @@ $scenarioCatalog = @(
 	"equipment_purchase_rejected", "adaptive_challenge", "mainland_equipment_reward", "oracle_departure",
 		"oracle_level_eight_interrupt", "oracle_level_eight_recovery",
 		"navigation", "navigation_recovery", "carlin_service_route", "mutable_portal_route", "patrol_recovery", "target_approach", "target_approach_unreachable", "target_attacker_priority",
-	"spell_training", "spell_training_shortlist", "spell_use", "spell_calibration", "magic_training_haste", "magic_training_great_light",
+	"spell_training", "spell_training_shortlist", "spell_training_low_supplies", "spell_training_low_supplies_unaffordable", "spell_use", "spell_calibration", "magic_training_haste", "magic_training_great_light",
 	"magic_training_light", "magic_training_refresh", "magic_training_reserve", "magic_training_exact_full",
 	"magic_training_pz", "magic_training_absent", "magic_training_expired", "magic_training_failed",
 	"magic_training_service", "magic_training_progression", "magic_training_post_hunt",
@@ -94,8 +94,8 @@ foreach ($scenarioName in $scenarioCatalog) {
 		throw "Duplicate gameplay scenario name: $scenarioName"
 	}
 }
-if ($scenarioCatalog.Count -ne 87) {
-	throw "The gameplay scenario catalog must contain 87 scenarios; found $($scenarioCatalog.Count)."
+if ($scenarioCatalog.Count -ne 90) {
+	throw "The gameplay scenario catalog must contain 90 scenarios; found $($scenarioCatalog.Count)."
 }
 $requestedScenarioNames = @($Scenario | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
 $exactScenarioSelection = $requestedScenarioNames.Count -gt 0

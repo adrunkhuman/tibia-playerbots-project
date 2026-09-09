@@ -5,5 +5,5 @@ root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 build=$(mktemp -d)
 trap 'rm -rf "$build"' EXIT HUP INT TERM
 "${CXX:-c++}" -std=c++17 -Wall -Wextra -Werror -I"$root/src" \
-    "$root/tests/playerbot_contracts.cpp" -o "$build/playerbot_contracts"
+    "$root/tests/playerbot_contracts.cpp" "$root/src/playerbotgoalplanner.cpp" -o "$build/playerbot_contracts"
 "$build/playerbot_contracts"

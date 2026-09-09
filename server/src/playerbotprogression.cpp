@@ -1032,6 +1032,7 @@ bool PlayerBotController::selectTopLevelGoal(Player& player, const Position& pos
 		sellLootCoolingDown, sellLootPlan.has_value(), sellLootPlan ? static_cast<int32_t>(std::clamp<int64_t>(
 			sellLootPlan->utility, std::numeric_limits<int32_t>::min(), std::numeric_limits<int32_t>::max())) : 0,
 		sellLootPlan ? "profitable_liquidation_trip" : "no_profitable_liquidation_trip",
+		spellTrainingFound && spellTraining.spellName == "Light Healing",
 	};
 	const PlayerBotGoalArbiter::GoalDecision decision = progressionRuntime.selectGoal(snapshot);
 	emitGoalCandidate(player, decision.candidate(TopLevelGoal::Departure), decision.id, position, decisionReason, nullptr,

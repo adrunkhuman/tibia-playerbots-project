@@ -12,6 +12,7 @@
 #define FS_PLAYERBOTHUNTREGIONS_H
 
 #include "playerbotcombatprofile.h"
+#include "playerbotsupplypolicy.h"
 #include "position.h"
 
 #include <algorithm>
@@ -50,6 +51,7 @@ struct PlayerBotHuntPlanningProfile {
 	int32_t lightHealingMinimum = 0;
 	double challengeFrontier = 0;
 	bool lightHealingLegal = false;
+	PlayerBotSupplyProfile supply;
 };
 
 struct PlayerBotHuntMonsterProfile {
@@ -103,6 +105,12 @@ struct PlayerBotHuntRegion {
 	double challengeBandMinimum = 0;
 	double challengeBandMaximum = 0;
 	PlayerBotRecoveryPrediction recovery;
+	PlayerBotSupplyProfile supplyProfile;
+	PlayerBotSupplyBudget supplyBudget;
+	double expectedDamagePerSecond = 0;
+	double combatFraction = 0;
+	uint32_t returnRouteDangerCost = 0;
+	bool routeValidated = false;
 	double score = 0;
 	uint32_t travelSteps = 0;
 	uint32_t topologyTravelSteps = 0;
@@ -122,8 +130,16 @@ struct PlayerBotHuntRegion {
 		staminaExperienceMultiplier = staminaMultiplier;
 		projectedExperience = experiencePerMinute * observedCorrection *
 		                      staminaExperienceMultiplier * availableHuntSeconds / 60.0;
-		// The scorer uses projected experience directly; route danger is an acceptance gate.
+		// XP is the tie-breaker within the duration-budget preference tier.
 		score = projectedExperience;
+		reconcileSupplies(supplyProfile.reserve);
+	}
+
+	void reconcileSupplies(uint32_t reserve)
+	{
+		supplyProfile.reserve = reserve;
+		supplyBudget = playerBotSupplyBudget(supplyProfile, expectedDamagePerSecond, combatFraction,
+		                                    availableHuntSeconds, estimatedTravelSeconds);
 	}
 };
 
@@ -165,7 +181,21 @@ PlayerBotHuntPlanningProfile playerBotHuntPlanningProfile(const Player& player, 
 PlayerBotRecoveryPrediction playerBotPredictRecovery(const PlayerBotHuntPlanningProfile& profile,
                                                       double predictedFightSeconds);
 bool playerBotPredictedLethal(int32_t currentHealth, double predictedDamage);
-bool playerBotPreferHuntRegion(const PlayerBotHuntRegion& left, const PlayerBotHuntRegion& right);
+inline bool playerBotPreferHuntRegion(const PlayerBotHuntRegion& left, const PlayerBotHuntRegion& right)
+{
+	const bool leftAvailable = left.suitable && left.reachable;
+	const bool rightAvailable = right.suitable && right.reachable;
+	if (leftAvailable != rightAvailable) return leftAvailable;
+	if (left.supplyBudget.fits != right.supplyBudget.fits) return left.supplyBudget.fits;
+	if (!left.supplyBudget.fits && left.supplyBudget.expectedPotions != right.supplyBudget.expectedPotions) {
+		return left.supplyBudget.expectedPotions < right.supplyBudget.expectedPotions;
+	}
+	return left.score > right.score;
+}
+inline const char* playerBotHuntSelectionRule(const PlayerBotHuntRegion& region)
+{
+	return region.supplyBudget.fits ? "supply_budget_then_xp" : "lowest_potion_consumption_then_xp";
+}
 bool playerBotHuntScopeExhausted(const std::vector<PlayerBotHuntRegion>& regions);
 
 class PlayerBotHuntRegionPlanner

@@ -76,6 +76,19 @@ std::vector<PlayerBotGoalArbiter::GoalCandidate> PlayerBotGoalPlanner::candidate
 		!snapshot.sellLootCoolingDown && snapshot.sellLootPlanAvailable && snapshot.sellLootUtility > huntGoalUtility ? snapshot.sellLootUtility : 0,
 		snapshot.sellLootCoolingDown ? "cooldown" : snapshot.sellLootPlanAvailable && snapshot.sellLootUtility > huntGoalUtility ?
 			snapshot.sellLootReason : snapshot.sellLootPlanAvailable ? "utility_below_hunt" : snapshot.sellLootReason};
-	return {departure, service, pickup, spell, equipment, magic, sellLoot,
+	std::vector<PlayerBotGoalArbiter::GoalCandidate> result{departure, service, pickup, spell, equipment, magic, sellLoot,
 	        {Goal::Hunt, true, huntGoalUtility, "autonomous_hunting_available"}};
+	if (snapshot.recoverySpellPlanAvailable && spell.feasible) {
+		for (auto& candidate : result) {
+			if (candidate.goal == Goal::LearnSpell) {
+				candidate.reason = "priority_recovery_spell";
+			} else if (candidate.goal != Goal::Departure &&
+			           !(candidate.goal == Goal::Service &&
+			             (snapshot.lowCapacity || snapshot.criticalHealing || snapshot.missingPotions != 0))) {
+				candidate.feasible = false;
+				candidate.reason = "deferred_recovery_spell";
+			}
+		}
+	}
+	return result;
 }

@@ -16,7 +16,7 @@ PlayerBotHuntCoordinator::PlayerBotHuntCoordinator(
 std::optional<PlayerBotCombatDecision> PlayerBotHuntCoordinator::selectTraversalAttack(
 	std::vector<PlayerBotTraversalCandidate> candidates, const Position& currentPosition, std::chrono::steady_clock::time_point now)
 {
-	if (dangerRetreat.active()) return std::nullopt;
+	if (transitCombat.active()) return std::nullopt;
 	return combatRuntime.selectTraversalAttack(std::move(candidates), currentPosition, now);
 }
 
@@ -24,7 +24,7 @@ std::optional<PlayerBotCombatDecision> PlayerBotHuntCoordinator::selectDefensive
 	std::vector<PlayerBotDefensiveTarget> candidates, const Position& currentPosition) const
 {
 	candidates.erase(std::remove_if(candidates.begin(), candidates.end(), [this](const PlayerBotDefensiveTarget& target) {
-		return !dangerRetreat.allowsDefense(target.id, target.routeCritical);
+		return !transitCombat.allowsDefense(target.id, target.routeCritical);
 	}), candidates.end());
 	return combatRuntime.selectDefensiveAttack(std::move(candidates), currentPosition);
 }
@@ -34,7 +34,7 @@ PlayerBotCombatDecision PlayerBotHuntCoordinator::confirmCombatAttack(const Play
 {
 	const auto result = combatRuntime.confirmAttack(command, accepted, now);
 	if (accepted && result.command == PlayerBotCombatCommand::AttackDefensive) {
-		dangerRetreat.beginDefense(command.target.id, now);
+		transitCombat.beginDefense(command.target.id, now);
 	}
 	return result;
 }

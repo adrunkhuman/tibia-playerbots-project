@@ -348,6 +348,7 @@
 			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST ADAPTIVE_CHALLENGE_START' | Out-Null
 			$challengeLogs = Wait-ForLog -Pattern '"event":"terminal".*"reason":"hunt_scope_exhausted"'
 			Assert-AdaptiveChallengeEvents -Logs $challengeLogs
+			Assert-SupplyBudgetEvents -Logs $challengeLogs
 		}
 	}
 

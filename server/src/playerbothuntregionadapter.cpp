@@ -6,6 +6,7 @@
 #include "playerbottopology.h"
 
 #include "configmanager.h"
+#include "condition.h"
 #include "game.h"
 #include "monsters.h"
 #include "player.h"
@@ -411,6 +412,9 @@ namespace {
 		std::set<size_t> reachableMembers;
 		double expectedCycleExperience = 0;
 		double expectedClearSeconds = 0;
+		double spawnDamagePerSecond = 0;
+		double spawnCombatFraction = 0;
+		double crowdDamageInflation = 1;
 		for (size_t member : cached.members) {
 			const CachedSpawnBlock& spawn = huntAtlas.spawns[member];
 			const auto approach = nearestApproach(player, spawn.position, topologyDistances);
@@ -442,6 +446,9 @@ namespace {
 				                              (60000.0 / std::max<uint32_t>(spawn.interval, 1));
 				expectedCycleExperience += monsterType->info.experience * probability;
 				expectedClearSeconds += fightSeconds * probability;
+				const double spawnsPerSecond = probability * 1000.0 / std::max<uint32_t>(spawn.interval, 1);
+				spawnDamagePerSecond += monsterProfile.predictedFightDamage * spawnsPerSecond;
+				spawnCombatFraction += fightSeconds * spawnsPerSecond;
 			}
 		}
 
@@ -469,12 +476,16 @@ namespace {
 			double remainingDamagePerSecond = 0;
 			for (size_t index = 0; index < attackers; ++index) remainingDamagePerSecond += localAttackers[index].damagePerSecond;
 			double fightDamage = 0;
+			double isolatedDamage = 0;
 			double fightSeconds = 0;
 			for (size_t index = 0; index < attackers; ++index) {
 				fightDamage += remainingDamagePerSecond * localAttackers[index].fightSeconds;
+				isolatedDamage += localAttackers[index].damagePerSecond * localAttackers[index].fightSeconds;
 				fightSeconds += localAttackers[index].fightSeconds;
 				remainingDamagePerSecond -= localAttackers[index].damagePerSecond;
 			}
+			crowdDamageInflation = std::max(crowdDamageInflation,
+			    playerBotCrowdDamageInflation(fightDamage, isolatedDamage));
 			if (fightDamage > worstFightDamage) {
 				worstFightDamage = fightDamage;
 				worstFightSeconds = fightSeconds;
@@ -499,6 +510,14 @@ namespace {
 		if (region.clearExperiencePerMinute > 0) {
 			region.experiencePerMinute = std::min(region.spawnExperiencePerMinute, region.clearExperiencePerMinute);
 		}
+		const double throughput = region.spawnExperiencePerMinute > 0 ?
+		    region.experiencePerMinute / region.spawnExperiencePerMinute : 1;
+		// Spawn rates already sum isolated fights. Apply only the largest local
+		// crowd/isolated ratio, not crowd damage divided by one monster's damage.
+		// This is conservative static prediction, not observed supply calibration.
+		region.expectedDamagePerSecond = spawnDamagePerSecond * throughput * crowdDamageInflation;
+		region.combatFraction = std::min(1.0, spawnCombatFraction * throughput);
+		region.supplyProfile = planningProfile.supply;
 		region.destination = *std::min_element(region.patrolPoints.begin(), region.patrolPoints.end(),
 			[&player](const Position& left, const Position& right) {
 				const uint32_t leftDistance = Position::getDistanceX(player.getPosition(), left) +
@@ -572,6 +591,7 @@ namespace {
 		region.optimisticProjectedExperience = region.experiencePerMinute * region.observedCorrection *
 		                                       1.5 * huntDurationSeconds / 60.0;
 		region.score = region.projectedExperience;
+		region.reconcileSupplies(planningProfile.supply.reserve);
 		region.reachable = withinPlanningScope;
 		region.travelSteps = estimatedTravelSteps;
 		return region;
@@ -648,6 +668,23 @@ PlayerBotHuntPlanningProfile PlayerBotHuntRegionAdapter::planningProfile(const P
 	    playerbot::recoveryPotionItemId(player.getVocationId()));
 	profile.potionMinimumHealing = playerbot::recoveryPotionMinimumHealing(player.getVocationId());
 	profile.challengeFrontier = challengeFrontier;
+	profile.supply.potions = profile.potionCount;
+	profile.supply.potionHealing = profile.potionMinimumHealing;
+	profile.supply.mana = profile.mana;
+	profile.supply.maximumMana = player.getMaxMana();
+	if (Condition* food = player.getCondition(CONDITION_REGENERATION, CONDITIONID_DEFAULT)) {
+		profile.supply.regenerationSeconds = food->getTicks() == -1 ?
+		    std::numeric_limits<double>::max() : std::max(0, food->getTicks()) / 1000.0;
+		profile.supply.healthGain = std::max(0, food->getParam(CONDITION_PARAM_HEALTHGAIN));
+		profile.supply.manaGain = std::max(0, food->getParam(CONDITION_PARAM_MANAGAIN));
+		auto interval = [](int32_t ticks) {
+			// Conditions execute on creature ticks, resetting their counter on gain.
+			return ticks > 0 ? std::ceil(static_cast<double>(ticks) / EVENT_CREATURE_THINK_INTERVAL) *
+			    EVENT_CREATURE_THINK_INTERVAL / 1000.0 : 0;
+		};
+		profile.supply.healthInterval = interval(food->getParam(CONDITION_PARAM_HEALTHTICKS));
+		profile.supply.manaInterval = interval(food->getParam(CONDITION_PARAM_MANATICKS));
+	}
 	InstantSpell* spell = g_spells ? g_spells->getInstantSpellByName("Light Healing") : nullptr;
 	if (!spell || spell->getWords() != "exura" || !spell->isLearnable() || !spell->isEnabled() ||
 	    !spell->canCast(&player) || player.getLevel() < spell->getLevel() ||
@@ -660,6 +697,10 @@ PlayerBotHuntPlanningProfile PlayerBotHuntRegionAdapter::planningProfile(const P
 	if (const PlayerBotSpellDescriptor* descriptor = playerBotSpellDescriptor("Light Healing")) {
 		profile.lightHealingMinimum = playerBotSpellEnvelope(player, *descriptor).minimum;
 	}
+	profile.supply.spellLegal = profile.lightHealingLegal;
+	profile.supply.spellMana = profile.lightHealingManaCost;
+	profile.supply.spellHealing = std::max(0, profile.lightHealingMinimum);
+	profile.supply.spellInterval = std::max<uint32_t>(profile.lightHealingCooldown, 1) / 1000.0;
 	return profile;
 }
 
