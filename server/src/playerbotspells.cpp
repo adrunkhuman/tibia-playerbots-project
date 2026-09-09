@@ -278,9 +278,13 @@ bool PlayerBotController::tryOffensiveSpell(Player* player, const Position& curr
 	    survivalRuntime.decideOffensiveSpell(survivalSnapshot(*player, target), std::chrono::steady_clock::now()));
 }
 
-uint64_t PlayerBotController::spellTrainingReserve(const Player& player) const
+uint64_t PlayerBotController::spellTrainingReserve(const Player& player, bool emergencyOnly) const
 {
 	const uint16_t potionItemId = recoveryPotionItemId(player.getVocationId());
+	const uint32_t potionCount = inventoryPolicy.inventoryItemCount(player, potionItemId);
+	const uint32_t reserveTarget = emergencyOnly ?
+	    (huntPotionReturnThreshold == UINT32_MAX ? UINT32_MAX : huntPotionReturnThreshold + 1) : healthPotionRestockTarget;
+	if (emergencyOnly && potionCount >= reserveTarget) return carriedGoldReserve;
 	uint32_t potionPrice = std::numeric_limits<uint32_t>::max();
 	for (Npc* npc : playerBotNpcProviders(g_game.getNpcs(), PlayerBotNpcCapability::Shop, player.getPosition())) {
 		for (const ShopInfo& offer : npc->getShopOffers()) {
@@ -292,10 +296,7 @@ uint64_t PlayerBotController::spellTrainingReserve(const Player& player) const
 	if (potionPrice == std::numeric_limits<uint32_t>::max()) {
 		return std::numeric_limits<uint64_t>::max();
 	}
-	const uint32_t potionCount = inventoryPolicy.inventoryItemCount(player, potionItemId);
-	const uint32_t potionGap = potionCount < healthPotionRestockTarget ?
-	                               healthPotionRestockTarget - potionCount : 0;
-	return carriedGoldReserve + static_cast<uint64_t>(potionGap) * potionPrice;
+	return playerBotRecoverySpendingReserve(potionCount, reserveTarget, potionPrice, carriedGoldReserve);
 }
 
 void PlayerBotController::emitSpellCandidate(const Npc& npc, const NpcSpellOffer& offer, const Position& position,
@@ -323,11 +324,13 @@ bool PlayerBotController::findSpellTraining(Player& player, const Position& posi
                                             std::deque<PlayerBotNavigationStep>& selectedSteps)
 {
 	const uint64_t reserve = spellTrainingReserve(player);
+	const uint64_t healingReserve = spellTrainingReserve(player, true);
 	const uint64_t totalMoney = player.getMoney() + player.getBankBalance();
 	const uint16_t vocationId = player.getVocationId();
 	const uint16_t baseVocationId = player.getVocation()->getFromVocation() == 0 ? vocationId :
 	                               player.getVocation()->getFromVocation();
-	const bool suppliesReady = inventoryPolicy.inventoryItemCount(player, recoveryPotionItemId(vocationId)) > healthPotionReturnThreshold;
+	const uint32_t potionCount = inventoryPolicy.inventoryItemCount(player, recoveryPotionItemId(vocationId));
+	const bool suppliesReady = potionCount > huntPotionReturnThreshold;
 	std::vector<PlayerBotSpellOfferSnapshot> offers;
 	std::vector<std::deque<PlayerBotNavigationStep>> routes;
 	uint64_t remainingPathNodes = maximumSpellTrainerPathNodes;
@@ -452,15 +455,21 @@ bool PlayerBotController::findSpellTraining(Player& player, const Position& posi
 			const bool levelEligible = player.getLevel() >= offer.level;
 			const bool premiumEligible = !offer.premium || player.isPremium();
 			const bool alreadyLearned = player.hasLearnedInstantSpell(offer.spellName);
-			const bool affordable = reserve != std::numeric_limits<uint64_t>::max() &&
-			                        totalMoney >= reserve + offer.price;
+			const uint64_t offerReserve = offer.spellName == "Light Healing" ? healingReserve : reserve;
+			const bool affordable = playerBotAffordableAfterReserve(totalMoney, offerReserve, offer.price);
 			const bool routeReachable = registryMatches && vocationEligible && levelEligible && premiumEligible &&
 			                            !alreadyLearned && suppliesReady && affordable && findTrainerApproach();
 			offers.push_back({npc->getID(), npc->getPosition(), npc->getName(), offer.spellName, offer.keyword,
 			                  offer.price, offer.level, offer.premium, inScope, registryMatches,
 			                  learningPriority.has_value(), learningPriority.value_or(UINT8_MAX), vocationEligible,
 			                  levelEligible, premiumEligible, alreadyLearned, suppliesReady,
-			                  trainerRoute});
+			                  trainerRoute, offerReserve});
+			if (routeReachable) {
+				const uint32_t routeReserve = recoveryPotionRouteReserve(vocationId, player.getMaxHealth(),
+				    trainerRoute.dangerCost, static_cast<uint32_t>(PlayerBotNavigationRiskProfile{}.healthLossCost));
+				offers.back().potionReserve = std::max(huntPotionReturnThreshold, routeReserve);
+				offers.back().suppliesReady = potionCount > offers.back().potionReserve;
+			}
 			routes.push_back(trainerSteps);
 		}
 	}
@@ -478,7 +487,7 @@ bool PlayerBotController::findSpellTraining(Player& player, const Position& posi
 		Npc* npc = g_game.getNpcByID(offer.npcId);
 		if (npc) emitSpellCandidate(*npc, {offer.spellName, offer.keyword, offer.price, offer.level, offer.premium, {}}, position,
 		                           rejection == decision.rejections.end() ? "feasible" : "rejected",
-		                           rejection == decision.rejections.end() ? nullptr : rejection->reason.c_str(), reserve, offer.route.steps,
+		                           rejection == decision.rejections.end() ? nullptr : rejection->reason.c_str(), offer.reserve.value_or(reserve), offer.route.steps,
 		                           offer.implementedUse ? std::optional<uint8_t>(offer.learningPriority) : std::nullopt);
 	}
 	if (!decision.selected) return false;
@@ -498,6 +507,7 @@ void PlayerBotController::beginSpellTraining(Player& player, const Position& pos
 	     std::to_string(training.npcId) + ",\"spell\":" + jsonString(training.spellName) +
 	     ",\"keyword\":" + jsonString(training.keyword) + ",\"price\":" +
 	     std::to_string(training.price) + ",\"reserve\":" + std::to_string(training.reserve) +
+	     ",\"potion_reserve\":" + std::to_string(training.potionReserve) +
 	     ",\"travel_steps\":" + std::to_string(training.travelSteps));
 	say(player, "Going to learn " + training.spellName + ".");
 }
@@ -538,6 +548,13 @@ void PlayerBotController::processSpellTraining(Player* player, const Position& c
 		});
 	PlayerBotSpellTrainingObservation observation;
 	observation.totalMoney = player->getMoney() + player->getBankBalance();
+	if (progressionRuntime.spellTraining().stage() != PlayerBotSpellTrainingStage::Verify &&
+	    (!playerBotAffordableAfterReserve(observation.totalMoney, training.reserve, training.price) ||
+	     inventoryPolicy.inventoryItemCount(*player, recoveryPotionItemId(vocationId)) <=
+	         std::max(huntPotionReturnThreshold, training.potionReserve))) {
+		finishSpellTraining(player, currentPosition, "failed", "recovery_reserve_changed");
+		return;
+	}
 	if (progressionRuntime.spellTraining().stage() == PlayerBotSpellTrainingStage::Travel) {
 		bool approachUnavailable = false;
 		observation.navigationReached = processNpcApproach(player, currentPosition, trainer, training.approachPosition, approachUnavailable);

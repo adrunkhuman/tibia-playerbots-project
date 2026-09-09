@@ -1,3 +1,16 @@
+	if ($FullNavigation -or $selectedScenarios.Contains("transit_return")) {
+		Invoke-Scenario -Name "transit_return" -DefaultTimeoutSeconds 60 -Body {
+			Invoke-Compose down --volumes --remove-orphans
+			$env:PLAYERBOT_GAMEPLAY_MODE = "transit_return"
+			Invoke-Compose up --detach
+			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST TRANSIT_RETURN_STATE_PASS' | Out-Null
+			$transitLogs = Wait-ForPlayerbotEvent -Predicate {
+				$_.event -eq "objective_transition" -and $_.to -eq "deposit_loot"
+			}
+			Assert-TransitReturnEvents -Logs $transitLogs
+		}
+	}
+
 	if ($FullNavigation -or $selectedScenarios.Contains("carlin_service_route") -or $selectedScenarios.Contains("mutable_portal_route")) {
 		Invoke-Scenario -Name "navigation" -DefaultTimeoutSeconds 240 -Body {
 			Invoke-Compose down --volumes --remove-orphans

@@ -37,12 +37,13 @@ function F.login.onLogin(player)
         end
     end
 	F.selectHealthPotion(player)
-    assert(mode == "mainland" or mode == "carlin_local_service" or mode == "cycle" or mode == "depot" or mode == "depot_risk_fallback" or mode == "slotted_loot_seller" or mode == "slotted_loot_no_seller" or mode == "sell_loot" or mode == "sell_loot_remote_depot" or mode == "navigation" or mode == "navigation_recovery" or mode == "carlin_service_route" or mode == "mutable_portal_route" or mode == "patrol_recovery" or mode == "target_approach" or mode == "target_approach_unreachable" or mode == "target_attacker_priority" or mode == "hunt_area_arrival" or mode == "corpse" or mode == "corpse_detour" or mode == "corpse_inaccessible" or mode == "death" or mode == "healing" or mode == "spell_use" or
+    assert(mode == "transit_return" or mode == "mainland" or mode == "carlin_local_service" or mode == "cycle" or mode == "depot" or mode == "depot_risk_fallback" or mode == "slotted_loot_seller" or mode == "slotted_loot_no_seller" or mode == "sell_loot" or mode == "sell_loot_remote_depot" or mode == "navigation" or mode == "navigation_recovery" or mode == "carlin_service_route" or mode == "mutable_portal_route" or mode == "patrol_recovery" or mode == "target_approach" or mode == "target_approach_unreachable" or mode == "target_attacker_priority" or mode == "hunt_area_arrival" or mode == "corpse" or mode == "corpse_detour" or mode == "corpse_inaccessible" or mode == "death" or mode == "healing" or mode == "spell_use" or
         mode == "healing_resupply" or mode == "value" or mode == "progression" or mode == "progression_bundle" or
         mode == "progression_nested" or mode == "progression_resume" or mode == "progression_nested_resume" or
         mode == "progression_space" or mode == "arbitration" or mode == "arbitration_interrupt" or mode == "departure" or
         mode == "departure_interrupt" or mode == "departure_recovery" or mode == "spell_training" or
-        mode == "spell_training_shortlist" or mode == "stamina_bonus" or
+        mode == "spell_training_shortlist" or mode == "spell_training_low_supplies" or
+        mode == "spell_training_low_supplies_unaffordable" or mode == "stamina_bonus" or
         mode == "stamina_boundary" or mode == "stamina_normal" or mode == "hunt_planning" or mode == "spell_calibration" or
         mode == "readiness_ready" or mode == "adaptive_challenge" or mode == "readiness_upgrade" or
         mode == "readiness_missing_weapon" or mode == "readiness_supplies" or mode == "readiness_no_food" or
@@ -654,7 +655,9 @@ function F.login.onLogin(player)
         print("PLAYERBOT_GAMEPLAY_TEST PICKUP_PROGRESSION_BUNDLE_START")
         return true
     end
-    if mode == "spell_training" then
+    if mode == "spell_training" or mode == "spell_training_low_supplies" or mode == "spell_training_low_supplies_unaffordable" then
+        local lowSupplies = mode ~= "spell_training"
+        local funding = mode == "spell_training_low_supplies_unaffordable" and 269 or lowSupplies and 270 or 300
         if player:getStorageValue(F.spellTrainingStorage) == 1 then
             assert(player:hasLearnedSpell("Light Healing") and not player:hasLearnedSpell("Find Person"),
                 "spell training priority did not persist across restart")
@@ -677,18 +680,22 @@ function F.login.onLogin(player)
         for _, spellName in ipairs({"Find Person", "Light", "Light Healing", "Cure Poison", "Great Light"}) do player:forgetSpell(spellName) end
         F.removeAll(player, F.potionItemId)
         F.removeAll(player, F.meatItemId)
-        assert(player:addItem(F.potionItemId, 10), "spell training fixture could not supply potions")
+        assert(player:addItem(F.potionItemId, lowSupplies and 2 or 10), "spell training fixture could not supply potions")
         assert(player:addItem(F.meatItemId, 2), "spell training fixture could not supply food")
         player:removeCondition(CONDITION_REGENERATION)
         local food = Condition(CONDITION_REGENERATION, CONDITIONID_DEFAULT)
         food:setParameter(CONDITION_PARAM_TICKS, 1200000)
         assert(player:addCondition(food), "spell training fixture could not fill the food timer")
         local totalMoney = player:getMoney() + player:getBankBalance()
-        if totalMoney < 300 then assert(player:addMoney(300 - totalMoney), "spell training fixture could not fund Bot One") end
-        if totalMoney > 300 then assert(player:removeTotalMoney(totalMoney - 300), "spell training fixture could not normalize funding") end
-        assert(player:getMoney() + player:getBankBalance() == 300, "spell training fixture has the wrong starting money")
+        if totalMoney < funding then assert(player:addMoney(funding - totalMoney), "spell training fixture could not fund Bot One") end
+        if totalMoney > funding then assert(player:removeTotalMoney(totalMoney - funding), "spell training fixture could not normalize funding") end
+        assert(player:getMoney() + player:getBankBalance() == funding, "spell training fixture has the wrong starting money")
         F.suppressNearbyMonsters(player:getId())
-        addEvent(F.verifySpellTraining, 500, player:getId(), 360)
+        if mode == "spell_training_low_supplies" then
+            addEvent(F.verifyLowSupplySpellTraining, 100, player:getId(), 1800)
+        elseif not lowSupplies then
+            addEvent(F.verifySpellTraining, 500, player:getId(), 360)
+        end
         assert(player:setStorageValue(F.fixtureReadyStorage, 1), "spell training fixture could not signal readiness")
         print("PLAYERBOT_GAMEPLAY_TEST SPELL_TRAINING_START")
         return true
@@ -804,6 +811,7 @@ function F.login.onLogin(player)
         print("PLAYERBOT_GAMEPLAY_TEST TARGET_APPROACH_START " .. monster:getId())
         return true
     end
+    if mode == "transit_return" then F.prepareTransitReturn(player); return true end
     if mode == "navigation" then F.createTemporaryBlockers(); F.suppressNearbyMonsters(player:getId()); print("PLAYERBOT_GAMEPLAY_TEST NAVIGATION_START"); return true end
     if mode == "navigation_recovery" then F.suppressNearbyMonsters(player:getId()); print("PLAYERBOT_GAMEPLAY_TEST NAVIGATION_RECOVERY_START"); return true end
     if mode == "carlin_service_route" then

@@ -1,5 +1,49 @@
 local F = PlayerbotGameplayFixture
 
+-- World.otbm: the depot at (32105,32195,8) is a stall opening north onto
+-- the hall. Its eastern neighbors are walls/stalls, not an open westward route.
+-- Start in the hall at (32105,32191,8), with four attackers north/west and
+-- the verified straight southward route into the stall left empty.
+function F.prepareTransitReturn(player)
+    F.suppressNearbyMonsters(player:getId())
+    local origin = Position(F.depotPosition.x, F.depotPosition.y - 4, F.depotPosition.z)
+    local offsets = {{-1, -1}, {0, -1}, {1, -1}, {-1, 0}}
+    for y = origin.y, F.depotPosition.y do
+        local tile = Tile(Position(origin.x, y, origin.z))
+        assert(tile and tile:isWalkable(), "transit fixture requires an open southward depot route")
+    end
+    for _, offset in ipairs(offsets) do
+        local tile = Tile(Position(origin.x + offset[1], origin.y + offset[2], origin.z))
+        assert(tile and tile:isWalkable(), "transit fixture requires four adjacent attacker tiles")
+    end
+    assert(player:teleportTo(origin), "transit fixture could not place Bot One")
+    local ids = {}
+    for _, offset in ipairs(offsets) do
+        local monster = Game.createMonster(F.defensiveMonsterName,
+            Position(origin.x + offset[1], origin.y + offset[2], origin.z), true, true)
+        assert(monster and monster:selectTarget(player), "transit attacker could not target Bot One")
+        ids[#ids + 1] = monster:getId()
+    end
+    print("PLAYERBOT_GAMEPLAY_TEST TRANSIT_RETURN_START " .. origin.x .. " " .. origin.y .. " " .. origin.z)
+    addEvent(F.verifyTransitReturn, 100, player:getId(), ids, 0)
+end
+
+function F.verifyTransitReturn(playerId, ids, attempts)
+    local player = Player(playerId)
+    assert(player and not player:isRemoved(), "transit fixture lost Bot One")
+    for _, id in ipairs(ids) do
+        local monster = Monster(id)
+        assert(monster and monster:getHealth() == monster:getMaxHealth(), "transit optional attacker was attacked")
+    end
+    local position = player:getPosition()
+    if position.x == F.depotPosition.x and position.y == F.depotPosition.y and position.z == F.depotPosition.z then
+        print("PLAYERBOT_GAMEPLAY_TEST TRANSIT_RETURN_STATE_PASS")
+        return
+    end
+    assert(attempts < 299, "transit crowd prevented depot arrival within 30 seconds")
+    addEvent(F.verifyTransitReturn, 100, playerId, ids, attempts + 1)
+end
+
 function F.removeTargetSelectionCompetitor(monsterId)
 	local monster = Monster(monsterId)
 	if monster and not monster:isRemoved() then monster:remove() end

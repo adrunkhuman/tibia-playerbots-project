@@ -41,6 +41,8 @@ struct PlayerBotHuntRuntimePlayerObservation {
 	std::set<uint64_t> excludedVariants;
 	bool canUseRope = false;
 	bool canUseShovel = false;
+	uint32_t potions = 0;
+	uint32_t mana = 0;
 };
 
 struct PlayerBotHuntRuntimeCooldownCommand {

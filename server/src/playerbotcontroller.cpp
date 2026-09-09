@@ -1244,6 +1244,8 @@ bool PlayerBotController::processNavigation(Player* player, const Position& curr
 	if (navigationOutcome) *navigationOutcome = outcome;
 	fixtureDriver.observeNavigationPlan(outcome.plan.attempted);
 	if (outcome.destinationReached) {
+		// A navigation leg (for example, coarse NPC approach) can finish
+		// without completing the transit goal or renewing blocker attempts.
 		resetNavigation();
 		return true;
 	}
@@ -1423,9 +1425,21 @@ void PlayerBotController::navigate()
 			return;
 		}
 	}
-	// Healing may consume consecutive turns; it must not extend blocker combat.
-	if (huntCoordinator.dangerDefenseExpired(std::chrono::steady_clock::now())) {
-		finishDefensiveCombat(player, currentPosition, "skipped", "danger_retreat_combat_budget");
+	const bool transit = PlayerBotTransitCombat::required(turnRouter.cyclePhase(), turnRouter.scenarioStage(),
+	    huntRegionReached, progressionRuntime.session().active() != PlayerBotProgressionProcedure::None);
+	const bool transitChanged = huntCoordinator.observeTransit(transit, progressionRuntime.decisionId(), turnRouter.cyclePhase());
+	// Reconcile before healing and combat dispatch: a previous hunt target cannot
+	// hold a new travel goal hostage, even when recovery consumes consecutive turns.
+	if (transit && transitChanged) {
+		if (huntCoordinator.hasDefensiveCombat()) {
+			finishDefensiveCombat(player, currentPosition, "skipped", "transit_goal_changed");
+		}
+		if (huntCoordinator.traversalTarget()) {
+			finishTraversalCombat(player, currentPosition, "transit_goal_changed");
+		}
+	}
+	if (huntCoordinator.transitDefenseExpired(std::chrono::steady_clock::now())) {
+		finishDefensiveCombat(player, currentPosition, "skipped", "transit_combat_budget");
 	}
 	const bool accessingReward = progressionRuntime.session().active(PlayerBotProgressionProcedure::PickupReward) &&
 	                             (progressionRuntime.reward().stage() == PlayerBotRewardStage::VerifyReward ||

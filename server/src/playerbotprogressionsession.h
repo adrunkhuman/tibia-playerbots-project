@@ -157,6 +157,7 @@ struct PlayerBotSpellTrainingPlan {
 	bool premium = false;
 	uint32_t travelSteps = 0;
 	uint64_t reserve = 0;
+	uint32_t potionReserve = 1;
 };
 
 enum class PlayerBotSpellTrainingStage : uint8_t {

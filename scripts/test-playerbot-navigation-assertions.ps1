@@ -1,6 +1,6 @@
 #Requires -Version 7.0
 
-param([string]$DangerRetreatLogPath)
+param([string]$DangerRetreatLogPath, [string]$InaccessibleCorpseLogPath)
 
 $ErrorActionPreference = "Stop"
 
@@ -31,6 +31,28 @@ function Assert-Rejected {
     }
     throw "$Name unexpectedly passed."
 }
+
+$transitMarkers = "PLAYERBOT_GAMEPLAY_TEST TRANSIT_RETURN_START 100 100 7`nPLAYERBOT_GAMEPLAY_TEST TRANSIT_RETURN_STATE_PASS`n"
+$transitStart = @{ event = "action_result"; action = "return"; result = "started"; reason = "startup";
+    position = @{ x = 100; y = 100; z = 7 } }
+$transitEnd = @{ event = "objective_transition"; to = "deposit_loot";
+    position = @{ x = 97; y = 100; z = 7 } }
+Assert-TransitReturnEvents -Logs ($transitMarkers + (ConvertTo-FixtureLogs @($transitStart, $transitEnd)))
+Assert-Rejected "Crowd caused optional combat" {
+    Assert-TransitReturnEvents -Logs ($transitMarkers + (ConvertTo-FixtureLogs @($transitStart,
+        @{ event = "target_changed"; target_id = 42; reason = "defensive_attacker"; route_critical = $false }, $transitEnd)))
+} "Transit return failed: optional combat"
+Assert-Rejected "Crowd caused unjustified blocker combat" {
+    Assert-TransitReturnEvents -Logs ($transitMarkers + (ConvertTo-FixtureLogs @($transitStart,
+        @{ event = "target_changed"; target_id = 42; reason = "defensive_path_blocker"; route_critical = $true }, $transitEnd)))
+} "Transit return failed: optional combat"
+Assert-Rejected "Crowd prevented movement" {
+    Assert-TransitReturnEvents -Logs ($transitMarkers + (ConvertTo-FixtureLogs @($transitStart,
+        @{ event = "objective_transition"; to = "deposit_loot"; position = $transitStart.position })))
+} "Transit return failed: no ordinary return movement"
+Assert-Rejected "No live crowd verification" {
+    Assert-TransitReturnEvents -Logs (ConvertTo-FixtureLogs @($transitStart, $transitEnd))
+} "Transit return failed: missing crowd fixture"
 
 $dangerStart = @{ event = "objective_transition"; to = "return_to_depot"; reason = "hunt_region_observed_danger";
     position = @{ x = 100; y = 100; z = 7 } }
@@ -68,6 +90,61 @@ Assert-Rejected "Stationary retreat" {
 } "Danger retreat failed: no movement"
 if ($DangerRetreatLogPath) {
     Assert-DangerRetreatEvents -Logs (Get-Content -Raw -LiteralPath $DangerRetreatLogPath)
+}
+
+function New-InaccessibleCorpseFixture {
+    return @(
+        @{ event = "navigation_progress"; result = "failed"; reason = "route_unavailable" }
+        @{ event = "target_changed"; target_id = 42; target_name = "Playerbot Corpse Blocker";
+            reason = "defensive_path_blocker"; route_critical = $true }
+        @{ event = "action_result"; action = "defensive_combat"; result = "started"; target_id = 42;
+            chase = $false; route_critical = $true; ts = "2026-09-09T16:36:29.485Z" }
+        @{ event = "target_changed"; previous_target_id = 42; target_id = $null; reason = "transit_combat_budget" }
+        @{ event = "action_result"; action = "defensive_combat"; result = "skipped"; target_id = 42;
+            reason = "transit_combat_budget"; ts = "2026-09-09T16:36:34.486Z" }
+        @{ event = "navigation_progress"; result = "suspended"; reason = "corpse_route_unchanged"; navigation_failures = 3 }
+        @{ event = "navigation_progress"; result = "resumed"; reason = "corpse_retry"; navigation_failures = 3 }
+        @{ event = "navigation_progress"; result = "failed"; reason = "route_unavailable" }
+        @{ event = "action_result"; action = "loot"; result = "failed"; reason = "corpse_inaccessible";
+            target_id = 41; navigation_failures = 6; navigation_suspensions = 1; elapsed_ms = 12150 }
+    )
+}
+Assert-InaccessibleCorpseEvents -Logs (ConvertTo-FixtureLogs (New-InaccessibleCorpseFixture))
+foreach ($case in @("old_timeout", "early_release", "late_release", "missing_timestamp", "optional_attacker",
+    "unconfirmed_blocker", "chase", "missing_chase", "wrong_release_target", "missing_target_clear",
+    "reacquired", "no_suspension", "no_resume", "no_retry", "detour_after_combat", "retry_before_resume",
+    "reset_failure_budget", "no_failure_progress", "too_many_failures", "loot_overrun", "duplicate_loot", "terminal")) {
+    $events = New-InaccessibleCorpseFixture
+    switch ($case) {
+        "old_timeout" { $events[4].result = "failed"; $events[4].reason = "combat_timeout" }
+        "early_release" { $events[4].ts = "2026-09-09T16:36:34.484Z" }
+        "late_release" { $events[4].ts = "2026-09-09T16:36:35.486Z" }
+        "missing_timestamp" { $events[4].Remove("ts") }
+        "optional_attacker" { $events[1].reason = "defensive_attacker" }
+        "unconfirmed_blocker" { $events[1].route_critical = $false }
+        "chase" { $events[2].chase = $true }
+        "missing_chase" { $events[2].Remove("chase") }
+        "wrong_release_target" { $events[4].target_id = 43 }
+        "missing_target_clear" { $events = @($events[0..2]) + @($events[4..8]) }
+        "reacquired" { $events = @($events[0..6]) + @($events[1], $events[2]) + @($events[7..8]) }
+        "no_suspension" { $events = @($events[0..4]) + @($events[6..8]) }
+        "no_resume" { $events = @($events[0..5]) + @($events[7..8]) }
+        "no_retry" { $events = @($events[0..6]) + @($events[8]) }
+        "detour_after_combat" { $events = @($events[1..4]) + @($events[0]) + @($events[5..8]) }
+        "retry_before_resume" { $events = @($events[0..5]) + @($events[7], $events[6], $events[8]) }
+        "reset_failure_budget" { $events[6].navigation_failures = 0 }
+        "no_failure_progress" { $events[8].navigation_failures = 3 }
+        "too_many_failures" { $events[8].navigation_failures = 7 }
+        "loot_overrun" { $events[8].elapsed_ms = 70001 }
+        "duplicate_loot" { $events += $events[8] }
+        "terminal" { $events += @{ event = "terminal"; reason = "controlled_player_dead" } }
+    }
+    Assert-Rejected "Inaccessible corpse $case" {
+        Assert-InaccessibleCorpseEvents -Logs (ConvertTo-FixtureLogs $events)
+    } "Inaccessible corpse work was not bounded"
+}
+if ($InaccessibleCorpseLogPath) {
+    Assert-InaccessibleCorpseEvents -Logs (Get-Content -Raw -LiteralPath $InaccessibleCorpseLogPath)
 }
 
 function New-MainlandFixture {

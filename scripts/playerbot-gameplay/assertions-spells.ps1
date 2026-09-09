@@ -1,3 +1,31 @@
+function Assert-LowSupplySpellTrainingEvents {
+	param([string]$Logs, [switch]$Unaffordable)
+	$events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
+	$candidates = @($events | Where-Object {
+		$_.event -eq 'spell_candidate' -and $_.spell -eq 'Light Healing' -and $_.price -eq 170 -and $_.reserve -eq 100
+	})
+	$purchases = @($events | Where-Object { $_.event -eq 'action_result' -and $_.action -eq 'learn_spell' })
+	if ($Unaffordable) {
+		if (@($candidates | Where-Object { $_.result -eq 'rejected' -and $_.reason -eq 'unaffordable_after_reserves' }).Count -lt 1 -or $purchases.Count -ne 0) {
+			throw 'Exura did not respect the one-gold-short emergency reserve boundary.'
+		}
+		return
+	}
+	$selection = @($events | Where-Object { $_.event -eq 'goal_selection' -and $_.to_goal -eq 'learn_spell' })
+	$priority = @($events | Where-Object { $_.event -eq 'goal_candidate' -and $_.goal -eq 'learn_spell' -and $_.feasible -and $_.reason -eq 'priority_recovery_spell' })
+	if (@($candidates | Where-Object { $_.result -eq 'feasible' }).Count -lt 1 -or
+		$selection.Count -ne 1 -or $priority.Count -lt 1 -or $purchases.Count -ne 1 -or
+		$purchases[0].result -ne 'success' -or $purchases[0].spell -ne 'Light Healing' -or
+		$purchases[0].money_before -ne 270 -or $purchases[0].money_after -ne 100 -or
+		$Logs -notmatch 'PLAYERBOT_GAMEPLAY_TEST SPELL_TRAINING_LOW_SUPPLIES_PASS') {
+		throw 'Low-supply Exura learning did not preserve exact payment, priority, and potion reserves.'
+	}
+	$firstSelection = @($events | Where-Object { $_.event -eq 'goal_selection' } | Select-Object -First 1)
+	if ($firstSelection.Count -ne 1 -or $firstSelection[0].to_goal -ne 'learn_spell') {
+		throw 'An optional goal preceded affordable Exura learning.'
+	}
+}
+
 function Assert-SpellTrainingEvents {
 	param([string]$Logs, [switch]$Restart)
 

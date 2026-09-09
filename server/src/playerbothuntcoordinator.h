@@ -14,7 +14,7 @@
 #include <vector>
 
 #include "playerbotcombatruntime.h"
-#include "playerbotdangerretreat.h"
+#include "playerbottransitcombat.h"
 #include "playerbothuntruntime.h"
 #include "playerbotlootworkflow.h"
 
@@ -82,12 +82,18 @@ class PlayerBotHuntCoordinator
 		int64_t lootElapsedMilliseconds(std::chrono::steady_clock::time_point now) const;
 		std::chrono::steady_clock::time_point lootNavigationRetryAt() const;
 
-		void beginDangerRetreat() { dangerRetreat.begin(); }
-		void finishDangerRetreat() { dangerRetreat.finish(); }
-		bool retreatingFromDanger() const { return dangerRetreat.active(); }
-		bool dangerDefenseExpired(std::chrono::steady_clock::time_point now) const
+		void beginDangerRetreat() { dangerReturn = true; }
+		void finishDangerRetreat() { dangerReturn = false; }
+		bool retreatingFromDanger() const { return dangerReturn; }
+		bool observeTransit(bool transit, uint64_t goal, PlayerBotCyclePhase phase)
 		{
-			return hasDefensiveCombat() && dangerRetreat.defenseExpired(now);
+			return transitCombat.observe(transit, goal, phase);
+		}
+		void enterHuntArea() { transitCombat.finish(); }
+		bool inTransit() const { return transitCombat.active(); }
+		bool transitDefenseExpired(std::chrono::steady_clock::time_point now) const
+		{
+			return hasDefensiveCombat() && transitCombat.defenseExpired(now);
 		}
 
 		void cancelPlanning();
@@ -138,7 +144,9 @@ class PlayerBotHuntCoordinator
 		void applyCooldown(const std::optional<PlayerBotHuntRuntimeCooldownCommand>& command,
 		                   std::chrono::steady_clock::time_point now);
 
-		PlayerBotDangerRetreat dangerRetreat;
+		// Danger return also defers departure arbitration; combat uses the general transit policy.
+		bool dangerReturn = false;
+		PlayerBotTransitCombat transitCombat;
 		PlayerBotCombatRuntime combatRuntime;
 		PlayerBotLootWorkflow lootWorkflow;
 		PlayerBotHuntRuntime huntRuntime;
