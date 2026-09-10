@@ -43,6 +43,7 @@ struct PlayerBotHuntRuntimePlayerObservation {
 	bool canUseShovel = false;
 	uint32_t potions = 0;
 	uint32_t mana = 0;
+	uint64_t funds = 0;
 };
 
 struct PlayerBotHuntRuntimeCooldownCommand {
@@ -88,6 +89,7 @@ struct PlayerBotHuntRuntimeOutcome {
 	std::vector<PlayerBotHuntRuntimeScoreWork> scoreWork;
 	std::optional<PlayerBotHuntRegion> selectedRegion;
 	std::vector<PlayerBotHuntRegion> candidates;
+	std::vector<PlayerBotHuntRegion> routeCandidates;
 	bool staleRevision = false;
 	bool invalidateCache = false;
 	bool stopForScopeExhaustion = false;
@@ -110,6 +112,7 @@ struct PlayerBotHuntRuntimeCompletion {
 	PlayerBotHuntChallengeUpdate challenge;
 	uint64_t durationSeconds = 0;
 	uint64_t experienceGained = 0;
+	uint64_t coinGoldAcquired = 0;
 	uint32_t levelBefore = 0;
 };
 
@@ -174,6 +177,7 @@ class PlayerBotHuntRuntime
 		void observeDamage(uint32_t damage) { policy.observeDamage(damage); }
 		void observeRecovery(bool potion) { policy.observeRecovery(potion); }
 		void observeKill() { policy.observeKill(); }
+		void observeCoinAcquisition(uint64_t gold) { if (activeRegion) coinGoldAcquired += gold; }
 		bool observeDanger(int32_t maximumHealth, std::chrono::steady_clock::duration age) { return policy.observeDanger(maximumHealth, age); }
 		std::optional<PlayerBotHuntRuntimeCooldownCommand> dangerObserved(int32_t maximumHealth,
 		                                                                  std::chrono::steady_clock::time_point now,
@@ -217,6 +221,7 @@ class PlayerBotHuntRuntime
 		uint64_t patrolFailureExpandedNodes = 0;
 		uint32_t scopeExhaustions = 0;
 		uint32_t cycles = 0;
+		uint64_t coinGoldAcquired = 0;
 		uint64_t huntStartExperience = 0;
 		uint32_t huntStartLevel = 0;
 		uint32_t plannedHuntDurationSeconds = 0;

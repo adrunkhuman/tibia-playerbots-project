@@ -357,7 +357,9 @@ function F.login.onLogin(player)
         print("PLAYERBOT_GAMEPLAY_TEST " .. string.upper(mode) .. "_START")
         return true
     end
-	F.restoreRookgaardBaseline(player, mode ~= "cycle")
+    if mode ~= "hunt_planning" and mode ~= "hunt_area_arrival" then
+        F.restoreRookgaardBaseline(player, mode ~= "cycle")
+    end
 	F.selectHealthPotion(player)
     if mode == "readiness_ready" or mode == "readiness_upgrade" or mode == "readiness_missing_weapon" or mode == "readiness_supplies" or mode == "readiness_no_food" or mode == "readiness_low_wealth" or mode == "readiness_food_capacity" or mode == "readiness_retention" then
         assert(player:setVocation(4), "readiness fixture could not select Knight vocation")
@@ -437,6 +439,9 @@ function F.login.onLogin(player)
             "hunt planning fixture could not normalize Knight health")
         assert(player:getLevel() == 8 and player:teleportTo(F.carlinTemplePosition),
             "hunt planning fixture could not prepare the level-8 Carlin Knight")
+        F.installSeededHuntLoadout(player, mode)
+        assert(player:getItemCount(F.healthPotionItemId) == 10 and player:getItemCount(F.smallHealthPotionItemId) == 0,
+            "hunt planning fixture has the wrong healing supplies")
         if mode == "hunt_planning" then F.suppressNearbyMonsters(player:getId()) end
         print(mode == "hunt_area_arrival" and "PLAYERBOT_GAMEPLAY_TEST HUNT_AREA_ARRIVAL_START" or
             "PLAYERBOT_GAMEPLAY_TEST HUNT_PLANNING_START")

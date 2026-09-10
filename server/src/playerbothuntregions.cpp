@@ -42,13 +42,6 @@ bool playerBotPredictedLethal(int32_t currentHealth, double predictedDamage)
 	return currentHealth <= 0 || predictedDamage >= currentHealth;
 }
 
-bool playerBotHuntScopeExhausted(const std::vector<PlayerBotHuntRegion>& regions)
-{
-	return std::none_of(regions.begin(), regions.end(), [](const PlayerBotHuntRegion& region) {
-		return region.suitable && region.reachable;
-	});
-}
-
 void PlayerBotHuntRegionPlanner::invalidateCache()
 {
 	PlayerBotHuntRegionAdapter::invalidateCache();

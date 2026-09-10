@@ -32,6 +32,7 @@ struct PlayerBotHuntPlanningSnapshot {
 	bool canUseShovel = false;
 	uint32_t potions = 0;
 	uint32_t mana = 0;
+	uint64_t funds = 0;
 };
 
 struct PlayerBotHuntPlanningStart {
@@ -89,6 +90,7 @@ class PlayerBotHuntPlanningSession
 		PlayerBotHuntPlanningProgress completeScoring();
 
 		const std::vector<PlayerBotHuntRegion>& regions() const { return scoredRegions; }
+		const std::vector<PlayerBotHuntRegion>& routeCandidates() const { return routeShortlist; }
 		const PlayerBotHuntRegion& region(size_t index) const { return scoredRegions.at(index); }
 	private:
 		void refreshSuitableCandidates();
@@ -99,6 +101,7 @@ class PlayerBotHuntPlanningSession
 		};
 
 		std::vector<PlayerBotHuntRegion> scoredRegions;
+		std::vector<PlayerBotHuntRegion> routeShortlist;
 		std::vector<size_t> candidateIndices;
 		std::string planningReason;
 		std::chrono::steady_clock::time_point planningStarted;

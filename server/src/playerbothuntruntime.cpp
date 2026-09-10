@@ -1,8 +1,11 @@
-#include "otpch.h"
-
+#include "definitions.h"
 #include "playerbothuntruntime.h"
-
 #include "playerbotequipmentpolicy.h"
+
+#include <cstring>
+#ifndef _WIN32
+#include <strings.h>
+#endif
 
 PlayerBotHuntRuntime::PlayerBotHuntRuntime(std::vector<Position> fallbackPatrol) :
 	fallbackPatrol(std::move(fallbackPatrol))
@@ -11,7 +14,7 @@ PlayerBotHuntRuntime::PlayerBotHuntRuntime(std::vector<Position> fallbackPatrol)
 PlayerBotHuntPlanningSnapshot PlayerBotHuntRuntime::snapshot(const PlayerBotHuntRuntimePlayerObservation& player, uint64_t revision)
 {
 	return {player.position, player.level, player.health, player.staminaMinutes, revision, player.topologyGeneration, player.excludedVariants,
-	        player.canUseRope, player.canUseShovel, player.potions, player.mana};
+	        player.canUseRope, player.canUseShovel, player.potions, player.mana, player.funds};
 }
 
 bool PlayerBotHuntRuntime::planningStartRequired(std::chrono::steady_clock::time_point now) const
@@ -76,6 +79,7 @@ PlayerBotHuntRuntimeOutcome PlayerBotHuntRuntime::advancePlanning(const PlayerBo
 	}
 	const auto& regions = planning->regions();
 	outcome.candidates = regions;
+	outcome.routeCandidates = planning->routeCandidates();
 	if (!observation.candidatesAvailable) return exhaustScope(now, std::chrono::seconds(1));
 	if (playerBotHuntScopeExhausted(regions)) {
 		return exhaustScope(now, std::chrono::seconds(30));
@@ -123,7 +127,7 @@ void PlayerBotHuntRuntime::applyCandidateSuitability(PlayerBotHuntRegion& region
 	region.challengeBandMinimum = 0;
 	region.challengeBandMaximum = region.challengeFrontier + 0.05;
 	region.inChallengeBand = region.threatRatio <= region.challengeBandMaximum;
-	region.suitable = observation.candidateFactsAvailable && !region.predictedLethal &&
+	region.suitable = observation.candidateFactsAvailable && region.sustainedEligible && !region.predictedLethal &&
 	                  region.threatRatio <= region.challengeBandMaximum && observation.withinPlanningScope;
 	if (planning->snapshot().excludedVariants.find(region.atlasVariantId) != planning->snapshot().excludedVariants.end()) {
 		region.suitable = false;
@@ -132,6 +136,8 @@ void PlayerBotHuntRuntime::applyCandidateSuitability(PlayerBotHuntRegion& region
 		region.rejectionReason = "travel_distance";
 	} else if (region.predictedLethal) {
 		region.rejectionReason = "predicted_lethal";
+	} else if (!region.sustainedEligible) {
+		region.rejectionReason = playerBotHuntViabilityRejection(region.viability);
 	} else if (!region.suitable) {
 		region.rejectionReason = "challenge_frontier";
 	} else {
@@ -165,6 +171,7 @@ void PlayerBotHuntRuntime::activate(PlayerBotHuntRegion region, const PlayerBotH
 	singleWaypointReached = false;
 	huntStarted = now;
 	huntStartExperience = player.experience;
+	coinGoldAcquired = 0;
 	huntStartLevel = player.level;
 	policy.resetCombatEvidence();
 	resetPatrolFailures();
@@ -254,6 +261,7 @@ std::optional<PlayerBotHuntRuntimeCompletion> PlayerBotHuntRuntime::complete(con
 	result.experienceGained = player.experience >= huntStartExperience ? player.experience - huntStartExperience : 0;
 	result.levelBefore = huntStartLevel;
 	result.combat = policy.combatSummary();
+	result.coinGoldAcquired = coinGoldAcquired;
 	result.performance = policy.observePerformance(activeRegion->atlasVariantId, {result.durationSeconds, result.combat.kills, result.experienceGained,
 		activeRegion->projectedExperience, activeRegion->observedCorrection, configuredDurationSeconds});
 	result.challenge = policy.updateChallengeFrontier({result.durationSeconds, player.maximumHealth});
@@ -311,13 +319,19 @@ PlayerBotHuntPatrolOutcome PlayerBotHuntRuntime::observePatrolNavigation(const P
 	const bool repeatedSteps = navigation.stepFailureCount >= repeatedStepLimit;
 	const bool repeatedRoutes = patrolRouteFailures >= routeFailureLimit;
 	if (!oscillating && !repeatedSteps && !repeatedRoutes) return outcome;
-	outcome.command = activeRegion ? PlayerBotHuntPatrolCommand::SkipWaypoint : PlayerBotHuntPatrolCommand::SkipWaypoint;
+	outcome.command = PlayerBotHuntPatrolCommand::SkipWaypoint;
 	outcome.reason = oscillating ? "position_oscillation" : repeatedSteps ? "repeated_step_failure" : "route_unavailable";
 	outcome.stepFailures = navigation.stepFailureCount;
 	outcome.routeFailures = patrolRouteFailures;
 	outcome.expandedNodes = patrolFailureExpandedNodes;
 	outcome.elapsedMs = patrolFailureStarted == std::chrono::steady_clock::time_point{} ? 0 : static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(now - patrolFailureStarted).count());
-	if (activeRegion) {
+	if (activeRegion && activeRegion->viability.reachableSpawns != 0) {
+		// Eligibility describes the original circuit. Removing even one point
+		// invalidates its absence windows; return for service and replan rather
+		// than reuse that eligibility for a reduced, potentially blocked patrol.
+		outcome.command = PlayerBotHuntPatrolCommand::RegionExhausted;
+		outcome.cooldown = {{activeRegion->atlasVariantId, std::chrono::minutes(10)}};
+	} else if (activeRegion) {
 		activeRegion->patrolPoints.erase(activeRegion->patrolPoints.begin() + patrolIndex);
 		if (activeRegion->patrolPoints.empty()) {
 			outcome.command = PlayerBotHuntPatrolCommand::RegionExhausted;

@@ -29,12 +29,6 @@ uint32_t playerbot::recoveryPotionRouteReserve(uint16_t vocationId, int32_t maxi
 		std::numeric_limits<uint32_t>::max(), std::max<uint64_t>(healthPotionReturnThreshold, routePotions)));
 }
 
-uint32_t playerbot::recoveryPotionRestockTargetForReserve(uint32_t returnReserve)
-{
-	return std::max(healthPotionRestockTarget,
-	                returnReserve == std::numeric_limits<uint32_t>::max() ? returnReserve : returnReserve + 1);
-}
-
 PlayerBotInventoryPolicy::PlayerBotInventoryPolicy(const PlayerBotInventoryPolicy::SellValues& sellValues,
                                                     EquipmentUpgradePredicate equipmentUpgrade) :
 	sellValues(sellValues), equipmentUpgrade(std::move(equipmentUpgrade))

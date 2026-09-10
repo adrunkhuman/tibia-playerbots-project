@@ -8,8 +8,6 @@
  * (at your option) any later version.
  */
 
-#include "otpch.h"
-
 #include "playerbothuntplanningsession.h"
 
 #include <algorithm>
@@ -18,9 +16,10 @@
 PlayerBotHuntPlanningSession::PlayerBotHuntPlanningSession(PlayerBotHuntPlanningStart start) :
 	candidateIndices(std::move(start.scan.candidateIndices)), planningReason(std::move(start.reason)),
 	planningStarted(start.started), planningProfile(std::move(start.profile)), planningSnapshot(std::move(start.snapshot)),
-	topologyDistances(std::move(start.topologyDistances)), topologyDistanceTimeUs(start.topologyDistanceTimeUs),
+	topologyDistances(std::move(start.topologyDistances)),
 	candidateCount(static_cast<uint32_t>(start.scan.candidateCount)), scanCacheHit(start.scan.cacheHit),
-	scanSnapshotTimeUs(start.scan.snapshotTimeUs), scanClusteringTimeUs(start.scan.clusteringTimeUs)
+	scanSnapshotTimeUs(start.scan.snapshotTimeUs), scanClusteringTimeUs(start.scan.clusteringTimeUs),
+	topologyDistanceTimeUs(start.topologyDistanceTimeUs)
 {
 	scoredRegions.reserve(candidateCount);
 }
@@ -30,6 +29,7 @@ bool PlayerBotHuntPlanningSession::invalidated(const PlayerBotHuntPlanningSnapsh
 	return current.playerPosition != planningSnapshot.playerPosition || current.playerLevel != planningSnapshot.playerLevel ||
 	       current.currentHealth < planningSnapshot.currentHealth || current.staminaMinutes != planningSnapshot.staminaMinutes ||
 	       current.potions != planningSnapshot.potions || current.mana < planningSnapshot.mana ||
+	       current.funds != planningSnapshot.funds ||
 	       current.topologyGeneration != planningSnapshot.topologyGeneration ||
 	       current.canUseRope != planningSnapshot.canUseRope || current.canUseShovel != planningSnapshot.canUseShovel ||
 	       current.excludedVariants != planningSnapshot.excludedVariants || current.cacheRevision != planningSnapshot.cacheRevision;
@@ -67,6 +67,7 @@ PlayerBotHuntPlanningProgress PlayerBotHuntPlanningSession::completeScoring()
 		region.id = regionId++;
 	}
 	refreshSuitableCandidates();
+	routeShortlist = playerBotHuntRouteShortlist(scoredRegions, planningProfile.diversifyIncomeRoutes);
 	phase = Phase::Ready;
 	return PlayerBotHuntPlanningProgress::Scored;
 }

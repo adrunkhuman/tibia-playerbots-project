@@ -124,6 +124,7 @@
             $env:PLAYERBOT_GAMEPLAY_MODE = "hunt_planning"
             $env:PLAYERBOT_HUNT_DURATION_SECONDS = "900"
             Invoke-Compose up --detach
+			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST HUNT_MAINLAND_LOADOUT_PASS hunt_planning' | Out-Null
 			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST HUNT_PLANNING_START' | Out-Null
             $planningLogs = Wait-ForLog -Pattern '"event":"hunt_region_scan".*"phase":"selected"'
             Assert-HuntRegionPlanningEvents -Logs $planningLogs
@@ -133,6 +134,7 @@
 			$env:PLAYERBOT_GAMEPLAY_MODE = "hunt_area_arrival"
 			$env:PLAYERBOT_HUNT_DURATION_SECONDS = "900"
 			Invoke-Compose up --detach
+			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST HUNT_MAINLAND_LOADOUT_PASS hunt_area_arrival' | Out-Null
 			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST HUNT_AREA_ARRIVAL_START' | Out-Null
 			Wait-ForLog -Pattern '"event":"hunt_area_entered"' | Out-Null
 			$arrivalLogs = Wait-ForLog -Pattern '"event":"target_changed".*"reason":"visible_monster"'
