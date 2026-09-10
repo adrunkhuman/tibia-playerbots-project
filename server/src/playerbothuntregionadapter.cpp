@@ -139,6 +139,8 @@ namespace {
 		uint64_t buildTimeUs = 0;
 		size_t siteCount = 0;
 		bool initialized = false;
+		std::map<const MonsterType*, double> coinGold;
+		int32_t lootRate = 0;
 	};
 
 	HuntAtlas huntAtlas;
@@ -199,10 +201,14 @@ namespace {
 		return false;
 	}
 
+	double expectedCoinGold(const std::vector<LootBlock>& loot, double rate, PlayerBotLootCountMemo& memo);
+
 	void buildHuntAtlas(uint64_t& snapshotTimeUs, uint64_t& clusteringTimeUs)
 	{
 		const auto buildStarted = std::chrono::steady_clock::now();
 		huntAtlas = HuntAtlas{};
+		huntAtlas.lootRate = g_config.getNumber(ConfigManager::RATE_LOOT);
+		PlayerBotLootCountMemo lootCounts;
 		const auto snapshotStarted = std::chrono::steady_clock::now();
 		for (SpawnBlockSnapshot& snapshot : g_game.map.spawns.getMonsterSpawnSnapshots()) {
 			snapshot.monsterTypes.erase(std::remove_if(snapshot.monsterTypes.begin(), snapshot.monsterTypes.end(),
@@ -210,6 +216,12 @@ namespace {
 					return !entry.first || !entry.first->info.isHostile || !entry.first->info.isAttackable;
 			}), snapshot.monsterTypes.end());
 			if (!snapshot.monsterTypes.empty()) {
+				for (const auto& entry : snapshot.monsterTypes) {
+					if (huntAtlas.coinGold.find(entry.first) == huntAtlas.coinGold.end()) {
+						huntAtlas.coinGold.emplace(entry.first,
+						    expectedCoinGold(entry.first->info.lootItems, huntAtlas.lootRate, lootCounts));
+					}
+				}
 				huntAtlas.spawns.push_back({snapshot.position, snapshot.interval, std::move(snapshot.monsterTypes)});
 			}
 		}
@@ -391,6 +403,20 @@ namespace {
 		++huntAtlasRevision;
 	}
 
+	double expectedCoinGold(const std::vector<LootBlock>& loot, double rate, PlayerBotLootCountMemo& memo)
+	{
+		double gold = 0;
+		for (const LootBlock& block : loot) {
+			const ItemType& type = Item::items[block.id];
+			if (type.worth != 0) {
+				gold += type.worth * memo.expectedCount(block.chance, block.countmax, type.stackable, rate);
+			} else if (!block.childLoot.empty()) {
+				gold += memo.expectedCount(block.chance, block.countmax, false, rate) * expectedCoinGold(block.childLoot, rate, memo);
+			}
+		}
+		return gold;
+	}
+
 	PlayerBotHuntRegion scoreRegion(Player& player, const PlayerBotHuntPlanningProfile& planningProfile,
 		size_t candidateIndex, const std::set<uint64_t>& excludedVariants,
 		const std::map<uint64_t, PlayerBotHuntRegionPerformance>& performance,
@@ -406,10 +432,12 @@ namespace {
 		region.atlasPocketCount = static_cast<uint32_t>(cached.pockets.size());
 		region.atlasSpawnCount = static_cast<uint32_t>(cached.members.size());
 		region.atlasFloorCount = cached.floorCount;
+		region.cashPressure = planningProfile.cashPressure;
 		region.floor = cached.center.z;
 		region.center = cached.center;
 		std::map<std::string, PlayerBotHuntMonsterProfile> profiles;
 		std::set<size_t> reachableMembers;
+		std::vector<PlayerBotReplenishmentPoint> replenishment;
 		double expectedCycleExperience = 0;
 		double expectedClearSeconds = 0;
 		double spawnDamagePerSecond = 0;
@@ -421,6 +449,7 @@ namespace {
 			if (!approach) continue;
 			reachableMembers.insert(member);
 			region.patrolPoints.push_back(*approach);
+			PlayerBotReplenishmentPoint point{spawn.position, *approach, 0, spawn.interval / 1000.0, true};
 			std::vector<std::pair<const MonsterType*, double>> spawnProbabilities;
 			if (spawn.monsters.size() == 1) {
 				spawnProbabilities.emplace_back(spawn.monsters.front().first, 1.0);
@@ -442,6 +471,11 @@ namespace {
 				monsterProfile.expectedDamagePerSecond = expectedMonsterDamagePerSecond(*monsterType, profile);
 				const double fightSeconds = monsterType->info.healthMax / expectedPlayerDamagePerSecond(profile, *monsterType);
 				monsterProfile.predictedFightDamage = monsterProfile.expectedDamagePerSecond * fightSeconds;
+				point.fightSeconds += fightSeconds * probability;
+				point.ignoresBlocking = point.ignoresBlocking && monsterType->info.isIgnoringSpawnBlock;
+				const double gold = staminaMinutes > 840 ? huntAtlas.coinGold.at(monsterType) * probability : 0;
+				point.coinGold += gold;
+				point.experience += monsterType->info.experience * probability;
 				region.experiencePerMinute += monsterType->info.experience * probability *
 				                              (60000.0 / std::max<uint32_t>(spawn.interval, 1));
 				expectedCycleExperience += monsterType->info.experience * probability;
@@ -450,6 +484,7 @@ namespace {
 				spawnDamagePerSecond += monsterProfile.predictedFightDamage * spawnsPerSecond;
 				spawnCombatFraction += fightSeconds * spawnsPerSecond;
 			}
+			replenishment.push_back(point);
 		}
 
 		if (profiles.empty() || region.patrolPoints.empty()) return region;
@@ -504,6 +539,9 @@ namespace {
 				patrolSeconds += steps * player.getStepDuration() / 1000.0;
 			}
 		}
+		region.viability = playerBotHuntViability(replenishment, player.getStepDuration() / 1000.0,
+		    Map::maxViewportX, Map::maxViewportY);
+		region.sustainedEligible = region.viability.eligible;
 		region.spawnExperiencePerMinute = region.experiencePerMinute;
 		const double cycleSeconds = expectedClearSeconds + patrolSeconds;
 		region.clearExperiencePerMinute = cycleSeconds > 0 ? expectedCycleExperience * 60.0 / cycleSeconds : 0;
@@ -517,6 +555,13 @@ namespace {
 		// This is conservative static prediction, not observed supply calibration.
 		region.expectedDamagePerSecond = spawnDamagePerSecond * throughput * crowdDamageInflation;
 		region.combatFraction = std::min(1.0, spawnCombatFraction * throughput);
+		// Blocked members can still be encountered initially: retain their clear
+		// time, danger and supply costs, but never count them as recurring yield.
+		const auto yield = playerBotSustainedHuntYield(replenishment, region.viability, cycleSeconds);
+		region.coinGoldPerMinute = yield.coinGoldPerMinute;
+		region.spawnExperiencePerMinute = yield.spawnExperiencePerMinute;
+		region.clearExperiencePerMinute = yield.clearExperiencePerMinute;
+		region.experiencePerMinute = std::min(yield.spawnExperiencePerMinute, yield.clearExperiencePerMinute);
 		region.supplyProfile = planningProfile.supply;
 		region.destination = *std::min_element(region.patrolPoints.begin(), region.patrolPoints.end(),
 			[&player](const Position& left, const Position& right) {
@@ -562,7 +607,8 @@ namespace {
 		region.inChallengeBand = region.threatRatio <= region.challengeBandMaximum;
 		region.predictedLethal = playerBotPredictedLethal(planningProfile.currentHealth, worstFightDamage);
 		withinPlanningScope = !topologyDistances || region.topologyReachable;
-		region.suitable = !region.predictedLethal && region.threatRatio <= region.challengeBandMaximum && withinPlanningScope;
+		region.suitable = region.sustainedEligible && !region.predictedLethal &&
+		    region.threatRatio <= region.challengeBandMaximum && withinPlanningScope;
 		if (excludedVariants.find(region.atlasVariantId) != excludedVariants.end()) {
 			region.suitable = false;
 			region.rejectionReason = "observed_danger_cooldown";
@@ -570,6 +616,8 @@ namespace {
 			region.rejectionReason = "topology_unreachable";
 		} else if (region.predictedLethal) {
 			region.rejectionReason = "predicted_lethal";
+		} else if (!region.sustainedEligible) {
+			region.rejectionReason = playerBotHuntViabilityRejection(region.viability);
 		} else if (!region.suitable) {
 			region.rejectionReason = "challenge_frontier";
 		}
@@ -622,6 +670,7 @@ uint64_t PlayerBotHuntRegionAdapter::getCacheRevision()
 {
 	if (huntAtlas.initialized &&
 	    (huntAtlas.spawnGeneration != g_game.map.spawns.getGeneration() ||
+	     huntAtlas.lootRate != g_config.getNumber(ConfigManager::RATE_LOOT) ||
 	     huntAtlas.topologyGeneration != PlayerBotTopology::instance().generation())) invalidateCache();
 	return huntAtlasRevision;
 }
@@ -630,7 +679,8 @@ PlayerBotHuntRegionScan PlayerBotHuntRegionAdapter::beginScan(
 	Player& player, const PlayerBotTopologyDistances* topologyDistances)
 {
 	PlayerBotHuntRegionScan scan;
-	scan.cacheHit = huntAtlas.initialized && huntAtlas.spawnGeneration == g_game.map.spawns.getGeneration() &&
+	scan.cacheHit = huntAtlas.initialized && huntAtlas.lootRate == g_config.getNumber(ConfigManager::RATE_LOOT) &&
+	                huntAtlas.spawnGeneration == g_game.map.spawns.getGeneration() &&
 	                huntAtlas.topologyGeneration == PlayerBotTopology::instance().generation();
 	if (!scan.cacheHit) buildHuntAtlas(scan.snapshotTimeUs, scan.clusteringTimeUs);
 	scan.revision = huntAtlasRevision;

@@ -61,6 +61,46 @@ function F.restoreRookgaardBaseline(player, acceptSeedBaseline)
         "fixture did not equip starter weapon")
 end
 
+-- Match server/schema/insertPlayerbots.sql, not the Rookgaard starter fixtures.
+function F.installSeededHuntLoadout(player, mode)
+    assert(player:getLevel() == 8 and player:getVocation():getId() == 4,
+        "hunt fixture requires the seeded level-8 Knight")
+    local money, bank = player:getMoney(), player:getBankBalance()
+    local loadout = {
+        {CONST_SLOT_HEAD, 2480}, {CONST_SLOT_ARMOR, F.seedArmorId},
+        {CONST_SLOT_RIGHT, F.seedShieldId}, {CONST_SLOT_LEFT, F.seedWeaponId},
+        {CONST_SLOT_LEGS, 2468}, {CONST_SLOT_FEET, F.seedBootsId},
+    }
+    for _, entry in ipairs(loadout) do
+        local slot, id = entry[1], entry[2]
+        local previous = player:getSlotItem(slot)
+        if previous then assert(previous:remove(), "hunt fixture could not clear slot " .. slot) end
+        assert(player:addItem(id, 1, false, 1, slot), "hunt fixture could not install seeded item " .. id)
+        local equipped = player:getSlotItem(slot)
+        assert(equipped and equipped:getId() == id, "hunt fixture did not equip seeded item " .. id)
+    end
+    for _, entry in ipairs({{SKILL_FIST, 10}, {SKILL_CLUB, 10}, {SKILL_SWORD, 20},
+        {SKILL_AXE, 10}, {SKILL_DISTANCE, 10}, {SKILL_SHIELD, 20}, {SKILL_FISHING, 10}}) do
+        local skill, level = entry[1], entry[2]
+        assert(player:addSkillLevel(skill, level - player:getSkillLevel(skill)),
+            "hunt fixture could not restore seeded skill " .. skill)
+        assert(player:getSkillLevel(skill) == level and player:getSkillTries(skill) == 0,
+            "hunt fixture has the wrong seeded skill " .. skill)
+    end
+    local backpack = player:getSlotItem(CONST_SLOT_BACKPACK)
+    assert(backpack and backpack:getId() == 1988 and player:getItemCount(2120) == 1 and player:getItemCount(2554) == 1,
+        "hunt fixture lacks the seeded backpack or tools")
+    -- Normal first-login gifts can occupy the ammo slot; do not require a
+    -- pristine SQL inventory after firstitems.lua has already run.
+    assert(not player:getSlotItem(CONST_SLOT_NECKLACE) and not player:getSlotItem(CONST_SLOT_RING),
+        "hunt fixture has unseeded combat accessories")
+    assert(player:getMagicLevel() == 0 and player:getMaxMana() == 35 and player:getCapacity() == 47000,
+        "hunt fixture has the wrong seeded magic or capacity")
+    assert(player:getMoney() == money and player:getBankBalance() == bank, "hunt fixture changed funds")
+    print("PLAYERBOT_GAMEPLAY_TEST HUNT_MAINLAND_LOADOUT_PASS " .. mode ..
+        " head=2480 armor=2464 right=2530 left=2395 legs=2468 feet=2643 sword=20 shielding=20")
+end
+
 function F.removeNearbyMonsters(player)
     for _, creature in ipairs(Game.getSpectators(player:getPosition(), true, false, 10, 10, 10, 10)) do
         if creature:isMonster() then

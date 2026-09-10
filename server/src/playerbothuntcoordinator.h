@@ -123,6 +123,7 @@ class PlayerBotHuntCoordinator
 		bool matchesHuntMonster(const std::string& name) const;
 		void sampleHuntCombat(const PlayerBotHuntCombatSnapshot& snapshot);
 		void observeHuntDamage(uint32_t damage);
+		void observeCoinAcquisition(uint64_t gold) { huntRuntime.observeCoinAcquisition(gold); }
 		void observeHuntRecovery(bool potion);
 		bool observeHuntDanger(int32_t maximumHealth, std::chrono::steady_clock::time_point now,
 		                      std::chrono::steady_clock::duration cooldown);

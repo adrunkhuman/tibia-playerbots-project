@@ -38,6 +38,7 @@ require Lua or LuaJIT. Run these from the repository root:
 ```sh
 sh server/tests/playerbot_contracts.sh
 lua scripts/test-playerbot-fixture-isolation.lua
+lua scripts/test-playerbot-hunt-fixture.lua
 lua scripts/test-playerbot-depot-fixture.lua
 lua scripts/test-playerbot-death-fixture.lua
 lua scripts/test-playerbot-transit-fixture.lua
@@ -67,7 +68,8 @@ live gameplay validation.
 
 Hunt selection keeps lethal, adaptive-challenge, topology, and route gates first.
 Among safe candidates, it prefers a duration budget that fits carried potions
-minus emergency and route reserves, then projected XP. If none fits, it chooses
+minus emergency and route reserves, then projected XP (or coin income under the
+cash-pressure rule below). If none fits, it chooses
 the lowest expected potion consumption among safe candidates, with XP breaking
 ties. This is not a new hunt eligibility gate: existing readiness and emergency
 return rules still apply. A budget is not permission to spend the reserve.
@@ -137,6 +139,168 @@ retain both potions/100 gold; 269 gold rejects it. Existing spell persistence,
 shortlist, adaptive-challenge, and hunt-planning assertions remain in place.
 Map extraction, actual route integration, and real combat consumption still need
 live validation; the synthetic contrast alone does not establish sustainable XP.
+
+## Sustained hunt eligibility and gross coin income
+
+Atlas construction retains every pocket, including one-to-three-spawn pockets,
+so they can contribute to larger cross-floor variants. Scoring rejects a
+standalone candidate with fewer than four reachable spawn blocks. Larger
+candidates must have at least three replenishing blocks and at least half their
+reachable blocks replenishing. These are eligibility gates, not personality
+preferences or permission to weaken danger, topology, route, or reserve checks.
+The quadratic screen handles at most 256 reachable blocks per candidate;
+larger variants receive `replenishment_model_limit`, while their smaller pocket
+and neighborhood variants remain available.
+
+`Spawn::findPlayer` uses same-floor spectators within 11 tiles on each axis;
+failed attempts restart the spawn timer. A spawn attempt requires absence at
+that instant, not absence throughout its interval. The bounded **patrol duty-share
+heuristic** uses the blocking rectangle plus one tile of margin. A block qualifies
+with at least 25% modeled unblocked time over a travel-and-fight lap, and at least
+5% over the same lap with every fight removed. The second check rejects token
+empty-patrol opportunities and circuits supported only by predicted combat.
+
+Unblocked time includes fights at outside approaches and Chebyshev travel only
+between same-floor approaches whose entire bounding rectangle is outside the
+blocker. The cycle denominator includes every fight and the existing atlas
+Manhattan travel plus 20-step-per-floor portal proxy. No cross-floor segment gets
+unblocked travel credit. Separate absences add to the duty share; the longest
+continuous absence remains diagnostic. Totals count exactly one lap, even though
+two laps find the continuous maximum across the patrol origin. Duplicate approaches
+combine fight time; rotating the patrol does not change the result. A block whose
+every monster ignores spawn blocking has share one in both models, but does not
+bypass minimum hunt size.
+
+Rationale: four spawns alone can still occupy one blocking rectangle. Requiring
+at least three and half the blocks to replenish excludes a token distant spawn.
+The 25% duty-share and 5% empty-lap floors reject brief or token exposure without
+requiring the bot to stay away for an entire respawn interval. That earlier gate
+was rejected after live `hunt_planning` validation scanned 1,520 candidates with
+zero suitable hunts. The safe six-spawn Snake/Spider site centered at
+`(32403,31727,9)` had only a 0.09 minimum continuous-away/interval ratio. A focused
+map-derived geometry check now qualifies its six members at roughly 32% minimum
+full-lap and 7% minimum empty-lap share, without fixture gear changes. Those are
+static model results, not a claim that the updated live fixture passes.
+
+Inspection of the raw
+`World-spawn.xml` with the atlas's same-floor pocket clustering found 5,905
+pockets, including 1,900 with at most three entries; 3,490 larger pockets had
+at least half their positions outside another position's 12-tile rectangle.
+These counts precede hostile-monster and topology filtering, and are not counts
+of eligible loaded hunts. The reported Troll pocket contains two entries at
+`(32459,32275,8)` and `(32460,32277,8)`, both with 240-second intervals.
+
+This is a geometry/opportunity heuristic with **uncalibrated expected timing**,
+not proof of successful respawns or scheduler phase alignment. Periodic patrols
+can still miss every attempt despite a positive duty share. Spawn-rate limits, other
+players, chase movement, and empty subsequent circuits can defeat that timing.
+If navigation would remove a modeled atlas waypoint, the runtime exhausts the
+whole region, applies its ten-minute cooldown, and uses the existing service/
+replanning path. It does not retain eligibility for the smaller patrol. Fixed
+fallbacks and synthetic hunts without modeled geometry retain waypoint skipping
+and empty-patrol exhaustion. No waiting, teleportation, or forced spawning was added.
+Normal-stack validation must check candidate availability and repeated combat;
+full route geometry and sustainable progression remain runtime checks.
+
+Coin estimates use loaded loot definitions and `ItemType::worth`, including
+conditional nested-container loot. The exact inclusive `0..100000` roll is
+divided by `RATE_LOOT`; the same roll controls strict chance comparison and
+stack-count modulo. Fractional counts follow the Lua-to-integer conversion.
+Expectations are cached per monster per atlas build. A build-local memo also
+shares exact `(chance, countmax, stackable, rate)` arithmetic across monsters
+and nested loot, enumerating each distinct loaded tuple only once. It is
+bounded by loaded metadata and discarded after the build; a rebuilt atlas gets
+a fresh memo, and loot-rate changes still invalidate the atlas cache. Stamina at or below 840 credits no coins, matching the
+loot callback. Per-spawn replenishment results restrict both recurring coin and
+XP yield to replenishing members: the blocked half of a viable three-of-six
+circuit contributes neither. Each qualifying member's coin and XP spawn rates
+are multiplied by the smaller of its full-lap and empty-lap unblocked shares.
+Thus slow modeled fights cannot inflate its income above the empty-lap rate cap.
+The existing clear-cycle cap still applies. All members still contribute to
+clear time, danger, and supply costs, so this correction cannot relax the existing
+safety budget. Spawn probabilities, discounted spawn rates, and patrol/combat
+clear throughput cap gross gold/minute. XP stages, premium XP, resale, costs, observed
+XP corrections, and unopened corpse contents do not enter this estimate.
+It assumes loot-container space and successful collection; competition, full
+containers, missed corpses, and spawn suppression can lower realized income.
+
+Cash pressure means carried potions are at most the current return reserve plus
+one, and carried plus bank money cannot cover the existing loaded-offer restock
+spending reserve (including the carried-gold reserve). Initial scoring uses the
+current dynamic hunt restock target, not the spell policy's fixed ten-potion
+target. After outbound and return route validation, each candidate refreshes
+cash pressure and its supply budget from their combined potion reserve; its
+recovery target is at least ten and at least that reserve plus one, saturating
+at `UINT32_MAX`. Spell-training reserve behavior is unchanged. Exact
+affordability or plentiful supplies retains XP preference. Under pressure, expected gross coin
+income breaks ties after supply fit and, when neither budget fits, minimum
+potion consumption; XP breaks remaining ties. This preserves the existing
+all-over-budget fallback and emergency/route reserves. Missing recovery offers
+retain the existing unaffordable-reserve behavior. Funds changes invalidate an
+in-progress planning snapshot. There is no personality framework.
+
+Before routing, the planner also checks whether the maximum outbound plus return
+potion reserve allowed by the existing route-risk ceiling could make supplies
+low and recovery unaffordable. Only then does it diversify the eight-candidate
+route shortlist. Supply-fit tiers still precede over-budget tiers, and lower
+potion demand still precedes higher demand when neither fits. Within an
+oversubscribed tier, half the remaining slots (rounded up) retain current-policy
+order; the rest take distinct coin-ranked alternatives, with stable ties. For a
+single large tier this is four policy choices plus four income alternatives.
+Income never displaces a better supply tier or bypasses suitability/reachability.
+
+The shortlist is computed once per completed planning session. Raw scored order,
+region IDs, initial selection, and fixture observations are unchanged. Both
+outbound and return routes still require the existing safety checks; reconciled
+reserves and affordability govern final preference. Affordable or plentiful
+worst-case recovery retains the ordinary shortlist. `hunt_region_scan` reports
+`route_shortlist_policy` (`current_policy` or `supply_tier_policy_and_coin`) and
+`route_shortlist_size`. This bounded diversification does not promise the global
+best route.
+
+`hunt_region_candidate` adds `sustained_eligible`, `reachable_spawns`,
+`replenishing_spawns`, `minimum_away_interval_ratio`,
+`minimum_unblocked_patrol_ratio`, `minimum_empty_patrol_unblocked_ratio`,
+`replenishment_estimate_source=patrol_duty_share_heuristic`, `cash_pressure`,
+`coin_estimate_source=static_loaded_loot_gross`, and
+`expected_coin_gold_per_minute`. Ratio minima cover all reachable members,
+including nonqualifying members; continuous-away ratio is diagnostic only.
+Rejections distinguish `tiny_spawn_pocket` and
+`insufficient_replenishment` (or `replenishment_model_limit`). Selection rules under pressure are
+`supply_budget_then_coin_income_then_xp` and
+`lowest_potion_consumption_then_coin_income_then_xp`; `score` remains XP.
+Verified loot moves report `coin_gold_acquired` separately from existing
+`total_value` (which includes sale-valued items). Hunt outcomes aggregate only
+verified coin moves during that active hunt and report actual gold/minute
+against the prediction; bank withdrawals and sales do not count as acquired
+hunt coins.
+
+Focused non-Docker checks:
+
+```sh
+sh server/tests/playerbot_contracts.sh
+lua scripts/test-playerbot-coin-estimation.lua
+pwsh -File scripts/test-playerbot-supply-assertions.ps1
+pwsh -File scripts/test-playerbot-navigation-assertions.ps1
+```
+
+The C++ checks cover tiny/dense exclusion, retaining tiny-pocket membership in a
+larger circuit, brief/token opportunity rejection, blocking exceptions,
+chance/count/rate/denomination arithmetic, cash-pressure boundaries, income/XP
+ranking, and safety/supply precedence. It also compiles the pure hunt runtime,
+planning session, and policy: regressions cover mixed three-of-six yield,
+one-lap accounting, short but meaningful absence, empty-patrol viability and
+rate caps independent of slow combat, the map-derived six-spawn site,
+modeled waypoint failure/cooldown versus synthetic/fallback skipping, and
+raised-route-reserve income ranking through the real planning session (including
+exact affordability and lethal rejection). A twelve-candidate regression proves
+that an initially twelfth-ranked income candidate reaches routing without
+changing raw planner selection, and checks affordable/plentiful cases and
+safety/supply precedence. Memo regressions make 5,000 requests for five exact
+arithmetic tuples and verify five evaluations, including separate rate/count/
+chance/stackability keys and fresh build ownership. The Lua check runs the actual datapack
+loot generator against deterministic rolls to verify the C++ expectation cases.
+Neither test proves live respawn timing or actual collected income.
 
 ## Transit combat and danger retreat
 
@@ -372,6 +536,41 @@ files, and domain scenario files into the same script scope. The in-server Lua
 entrypoint loads ordered `.inc` files from
 `server/tests/playerbot-gameplay/includes/`; only `playerbot_gameplay.lua` is
 auto-loaded and registers the fixture events.
+
+### Hunt planning and arrival fixture baseline
+
+`hunt_planning` and `hunt_area_arrival` test the atlas and mainland navigation,
+not combat with Rookgaard starter equipment. Both bypass the Rookgaard baseline
+reset and explicitly equip the exact mainland Knight loadout from
+`server/schema/insertPlayerbots.sql`: head 2480, armor 2464, right-hand shield
+2530, left-hand sword 2395, legs 2468, and boots 2643. Sword and shielding are
+exactly 20, other skills 10, with zero skill tries. Login verifies each equipped
+slot, the seeded backpack/tools, absent necklace/ring accessories, magic level 0,
+maximum mana 35, and 470 oz capacity. Normal first-login gifts may occupy the ammo slot. The existing level-8/185-health baseline and ten
+health potions remain; no funds are added or recovery thresholds changed.
+Both scenarios require `HUNT_MAINLAND_LOADOUT_PASS` before their start marker.
+
+This corrects a fixture mismatch: the former shared reset replaced the seed's
+mainland equipment with starter armor 2650 and weapon 2382 before promoting the
+character back to Knight. After sustained-hunt filtering, one observed arrival
+run had only one suitable candidate; an ordinary patrol route failure correctly
+exhausted it with no alternative. The fix changes fixture fidelity, not viability,
+waypoint failure, or danger policy. Live navigation remains subject to route and
+monster variability; seeded gear is not a guarantee of arrival.
+
+`hunt_planning` still removes nearby live monsters repeatedly to isolate planning.
+It does not edit loaded spawn metadata, create an authored hunt candidate list,
+or choose a destination. Its C++ fixture observations retain first-route
+unreachable/second-route node-limit failures, one scoring-barrier cancellation,
+and cache-revision invalidation. `hunt_area_arrival` retains normal live monsters
+and no such planning injections, and must enter the selected region before
+matching combat and before the first waypoint completion.
+
+`lua scripts/test-playerbot-hunt-fixture.lua` runs both real login paths with
+mocked player/world APIs. It compares the installed equipment and skills against
+the seed SQL, checks unchanged funds and potion counts, distinguishes monster
+suppression by mode, and rejects failed equipment/skill writes or verification.
+These pure checks do not establish live arrival or combat success.
 
 ### Limits
 

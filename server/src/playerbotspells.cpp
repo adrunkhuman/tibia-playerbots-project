@@ -285,6 +285,13 @@ uint64_t PlayerBotController::spellTrainingReserve(const Player& player, bool em
 	const uint32_t reserveTarget = emergencyOnly ?
 	    (huntPotionReturnThreshold == UINT32_MAX ? UINT32_MAX : huntPotionReturnThreshold + 1) : healthPotionRestockTarget;
 	if (emergencyOnly && potionCount >= reserveTarget) return carriedGoldReserve;
+	return recoverySpendingReserve(player, reserveTarget);
+}
+
+uint64_t PlayerBotController::recoverySpendingReserve(const Player& player, uint32_t target) const
+{
+	const uint16_t potionItemId = recoveryPotionItemId(player.getVocationId());
+	const uint32_t potionCount = inventoryPolicy.inventoryItemCount(player, potionItemId);
 	uint32_t potionPrice = std::numeric_limits<uint32_t>::max();
 	for (Npc* npc : playerBotNpcProviders(g_game.getNpcs(), PlayerBotNpcCapability::Shop, player.getPosition())) {
 		for (const ShopInfo& offer : npc->getShopOffers()) {
@@ -296,7 +303,7 @@ uint64_t PlayerBotController::spellTrainingReserve(const Player& player, bool em
 	if (potionPrice == std::numeric_limits<uint32_t>::max()) {
 		return std::numeric_limits<uint64_t>::max();
 	}
-	return playerBotRecoverySpendingReserve(potionCount, reserveTarget, potionPrice, carriedGoldReserve);
+	return playerBotRecoverySpendingReserve(potionCount, target, potionPrice, carriedGoldReserve);
 }
 
 void PlayerBotController::emitSpellCandidate(const Npc& npc, const NpcSpellOffer& offer, const Position& position,

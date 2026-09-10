@@ -65,11 +65,14 @@ namespace {
 
 void PlayerBotController::logLootSuccess(uint16_t itemId, uint32_t count, uint32_t inventoryCount, const Position& position)
 {
+	const uint64_t coinGold = Item::items[itemId].worth * count;
+	huntCoordinator.observeCoinAcquisition(coinGold);
 	std::ostringstream fields;
 	fields << "\"action\":\"loot\",\"result\":\"success\",\"item_id\":" << itemId
 	       << ",\"count\":" << count << ",\"inventory_count\":" << inventoryCount
 	       << ",\"unit_value\":" << inventoryPolicy.itemUnitValue(itemId)
 	       << ",\"total_value\":" << static_cast<uint64_t>(inventoryPolicy.itemUnitValue(itemId)) * count
+	       << ",\"coin_gold_acquired\":" << coinGold
 	       << ",\"unit_weight\":" << Item::items[itemId].weight;
 	emit("action_result", position, fields.str());
 }

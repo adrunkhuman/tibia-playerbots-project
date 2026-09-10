@@ -45,7 +45,11 @@ namespace playerbot {
 
 	uint32_t recoveryPotionRouteReserve(uint16_t vocationId, int32_t maximumHealth,
 	                                   uint32_t routeDangerCost, uint32_t healthLossCost = 1000);
-	uint32_t recoveryPotionRestockTargetForReserve(uint32_t returnReserve);
+	constexpr uint32_t recoveryPotionRestockTargetForReserve(uint32_t returnReserve)
+	{
+		const uint32_t minimumTarget = returnReserve == UINT32_MAX ? returnReserve : returnReserve + 1;
+		return minimumTarget > healthPotionRestockTarget ? minimumTarget : healthPotionRestockTarget;
+	}
 
 	struct PlayerBotFoodInventory {
 		uint32_t count = 0;

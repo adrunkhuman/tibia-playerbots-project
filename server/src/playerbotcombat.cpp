@@ -22,7 +22,7 @@ extern Spells* g_spells;
 
 namespace {
 	constexpr size_t maximumHuntCandidateTelemetry = 64;
-	constexpr size_t maximumHuntRouteCandidates = 8;
+	constexpr size_t maximumHuntRouteCandidates = playerBotMaximumHuntRouteCandidates;
 	constexpr uint64_t maximumTargetApproachExpandedNodes = 10000;
 
 	double projectedHuntStaminaMultiplier(const Player& player, double availableHuntSeconds)
@@ -56,6 +56,7 @@ namespace {
 		observation.canUseShovel = g_game.findItemOfType(&player, 2554, true) != nullptr;
 		observation.potions = static_cast<const Cylinder&>(player).getItemTypeCount(recoveryPotionItemId(player.getVocationId()));
 		observation.mana = player.getMana();
+		observation.funds = player.getMoney() + player.getBankBalance();
 		return observation;
 	}
 
@@ -659,6 +660,16 @@ void PlayerBotController::emitHuntRegionCandidate(const PlayerBotHuntRegion& reg
 	       << ",\"z\":" << static_cast<uint16_t>(region.destination.z) << '}'
 	       << ",\"patrol_points\":" << region.patrolPoints.size()
 	       << ",\"experience_per_minute\":" << region.experiencePerMinute
+	       << ",\"coin_estimate_source\":\"static_loaded_loot_gross\""
+	       << ",\"expected_coin_gold_per_minute\":" << region.coinGoldPerMinute
+	       << ",\"cash_pressure\":" << (region.cashPressure ? "true" : "false")
+	       << ",\"sustained_eligible\":" << (region.sustainedEligible ? "true" : "false")
+	       << ",\"reachable_spawns\":" << region.viability.reachableSpawns
+	       << ",\"replenishing_spawns\":" << region.viability.replenishingSpawns
+	       << ",\"replenishment_estimate_source\":\"patrol_duty_share_heuristic\""
+	       << ",\"minimum_away_interval_ratio\":" << region.viability.minimumAwayRatio
+	       << ",\"minimum_unblocked_patrol_ratio\":" << region.viability.minimumUnblockedPatrolRatio
+	       << ",\"minimum_empty_patrol_unblocked_ratio\":" << region.viability.minimumEmptyPatrolRatio
 	       << ",\"spawn_experience_per_minute\":" << region.spawnExperiencePerMinute
 	       << ",\"clear_experience_per_minute\":" << region.clearExperiencePerMinute
 	       << ",\"estimated_travel_seconds\":" << region.estimatedTravelSeconds
@@ -738,6 +749,9 @@ void PlayerBotController::emitHuntRegionPlanning(const PlayerBotHuntPlanningSess
 	       << ",\"topology_time_us\":" << planning.topologyTimeUs()
 	       << ",\"scoring_time_us\":" << planning.scoringTimeUs() << ",\"candidate_count\":" << planning.totalCandidates()
 	       << ",\"scored_candidate_count\":" << planning.scoredCandidates() << ",\"suitable_candidate_count\":" << planning.suitableCandidates()
+	       << ",\"route_shortlist_policy\":" << jsonString(planning.profile().diversifyIncomeRoutes ?
+	           "supply_tier_policy_and_coin" : "current_policy")
+	       << ",\"route_shortlist_size\":" << planning.routeCandidates().size()
 	       << ",\"yields\":" << planning.yields() << ",\"selection_strategy\":"
 	       << jsonString(planning.topologySelection() ? "atlas_topology_selection" : "atlas_geometric_selection")
 	       << ",\"challenge_frontier\":" << planning.profile().challengeFrontier << ",\"decision_latency_us\":" << latencyUs;
@@ -758,6 +772,10 @@ void PlayerBotController::finishHuntRegion(const Player& player, const Position&
 	fields << std::fixed << std::setprecision(2) << "\"region_id\":" << completion->region.id
 	       << ",\"reason\":" << jsonString(reason) << ",\"duration_seconds\":" << completion->durationSeconds
 	       << ",\"level_before\":" << completion->levelBefore << ",\"level_after\":" << player.getLevel()
+	       << ",\"coin_gold_acquired\":" << completion->coinGoldAcquired
+	       << ",\"actual_coin_gold_per_minute\":" << (completion->durationSeconds > 0 ?
+	           completion->coinGoldAcquired * 60.0 / completion->durationSeconds : 0)
+	       << ",\"expected_coin_gold_per_minute\":" << completion->region.coinGoldPerMinute
 	       << ",\"experience_gained\":" << completion->experienceGained
 	       << ",\"actual_experience_per_minute\":" << completion->performance.actualExperiencePerMinute
 	       << ",\"predicted_experience\":" << completion->region.projectedExperience
@@ -801,8 +819,21 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 			const uint64_t topologyTimeUs = std::chrono::duration_cast<std::chrono::microseconds>(
 			    std::chrono::steady_clock::now() - topologyStarted).count();
 			PlayerBotHuntRegionScan scan = planner.beginScan(player, topologyDistances.get());
-			input.start = {{std::move(scan), huntPlanningFacts(player, huntCombatProfile(player)),
-			                std::move(topologyDistances), topologyTimeUs}};
+			auto profile = huntPlanningFacts(player, huntCombatProfile(player));
+			profile.cashPressure = playerBotHuntCashPressure(profile.potionCount, huntPotionReturnThreshold,
+			    input.player.funds, recoverySpendingReserve(player, huntPotionRestockTarget));
+			// Diversify only if a route within the existing risk ceiling could
+			// leave supplies low and recovery unaffordable. Do not route to test
+			// this bound, or change the initial scoring/fixture selection policy.
+			const PlayerBotNavigationRiskProfile risk;
+			const uint32_t maximumLegReserve = recoveryPotionRouteReserve(player.getVocationId(), player.getMaxHealth(),
+			    static_cast<uint32_t>(risk.maximumRouteHealthLoss * risk.healthLossCost),
+			    static_cast<uint32_t>(risk.healthLossCost));
+			const uint32_t maximumCandidateReserve = static_cast<uint32_t>(std::min<uint64_t>(UINT32_MAX,
+			    static_cast<uint64_t>(maximumLegReserve) * 2));
+			profile.diversifyIncomeRoutes = playerBotHuntCashPressure(profile.potionCount, maximumCandidateReserve,
+			    input.player.funds, recoverySpendingReserve(player, recoveryPotionRestockTargetForReserve(maximumCandidateReserve)));
+			input.start = {{std::move(scan), std::move(profile), std::move(topologyDistances), topologyTimeUs}};
 		}
 		return input;
 	};
@@ -867,6 +898,7 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 		return false;
 	}
 	if (!outcome.selectedRegion) return false;
+	const auto& routeCandidates = outcome.routeCandidates;
 	const PlayerBotNavigationRiskProfile risk;
 	auto rejectRouteCandidate = [&](PlayerBotHuntRegion& candidate) {
 		emitHuntRegionCandidate(candidate, position);
@@ -880,14 +912,14 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 		}
 		huntRouteRejectedVariants.clear();
 	};
-	while (!huntRouteValidationCandidate && huntRouteCandidateIndex < outcome.candidates.size() &&
-	       (!outcome.candidates[huntRouteCandidateIndex].suitable ||
-	        !outcome.candidates[huntRouteCandidateIndex].reachable)) {
+	while (!huntRouteValidationCandidate && huntRouteCandidateIndex < routeCandidates.size() &&
+	       (!routeCandidates[huntRouteCandidateIndex].suitable ||
+	        !routeCandidates[huntRouteCandidateIndex].reachable)) {
 		++huntRouteCandidateIndex;
 	}
-	if (!huntRouteValidationCandidate && huntRouteCandidateIndex < outcome.candidates.size() &&
+	if (!huntRouteValidationCandidate && huntRouteCandidateIndex < routeCandidates.size() &&
 	    huntRouteCandidatesValidated < maximumHuntRouteCandidates) {
-		PlayerBotHuntRegion routed = outcome.candidates[huntRouteCandidateIndex];
+		PlayerBotHuntRegion routed = routeCandidates[huntRouteCandidateIndex];
 		++huntRouteCandidatesValidated;
 		const PlayerBotNavigationRoutePlan routePlan = planCompleteNavigationRoute(player, routed.destination);
 		routed.travelSteps = static_cast<uint32_t>(routePlan.metrics.steps);
@@ -944,15 +976,17 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 		    recoveryPotionRouteReserve(player.getVocationId(), player.getMaxHealth(), routed.routeDangerCost,
 		        static_cast<uint32_t>(risk.healthLossCost));
 		routed.supplyProfile = huntPlanningFacts(player, huntCombatProfile(player)).supply;
-		routed.reconcileSupplies(static_cast<uint32_t>(std::min<uint64_t>(UINT32_MAX,
-		    static_cast<uint64_t>(returnReserve) + outboundReserve)));
+		const uint32_t candidateReserve = static_cast<uint32_t>(std::min<uint64_t>(UINT32_MAX,
+		    static_cast<uint64_t>(returnReserve) + outboundReserve));
+		routed.reconcileRecovery(candidateReserve, player.getMoney() + player.getBankBalance(),
+		    recoverySpendingReserve(player, recoveryPotionRestockTargetForReserve(candidateReserve)));
 		emitHuntRegionCandidate(routed, position);
 		if (!huntRouteBestCandidate || playerBotPreferHuntRegion(routed, *huntRouteBestCandidate)) {
 			huntRouteBestCandidate = std::move(routed);
 		}
 		++huntRouteCandidateIndex;
 		huntRouteValidationCandidate.reset();
-		if (huntRouteCandidateIndex < outcome.candidates.size() && huntRouteCandidatesValidated < maximumHuntRouteCandidates) {
+		if (huntRouteCandidateIndex < routeCandidates.size() && huntRouteCandidatesValidated < maximumHuntRouteCandidates) {
 			if (retryAfter) *retryAfter = std::chrono::milliseconds(SCHEDULER_MINTICKS);
 			return false;
 		}
