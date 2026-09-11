@@ -169,6 +169,18 @@ void PlayerBotNavigationSession::confirmRequiredRouteBlocker()
 	}
 }
 
+void PlayerBotNavigationSession::confirmRouteBlocker(uint32_t blockerId, const Position& position,
+	std::chrono::steady_clock::time_point now, std::chrono::steady_clock::duration suppression)
+{
+	requiredRouteBlockerIds.insert(blockerId);
+	auto expires = temporarilyBlockedPositions.find(position);
+	if (expires == temporarilyBlockedPositions.end()) {
+		temporarilyBlockedPositions.emplace(position, now + suppression);
+	} else if (expires->second < now + suppression) {
+		expires->second = now + suppression;
+	}
+}
+
 std::optional<PlayerBotNavigationOscillation> PlayerBotNavigationSession::observeProgress(
 	const Position& currentPosition, const PlayerBotNavigationGoal& goal, std::chrono::steady_clock::time_point now,
 	std::chrono::steady_clock::duration suppression)

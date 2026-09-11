@@ -1195,6 +1195,11 @@ bool PlayerBotController::discoverDepot(Player& player, const Position& currentP
 				if (auto paidRoute = planNpcTravelRoute(player, candidate.approachPosition, {},
 				                                        playerBotNavigationMaximumExpandedNodes)) {
 					routePlan = std::move(*paidRoute);
+				} else {
+					// A failed travel-approach plan is still a real attempt: mark it
+					// so the failure feeds exhaustion like any other route failure.
+					routePlan.metrics.attempted = true;
+					routePlan.metrics.result = PlayerBotNavigationResult::Unreachable;
 				}
 			} else {
 				// Respect the navigation session's temporarily suppressed tiles so
@@ -1225,11 +1230,12 @@ bool PlayerBotController::discoverDepot(Player& player, const Position& currentP
 		observation.maximumHealthLossPerSecond = routePlan.metrics.maximumHealthLossPerSecond;
 		if (reached) {
 			steps = std::move(routePlan.steps);
-		} else if (routePlan.metrics.attempted &&
-		           !navigationRuntime.activeBlockedPositions(startedAt).empty()) {
-			// A temporarily suppressed route blocker makes the validated approach
-			// unreachable. Feed the failure into the runtime so the blocker
-			// becomes route-critical and exhaustion can escalate.
+		} else if (routePlan.metrics.attempted) {
+			// A failed fixed-goal validation is a no-progress failure toward the
+			// depot. Feed it into the runtime: adjacent hostiles confirm as
+			// route-critical so transit defense engages, and repeated failures
+			// accumulate toward exhaustion and breakout.
+			confirmAdjacentRouteBlockers(&player, currentPosition, startedAt);
 			PlayerBotNavigationRoutePlan failure;
 			failure.metrics = routePlan.metrics;
 			const PlayerBotNavigationRuntimeOutcome fed = navigationRuntime.observePlan(

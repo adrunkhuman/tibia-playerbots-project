@@ -167,9 +167,13 @@ no-chase defense attempt against a route-critical blocker; replans and
 intermediate route legs do not renew that budget, while a goal or phase change
 starts a new episode. A repeated detour onto an already suppressed tile
 proves a persistent corridor blocker and confirms it as route-critical
-immediately. Adjacent-approach goal flapping (for example, depot discovery
-alternating between standable tiles of the same depot) does not reset fixed
-goal failure accounting or erase confirmed blockers. If 20 fixed-goal route
+immediately, as does any failed fixed-goal route with adjacent hostiles:
+when the planner cannot route out, the monsters sealing the exits become
+attackable instead of waiting for a dispatched step to collide. Adjacent
+approach goal flapping (for example, depot discovery alternating between
+standable tiles of the same depot) does not reset fixed goal failure
+accounting or erase confirmed blockers, and failed depot route validations
+count toward the same exhaustion. If 20 fixed-goal route
 failures confirm that adjacent hostile blockers have sealed the exits, the bot
 enters a final 30-second no-chase breakout, and exhaustion is also honored when
 nominally successful plans would keep dispatching a blocked corridor step.

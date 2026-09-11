@@ -61,6 +61,8 @@ class PlayerBotNavigationSession
 		bool avoidPendingRouteBlocker(uint32_t blockerId, const Position& position, std::chrono::steady_clock::time_point now,
 		                              std::chrono::steady_clock::duration suppression);
 		void confirmRequiredRouteBlocker();
+		void confirmRouteBlocker(uint32_t blockerId, const Position& position, std::chrono::steady_clock::time_point now,
+		                         std::chrono::steady_clock::duration suppression);
 		void clearRequiredRouteBlockers() { requiredRouteBlockerIds.clear(); }
 		void clearBlockedPositions() { temporarilyBlockedPositions.clear(); clearRequiredRouteBlockers(); pendingRouteBlocker.reset(); pendingRouteBlockerId.reset(); }
 

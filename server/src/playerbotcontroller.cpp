@@ -1338,6 +1338,26 @@ void PlayerBotController::onHealthGain(Creature* healer, const Creature& target,
 	survivalRuntime.observeHealthGain(healer && healer->getID() == playerId, target.getID() == playerId, gain);
 }
 
+bool PlayerBotController::confirmAdjacentRouteBlockers(Player* player, const Position& currentPosition,
+	std::chrono::steady_clock::time_point now)
+{
+	if (!player) return false;
+	bool confirmed = false;
+	SpectatorVec spectators;
+	g_game.map.getSpectators(spectators, currentPosition);
+	for (Creature* creature : spectators) {
+		if (!creature->getMonster() || creature->isRemoved() || creature->isDead() ||
+		    !player->canSee(creature->getPosition()) ||
+		    !Position::areInRange<1, 1, 0>(currentPosition, creature->getPosition())) {
+			continue;
+		}
+		navigationRuntime.confirmRouteBlocker(creature->getID(), creature->getPosition(), now,
+		                                      navigationBlockSuppression);
+		confirmed = true;
+	}
+	return confirmed;
+}
+
 bool PlayerBotController::handleFixedTargetRouteExhausted(Player* player, const Position& currentPosition,
 	const PlayerBotNavigationRuntimeOutcome& outcome, std::chrono::steady_clock::time_point now, bool allowStop)
 {
@@ -1537,31 +1557,10 @@ bool PlayerBotController::processNavigation(Player* player, const Position& curr
 			         std::to_string(outcome.plan.waypoint.x) + ",\"y\":" + std::to_string(outcome.plan.waypoint.y) +
 			         ",\"z\":" + std::to_string(static_cast<uint16_t>(outcome.plan.waypoint.z)) + "}");
 			telemetry.logActionFailure("navigate", "route_unavailable", currentPosition);
-			if (outcome.fixedTargetRouteExhausted) {
-				bool adjacentConfirmedHostileBlocker = false;
-				SpectatorVec spectators;
-				g_game.map.getSpectators(spectators, currentPosition);
-				for (Creature* creature : spectators) {
-					if (creature->getMonster() && !creature->isRemoved() && !creature->isDead() &&
-					    player->canSee(creature->getPosition()) &&
-					    Position::areInRange<1, 1, 0>(currentPosition, creature->getPosition()) &&
-					    navigationRuntime.isRouteCritical(creature->getID(), creature->getPosition(), now)) {
-						adjacentConfirmedHostileBlocker = true;
-						break;
-					}
-				}
-				const bool breakoutStarted = huntCoordinator.beginTransitBreakout(
-				    outcome.fixedTargetRouteExhausted, adjacentConfirmedHostileBlocker,
-				    outcome.routeUnavailable, now);
-				if (huntCoordinator.transitBreakoutActive()) {
-					if (breakoutStarted) {
-						emit("navigation_progress", currentPosition,
-						     "\"result\":\"recovering\",\"reason\":\"transit_breakout\",\"duration_seconds\":30");
-					}
-					schedule(blockedRouteRetryInterval);
-					return false;
-				}
-				stop("navigation_route_unavailable", currentPosition);
+			confirmAdjacentRouteBlockers(player, currentPosition, now);
+			if (handleFixedTargetRouteExhausted(player, currentPosition, outcome, now, true)) {
+				schedule(blockedRouteRetryInterval);
+				return false;
 			}
 			schedule(blockedRouteRetryInterval);
 			return false;

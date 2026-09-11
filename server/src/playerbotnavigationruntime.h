@@ -200,6 +200,11 @@ class PlayerBotNavigationRuntime
 			return true;
 		}
 		bool isRouteCritical(uint32_t blockerId, const Position& position, std::chrono::steady_clock::time_point now) const { return session.isRouteCritical(blockerId, position, now); }
+		void confirmRouteBlocker(uint32_t blockerId, const Position& position, std::chrono::steady_clock::time_point now,
+		                         std::chrono::steady_clock::duration suppression)
+		{
+			session.confirmRouteBlocker(blockerId, position, now, suppression);
+		}
 		std::set<Position> activeBlockedPositions(std::chrono::steady_clock::time_point now) { return session.activeBlockedPositions(now); }
 		bool hasActiveRouteBlock(std::chrono::steady_clock::time_point now) const { return session.hasActiveRouteBlock(now); }
 		bool oscillationDetected() const { return session.oscillationDetected(); }

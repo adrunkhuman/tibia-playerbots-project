@@ -362,6 +362,11 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		bool handleFixedTargetRouteExhausted(Player* player, const Position& currentPosition,
 		                                     const PlayerBotNavigationRuntimeOutcome& outcome,
 		                                     std::chrono::steady_clock::time_point now, bool allowStop);
+		// A failed fixed-goal route with adjacent hostiles means the monsters
+		// seal the exits: confirm them route-critical so transit defense can
+		// engage instead of waiting for a dispatched step to collide.
+		bool confirmAdjacentRouteBlockers(Player* player, const Position& currentPosition,
+		                                  std::chrono::steady_clock::time_point now);
 
 		void finishHuntAndReturn(Player* player, const Position& position, const char* reason);
 
