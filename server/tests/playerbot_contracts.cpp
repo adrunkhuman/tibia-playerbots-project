@@ -4,11 +4,17 @@
 #include <cstdint>
 #include <iostream>
 
+#include "playerbotdepotworkflow.h"
+#include "playerboteconomy.h"
 #include "playerbotgoalplanner.h"
+#include "playerbotnavigationruntime.h"
 #include "playerbottransitcombat.h"
+#include "playerbottopology.h"
 #include "playerbothuntregions.h"
 #include "playerbothuntruntime.h"
 #include "playerbotinventorypolicy.h"
+#include "playerbotsupplyrecovery.h"
+#include "playerbottestpolicy.h"
 #include "playerbotturnrouter.h"
 
 namespace {
@@ -175,14 +181,13 @@ void mixedSustainedYield()
 	assert(playerBotSustainedHuntYield(points, viability, 1200).clearExperiencePerMinute == 3);
 }
 
-PlayerBotHuntRuntimeOutcome planRuntimeHunts(const std::vector<PlayerBotHuntRegion>& candidates, bool diversify = false)
+PlayerBotHuntRuntimeOutcome planRuntimeHunts(const std::vector<PlayerBotHuntRegion>& candidates)
 {
 	PlayerBotHuntRuntime runtime({});
 	PlayerBotHuntRuntimePlanningInput input;
 	input.cacheRevision = 1;
 	input.start.emplace();
 	input.start->scan.revision = 1;
-	input.start->profile.diversifyIncomeRoutes = diversify;
 	input.start->scan.candidateCount = candidates.size();
 	for (size_t i = 0; i < candidates.size(); ++i) input.start->scan.candidateIndices.push_back(i);
 	const auto now = std::chrono::steady_clock::time_point{};
@@ -241,78 +246,147 @@ void raisedHuntRecoveryReserve()
 	assert(selectRuntimeHunt({income, xp}).atlasVariantId == 2);
 }
 
-void diversifiedRouteShortlist()
+void incrementalHuntValidationPipeline()
 {
-	using namespace playerbot;
-	std::vector<PlayerBotHuntRegion> candidates(12);
-	for (size_t i = 0; i < candidates.size(); ++i) {
-		auto& region = candidates[i];
-		region.atlasVariantId = i + 1;
+	std::vector<PlayerBotHuntRegion> candidates(10);
+	for (size_t index = 0; index < candidates.size(); ++index) {
+		PlayerBotHuntRegion& region = candidates[index];
+		region.atlasVariantId = index + 1;
 		region.suitable = region.reachable = true;
-		region.supplyProfile.potions = 10;
-		region.score = 100 - i;
+		region.supplyBudget.fits = true;
+		region.score = 100 - index;
+		region.optimisticProjectedExperience = 100 - index;
+		region.topologyReachable = index % 2 == 0;
 	}
-	candidates.back().coinGoldPerMinute = 100;
-	const uint32_t maximumLegalReserve = 12;
-	auto recoveryCost = [&](uint32_t potions, uint32_t reserve) {
-		return playerBotRecoverySpendingReserve(potions, recoveryPotionRestockTargetForReserve(reserve), 45, carriedGoldReserve);
-	};
-	auto diversify = [&](uint32_t potions, uint64_t funds) {
-		return playerBotHuntCashPressure(potions, maximumLegalReserve, funds, recoveryCost(potions, maximumLegalReserve));
-	};
-	assert(diversify(10, 200));
-	assert(!diversify(10, 235)); // can fund even the largest legal route reserve
-	assert(!diversify(14, 0)); // plentiful supplies do not need income probes
-	const auto ordinary = planRuntimeHunts(candidates);
-	assert(ordinary.routeCandidates.size() == 8);
-	for (size_t i = 0; i < 8; ++i) assert(ordinary.routeCandidates[i].atlasVariantId == i + 1);
-	const auto diversified = planRuntimeHunts(candidates, diversify(10, 200));
-	assert(diversified.routeCandidates.size() == 8 && diversified.candidates.size() == 12);
-	assert(diversified.selectedRegion->atlasVariantId == ordinary.selectedRegion->atlasVariantId);
-	for (size_t i = 0; i < 12; ++i) assert(diversified.candidates[i].atlasVariantId == ordinary.candidates[i].atlasVariantId);
-	for (size_t i = 0; i < 4; ++i) assert(diversified.routeCandidates[i].atlasVariantId == i + 1);
-	auto containsIncome = [](const auto& regions) {
-		return std::any_of(regions.begin(), regions.end(), [](const auto& region) { return region.atlasVariantId == 12; });
-	};
-	assert(containsIncome(diversified.routeCandidates));
-	assert(!containsIncome(ordinary.routeCandidates));
-	assert(!containsIncome(planRuntimeHunts(candidates, diversify(10, 235)).routeCandidates));
-	// Execute the same reconciliation and final comparison used after routing.
-	auto routed = diversified.routeCandidates;
-	for (auto& region : routed) {
-		region.routeValidated = true;
-		region.reconcileRecovery(maximumLegalReserve, 200, recoveryCost(10, maximumLegalReserve));
+	const auto planned = planRuntimeHunts(candidates);
+	assert(planned.routeCandidates.size() == candidates.size());
+	for (size_t index = 0; index < candidates.size(); ++index) {
+		assert(planned.routeCandidates[index].atlasVariantId == index + 1);
 	}
-	auto best = [&]() { return std::min_element(routed.begin(), routed.end(), playerBotPreferHuntRegion)->atlasVariantId; };
-	assert(best() == 12); // the initially twelfth XP option actually reaches routing
-	for (auto& region : routed) if (region.atlasVariantId == 12) region.suitable = false;
-	assert(best() == 1); // rejected outbound/return danger cannot be overridden
-	for (auto& region : routed) {
-		region.suitable = true;
-		region.reconcileRecovery(maximumLegalReserve, 235, recoveryCost(10, maximumLegalReserve));
-	}
-	assert(best() == 1); // exact affordability retains XP even after diversification
-	for (auto& region : routed) region.reconcileRecovery(1, 200, recoveryCost(10, 1));
-	assert(best() == 1); // an inexpensive actual route likewise retains XP
+	// There is no fixed-eight, local/remote, observed/unobserved, or income slot.
+	assert(std::count_if(planned.routeCandidates.begin(), planned.routeCandidates.end(),
+	    [](const auto& region) { return region.topologyReachable; }) == 5);
 
-	candidates.back().supplyBudget.fits = false;
-	assert(!containsIncome(planRuntimeHunts(candidates, true).routeCandidates));
-	for (auto& region : candidates) {
-		region.supplyBudget.fits = false;
-		region.supplyBudget.expectedPotions = 1;
+	// Nine route failures still leave the tenth candidate available to win.
+	size_t validated = 0;
+	std::optional<PlayerBotHuntRegion> winner;
+	for (const PlayerBotHuntRegion& candidate : planned.routeCandidates) {
+		++validated;
+		if (candidate.atlasVariantId == 10) winner = candidate;
 	}
-	candidates.back().supplyBudget.expectedPotions = 2;
-	assert(!containsIncome(planRuntimeHunts(candidates, true).routeCandidates));
-	candidates.back().supplyBudget.expectedPotions = 1;
-	candidates[0].supplyBudget.fits = candidates[1].supplyBudget.fits = true;
-	const auto mixedTiers = planRuntimeHunts(candidates, true).routeCandidates;
-	assert(mixedTiers.size() == 8 && containsIncome(mixedTiers));
-	assert(mixedTiers[0].atlasVariantId == 1 && mixedTiers[1].atlasVariantId == 2);
-	candidates.back().predictedLethal = true;
-	assert(!containsIncome(planRuntimeHunts(candidates, true).routeCandidates));
-	candidates.back().predictedLethal = false;
-	candidates.back().reachable = false;
-	assert(!containsIncome(planRuntimeHunts(candidates, true).routeCandidates));
+	assert(validated == 10 && winner && winner->atlasVariantId == 10);
+
+	PlayerBotHuntRegion incumbent = candidates.front();
+	incumbent.score = 95;
+	incumbent.optimisticProjectedExperience = 95;
+	assert(!playerBotHuntRemainingCanBeatValidated(candidates, 6, incumbent));
+	candidates[6].optimisticProjectedExperience = incumbent.score;
+	assert(playerBotHuntRemainingCanBeatValidated(candidates, 6, incumbent));
+	candidates[6].optimisticProjectedExperience = 94;
+	incumbent.supplyBudget.fits = false;
+	assert(playerBotHuntRemainingCanBeatValidated(candidates, 6, incumbent));
+
+	// A validated fitting winner skips each dominated candidate without hiding a
+	// later candidate whose optimistic bound can still win in another supply tier.
+	std::vector<PlayerBotHuntRegion> sparseCompetition(52);
+	for (size_t index = 0; index < sparseCompetition.size(); ++index) {
+		sparseCompetition[index].atlasVariantId = index + 1;
+		sparseCompetition[index].suitable = sparseCompetition[index].reachable = true;
+		sparseCompetition[index].supplyBudget.fits = true;
+		sparseCompetition[index].optimisticProjectedExperience = 499;
+	}
+	PlayerBotHuntRegion earlyWinner = sparseCompetition.front();
+	earlyWinner.score = 548;
+	earlyWinner.supplyBudget.fits = true;
+	sparseCompetition.back().supplyBudget.fits = false;
+	sparseCompetition.back().optimisticProjectedExperience = 600;
+	assert(playerBotNextHuntCandidateToValidate(sparseCompetition, 1, &earlyWinner) == 51);
+	assert(playerBotHuntRemainingCanBeatValidated(sparseCompetition, 1, earlyWinner));
+	sparseCompetition.back().optimisticProjectedExperience = 547;
+	assert(playerBotNextHuntCandidateToValidate(sparseCompetition, 1, &earlyWinner) ==
+	       sparseCompetition.size());
+
+	// Scoring remains bounded per turn and cancellation is honored before a
+	// second 256-candidate batch starts.
+	PlayerBotHuntRuntime runtime({});
+	PlayerBotHuntRuntimePlanningInput input;
+	input.cacheRevision = 1;
+	input.start.emplace();
+	input.start->scan.revision = 1;
+	input.start->scan.candidateCount = 300;
+	for (size_t index = 0; index < 300; ++index) input.start->scan.candidateIndices.push_back(index);
+	const auto now = std::chrono::steady_clock::time_point{};
+	assert(runtime.advancePlanning(input, now).command == PlayerBotHuntRuntimeCommand::PlanningStarted);
+	const auto firstTurn = runtime.advancePlanning(input, now);
+	assert(firstTurn.scoreWork.size() == 256);
+	std::vector<PlayerBotHuntRuntimeScoreObservation> observations;
+	for (const auto& work : firstTurn.scoreWork) {
+		PlayerBotHuntRegion region;
+		region.suitable = region.reachable = true;
+		observations.push_back({work.candidateIndex, true, true, true, region});
+	}
+	assert(runtime.completeScoreWork(observations, 0).command == PlayerBotHuntRuntimeCommand::PlanningYield);
+	PlayerBotHuntPlanningObservation cancel;
+	cancel.cancelAtScoreBarrier = true;
+	assert(runtime.advancePlanning(input, now, cancel).command == PlayerBotHuntRuntimeCommand::PlanningCancelled);
+	assert(!runtime.planningActive());
+
+	// Transport closure is a separate bounded phase and cancellation is honored
+	// between its eight-offer batches.
+	PlayerBotHuntRuntime boundedTransport({});
+	PlayerBotHuntRuntimePlanningInput boundedTransportInput;
+	boundedTransportInput.cacheRevision = 1;
+	boundedTransportInput.start.emplace();
+	boundedTransportInput.start->scan.revision = 1;
+	boundedTransportInput.start->originReachability = std::make_shared<PlayerBotTopologyReachability>();
+	boundedTransportInput.start->transportOffers = std::make_shared<std::vector<PlayerBotHuntTransportOffer>>(10);
+	assert(boundedTransport.advancePlanning(boundedTransportInput, now).command ==
+	       PlayerBotHuntRuntimeCommand::PlanningStarted);
+	const auto boundedTransportTurn = boundedTransport.advancePlanning(boundedTransportInput, now);
+	assert(boundedTransportTurn.transportWork.size() == 8);
+	std::vector<PlayerBotHuntRuntimeTransportObservation> emptyTransportObservations;
+	for (const auto& work : boundedTransportTurn.transportWork) {
+		emptyTransportObservations.push_back({work.offerIndex, std::nullopt});
+	}
+	assert(boundedTransport.completeTransportWork(emptyTransportObservations).command ==
+	       PlayerBotHuntRuntimeCommand::PlanningYield);
+	PlayerBotHuntPlanningObservation cancelBoundedTransport;
+	cancelBoundedTransport.cancelAtScoreBarrier = true;
+	assert(boundedTransport.advancePlanning(boundedTransportInput, now, cancelBoundedTransport).command ==
+	       PlayerBotHuntRuntimeCommand::PlanningCancelled);
+
+	// A newly reached transport destination becomes available to later offers on
+	// the next pass, preserving affordable multihop labels without one synchronous
+	// all-NPC closure.
+	PlayerBotHuntRuntime transportRuntime({});
+	PlayerBotHuntRuntimePlanningInput transportInput;
+	transportInput.cacheRevision = 1;
+	transportInput.player.level = 20;
+	transportInput.player.funds = 100;
+	transportInput.start.emplace();
+	transportInput.start->scan.revision = 1;
+	transportInput.start->scan.candidateCount = 1;
+	transportInput.start->scan.candidateIndices = {0};
+	transportInput.start->originReachability = std::make_shared<PlayerBotTopologyReachability>();
+	transportInput.start->transportOffers = std::make_shared<std::vector<PlayerBotHuntTransportOffer>>(
+	    std::initializer_list<PlayerBotHuntTransportOffer>{{Position(1, 1, 7), Position(2, 2, 7), 10},
+	                                                      {Position(2, 2, 7), Position(3, 3, 7), 20}});
+	assert(transportRuntime.advancePlanning(transportInput, now).command == PlayerBotHuntRuntimeCommand::PlanningStarted);
+	auto transportTurn = transportRuntime.advancePlanning(transportInput, now);
+	assert(transportTurn.transportWork.size() == 2 && transportTurn.transportWork[0].arrivals &&
+	       transportTurn.transportWork[0].arrivals->size() == 1);
+	auto reachability = std::make_shared<PlayerBotTopologyReachability>();
+	std::vector<PlayerBotHuntRuntimeTransportObservation> transportObservations = {
+	    {0, PlayerBotHuntTransportArrival{Position(2, 2, 7), 10, 1, reachability}}, {1, std::nullopt}};
+	assert(transportRuntime.completeTransportWork(transportObservations).command == PlayerBotHuntRuntimeCommand::PlanningYield);
+	transportTurn = transportRuntime.advancePlanning(transportInput, now);
+	assert(transportTurn.transportWork.size() == 2 && transportTurn.transportWork[1].arrivals &&
+	       transportTurn.transportWork[1].arrivals->size() == 2);
+	PlayerBotHuntPlanningObservation cancelTransport;
+	cancelTransport.cancelAtScoreBarrier = true;
+	transportRuntime.completeTransportWork({{0, std::nullopt}, {1, std::nullopt}});
+	assert(transportRuntime.advancePlanning(transportInput, now, cancelTransport).command ==
+	       PlayerBotHuntRuntimeCommand::PlanningCancelled);
 }
 
 void lootArithmeticMemo()
@@ -368,6 +442,24 @@ void modeledPatrolFailure()
 	assert(fallback.patrolTarget().destination == points[1]);
 }
 
+void navigationFailureAccounting()
+{
+	PlayerBotFixedTargetFailureTracker failures;
+	assert(!failures.observePosition(false, 20));
+	for (int attempt = 0; attempt < 20; ++attempt) {
+		failures.observePlan(true);
+		failures.observeBlockedPlan(); // the dispatched route is immediately blocked
+		failures.observePlan(false); // the same cycle's unavailable replan is not double-counted
+		assert(failures.count() == static_cast<uint32_t>(attempt + 1));
+	}
+	assert(failures.exhausted());
+	assert(failures.observePosition(true, 19));
+	assert(failures.count() == 0 && !failures.exhausted());
+	failures.observePlan(false);
+	failures.observePosition(false, 200);
+	assert(failures.count() == 0); // a different fixed goal starts a new sequence
+}
+
 void transitCombat()
 {
 	using Phase = PlayerBotCyclePhase;
@@ -384,6 +476,7 @@ void transitCombat()
 	for (int turn = 0; turn < 100; ++turn) {
 		assert(!episode.observe(true, 1, Phase::ReturnToDepot));
 		assert(!episode.allowsDefense(42, true));
+		assert(!episode.allowsDefense(43, true)); // the budget belongs to the episode, not the monster ID
 		for (uint32_t id = 43; id < 48; ++id) assert(!episode.allowsDefense(id, false));
 	}
 	// Wall-clock expiry is independent of how many turns healing consumes.
@@ -426,11 +519,26 @@ void transitCombat()
 	retreat.begin();
 	assert(!retreat.allowsDefense(42, true));
 	assert(retreat.defenseExpired(now + std::chrono::seconds(75)));
-	assert(retreat.allowsDefense(43, true));
-	retreat.beginDefense(43, now + std::chrono::seconds(75));
-	assert(!retreat.defenseExpired(now + std::chrono::seconds(79)));
-	assert(retreat.defenseExpired(now + std::chrono::seconds(80)));
-	assert(!retreat.allowsDefense(42, true));
+	assert(!retreat.allowsDefense(43, true));
+
+	// Route exhaustion can spend a separate bounded escape window. It permits
+	// route-critical targets regardless of the planner's nominal success (a
+	// corridor plan can "succeed" straight through a blocked tile), exits on
+	// real progress, and never renews on replans.
+	assert(!retreat.beginBreakout(false, true, true, now + std::chrono::seconds(75)));
+	assert(!retreat.beginBreakout(true, false, true, now + std::chrono::seconds(75)));
+	assert(retreat.beginBreakout(true, true, false, now + std::chrono::seconds(75)));
+	assert(retreat.breakoutActive() && retreat.allowsDefense(43, true));
+	assert(!retreat.beginBreakout(true, true, true, now + std::chrono::seconds(76)));
+	assert(!retreat.breakoutExpired(now + std::chrono::seconds(104)));
+	assert(retreat.breakoutExpired(now + std::chrono::seconds(105)));
+	assert(retreat.observeBreakoutNavigation(true, false));
+	assert(!retreat.breakoutActive() && !retreat.allowsDefense(43, true));
+	assert(!retreat.beginBreakout(true, true, true, now + std::chrono::seconds(110)));
+	assert(retreat.observe(true, 2, Phase::ReturnToDepot));
+	assert(retreat.beginBreakout(true, true, true, now + std::chrono::seconds(110)));
+	assert(retreat.observeBreakoutNavigation(false, true));
+	assert(!retreat.breakoutActive());
 	retreat.finish();
 	assert(!retreat.active());
 	assert(!retreat.defenseExpired(now + std::chrono::hours(1)));
@@ -472,6 +580,269 @@ void crowdDamageInflation()
 	assert(std::max(identicalInflation, unequalInflation) == 1.5);
 	assert(playerBotCrowdDamageInflation(0, 0) == 1);
 	assert(playerBotCrowdDamageInflation(9, 10) == 1);
+}
+
+void adaptiveChallenge()
+{
+	auto observe = [](PlayerBotHuntPolicy& policy, double seconds, uint32_t kills,
+	                  int32_t health, uint32_t mana, uint32_t potions, uint32_t spells) {
+		policy.resetCombatEvidence();
+		policy.observeCombat({true, seconds, health, 100, mana, 100, 1});
+		for (uint32_t index = 0; index < kills; ++index) policy.observeKill();
+		for (uint32_t index = 0; index < potions; ++index) policy.observeRecovery(true);
+		for (uint32_t index = 0; index < spells; ++index) policy.observeRecovery(false);
+		return policy.updateChallengeFrontier({300, 100});
+	};
+
+	PlayerBotHuntPolicy exura;
+	auto update = observe(exura, 120, 4, 90, 80, 0, 1);
+	assert(update.result == PlayerBotHuntChallengeResult::Escalated);
+	assert(std::abs(update.frontierAfter - 0.30) < 1e-12);
+	assert(update.combat.p10ManaPercent == 80);
+
+	PlayerBotHuntPolicy routinePotion;
+	update = observe(routinePotion, 120, 4, 90, 80, 1, 0);
+	assert(update.result == PlayerBotHuntChallengeResult::Escalated);
+	assert(std::abs(update.frontierAfter - 0.30) < 1e-12);
+	PlayerBotHuntPolicy twoPotions;
+	assert(observe(twoPotions, 180, 5, 80, 80, 2, 0).result == PlayerBotHuntChallengeResult::Escalated);
+
+	PlayerBotHuntPolicy insufficient;
+	update = observe(insufficient, 30, 1, 100, 100, 0, 0);
+	assert(update.result == PlayerBotHuntChallengeResult::InsufficientActiveCombat);
+	assert(update.frontierAfter == update.frontierBefore);
+
+	PlayerBotHuntPolicy routineLongHunt;
+	update = observe(routineLongHunt, 300, 8, 80, 80, 3, 0);
+	assert(update.result == PlayerBotHuntChallengeResult::Hold);
+	assert(update.frontierAfter == update.frontierBefore);
+
+	PlayerBotHuntPolicy heavyPotions;
+	update = observe(heavyPotions, 60, 3, 75, 80, 3, 0);
+	assert(update.result == PlayerBotHuntChallengeResult::Backoff);
+	assert(std::abs(update.frontierAfter - 0.10) < 1e-12);
+	PlayerBotHuntPolicy manaPressure;
+	assert(observe(manaPressure, 90, 3, 80, 10, 0, 1).result == PlayerBotHuntChallengeResult::Backoff);
+	PlayerBotHuntPolicy criticalHealth;
+	assert(observe(criticalHealth, 90, 3, 30, 80, 0, 0).result == PlayerBotHuntChallengeResult::Backoff);
+	PlayerBotHuntPolicy danger;
+	danger.observeCombat({true, 90, 80, 100, 80, 100, 2});
+	for (uint32_t index = 0; index < 3; ++index) danger.observeKill();
+	danger.observeDamage(100);
+	assert(danger.observeDanger(100, std::chrono::seconds(30)));
+	assert(danger.updateChallengeFrontier({300, 100}).result == PlayerBotHuntChallengeResult::Backoff);
+	PlayerBotHuntPolicy death;
+	death.observeDeath();
+	assert(death.updateChallengeFrontier({300, 100}).result == PlayerBotHuntChallengeResult::Backoff);
+
+	PlayerBotHuntPolicy bounded;
+	for (uint32_t index = 0; index < 10; ++index) observe(bounded, 120, 4, 90, 90, 0, 0);
+	assert(std::abs(bounded.challengeFrontier() - 0.60) < 1e-12);
+}
+
+void sharedHuntPerformanceCalibration()
+{
+	auto reliableSample = [](uint64_t experience) {
+		return PlayerBotHuntPerformanceSample{120, 90, 4, experience, 100, 1, 120, false, false};
+	};
+	PlayerBotHuntPolicy policy;
+	constexpr uint64_t atlasRevision = 7;
+	auto update = policy.observePerformance(1, atlasRevision, reliableSample(200));
+	assert(update.observed && std::abs(update.updatedCorrection - 2.0) < 1e-12);
+	update = policy.observePerformance(2, atlasRevision, reliableSample(100));
+	assert(update.observed && std::abs(update.updatedCorrection - 1.0) < 1e-12);
+
+	auto performance = policy.regionPerformance();
+	const auto tested = playerBotHuntCorrectionForVariant(1, atlasRevision, performance);
+	assert(std::string(tested.source) == "variant_observed");
+	assert(tested.sampleCount == 1 && std::abs(tested.correction - 2.0) < 1e-12);
+	const auto untested = playerBotHuntCorrectionForVariant(3, atlasRevision, performance);
+	assert(std::string(untested.source) == "shared_observed");
+	assert(untested.sampleCount == 2 && std::abs(untested.correction - 1.5) < 1e-12);
+
+	// Repeated outings refine their own variant but do not multiply its weight in
+	// the shared prior: there are still two tested variants.
+	assert(policy.observePerformance(1, atlasRevision, reliableSample(200)).observed);
+	performance = policy.regionPerformance();
+	const auto repeated = playerBotHuntCorrectionForVariant(3, atlasRevision, performance);
+	assert(repeated.sampleCount == 2 && std::abs(repeated.correction - 1.5) < 1e-12);
+
+	// Default, malformed, stale, and explicitly unreliable entries are not observations.
+	performance.emplace(4, PlayerBotHuntRegionPerformance{});
+	performance.emplace(5, PlayerBotHuntRegionPerformance{10, 9, 1, atlasRevision, true});
+	performance.emplace(6, PlayerBotHuntRegionPerformance{10, 1.25, 1, atlasRevision, false});
+	performance.emplace(8, PlayerBotHuntRegionPerformance{10, 1.75, 1, atlasRevision - 1, true});
+	const auto filtered = playerBotHuntCorrectionForVariant(7, atlasRevision, performance);
+	assert(filtered.sampleCount == 2 && std::abs(filtered.correction - 1.5) < 1e-12);
+	assert(std::string(playerBotHuntCorrectionForVariant(4, atlasRevision, {}).source) == "default");
+
+	PlayerBotHuntPolicy insufficient;
+	PlayerBotHuntPerformanceSample sample = reliableSample(200);
+	sample.activeCombatSeconds = 59;
+	assert(!insufficient.observePerformance(1, atlasRevision, sample).observed);
+	sample = reliableSample(200);
+	sample.kills = 2;
+	assert(!insufficient.observePerformance(1, atlasRevision, sample).observed);
+	sample = reliableSample(200);
+	sample.durationSeconds = 119;
+	assert(!insufficient.observePerformance(1, atlasRevision, sample).observed);
+	sample = reliableSample(200);
+	sample.dangerObserved = true;
+	const auto unsafe = insufficient.observePerformance(1, atlasRevision, sample);
+	assert(!unsafe.observed && unsafe.actualExperiencePerMinute == 100);
+	sample.durationSeconds = 0;
+	assert(insufficient.observePerformance(1, atlasRevision, sample).actualExperiencePerMinute == 0);
+	assert(insufficient.regionPerformance().empty());
+}
+
+void supplyRecoveryMode()
+{
+	PlayerBotSupplyRecoveryState recovery;
+	assert(!recovery.active());
+	assert(recovery.enter());
+	assert(recovery.active() && !recovery.enter());
+	// An unknown budget must not clear the degraded state.
+	assert(!recovery.update(std::numeric_limits<uint64_t>::max(), std::numeric_limits<uint64_t>::max()));
+	assert(recovery.update(500, 400)); // Funds above budget end recovery.
+	assert(!recovery.active());
+	assert(recovery.update(100, 400)); // A shortfall enters recovery.
+	assert(recovery.active());
+
+	assert(playerBotSupplyRecoveryChallengeFrontier(0.6, true) == 0.20);
+	assert(playerBotSupplyRecoveryChallengeFrontier(0.1, true) == 0.1);
+	assert(playerBotSupplyRecoveryChallengeFrontier(0.6, false) == 0.6);
+
+	PlayerBotEconomyInventorySnapshot inventory{1, 100, 36, 0};
+	PlayerBotDispositionPolicy policy;
+	// Normal restock refuses gold that cannot lift the stock past the return
+	// threshold; survival restock buys what is affordable instead.
+	const auto normal = policy.restock(inventory, 45, 0, 1, 10);
+	assert(normal.insufficientFunds && normal.amount == 0);
+	const auto survival = policy.restock(inventory, 45, 0, 1, 10, true);
+	assert(!survival.insufficientFunds && survival.amount == 0);
+	PlayerBotEconomyInventorySnapshot richer{1, 100, 146, 0};
+	const auto partial = policy.restock(richer, 45, 0, 1, 10, true);
+	assert(!partial.insufficientFunds && partial.amount == 1); // 146 - 100 reserve = 46 gp.
+
+	const PlayerBotSurvivalSellCandidate rejected{
+	    true, true, true, true, 10, 500};
+	assert(!playerBotSurvivalSellAccepted(true, rejected));
+	const PlayerBotSurvivalSellCandidate unreachable{false, false, false, true, 0, 500};
+	assert(!playerBotSurvivalSellAccepted(true, unreachable));
+	const PlayerBotSurvivalSellCandidate unsafe{false, true, true, false, 0, 500};
+	assert(!playerBotSurvivalSellAccepted(true, unsafe));
+	const PlayerBotSurvivalSellCandidate unaffordable{false, true, true, true, 600, 500};
+	assert(!playerBotSurvivalSellAccepted(true, unaffordable));
+	const PlayerBotSurvivalSellCandidate viable{false, true, true, true, 10, 500};
+	assert(playerBotSurvivalSellAccepted(true, viable));
+	assert(!playerBotSurvivalSellAccepted(false, viable));
+
+	// Recovery ordering puts coin income ahead of experience even for regions
+	// that are not cash-pressed, and breaks income ties toward lower threat.
+	PlayerBotHuntRegion gold, xp;
+	gold.suitable = xp.suitable = gold.reachable = xp.reachable = true;
+	gold.supplyRecovery = xp.supplyRecovery = true;
+	gold.coinGoldPerMinute = 5;
+	gold.score = 10;
+	xp.score = 100;
+	assert(playerBotPreferHuntRegion(gold, xp));
+	PlayerBotHuntRegion safer = xp;
+	safer.coinGoldPerMinute = 5;
+	safer.threatRatio = 0.1;
+	xp.threatRatio = 0.4;
+	assert(playerBotPreferHuntRegion(safer, xp));
+}
+
+void navigationFixedObjective()
+{
+	PlayerBotNavigationGoal depot;
+	depot.position = Position(32341, 32229, 8);
+	PlayerBotNavigationGoal flap;
+	flap.position = Position(32343, 32229, 8);
+	PlayerBotNavigationGoal distant;
+	distant.position = Position(32105, 32191, 8);
+	assert(playerBotNavigationSameFixedObjective(depot, depot));
+	// Adjacent approach tiles of the same depot are one objective.
+	assert(playerBotNavigationSameFixedObjective(depot, flap));
+	assert(!playerBotNavigationSameFixedObjective(depot, distant));
+}
+
+void topologyComponentCompression()
+{
+	const auto bidirectional = playerBotTopologyBidirectionalComponents(
+	    3, {{0, 1, true}, {1, 0, true}, {1, 2, true}});
+	assert(bidirectional[0] == bidirectional[1]);
+	assert(bidirectional[1] != bidirectional[2]); // A one-way edge stays directed.
+
+	const auto gated = playerBotTopologyBidirectionalComponents(
+	    2, {{0, 1, true}, {1, 0, false}});
+	assert(gated[0] != gated[1]); // A level-gated reverse edge cannot merge components.
+
+	const auto gatedBothWays = playerBotTopologyBidirectionalComponents(
+	    2, {{0, 1, false}, {1, 0, false}});
+	assert(gatedBothWays[0] != gatedBothWays[1]);
+}
+
+void fixtureHuntHorizons()
+{
+	assert(playerbot::playerBotFixtureHuntPlanningDuration(false, 10) == 10);
+	assert(playerbot::playerBotFixtureHuntPlanningDuration(true, 10) == 900);
+	assert(playerbot::playerBotFixtureHuntPlanningDuration(true, 1500) == 1500);
+}
+
+void remoteHuntTravelGuards()
+{
+	// Once a coarse route reaches the provider's local area, finish against the
+	// live interaction range instead of an arbitrary exact topology approach tile.
+	const Position provider(32386, 31820, 6);
+	assert(playerBotNpcTravelUsesLocalApproach(Position(32382, 31816, 6), provider, 11));
+	assert(playerBotNpcTravelUsesLocalApproach(Position(32375, 31820, 6), provider, 11));
+	assert(!playerBotNpcTravelUsesLocalApproach(Position(32374, 31820, 6), provider, 11));
+	assert(!playerBotNpcTravelUsesLocalApproach(Position(32382, 31816, 7), provider, 11));
+	assert(playerBotNpcTravelApproachComplete(true, false, false));
+	assert(playerBotNpcTravelApproachComplete(false, true, true));
+	assert(!playerBotNpcTravelApproachComplete(false, false, false));
+	assert(!playerBotNpcTravelApproachComplete(false, true, false));
+
+	// Free routes need no cash reserve; paid routes still preserve recovery funds.
+	assert(playerBotHuntTravelAffordable(0, 100, 0, 0, 0));
+	assert(playerBotHuntTravelAffordable(50, 100, 0, 0, 0));
+	assert(!playerBotHuntTravelAffordable(50, 100, 1, 0, 0));
+	assert(playerBotHuntTravelAffordable(500, 100, 100, 200, 100));
+	assert(!playerBotHuntTravelAffordable(499, 100, 100, 200, 100));
+	assert(!playerBotHuntTravelAffordable(500, 100, 250, 200));
+	assert(playerBotHuntTravelAffordable(550, 100, 250, 200));
+	assert(playerBotHuntTravelPaymentAffordable(0, 100, 0, 200));
+	assert(!playerBotHuntTravelPaymentAffordable(500, 100, 250, 200));
+	assert(playerBotHuntTravelPaymentAffordable(550, 100, 250, 200));
+	// Exit validation reserves only the later supplier fare; counting the exit
+	// fare again as future money would reject this exactly funded route.
+	assert(playerBotHuntTravelPaymentAffordable(400, 100, 200, 100));
+	assert(!playerBotHuntTravelPaymentAffordable(400, 100, 200, 300));
+	const uint64_t recoveryBeforeRestock = playerBotRecoverySpendingReserve(2, 10, 45, 100);
+	const uint64_t recoveryAfterRestock = playerBotRecoverySpendingReserve(10, 10, 45, 100);
+	assert(recoveryBeforeRestock == 460 && recoveryAfterRestock == 100);
+	assert(!playerBotHuntTravelPaymentAffordable(200, recoveryBeforeRestock, 50, 0));
+	assert(playerBotHuntTravelPaymentAffordable(200, recoveryAfterRestock, 50, 0));
+	assert(playerBotDepotRouteSafetyAccepted(true, false, false, true));
+	assert(playerBotDepotRouteSafetyAccepted(false, true, false, false));
+	assert(!playerBotDepotRouteSafetyAccepted(false, true, false, true));
+	assert(!playerBotDepotRouteSafetyAccepted(false, true, true, false));
+	assert(!playerBotHuntTravelAffordable(500, 200, UINT64_MAX, 1));
+	assert(!playerBotHuntNeedsSupplyRoute(0, 3, 2));
+	assert(playerBotHuntNeedsSupplyRoute(1, 3, 2));
+	assert(playerBotHuntNeedsSupplyRoute(0, 2, 2));
+	assert(playerBotHuntNeedsSupplyRoute(0, 1, 2));
+	assert(playerBotNpcTravelOfferEligible(15, false, 100, 10, false, 100, false, false));
+	assert(!playerBotNpcTravelOfferEligible(9, true, 100, 10, false, 100, false, false));
+	assert(!playerBotNpcTravelOfferEligible(15, false, 100, 10, true, 100, false, false));
+	assert(!playerBotNpcTravelOfferEligible(15, true, 99, 10, true, 100, false, false));
+	assert(!playerBotNpcTravelOfferEligible(15, true, 100, 10, true, 100, true, false));
+	assert(!playerBotNpcTravelOfferEligible(15, true, 100, 10, true, 100, false, true));
+	const PlayerBotNavigationRiskProfile risk;
+	assert(playerBotNavigationRiskAccepts(risk, 500, 0.08));
+	assert(!playerBotNavigationRiskAccepts(risk, 501, 0.08));
+	assert(!playerBotNavigationRiskAccepts(risk, 500, 0.081));
 }
 
 void overBudgetHunts()
@@ -717,11 +1088,19 @@ int main()
 	patrolOpportunity();
 	mixedSustainedYield();
 	raisedHuntRecoveryReserve();
-	diversifiedRouteShortlist();
+	incrementalHuntValidationPipeline();
 	lootArithmeticMemo();
 	modeledPatrolFailure();
+	navigationFailureAccounting();
 	transitCombat();
 	crowdDamageInflation();
+	adaptiveChallenge();
+	sharedHuntPerformanceCalibration();
+	supplyRecoveryMode();
+	navigationFixedObjective();
+	topologyComponentCompression();
+	fixtureHuntHorizons();
+	remoteHuntTravelGuards();
 	overBudgetHunts();
 	supplyBudget();
 	recoverySpellPriority();

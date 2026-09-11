@@ -29,7 +29,8 @@ SKILL_FIST, SKILL_CLUB, SKILL_SWORD, SKILL_AXE, SKILL_DISTANCE, SKILL_SHIELD, SK
 ITEM_GOLD_COIN = 2148
 CreatureEvent = function() return {register = function() end} end
 Town = function(id) assert(id == 4); return {} end
-Game = {getExperienceForLevel = function(level) assert(level == 8); return seeded.experience end}
+local experienceByLevel = {[8] = seeded.experience, [15] = 37800}
+Game = {getExperienceForLevel = function(level) return assert(experienceByLevel[level]) end}
 PlayerbotGameplayFixture = {}
 local root = 'server/tests/playerbot-gameplay/includes/'
 dofile(root .. 'constants.inc')
@@ -58,11 +59,16 @@ local function login(selectedMode, fault, starter)
     equip(CONST_SLOT_AMMO, 2050) -- firstitems.lua runs before the fixture
     if fault == 'tool' then inventory[2120] = 0 end
     local vocation, health, position = 4, 1, nil
+    local level, experience = seeded.level, seeded.experience
     local player = {
         getName = function() return F.botName end,
         getId = function() return 3 end,
-        getLevel = function() return seeded.level end,
-        getExperience = function() return seeded.experience end,
+        getLevel = function() return level end,
+        getExperience = function() return experience end,
+        addExperience = function(_, amount)
+            experience = experience + amount
+            if experience >= experienceByLevel[15] then level = 15 end
+        end,
         getVocation = function() return {getId = function() return vocation end} end,
         setVocation = function(_, value) assert(value == 4, 'hunt fixture restored Rookgaard'); vocation = value; return true end,
         setTown = function() return true end,
@@ -105,12 +111,15 @@ local function login(selectedMode, fault, starter)
         assert(skills[skill] == wanted and tries[skill] == 0)
     end
     assert(health == seeded.health and position.x == seeded.posx and position.y == seeded.posy and position.z == seeded.posz)
+    assert(level == (mode == 'remote_hunt' and 15 or 8))
     assert(inventory[7618] == 10 and inventory[8704] == 0)
     assert(suppressed == (mode == 'hunt_planning' and 1 or 0))
     assert(output[1]:find('HUNT_MAINLAND_LOADOUT_PASS ' .. mode, 1, true))
-    assert(output[2] == 'PLAYERBOT_GAMEPLAY_TEST ' .. (mode == 'hunt_planning' and 'HUNT_PLANNING_START' or 'HUNT_AREA_ARRIVAL_START'))
+    local start = mode == 'hunt_planning' and 'HUNT_PLANNING_START' or
+        mode == 'hunt_area_arrival' and 'HUNT_AREA_ARRIVAL_START' or 'REMOTE_HUNT_START'
+    assert(output[2] == 'PLAYERBOT_GAMEPLAY_TEST ' .. start)
 end
-for _, selectedMode in ipairs({'hunt_planning', 'hunt_area_arrival'}) do
+for _, selectedMode in ipairs({'hunt_planning', 'hunt_area_arrival', 'remote_hunt'}) do
     login(selectedMode, nil, false)
     login(selectedMode, nil, true)
     assert(login(selectedMode, 'unequipped'):find('did not equip seeded item', 1, true))

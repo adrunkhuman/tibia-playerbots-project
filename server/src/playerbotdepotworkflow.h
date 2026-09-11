@@ -21,6 +21,11 @@ enum class PlayerBotDepotCommandType : uint8_t {
 };
 enum class PlayerBotDepotOutcome : uint8_t { Pending, Ready, Success, Retry, Moved, Partial, Deferred, Rejected, Unavailable };
 enum class PlayerBotDepotRouteResult : uint8_t { NotObserved, Reached, Unsafe, Unreachable };
+inline bool playerBotDepotRouteSafetyAccepted(bool routeSafe, bool validatingRiskFallback,
+                                               bool liquidationSource, bool protectedHuntExit)
+{
+	return routeSafe || (validatingRiskFallback && !liquidationSource && !protectedHuntExit);
+}
 enum class PlayerBotDepotActionResult : uint8_t {
 	None,
 	SelectedLockerUnavailable,

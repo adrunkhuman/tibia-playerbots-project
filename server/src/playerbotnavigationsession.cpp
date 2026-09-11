@@ -18,6 +18,7 @@ void PlayerBotNavigationSession::clear()
 	movementPending = false;
 	worldChangePending = false;
 	target = PlayerBotNavigationGoal();
+	targetSet = false;
 	blockedStepCount = 0;
 	pendingRouteBlocker.reset();
 	pendingRouteBlockerId.reset();
@@ -27,6 +28,7 @@ void PlayerBotNavigationSession::clear()
 void PlayerBotNavigationSession::adopt(const PlayerBotNavigationGoal& goal, std::deque<PlayerBotNavigationStep> newSteps)
 {
 	target = goal;
+	targetSet = true;
 	steps = std::move(newSteps);
 	movementPending = false;
 	worldChangePending = false;
@@ -34,21 +36,28 @@ void PlayerBotNavigationSession::adopt(const PlayerBotNavigationGoal& goal, std:
 
 void PlayerBotNavigationSession::prepareGoal(const PlayerBotNavigationGoal& goal)
 {
-	if (target == goal) {
+	if (targetSet && target == goal) {
 		return;
 	}
 	steps.clear();
+	// Adjacent-approach goal flapping (depot discovery alternating between
+	// standable tiles of the same depot) must not erase confirmed route
+	// blockers, or a corridor blocker never becomes attackable.
+	if (!targetSet || !playerBotNavigationSameFixedObjective(target, goal)) {
+		clearRequiredRouteBlockers();
+		pendingRouteBlocker.reset();
+		pendingRouteBlockerId.reset();
+	}
 	target = goal;
+	targetSet = true;
 	blockedStepCount = 0;
-	clearRequiredRouteBlockers();
-	pendingRouteBlocker.reset();
-	pendingRouteBlockerId.reset();
 }
 
 void PlayerBotNavigationSession::installRoute(const PlayerBotNavigationGoal& goal,
 	                                           std::deque<PlayerBotNavigationStep> newSteps)
 {
 	target = goal;
+	targetSet = true;
 	steps = std::move(newSteps);
 }
 
@@ -139,8 +148,14 @@ bool PlayerBotNavigationSession::avoidPendingRouteBlocker(
 	if (!movementPending || position != stepTarget) return false;
 	movementPending = false;
 	steps.clear();
+	// A detour onto a tile that is already suppressed means the planner had no
+	// alternative around it (one-tile corridor): the blocker is persistent and
+	// must become attackable instead of looping as an optional detour.
+	const auto existing = temporarilyBlockedPositions.find(position);
+	const bool persistent = existing != temporarilyBlockedPositions.end() && now < existing->second;
 	temporarilyBlockedPositions[position] = now + suppression;
-	requiredRouteBlockerIds.erase(blockerId);
+	if (persistent) requiredRouteBlockerIds.insert(blockerId);
+	else requiredRouteBlockerIds.erase(blockerId);
 	pendingRouteBlocker = position;
 	pendingRouteBlockerId = blockerId;
 	return true;

@@ -78,29 +78,6 @@ uint32_t PlayerBotDispositionPolicy::sellQuantity(const PlayerBotEconomyInventor
 	return inventory.itemCount > reserve ? inventory.itemCount - reserve : 0;
 }
 
-PlayerBotEconomyRestockDecision PlayerBotDispositionPolicy::restock(const PlayerBotEconomyInventorySnapshot& inventory,
-	uint32_t unitPrice, uint32_t unitWeight, uint32_t returnThreshold, uint32_t restockTarget) const
-{
-	if (inventory.itemCount >= restockTarget || unitPrice == 0) {
-		return {};
-	}
-	const uint32_t targetGap = restockTarget - inventory.itemCount;
-	const uint64_t totalMoney = inventory.money + inventory.bankBalance;
-	const uint32_t requiredGap = inventory.itemCount <= returnThreshold ? returnThreshold + 1 - inventory.itemCount : 0;
-	if (totalMoney / unitPrice < requiredGap) {
-		return {0, true};
-	}
-	uint32_t amount = totalMoney / unitPrice >= targetGap ? targetGap : static_cast<uint32_t>(std::min<uint64_t>(
-		targetGap, totalMoney > carriedGoldReserve ? (totalMoney - carriedGoldReserve) / unitPrice : 0));
-	if (inventory.itemCount <= returnThreshold) {
-		amount = std::max(amount, static_cast<uint32_t>(std::min<uint64_t>(requiredGap, totalMoney / unitPrice)));
-	}
-	if (unitWeight != 0) {
-		amount = std::min(amount, inventory.freeCapacity / unitWeight);
-	}
-	return {amount, false};
-}
-
 uint32_t PlayerBotDispositionPolicy::bankWithdrawal(const PlayerBotEconomyInventorySnapshot& inventory, uint32_t coinWeight) const
 {
 	uint32_t amount = static_cast<uint32_t>(std::min<uint64_t>(carriedGoldReserve, inventory.bankBalance));

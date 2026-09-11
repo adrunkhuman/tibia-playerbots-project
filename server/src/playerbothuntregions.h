@@ -17,6 +17,7 @@
 #include "position.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -26,6 +27,7 @@
 
 class Player;
 struct PlayerBotTopologyDistances;
+class PlayerBotTopologyReachability;
 
 struct PlayerBotRecoveryPrediction {
 	double spellMinimumHealing = 0;
@@ -38,6 +40,23 @@ struct PlayerBotRecoveryPrediction {
 	uint32_t manaReserve = 0;
 	double availableBeforeLethal = 0;
 	bool lightHealingLegal = false;
+};
+
+struct PlayerBotHuntTransportArrival {
+	Position position;
+	uint64_t fare = 0;
+	uint32_t estimatedSteps = 0;
+	std::shared_ptr<const PlayerBotTopologyReachability> topologyReachability;
+};
+
+struct PlayerBotHuntTransportOffer {
+	Position provider;
+	Position destination;
+	uint32_t price = 0;
+	uint32_t minimumLevel = 0;
+	bool premiumRequired = false;
+	bool opaqueCondition = false;
+	bool opaqueAction = false;
 };
 
 struct PlayerBotHuntPlanningProfile {
@@ -53,7 +72,8 @@ struct PlayerBotHuntPlanningProfile {
 	double challengeFrontier = 0;
 	bool lightHealingLegal = false;
 	bool cashPressure = false;
-	bool diversifyIncomeRoutes = false;
+	bool supplyRecovery = false;
+	std::vector<PlayerBotHuntTransportArrival> transportArrivals;
 	PlayerBotSupplyProfile supply;
 };
 
@@ -77,6 +97,7 @@ struct PlayerBotHuntRegion {
 	uint32_t id = 0;
 	uint64_t atlasSiteId = 0;
 	uint64_t atlasVariantId = 0;
+	uint64_t atlasRevision = 0;
 	uint32_t atlasPocketCount = 0;
 	uint32_t atlasSpawnCount = 0;
 	uint32_t atlasFloorCount = 0;
@@ -86,7 +107,9 @@ struct PlayerBotHuntRegion {
 	std::vector<Position> patrolPoints;
 	std::vector<PlayerBotHuntMonsterProfile> monsters;
 	double coinGoldPerMinute = 0;
+	double observedCoinGoldPerMinute = 0;
 	bool cashPressure = false;
+	bool supplyRecovery = false;
 	// Synthetic policy fixtures have no atlas geometry; engine candidates set this.
 	bool sustainedEligible = true;
 	PlayerBotHuntViability viability;
@@ -97,6 +120,8 @@ struct PlayerBotHuntRegion {
 	double availableHuntSeconds = 0;
 	double observedExperiencePerMinute = 0;
 	double observedCorrection = 1;
+	uint32_t calibrationSampleCount = 0;
+	const char* calibrationSource = "default";
 	uint16_t staminaMinutes = 0;
 	double staminaExperienceMultiplier = 1;
 	double projectedExperience = 0;
@@ -118,6 +143,15 @@ struct PlayerBotHuntRegion {
 	double expectedDamagePerSecond = 0;
 	double combatFraction = 0;
 	uint32_t returnRouteDangerCost = 0;
+	uint64_t outboundFare = 0;
+	uint64_t exitFare = 0;
+	uint64_t supplyFare = 0;
+	uint32_t recoveryPotionReserve = 0;
+	Position exitDepotDestination;
+	Position supplyDestination;
+	bool outboundNpcTravel = false;
+	bool exitNpcTravel = false;
+	bool supplyNpcTravel = false;
 	bool routeValidated = false;
 	double score = 0;
 	uint32_t travelSteps = 0;
@@ -127,6 +161,7 @@ struct PlayerBotHuntRegion {
 	bool suitable = false;
 	bool reachable = false;
 	bool topologyReachable = false;
+	bool transportPlausible = true;
 	bool inChallengeBand = false;
 	bool predictedLethal = false;
 	std::string rejectionReason;
@@ -159,9 +194,64 @@ struct PlayerBotHuntRegion {
 
 struct PlayerBotHuntRegionPerformance {
 	double observedExperiencePerMinute = 0;
+	double observedCoinGoldPerMinute = 0;
 	double correction = 1;
 	uint32_t samples = 0;
+	uint64_t atlasRevision = 0;
+	bool reliable = false;
 };
+
+struct PlayerBotHuntSharedCorrection {
+	double correction = 1;
+	uint32_t testedVariants = 0;
+};
+
+inline PlayerBotHuntSharedCorrection playerBotSharedHuntCorrection(
+    uint64_t atlasRevision, const std::map<uint64_t, PlayerBotHuntRegionPerformance>& performance)
+{
+	PlayerBotHuntSharedCorrection result;
+	double total = 0;
+	for (const auto& entry : performance) {
+		const PlayerBotHuntRegionPerformance& observed = entry.second;
+		if (!observed.reliable || observed.samples == 0 || observed.atlasRevision != atlasRevision ||
+		    !std::isfinite(observed.correction) ||
+		    observed.correction < 0.25 || observed.correction > 2.0) continue;
+		total += observed.correction;
+		++result.testedVariants;
+	}
+	if (result.testedVariants != 0) {
+		result.correction = std::clamp(total / result.testedVariants, 0.25, 2.0);
+	}
+	return result;
+}
+
+struct PlayerBotHuntCorrection {
+	double correction = 1;
+	double observedExperiencePerMinute = 0;
+	double observedCoinGoldPerMinute = 0;
+	uint32_t sampleCount = 0;
+	const char* source = "default";
+};
+
+inline PlayerBotHuntCorrection playerBotHuntCorrectionForVariant(
+    uint64_t variantId, uint64_t atlasRevision,
+    const std::map<uint64_t, PlayerBotHuntRegionPerformance>& performance)
+{
+	if (auto found = performance.find(variantId); found != performance.end()) {
+		const PlayerBotHuntRegionPerformance& observed = found->second;
+		if (observed.reliable && observed.samples != 0 && observed.atlasRevision == atlasRevision &&
+		    std::isfinite(observed.correction) &&
+		    observed.correction >= 0.25 && observed.correction <= 2.0) {
+			return {observed.correction, observed.observedExperiencePerMinute,
+			        observed.observedCoinGoldPerMinute, observed.samples, "variant_observed"};
+		}
+	}
+	const PlayerBotHuntSharedCorrection shared = playerBotSharedHuntCorrection(atlasRevision, performance);
+	if (shared.testedVariants != 0) {
+		return {shared.correction, 0, 0, shared.testedVariants, "shared_observed"};
+	}
+	return {};
+}
 
 struct PlayerBotHuntRegionScan {
 	bool cacheHit = false;
@@ -204,50 +294,90 @@ inline bool playerBotPreferHuntRegion(const PlayerBotHuntRegion& left, const Pla
 	if (!left.supplyBudget.fits && left.supplyBudget.expectedPotions != right.supplyBudget.expectedPotions) {
 		return left.supplyBudget.expectedPotions < right.supplyBudget.expectedPotions;
 	}
-	const double leftIncome = left.cashPressure ? left.coinGoldPerMinute : 0;
-	const double rightIncome = right.cashPressure ? right.coinGoldPerMinute : 0;
+	const bool recovery = left.supplyRecovery && right.supplyRecovery;
+	const double leftIncome = (left.cashPressure || recovery) ?
+	    (left.observedCoinGoldPerMinute > 0 ? left.observedCoinGoldPerMinute : left.coinGoldPerMinute) : 0;
+	const double rightIncome = (right.cashPressure || recovery) ?
+	    (right.observedCoinGoldPerMinute > 0 ? right.observedCoinGoldPerMinute : right.coinGoldPerMinute) : 0;
 	if (leftIncome != rightIncome) return leftIncome > rightIncome;
-	return left.score > right.score;
+	if (recovery && left.threatRatio != right.threatRatio) return left.threatRatio < right.threatRatio;
+	if (left.score != right.score) return left.score > right.score;
+	// A zero-duration estimate must not let an unproven disconnected region win
+	// a tie merely because it forecasts no combat consumption.
+	if (left.topologyReachable != right.topologyReachable) return left.topologyReachable;
+	return left.estimatedTravelSeconds < right.estimatedTravelSeconds;
 }
-inline constexpr size_t playerBotMaximumHuntRouteCandidates = 8;
-
-// Input retains the planner's normal stable ordering and region IDs. Diversify
-// only an oversubscribed supply tier: income must not displace a safer budget.
-inline std::vector<PlayerBotHuntRegion> playerBotHuntRouteShortlist(
-    const std::vector<PlayerBotHuntRegion>& orderedRegions, bool diversifyIncome)
+inline bool playerBotHuntTravelAffordable(uint64_t funds, uint64_t recoveryReserve,
+                                          uint64_t outboundFare, uint64_t exitFare,
+                                          uint64_t supplyFare = 0)
 {
-	std::vector<const PlayerBotHuntRegion*> eligible, chosen;
-	for (const auto& region : orderedRegions) {
-		if (region.suitable && region.reachable) eligible.push_back(&region);
-	}
-	for (size_t begin = 0; begin < eligible.size() && chosen.size() < playerBotMaximumHuntRouteCandidates;) {
-		size_t end = begin + 1;
-		const auto& tier = eligible[begin]->supplyBudget;
-		while (end < eligible.size() && eligible[end]->supplyBudget.fits == tier.fits &&
-		       (tier.fits || eligible[end]->supplyBudget.expectedPotions == tier.expectedPotions)) ++end;
-		const size_t slots = playerBotMaximumHuntRouteCandidates - chosen.size();
-		const bool diversify = diversifyIncome && end - begin > slots;
-		const size_t normalSlots = diversify ? (slots + 1) / 2 : std::min(slots, end - begin);
-		chosen.insert(chosen.end(), eligible.begin() + begin, eligible.begin() + begin + normalSlots);
-		if (diversify) {
-			std::vector<const PlayerBotHuntRegion*> income(eligible.begin() + begin, eligible.begin() + end);
-			std::stable_sort(income.begin(), income.end(), [](const auto* left, const auto* right) {
-				return left->coinGoldPerMinute > right->coinGoldPerMinute;
-			});
-			for (const auto* region : income) {
-				if (chosen.size() == playerBotMaximumHuntRouteCandidates) break;
-				if (std::find(chosen.begin(), chosen.end(), region) == chosen.end()) chosen.push_back(region);
-			}
-		}
-		begin = end;
-	}
+	uint64_t totalFare = outboundFare > UINT64_MAX - exitFare ? UINT64_MAX : outboundFare + exitFare;
+	totalFare = totalFare > UINT64_MAX - supplyFare ? UINT64_MAX : totalFare + supplyFare;
+	if (totalFare == 0) return true;
+	return totalFare <= funds && recoveryReserve <= funds - totalFare;
+}
+
+inline bool playerBotHuntTravelPaymentAffordable(uint64_t funds, uint64_t recoveryReserve,
+                                                 uint64_t fare, uint64_t futureFareReserve)
+{
+	return fare == 0 || playerBotHuntTravelAffordable(funds, recoveryReserve, fare, futureFareReserve);
+}
+
+inline bool playerBotHuntNeedsSupplyRoute(double expectedPotions, uint32_t availablePotions,
+                                          uint32_t routeReserve)
+{
+	return expectedPotions > 0 || availablePotions <= routeReserve;
+}
+
+// Preserve the normal policy order across every cheap viable candidate. Route
+// validation consumes this finite queue incrementally; it does not reserve
+// slots for local, remote, observed, unobserved, or income candidates.
+inline std::vector<PlayerBotHuntRegion> playerBotHuntRouteCandidates(
+    const std::vector<PlayerBotHuntRegion>& orderedRegions)
+{
 	std::vector<PlayerBotHuntRegion> result;
-	for (const auto* region : chosen) result.push_back(*region);
+	for (const PlayerBotHuntRegion& region : orderedRegions) {
+		if (region.suitable && region.reachable) result.push_back(region);
+	}
 	return result;
+}
+
+inline bool playerBotHuntCandidateCanBeatValidated(
+    const PlayerBotHuntRegion& candidate, const PlayerBotHuntRegion& validated)
+{
+	if (!candidate.suitable || !candidate.reachable) return false;
+	// Travel can improve the candidate's supply tier, but it cannot improve past
+	// an incumbent that already fits. Compare that best case with the candidate's
+	// no-travel XP bound before spending another route budget.
+	if (!validated.supplyBudget.fits) return true;
+	if (validated.cashPressure && candidate.coinGoldPerMinute > validated.coinGoldPerMinute) return true;
+	if (validated.cashPressure && candidate.coinGoldPerMinute < validated.coinGoldPerMinute) return false;
+	return candidate.optimisticProjectedExperience >= validated.score;
+}
+
+inline size_t playerBotNextHuntCandidateToValidate(
+    const std::vector<PlayerBotHuntRegion>& candidates, size_t begin,
+    const PlayerBotHuntRegion* validated = nullptr)
+{
+	for (size_t index = std::min(begin, candidates.size()); index < candidates.size(); ++index) {
+		const PlayerBotHuntRegion& candidate = candidates[index];
+		if (!candidate.suitable || !candidate.reachable) continue;
+		if (!validated || playerBotHuntCandidateCanBeatValidated(candidate, *validated)) return index;
+	}
+	return candidates.size();
+}
+
+inline bool playerBotHuntRemainingCanBeatValidated(
+    const std::vector<PlayerBotHuntRegion>& candidates, size_t begin,
+    const PlayerBotHuntRegion& validated)
+{
+	return playerBotNextHuntCandidateToValidate(candidates, begin, &validated) < candidates.size();
 }
 
 inline const char* playerBotHuntSelectionRule(const PlayerBotHuntRegion& region)
 {
+	if (region.supplyRecovery) return region.supplyBudget.fits ?
+	    "supply_recovery_coin_safety_then_xp" : "supply_recovery_potions_then_coin_safety_then_xp";
 	if (region.cashPressure) return region.supplyBudget.fits ?
 	    "supply_budget_then_coin_income_then_xp" : "lowest_potion_consumption_then_coin_income_then_xp";
 	return region.supplyBudget.fits ? "supply_budget_then_xp" : "lowest_potion_consumption_then_xp";

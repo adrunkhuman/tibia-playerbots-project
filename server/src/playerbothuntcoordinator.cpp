@@ -89,6 +89,11 @@ PlayerBotHuntRuntimeOutcome PlayerBotHuntCoordinator::advancePlanning(const Play
 {
 	return huntRuntime.advancePlanning(input, now, observation);
 }
+PlayerBotHuntRuntimeOutcome PlayerBotHuntCoordinator::completeTransportWork(
+	const std::vector<PlayerBotHuntRuntimeTransportObservation>& observations)
+{
+	return huntRuntime.completeTransportWork(observations);
+}
 PlayerBotHuntRuntimeOutcome PlayerBotHuntCoordinator::completeScoreWork(const std::vector<PlayerBotHuntRuntimeScoreObservation>& observations,
 	uint64_t elapsedUs) { return huntRuntime.completeScoreWork(observations, elapsedUs); }
 std::optional<PlayerBotHuntPlanningSession> PlayerBotHuntCoordinator::planningSession() const { return huntRuntime.planningSession(); }

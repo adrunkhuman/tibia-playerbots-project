@@ -198,7 +198,8 @@ std::vector<playerbot::PlayerBotFixtureEvent> playerbot::PlayerBotFixtureDriver:
 	PlayerBotHuntPolicy adaptivePolicy;
 	auto evidence = [&](double seconds, uint32_t kills, uint32_t recoveries, bool death = false) {
 		adaptivePolicy.resetCombatEvidence();
-		adaptivePolicy.observeCombat({seconds != 0, seconds, player.getMaxHealth(), player.getMaxHealth(), 1});
+		adaptivePolicy.observeCombat({seconds != 0, seconds, player.getMaxHealth(), player.getMaxHealth(),
+		                              player.getMana(), player.getMaxMana(), 1});
 		for (uint32_t i = 0; i < kills; ++i) adaptivePolicy.observeKill();
 		for (uint32_t i = 0; i < recoveries; ++i) adaptivePolicy.observeRecovery(true);
 		if (death) adaptivePolicy.observeDeath();
@@ -210,16 +211,24 @@ std::vector<playerbot::PlayerBotFixtureEvent> playerbot::PlayerBotFixtureDriver:
 		       << ",\"active_combat_seconds\":" << update.combat.activeSeconds << ",\"active_combat_uptime\":" << update.activeCombatUptime
 		       << ",\"kills\":" << update.combat.kills << ",\"minimum_active_combat_seconds\":" << update.minimumActiveCombatSeconds
 		       << ",\"minimum_kills\":" << update.minimumKills << ",\"minimum_health\":" << (update.combat.minimumHealth == std::numeric_limits<int32_t>::max() ? 0 : update.combat.minimumHealth)
-		       << ",\"verified_recoveries\":" << update.verifiedRecoveries << ",\"retreat\":false,\"danger\":" << (update.combat.dangerObserved ? "true" : "false")
+		       << ",\"p10_health_percent\":" << static_cast<uint16_t>(update.combat.p10HealthPercent)
+		       << ",\"minimum_mana\":" << (update.combat.minimumMana == std::numeric_limits<uint32_t>::max() ? 0 : update.combat.minimumMana)
+		       << ",\"p10_mana_percent\":" << static_cast<uint16_t>(update.combat.p10ManaPercent)
+		       << ",\"verified_recoveries\":" << update.verifiedRecoveries
+		       << ",\"potion_recoveries_per_active_minute\":" << update.potionRecoveriesPerActiveMinute
+		       << ",\"retreat\":false,\"danger\":" << (update.combat.dangerObserved ? "true" : "false")
 		       << ",\"death\":" << (update.combat.deathObserved ? "true" : "false");
 		events.push_back({"hunt_challenge_frontier", fields.str()});
 	};
 	adaptivePolicy.resetCombatEvidence();
-	adaptivePolicy.observeCombat({false, 30, player.getMaxHealth(), player.getMaxHealth(), 1});
+	adaptivePolicy.observeCombat({false, 30, player.getMaxHealth(), player.getMaxHealth(),
+	                              player.getMana(), player.getMaxMana(), 1});
 	const double idle = adaptivePolicy.combatSummary().activeSeconds;
-	adaptivePolicy.observeCombat({true, 30, player.getMaxHealth(), player.getMaxHealth(), 1});
+	adaptivePolicy.observeCombat({true, 30, player.getMaxHealth(), player.getMaxHealth(),
+	                              player.getMana(), player.getMaxMana(), 1});
 	const double active = adaptivePolicy.combatSummary().activeSeconds;
-	evidence(0, 0, 0); evidence(30, 0, 0); evidence(30, 1, 0); evidence(30, 1, 0); evidence(30, 1, 1); evidence(30, 1, 0); evidence(30, 1, 0); evidence(30, 1, 0); evidence(0, 0, 0, true);
+	evidence(0, 0, 0); evidence(60, 0, 0); evidence(60, 3, 0); evidence(60, 3, 0); evidence(60, 3, 3);
+	evidence(60, 3, 0); evidence(60, 3, 0); evidence(60, 3, 1); evidence(0, 0, 0, true);
 	const Item* weapon = player.getWeapon(true);
 	const PlayerBotCombatProfile profile{player.getLevel(), player.getMaxHealth(), player.getArmor(), player.getDefense(), weapon ? weapon->getAttack() : 7, weapon ? player.getWeaponSkill(weapon) : player.getSkillLevel(SKILL_FIST), player.getAttackFactor()};
 	PlayerBotHuntRegion current, equipped;

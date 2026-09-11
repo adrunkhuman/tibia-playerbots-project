@@ -321,10 +321,35 @@ function Assert-HuntRegionPlanningEvents {
 
     $events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
     $scored = @($events | Where-Object {
-        $_.event -eq "hunt_region_scan" -and $_.phase -in @("scoring_started", "scored")
+        $_.event -eq "hunt_region_scan" -and $_.phase -eq "scored"
     })
-    $build = @($scored | Where-Object { $_.cache -eq "build" })
-    $hit = @($scored | Where-Object { $_.cache -eq "hit" })
+	$planningStarted = @($events | Where-Object {
+		$_.event -eq 'hunt_region_scan' -and $_.phase -eq 'planning_started'
+	})
+	$startedBuild = @($planningStarted | Where-Object { $_.cache -eq 'build' })
+	$startedHit = @($planningStarted | Where-Object { $_.cache -eq 'hit' })
+	$completedScoring = @($scored | Where-Object {
+		$_.candidate_count -gt 0 -and $_.scored_candidate_count -eq $_.candidate_count -and
+		$_.suitable_candidate_count -ge 1 -and $_.route_candidate_count -ge 1
+	})
+	$completedBuildScoring = @($completedScoring | Where-Object { $_.cache -eq 'build' })
+	$buildLifecycleValid = $completedBuildScoring.Count -ge 1 -and @($completedBuildScoring | Where-Object {
+		$completion = $_
+		@($startedBuild | Where-Object {
+			$_.candidate_count -eq $completion.candidate_count -and
+			$_.snapshot_time_us -eq $completion.snapshot_time_us -and
+			$_.clustering_time_us -eq $completion.clustering_time_us
+		}).Count -ge 1
+	}).Count -eq $completedBuildScoring.Count
+	$cacheReuseValid = $startedHit.Count -ge 2 -and @($startedHit | Where-Object {
+		$hitStart = $_
+		$hitStart.candidate_count -le 0 -or $hitStart.scored_candidate_count -ne 0 -or
+		$hitStart.route_candidate_count -ne 0 -or $hitStart.snapshot_time_us -ne 0 -or
+		$hitStart.clustering_time_us -ne 0 -or
+		@($completedScoring | Where-Object { $_.candidate_count -eq $hitStart.candidate_count }).Count -lt 1
+	}).Count -eq 0
+	$transportYields = @($events | Where-Object { $_.event -eq 'hunt_region_scan' -and $_.phase -eq 'transport_yield' })
+	$scoringYields = @($events | Where-Object { $_.event -eq 'hunt_region_scan' -and $_.phase -eq 'scoring_yield' })
 	$cancelled = @($events | Where-Object { $_.event -eq "hunt_region_scan" -and $_.phase -eq "cancelled" })
 	$staleRevision = @($events | Where-Object { $_.event -eq "hunt_region_scan" -and $_.phase -eq "stale_revision" })
     $topologyScans = @($events | Where-Object {
@@ -339,8 +364,14 @@ function Assert-HuntRegionPlanningEvents {
     $completed = @($events | Where-Object {
 		$_.event -eq "hunt_region_scan" -and $_.phase -eq "selected" -and $_.decision_latency_us -gt 0
     })
+	$selectedScan = if ($completed.Count -gt 0) { $completed[$completed.Count - 1] } else { $null }
     $selectedCandidate = if ($selection) { @($candidates | Where-Object { $_.region_id -eq $selection.region_id }) } else { @() }
 	$reachableCandidates = @($candidates | Where-Object { $_.suitable -and $_.reachable -and $_.route_validated })
+	$validatedVariantCount = @($reachableCandidates | Select-Object -ExpandProperty atlas_variant_id -Unique).Count
+	$finiteRouteQueue = $selectedScan -and $selectedScan.route_candidate_policy -eq 'all_cheap_viable_ranked' -and
+		$selectedScan.route_candidate_count -gt 0 -and $selectedScan.route_candidate_count -le $selectedScan.candidate_count -and
+		$validatedVariantCount -le $selectedScan.route_candidate_count -and $selectedScan.transport_offer_count -ge 0 -and
+		$selectedScan.transport_arrival_count -ge 1
 	$budgetCandidates = @($reachableCandidates | Where-Object { $_.supply_budget_fits })
 	$minimumPotions = if ($reachableCandidates.Count -gt 0) { ($reachableCandidates | Measure-Object -Property supply_expected_potions -Minimum).Minimum } else { $null }
 	$preferredCandidates = if ($budgetCandidates.Count -gt 0) { $budgetCandidates } else {
@@ -363,10 +394,10 @@ function Assert-HuntRegionPlanningEvents {
 		$expectedThreshold = [Math]::Max(1, [Math]::Ceiling($expectedHealthLoss / $reserve.minimum_potion_healing))
 		$reserveFormulaValid = $reserve.return_threshold -eq $expectedThreshold
 	}
-	if ($build.Count -lt 2 -or $hit.Count -lt 1 -or $cancelled.Count -ne 1 -or $staleRevision.Count -ne 1 -or
-		$topologyScans.Count -lt 1 -or $routeValidations.Count -lt 1 -or -not $selection -or $selectedCandidate.Count -ne 1 -or
+	if (-not $buildLifecycleValid -or -not $cacheReuseValid -or $transportYields.Count -lt 1 -or $scoringYields.Count -lt 1 -or
+		$cancelled.Count -ne 1 -or $staleRevision.Count -ne 1 -or $topologyScans.Count -lt 1 -or $routeValidations.Count -lt 1 -or -not $selection -or $selectedCandidate.Count -ne 1 -or
 		$bestScore -eq $null -or [Math]::Abs($selectedCandidate[0].score - $bestScore) -gt 0.01 -or
-		$reachableCandidates.Count -gt 8 -or $selection.selection_rule -ne $selectionRule -or
+		-not $finiteRouteQueue -or $selection.selection_rule -ne $selectionRule -or
 		-not $selectedCandidate[0].route_validated -or
 		($budgetCandidates.Count -gt 0 -and -not $selectedCandidate[0].supply_budget_fits) -or
 		($budgetCandidates.Count -eq 0 -and $selectedCandidate[0].supply_expected_potions -ne $minimumPotions) -or
@@ -374,7 +405,7 @@ function Assert-HuntRegionPlanningEvents {
 		-not $selectedCandidate[0].reachable -or $selectedCandidate[0].route_danger_cost -lt 0 -or
 		$outsideLocalFixture.Count -lt 1 -or $completedTopology.Count -lt 1 -or
 		-not $reserveFormulaValid) {
-		throw "Hunt planning telemetry was incomplete. build=$($build.Count), hit=$($hit.Count), cancelled=$($cancelled.Count), stale=$($staleRevision.Count), topology_scans=$($topologyScans.Count), route_validations=$($routeValidations.Count), selection=$($selection.Count), outside=$($outsideLocalFixture.Count), completed=$($completedTopology.Count)."
+		throw "Hunt planning telemetry was incomplete. started_build=$($startedBuild.Count), started_hit=$($startedHit.Count), completed_scoring=$($completedScoring.Count), build_lifecycle=$buildLifecycleValid, cache_reuse=$cacheReuseValid, transport_yields=$($transportYields.Count), scoring_yields=$($scoringYields.Count), cancelled=$($cancelled.Count), stale=$($staleRevision.Count), topology_scans=$($topologyScans.Count), route_candidates=$($selectedScan.route_candidate_count), validated_variants=$validatedVariantCount, route_validations=$($routeValidations.Count), selection=$($selection.Count), outside=$($outsideLocalFixture.Count), completed=$($completedTopology.Count)."
 	}
 }
 
@@ -409,6 +440,38 @@ function Assert-HuntAreaArrivalEvents {
 	}
 }
 
+function Assert-RemoteHuntEvents {
+	param([string]$Logs)
+
+	$events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
+	$selection = @($events | Where-Object { $_.event -eq 'hunt_region_selection' -and $_.result -eq 'selected' }) | Select-Object -Last 1
+	if (-not $selection) { throw 'Remote hunt did not select a region.' }
+	$candidate = @($events | Where-Object {
+		$_.event -eq 'hunt_region_candidate' -and $_.region_id -eq $selection.region_id -and $_.route_validated
+	}) | Select-Object -Last 1
+	$entry = @($events | Where-Object { $_.event -eq 'hunt_area_entered' -and $_.region_id -eq $selection.region_id }) | Select-Object -First 1
+	$depot = @($events | Where-Object { $_.event -eq 'action_result' -and $_.action -eq 'depot_discover' -and $_.result -eq 'success' }) | Select-Object -Last 1
+	$travel = @($events | Where-Object { $_.event -eq 'npc_travel' -and $_.result -eq 'success' })
+	$boatTravel = @($travel | Where-Object { $_.npc_name -like 'Captain *' })
+	$return = @($events | Where-Object { $_.event -eq 'action_result' -and $_.action -eq 'return' -and $_.result -eq 'started' })
+	$terminal = @($events | Where-Object { $_.event -eq 'terminal' })
+	$remoteDistance = if ($candidate) {
+		[Math]::Max([Math]::Abs($candidate.center.x - 32360), [Math]::Abs($candidate.center.y - 31782))
+	} else { 0 }
+	$depotMatchesPreflight = $candidate -and $depot -and
+		$depot.approach.z -eq $candidate.exit_depot_destination.z -and
+		[Math]::Max([Math]::Abs($depot.approach.x - $candidate.exit_depot_destination.x),
+		            [Math]::Abs($depot.approach.y - $candidate.exit_depot_destination.y)) -le 2
+	$darashiaRegion = $candidate -and $candidate.center.x -ge 33100 -and $candidate.center.x -le 33350 -and
+		$candidate.center.y -ge 32300 -and $candidate.center.y -le 32650
+	if (-not $candidate -or -not $darashiaRegion -or $candidate.topology_reachable -or -not $candidate.outbound_npc_travel -or
+		$candidate.outbound_fare -le 0 -or $candidate.exit_npc_travel -or $remoteDistance -le 100 -or
+		-not $entry -or $travel.Count -lt 1 -or $boatTravel.Count -lt 1 -or $return.Count -lt 1 -or
+		-not $depotMatchesPreflight -or $terminal.Count -ne 0) {
+		throw "Remote hunt integration failed. candidate=$([bool]$candidate), darashia=$darashiaRegion, distance=$remoteDistance, travel=$($travel.Count), boat_travel=$($boatTravel.Count), entry=$([bool]$entry), return=$($return.Count), depot_match=$depotMatchesPreflight, terminal=$($terminal.Count)."
+	}
+}
+
 function Assert-SupplyBudgetEvents {
 	param([string]$Logs)
 	$fixtures = @(ConvertFrom-PlayerbotLogs -Logs $Logs | Where-Object {
@@ -434,7 +497,7 @@ function Assert-AdaptiveChallengeEvents {
     $events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
     $frontier = @($events | Where-Object { $_.event -eq "hunt_challenge_frontier" })
 	$idle = @($frontier | Where-Object { $_.result -eq "insufficient_active_combat" -and $_.active_combat_seconds -eq 0 -and $_.kills -eq 0 })
-	$noKill = @($frontier | Where-Object { $_.result -eq "insufficient_active_combat" -and $_.active_combat_seconds -ge 30 -and $_.kills -eq 0 })
+	$noKill = @($frontier | Where-Object { $_.result -eq "insufficient_active_combat" -and $_.active_combat_seconds -ge 60 -and $_.kills -eq 0 })
 	$escalated = @($frontier | Where-Object { $_.result -eq "escalated" })
 	$invalidEscalation = @($escalated | Where-Object {
 		$_.active_combat_seconds -lt $_.minimum_active_combat_seconds -or $_.kills -lt $_.minimum_kills
@@ -463,10 +526,10 @@ function Assert-AdaptiveChallengeEvents {
 	if ($idle.Count -ne 1 -or $noKill.Count -ne 1 -or $invalidEscalation.Count -ne 0 -or
 		$escalated.Count -ne 3 -or $backoff.Count -ne 2 -or $deathBackoff.Count -ne 1 -or $hold.Count -ne 2 -or
         [Math]::Abs($escalated[0].frontier_before - 0.20) -gt 0.001 -or
-        [Math]::Abs($escalated[1].frontier_after - 0.25) -gt 0.001 -or
-		[Math]::Abs($escalated[2].frontier_after - 0.225) -gt 0.001 -or
-        [Math]::Abs($backoff[0].frontier_after - 0.20) -gt 0.001 -or
-		[Math]::Abs($deathBackoff[0].frontier_after - 0.175) -gt 0.001 -or
+        [Math]::Abs($escalated[1].frontier_after - 0.40) -gt 0.001 -or
+		[Math]::Abs($escalated[2].frontier_after - 0.40) -gt 0.001 -or
+        [Math]::Abs($backoff[0].frontier_after - 0.30) -gt 0.001 -or
+		[Math]::Abs($deathBackoff[0].frontier_after - 0.30) -gt 0.001 -or
         $hold[0].hold_qualifying_hunts -ne 1 -or $hold[1].hold_qualifying_hunts -ne 0 -or
         $fixture.Count -ne 1 -or -not $fixture[0].recovery_spell_legal -or $fixture[0].recovery_spell_casts -lt 1 -or
         $fixture[0].equipment_pressure_after -gt $fixture[0].equipment_pressure_before -or

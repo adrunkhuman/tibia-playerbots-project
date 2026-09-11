@@ -11,6 +11,7 @@
 #ifndef FS_PLAYERBOTNAVIGATION_H
 #define FS_PLAYERBOTNAVIGATION_H
 
+#include <algorithm>
 #include <cstdint>
 #include <deque>
 #include <functional>
@@ -25,6 +26,14 @@ class Player;
 class Item;
 
 inline constexpr uint64_t playerBotNavigationMaximumExpandedNodes = 100000;
+
+inline bool playerBotNpcTravelOfferEligible(uint32_t playerLevel, bool playerPremium, uint64_t availableMoney,
+                                             uint32_t minimumLevel, bool premiumRequired, uint64_t fare,
+                                             bool opaqueCondition, bool opaqueAction)
+{
+	return playerLevel >= minimumLevel && (!premiumRequired || playerPremium) && fare <= availableMoney &&
+	       !opaqueCondition && !opaqueAction;
+}
 
 inline uint32_t playerBotNavigationDistance(const Position& from, const Position& destination)
 {
@@ -62,10 +71,40 @@ struct PlayerBotNavigationGoal {
 	static PlayerBotNavigationGoal anyOf(std::vector<Position> positions);
 	bool reached(const Position& candidate) const;
 	uint32_t distance(const Position& candidate) const;
-	Position representative() const;
-	bool operator==(const PlayerBotNavigationGoal& other) const;
+	Position representative() const { return position; }
+	bool operator==(const PlayerBotNavigationGoal& other) const
+	{
+		return type == other.type && position == other.position && rangeX == other.rangeX && rangeY == other.rangeY &&
+		       rangeZ == other.rangeZ && positions == other.positions;
+	}
 	bool operator!=(const PlayerBotNavigationGoal& other) const { return !(*this == other); }
 };
+
+inline bool playerBotNpcTravelUsesLocalApproach(const Position& current, const Position& provider,
+                                                 int32_t maximumDistance)
+{
+	return current.z == provider.z &&
+	       std::max(Position::getDistanceX(current, provider), Position::getDistanceY(current, provider)) <= maximumDistance;
+}
+
+// Depot discovery can alternate between adjacent standable approach tiles of
+// the same depot every decision tick. Treat such flapping as one fixed
+// objective so failure accounting and confirmed route blockers survive it.
+inline bool playerBotNavigationSameFixedObjective(const PlayerBotNavigationGoal& previous,
+	const PlayerBotNavigationGoal& current)
+{
+	if (previous == current) return true;
+	const Position previousRepresentative = previous.representative();
+	const Position currentRepresentative = current.representative();
+	return previousRepresentative.z == currentRepresentative.z &&
+	       Position::areInRange<3, 3, 0>(previousRepresentative, currentRepresentative);
+}
+
+inline bool playerBotNpcTravelApproachComplete(bool localApproach, bool hasSteps,
+                                                bool exactDestinationReached)
+{
+	return localApproach || (hasSteps && exactDestinationReached);
+}
 
 enum class PlayerBotNavigationAction : uint8_t {
 	Move,

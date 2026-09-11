@@ -15,6 +15,8 @@
 #include "playerbotnpccapabilities.h"
 #include "playerbottopology.h"
 
+#include <tuple>
+
 // Playerbot lifecycle, scheduling, navigation execution, and telemetry.
 using namespace playerbot;
 
@@ -537,10 +539,22 @@ bool PlayerBotController::executeNavigationStep(Player* player, const PlayerBotN
 				       !offer.hasOpaqueAction && offer.price == step.price && offer.level == step.minimumLevel &&
 				       offer.premium == step.premium;
 			});
-		if (!offerAvailable || player->getLevel() < step.minimumLevel || (step.premium && !player->isPremium()) ||
-		    player->getMoney() + player->getBankBalance() < step.price || npc->getPosition().z != player->getPosition().z ||
+		if (!offerAvailable || !playerBotNpcTravelOfferEligible(
+		        player->getLevel(), player->isPremium(), player->getMoney() + player->getBankBalance(),
+		        step.minimumLevel, step.premium, step.price, false, false) ||
+		    npc->getPosition().z != player->getPosition().z ||
 		    std::max(Position::getDistanceX(npc->getPosition(), player->getPosition()),
 		             Position::getDistanceY(npc->getPosition(), player->getPosition())) > 3) return false;
+		if (!huntTravelFareAffordable(*player, step.price, huntTravelBudgetPhase)) {
+			telemetry.emit("npc_travel", player->getPosition(),
+			     "\"result\":\"refused\",\"reason\":\"fare_breaks_hunt_reserve\",\"npc_id\":" +
+			         std::to_string(step.npcId) + ",\"npc_name\":" + jsonString(npc->getName()) +
+			         ",\"fare\":" + std::to_string(step.price) + ",\"future_fare_reserve\":" +
+			         std::to_string(huntTravelFutureFareReserve(huntTravelBudgetPhase)) +
+			         ",\"recovery_funds_reserve\":" + std::to_string(recoverySpendingReserve(
+			             *player, recoveryPotionRestockTargetForReserve(huntRecoveryPotionReserve))));
+			return false;
+		}
 		npc->receiveSpeech(player, TALKTYPE_PRIVATE_PN, "hi");
 		for (const std::string& phrase : step.dialogue) {
 			npc->receiveSpeech(player, TALKTYPE_PRIVATE_PN, phrase);
@@ -552,7 +566,7 @@ bool PlayerBotController::executeNavigationStep(Player* player, const PlayerBotN
 		}
 		telemetry.emit("npc_travel", player->getPosition(),
 		     std::string("\"result\":") + jsonString(travelled ? "success" : "failed") +
-		         ",\"npc_id\":" + std::to_string(step.npcId) +
+		         ",\"npc_id\":" + std::to_string(step.npcId) + ",\"npc_name\":" + jsonString(npc->getName()) +
 		         ",\"destination\":{\"x\":" + std::to_string(step.expectedPosition.x) +
 		         ",\"y\":" + std::to_string(step.expectedPosition.y) + ",\"z\":" +
 		         std::to_string(static_cast<uint16_t>(step.expectedPosition.z)) + "}");
@@ -795,7 +809,10 @@ PlayerBotNavigationRoutePlan PlayerBotController::planNavigationRoute(Player& pl
 			    std::numeric_limits<size_t>::max();
 			const double directTravelSeconds = directSteps == std::numeric_limits<size_t>::max() ?
 			    std::numeric_limits<double>::infinity() : directSteps * player.getStepDuration() / 1000.0;
-			if (travelRoute->metrics.estimatedTravelSeconds < directTravelSeconds) {
+			const double paidCost = travelRoute->metrics.estimatedTravelSeconds +
+			                        travelRoute->metrics.fare / 10.0 + travelRoute->metrics.dangerCost / 10.0;
+			const double directCost = directTravelSeconds + (topologyRoute ? topologyRoute->dangerCost / 10.0 : 0);
+			if (paidCost < directCost) {
 				travelRoute->metrics.elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
 				    std::chrono::steady_clock::now() - startedAt);
 				travelRoute->metrics.attempted = true;
@@ -878,10 +895,13 @@ std::optional<PlayerBotNavigationRoutePlan> PlayerBotController::planNpcTravelRo
 	std::vector<Position> states{source};
 	std::map<Position, size_t> stateIndices{{source, 0}};
 	const Position currentPosition = source;
+	const uint64_t availableMoney = player.getMoney() + player.getBankBalance();
 	for (Npc* npc : playerBotNpcProviders(g_game.getNpcs(), PlayerBotNpcCapability::Travel, currentPosition)) {
 		for (const NpcTravelOffer& offer : npc->getTravelOffers()) {
-			if ((offer.level != 0 && player.getLevel() < offer.level) || (offer.premium && !player.isPremium()) ||
-			    offer.hasOpaqueCondition || offer.hasOpaqueAction || offer.destination == currentPosition ||
+			if (!playerBotNpcTravelOfferEligible(player.getLevel(), player.isPremium(), availableMoney,
+			                                     offer.level, offer.premium, offer.price,
+			                                     offer.hasOpaqueCondition, offer.hasOpaqueAction) ||
+			    offer.destination == currentPosition ||
 			    blockedPositions.find(npc->getPosition()) != blockedPositions.end()) continue;
 			const auto unavailable = unavailableTravelOffers.find({npc->getID(), offer.destination});
 			if (unavailable != unavailableTravelOffers.end() && unavailable->second > std::chrono::steady_clock::now()) continue;
@@ -919,7 +939,6 @@ std::optional<PlayerBotNavigationRoutePlan> PlayerBotController::planNpcTravelRo
 	std::vector<std::vector<std::pair<uint64_t, uint64_t>>> labels(states.size());
 	labels[0].push_back({0, 0});
 	queue.push({0, 0, 0, 0, 0, 0, 0, std::numeric_limits<size_t>::max()});
-	const uint64_t availableMoney = player.getMoney() + player.getBankBalance();
 	const PlayerBotNavigator navigator;
 	const PlayerBotNavigationCostPolicy costPolicy = navigationCostPolicy(player);
 	const uint64_t graphNodeBudget = estimateOnly ? maximumExpandedNodes : maximumExpandedNodes / 2;
@@ -1112,12 +1131,19 @@ std::optional<PlayerBotNavigationRoutePlan> PlayerBotController::planNpcTravelRo
 	bool firstSegmentComplete = true;
 	if (!estimateOnly && firstSegment.coarse && firstSegment.destination != player.getPosition()) {
 		if (graphExpandedNodes >= maximumExpandedNodes) return std::nullopt;
+		const bool localApproach = playerBotNpcTravelUsesLocalApproach(
+		    player.getPosition(), selected.npc->getPosition(), npcLocalApproachDistance + 3);
 		const uint64_t remainingNodeBudget = std::min<uint64_t>(
-		    maximumExpandedNodes - graphExpandedNodes, playerBotNavigationMaximumExpandedNodes - 1);
+		    maximumExpandedNodes - graphExpandedNodes,
+		    localApproach ? maximumNpcLocalPathNodes : playerBotNavigationMaximumExpandedNodes - 1);
+		const PlayerBotNavigationGoal approachGoal = localApproach ?
+		    PlayerBotNavigationGoal::withinRange(selected.npc->getPosition(), 3, 3) :
+		    PlayerBotNavigationGoal::exact(firstSegment.destination);
 		PlayerBotNavigationRoutePlan incremental = planNavigationRoute(
-		    player, PlayerBotNavigationGoal::exact(firstSegment.destination), blockedPositions, remainingNodeBudget);
+		    player, approachGoal, blockedPositions, remainingNodeBudget, localApproach);
 		graphExpandedNodes += incremental.metrics.expandedNodes;
-		if (incremental.metrics.result != PlayerBotNavigationResult::Reached || incremental.steps.empty()) {
+		if (incremental.metrics.result != PlayerBotNavigationResult::Reached ||
+		    (!localApproach && incremental.steps.empty())) {
 			std::ostringstream fields;
 			fields << "\"result\":\"failed\",\"npc_id\":" << selected.npc->getID()
 			       << ",\"route_result\":" << static_cast<uint32_t>(incremental.metrics.result)
@@ -1131,7 +1157,9 @@ std::optional<PlayerBotNavigationRoutePlan> PlayerBotController::planNpcTravelRo
 			emit("npc_travel_approach", player.getPosition(), fields.str());
 			return std::nullopt;
 		}
-		firstSegmentComplete = incremental.steps.back().expectedPosition == firstSegment.destination;
+		firstSegmentComplete = playerBotNpcTravelApproachComplete(
+		    localApproach, !incremental.steps.empty(),
+		    !incremental.steps.empty() && incremental.steps.back().expectedPosition == firstSegment.destination);
 		PlayerBotNavigationRoutePlan firstPlan = std::move(incremental);
 		firstSegment.stepCount = static_cast<uint32_t>(firstPlan.steps.size());
 		firstSegment.movementCost = firstPlan.metrics.movementCost;
@@ -1175,9 +1203,173 @@ std::optional<PlayerBotNavigationRoutePlan> PlayerBotController::planNpcTravelRo
 	return route;
 }
 
+uint64_t PlayerBotController::huntTravelFutureFareReserve(HuntTravelBudgetPhase phase) const
+{
+	if (phase == HuntTravelBudgetPhase::Outbound) {
+		return huntExitFareReserve > UINT64_MAX - huntSupplyFareReserve ? UINT64_MAX :
+		       huntExitFareReserve + huntSupplyFareReserve;
+	}
+	return phase == HuntTravelBudgetPhase::Exit ? huntSupplyFareReserve : 0;
+}
+
+bool PlayerBotController::huntTravelFareAffordable(
+	const Player& player, uint64_t fare, HuntTravelBudgetPhase phase) const
+{
+	if (phase == HuntTravelBudgetPhase::None || fare == 0) return true;
+	const uint64_t recoveryReserve = recoverySpendingReserve(
+	    player, recoveryPotionRestockTargetForReserve(huntRecoveryPotionReserve));
+	return playerBotHuntTravelPaymentAffordable(player.getMoney() + player.getBankBalance(),
+	                                            recoveryReserve, fare,
+	                                            huntTravelFutureFareReserve(phase));
+}
+
+PlayerBotNavigationRoutePlan PlayerBotController::planHuntTravelRoute(
+	Player& player, const Position& source, const Position& destination,
+	const std::set<Position>& blockedPositions, bool estimateOnly) const
+{
+	PlayerBotNavigationRoutePlan walking = planCompleteNavigationRoute(player, source, destination, blockedPositions);
+	auto paid = planNpcTravelRoute(player, source, destination, blockedPositions,
+	                              playerBotNavigationMaximumExpandedNodes, estimateOnly);
+	const PlayerBotNavigationRiskProfile risk;
+	auto safe = [&risk](const PlayerBotNavigationRoutePlan& route) {
+		return route.metrics.result == PlayerBotNavigationResult::Reached &&
+		       playerBotNavigationRiskAccepts(risk, route.metrics.dangerCost,
+		                                      route.metrics.maximumHealthLossPerSecond);
+	};
+	if (!paid || !safe(*paid)) return walking;
+	if (!safe(walking)) return std::move(*paid);
+	auto cost = [](const PlayerBotNavigationRoutePlan& route) {
+		return route.metrics.estimatedTravelSeconds + route.metrics.fare / 10.0 + route.metrics.dangerCost / 10.0;
+	};
+	return cost(*paid) < cost(walking) ? std::move(*paid) : std::move(walking);
+}
+
+std::vector<Position> PlayerBotController::huntDepotExitCandidates(Player& player, const Position& source) const
+{
+	struct Candidate {
+		Position approach;
+		uint32_t cost = 0;
+		bool topologyReachable = false;
+	};
+	const bool canUseRope = g_game.findItemOfType(&player, playerbot::ropeItemId, true) != nullptr;
+	const bool canUseShovel = g_game.findItemOfType(&player, shovelToolItemId, true) != nullptr;
+	const PlayerBotTopologyDistances distances = PlayerBotTopology::instance().distancesFrom(
+	    source, canUseRope, canUseShovel, player.getLevel());
+	std::vector<Candidate> candidates;
+	for (const auto& entry : g_game.map.getDepotLockerPositions()) {
+		std::optional<Candidate> bestForDepot;
+		for (const Position& locker : entry.second) {
+			uint16_t lockerItemId = 0;
+			if (!findDepotLocker(locker, entry.first, lockerItemId)) continue;
+			for (int32_t xOffset = -1; xOffset <= 1; ++xOffset) {
+				for (int32_t yOffset = -1; yOffset <= 1; ++yOffset) {
+					if (xOffset == 0 && yOffset == 0) continue;
+					const Position approach(locker.x + xOffset, locker.y + yOffset, locker.z);
+					Tile* tile = g_game.map.getTile(approach);
+					if (!tile || tile->queryAdd(0, player, 1, FLAG_IGNOREBLOCKCREATURE) != RETURNVALUE_NOERROR) continue;
+					const auto topologyCost = PlayerBotTopology::instance().distanceTo(distances, approach);
+					Candidate candidate{approach, topologyCost.value_or(static_cast<uint32_t>(
+					    playerBotNavigationDistance(source, approach))), topologyCost.has_value()};
+					if (!bestForDepot || std::make_tuple(!candidate.topologyReachable, candidate.cost, candidate.approach) <
+					                     std::make_tuple(!bestForDepot->topologyReachable, bestForDepot->cost, bestForDepot->approach)) {
+						bestForDepot = candidate;
+					}
+				}
+			}
+		}
+		if (bestForDepot) candidates.push_back(*bestForDepot);
+	}
+	std::sort(candidates.begin(), candidates.end(), [](const Candidate& left, const Candidate& right) {
+		return std::make_tuple(!left.topologyReachable, left.cost, left.approach) <
+		       std::make_tuple(!right.topologyReachable, right.cost, right.approach);
+	});
+	std::vector<Position> approaches;
+	approaches.reserve(candidates.size());
+	for (const Candidate& candidate : candidates) approaches.push_back(candidate.approach);
+	return approaches;
+}
+
+std::vector<Position> PlayerBotController::huntSupplyExitCandidates(Player& player, const Position& source) const
+{
+	struct Candidate {
+		Position approach;
+		uint32_t cost = 0;
+		bool topologyReachable = false;
+	};
+	const bool canUseRope = g_game.findItemOfType(&player, playerbot::ropeItemId, true) != nullptr;
+	const bool canUseShovel = g_game.findItemOfType(&player, shovelToolItemId, true) != nullptr;
+	const PlayerBotTopologyDistances distances = PlayerBotTopology::instance().distancesFrom(
+	    source, canUseRope, canUseShovel, player.getLevel());
+	const uint16_t potionId = playerbot::recoveryPotionItemId(player.getVocationId());
+	std::vector<Candidate> candidates;
+	for (Npc* npc : playerBotNpcProviders(g_game.getNpcs(), PlayerBotNpcCapability::Shop, source)) {
+		const bool sellsPotion = std::any_of(npc->getShopOffers().begin(), npc->getShopOffers().end(),
+		    [potionId](const ShopInfo& offer) { return offer.itemId == potionId && offer.buyPrice != 0; });
+		if (!sellsPotion) continue;
+		std::optional<Candidate> best;
+		for (int32_t xOffset = -3; xOffset <= 3; ++xOffset) {
+			for (int32_t yOffset = -3; yOffset <= 3; ++yOffset) {
+				if (xOffset == 0 && yOffset == 0) continue;
+				const Position approach(npc->getPosition().x + xOffset, npc->getPosition().y + yOffset,
+				                        npc->getPosition().z);
+				Tile* tile = g_game.map.getTile(approach);
+				if (!tile || tile->queryAdd(0, player, 1, FLAG_IGNOREBLOCKCREATURE) != RETURNVALUE_NOERROR) continue;
+				const auto topologyCost = PlayerBotTopology::instance().distanceTo(distances, approach);
+				Candidate candidate{approach, topologyCost.value_or(static_cast<uint32_t>(
+				    playerBotNavigationDistance(source, approach))), topologyCost.has_value()};
+				if (!best || std::make_tuple(!candidate.topologyReachable, candidate.cost, candidate.approach) <
+				             std::make_tuple(!best->topologyReachable, best->cost, best->approach)) best = candidate;
+			}
+		}
+		if (best) candidates.push_back(*best);
+	}
+	std::sort(candidates.begin(), candidates.end(), [](const Candidate& left, const Candidate& right) {
+		return std::make_tuple(!left.topologyReachable, left.cost, left.approach) <
+		       std::make_tuple(!right.topologyReachable, right.cost, right.approach);
+	});
+	std::vector<Position> approaches;
+	approaches.reserve(candidates.size());
+	for (const Candidate& candidate : candidates) approaches.push_back(candidate.approach);
+	return approaches;
+}
+
 void PlayerBotController::onHealthGain(Creature* healer, const Creature& target, uint32_t gain)
 {
 	survivalRuntime.observeHealthGain(healer && healer->getID() == playerId, target.getID() == playerId, gain);
+}
+
+bool PlayerBotController::handleFixedTargetRouteExhausted(Player* player, const Position& currentPosition,
+	const PlayerBotNavigationRuntimeOutcome& outcome, std::chrono::steady_clock::time_point now, bool allowStop)
+{
+	if (!outcome.fixedTargetRouteExhausted) return false;
+	bool adjacentConfirmedHostileBlocker = false;
+	SpectatorVec spectators;
+	g_game.map.getSpectators(spectators, currentPosition);
+	for (Creature* creature : spectators) {
+		if (creature->getMonster() && !creature->isRemoved() && !creature->isDead() &&
+		    player->canSee(creature->getPosition()) &&
+		    Position::areInRange<1, 1, 0>(currentPosition, creature->getPosition()) &&
+		    navigationRuntime.isRouteCritical(creature->getID(), creature->getPosition(), now)) {
+			adjacentConfirmedHostileBlocker = true;
+			break;
+		}
+	}
+	const bool breakoutStarted = huntCoordinator.beginTransitBreakout(
+	    outcome.fixedTargetRouteExhausted, adjacentConfirmedHostileBlocker,
+	    outcome.routeUnavailable, now);
+	if (huntCoordinator.transitBreakoutActive()) {
+		if (breakoutStarted) {
+			emit("navigation_progress", currentPosition,
+			     "\"result\":\"recovering\",\"reason\":\"transit_breakout\",\"duration_seconds\":30");
+		}
+		return true;
+	}
+	// A previous breakout failed to free the tile and no blocker is currently
+	// attackable: continuing would loop the same no-progress plan sequence.
+	if (allowStop || huntCoordinator.transitBreakoutAttempted()) {
+		stop("navigation_route_unavailable", currentPosition);
+	}
+	return true;
 }
 
 bool PlayerBotController::processNavigation(Player* player, const Position& currentPosition, const Position& destination,
@@ -1220,8 +1412,26 @@ bool PlayerBotController::processNavigation(Player* player, const Position& curr
 			                                std::min(fixturePlan.maximumExpandedNodes, routeNodeBudget), sameFloorOnly);
 		}
 		const PlayerBotPendingMovementResult movementResult = outcome.movementResult;
+		const bool positionalProgress = outcome.positionalProgress;
 		outcome = navigationRuntime.observePlan({goal, std::move(routePlan), player->canDoAction(), false, now});
 		outcome.movementResult = movementResult;
+		outcome.positionalProgress = positionalProgress;
+	}
+	if (outcome.plan.attempted && !outcome.routeUnavailable &&
+	    !huntTravelFareAffordable(*player, outcome.plan.fare, huntTravelBudgetPhase)) {
+		outcome.routeUnavailable = true;
+		navigationRuntime.reset();
+		if (navigationOutcome) *navigationOutcome = outcome;
+		telemetry.emit("navigation_progress", currentPosition,
+		     "\"result\":\"skipped\",\"reason\":\"route_fare_breaks_hunt_reserve\",\"destination\":{\"x\":" +
+		         std::to_string(destination.x) + ",\"y\":" + std::to_string(destination.y) +
+		         ",\"z\":" + std::to_string(static_cast<uint16_t>(destination.z)) +
+		         "},\"fare\":" + std::to_string(outcome.plan.fare) +
+		         ",\"future_fare_reserve\":" + std::to_string(huntTravelFutureFareReserve(huntTravelBudgetPhase)) +
+		         ",\"recovery_funds_reserve\":" + std::to_string(recoverySpendingReserve(
+		             *player, recoveryPotionRestockTargetForReserve(huntRecoveryPotionReserve))));
+		schedule(blockedRouteRetryInterval);
+		return false;
 	}
 	if (risk && outcome.plan.attempted && !outcome.routeUnavailable) {
 		if (!playerBotNavigationRiskAccepts(*risk, outcome.plan.dangerCost,
@@ -1240,6 +1450,27 @@ bool PlayerBotController::processNavigation(Player* player, const Position& curr
 			schedule(navigationDecisionDelay(*player));
 			return false;
 		}
+	}
+	bool immediateEscapeStepOpen = outcome.nextStep.has_value();
+	if (immediateEscapeStepOpen && outcome.nextStep->action == PlayerBotNavigationAction::Move) {
+		SpectatorVec spectators;
+		g_game.map.getSpectators(spectators, currentPosition);
+		immediateEscapeStepOpen = std::none_of(spectators.begin(), spectators.end(), [&outcome](Creature* creature) {
+			return creature->getMonster() && !creature->isRemoved() && !creature->isDead() &&
+			       creature->getPosition() == outcome.nextStep->target;
+		});
+	}
+	if (huntCoordinator.observeTransitBreakoutNavigation(outcome.positionalProgress, immediateEscapeStepOpen)) {
+		if (huntCoordinator.hasDefensiveCombat()) {
+			finishDefensiveCombat(player, currentPosition, "skipped", "transit_breakout_route_open");
+		} else {
+			resetNavigation();
+		}
+		emit("navigation_progress", currentPosition,
+		     "\"result\":\"recovered\",\"reason\":\"transit_breakout_route_open\"");
+		schedule(SCHEDULER_MINTICKS);
+		if (navigationOutcome) *navigationOutcome = outcome;
+		return false;
 	}
 	if (navigationOutcome) *navigationOutcome = outcome;
 	fixtureDriver.observeNavigationPlan(outcome.plan.attempted);
@@ -1307,9 +1538,40 @@ bool PlayerBotController::processNavigation(Player* player, const Position& curr
 			         ",\"z\":" + std::to_string(static_cast<uint16_t>(outcome.plan.waypoint.z)) + "}");
 			telemetry.logActionFailure("navigate", "route_unavailable", currentPosition);
 			if (outcome.fixedTargetRouteExhausted) {
+				bool adjacentConfirmedHostileBlocker = false;
+				SpectatorVec spectators;
+				g_game.map.getSpectators(spectators, currentPosition);
+				for (Creature* creature : spectators) {
+					if (creature->getMonster() && !creature->isRemoved() && !creature->isDead() &&
+					    player->canSee(creature->getPosition()) &&
+					    Position::areInRange<1, 1, 0>(currentPosition, creature->getPosition()) &&
+					    navigationRuntime.isRouteCritical(creature->getID(), creature->getPosition(), now)) {
+						adjacentConfirmedHostileBlocker = true;
+						break;
+					}
+				}
+				const bool breakoutStarted = huntCoordinator.beginTransitBreakout(
+				    outcome.fixedTargetRouteExhausted, adjacentConfirmedHostileBlocker,
+				    outcome.routeUnavailable, now);
+				if (huntCoordinator.transitBreakoutActive()) {
+					if (breakoutStarted) {
+						emit("navigation_progress", currentPosition,
+						     "\"result\":\"recovering\",\"reason\":\"transit_breakout\",\"duration_seconds\":30");
+					}
+					schedule(blockedRouteRetryInterval);
+					return false;
+				}
 				stop("navigation_route_unavailable", currentPosition);
 			}
 			schedule(blockedRouteRetryInterval);
+			return false;
+		}
+		// Exhaustion can also accumulate while plans keep nominally succeeding
+		// (the only corridor step is occupied by a stationary monster). Escalate
+		// before dispatching another doomed step.
+		if (handleFixedTargetRouteExhausted(player, currentPosition, outcome, now, false)) {
+			schedule(blockedRouteRetryInterval);
+			if (navigationOutcome) *navigationOutcome = outcome;
 			return false;
 		}
 		std::ostringstream fields;
@@ -1438,7 +1700,16 @@ void PlayerBotController::navigate()
 			finishTraversalCombat(player, currentPosition, "transit_goal_changed");
 		}
 	}
-	if (huntCoordinator.transitDefenseExpired(std::chrono::steady_clock::now())) {
+	const auto transitNow = std::chrono::steady_clock::now();
+	if (huntCoordinator.transitBreakoutExpired(transitNow)) {
+		huntCoordinator.finishTransitBreakout();
+		if (huntCoordinator.hasDefensiveCombat()) {
+			finishDefensiveCombat(player, currentPosition, "skipped", "transit_breakout_timeout");
+		}
+		stop("navigation_route_unavailable", currentPosition);
+		return;
+	}
+	if (huntCoordinator.transitDefenseExpired(transitNow)) {
 		finishDefensiveCombat(player, currentPosition, "skipped", "transit_combat_budget");
 	}
 	const bool accessingReward = progressionRuntime.session().active(PlayerBotProgressionProcedure::PickupReward) &&

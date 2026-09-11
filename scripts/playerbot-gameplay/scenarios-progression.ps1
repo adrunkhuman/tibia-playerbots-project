@@ -140,6 +140,17 @@
 			$arrivalLogs = Wait-ForLog -Pattern '"event":"target_changed".*"reason":"visible_monster"'
 			Assert-HuntAreaArrivalEvents -Logs $arrivalLogs
 		}
+		Invoke-Scenario -Name "remote_hunt" -DefaultTimeoutSeconds 600 -Body {
+			Invoke-Compose down --volumes --remove-orphans
+			$env:PLAYERBOT_GAMEPLAY_MODE = "remote_hunt"
+			$env:PLAYERBOT_HUNT_DURATION_SECONDS = "900"
+			Invoke-Compose up --detach
+			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST HUNT_MAINLAND_LOADOUT_PASS remote_hunt' | Out-Null
+			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST REMOTE_HUNT_START' | Out-Null
+			Wait-ForLog -Pattern '"event":"hunt_area_entered"' | Out-Null
+			$remoteLogs = Wait-ForLog -Pattern '"event":"action_result".*"action":"depot_discover".*"result":"success"'
+			Assert-RemoteHuntEvents -Logs $remoteLogs
+		}
 	}
 
     if ($CombatReadiness) {

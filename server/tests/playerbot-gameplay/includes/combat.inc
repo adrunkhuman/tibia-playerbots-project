@@ -295,6 +295,11 @@ function F.spawnCorpseMonster(playerId, monsterName)
         if tile and tile:isWalkable() then
             local monster = Game.createMonster(monsterName, position, true, true)
             assert(monster, "corpse test monster could not be created: " .. monsterName)
+            if monsterName == F.lootMonsterName then
+                -- This case tests proactive corpse looting, not defensive combat.
+                monster:setTarget(nil)
+                monster:setIdle(true)
+            end
             print("PLAYERBOT_GAMEPLAY_TEST SPAWNED " .. monsterName)
             return
         end

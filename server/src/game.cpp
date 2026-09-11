@@ -4916,11 +4916,12 @@ void Game::removePlayer(Player* player)
 void Game::addNpc(Npc* npc)
 {
 	npcs[npc->getID()] = npc;
+	++npcGeneration;
 }
 
 void Game::removeNpc(Npc* npc)
 {
-	npcs.erase(npc->getID());
+	if (npcs.erase(npc->getID()) != 0) ++npcGeneration;
 }
 
 void Game::addMonster(Monster* monster)

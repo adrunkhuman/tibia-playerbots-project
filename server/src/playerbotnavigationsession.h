@@ -77,6 +77,7 @@ class PlayerBotNavigationSession
 	private:
 		std::deque<PlayerBotNavigationStep> steps;
 		PlayerBotNavigationGoal target;
+		bool targetSet = false;
 		Position expectedPosition;
 		Position stepTarget;
 		PlayerBotNavigationGoal progressTarget;

@@ -527,8 +527,8 @@ PlayerBotServiceCommand PlayerBotServiceWorkflow::advanceImpl(const PlayerBotSer
 		if (offer == selected->offers.end()) { serviceStage = PlayerBotServiceStage::Failed; return {PlayerBotServiceCommandType::Fail, PlayerBotServiceOutcome::Unavailable}; }
 		const auto restock = disposition.restock({count, observation.freeCapacity, observation.money, observation.bankBalance}, offer->buyPrice,
 		                                         observation.healthPotionWeight, observation.healthPotionReturnThreshold,
-		                                         observation.healthPotionRestockTarget);
-		if (restock.insufficientFunds) { serviceStage = PlayerBotServiceStage::Failed; return {PlayerBotServiceCommandType::Fail, PlayerBotServiceOutcome::InsufficientFunds}; }
+		                                         observation.healthPotionRestockTarget, survivalRestock);
+		if (restock.insufficientFunds && !survivalRestock) { serviceStage = PlayerBotServiceStage::Failed; return {PlayerBotServiceCommandType::Fail, PlayerBotServiceOutcome::InsufficientFunds}; }
 		if (restock.amount == 0) { serviceStage = PlayerBotServiceStage::Bank; return advanceImpl(observation, catalog, disposition); }
 		targetProvider(selected->id);
 		PlayerBotServiceCommand focus = establishNpc(observation, true);

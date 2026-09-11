@@ -67,8 +67,60 @@ struct PlayerBotNavigationRuntimeInput {
 	PlayerBotNavigationRuntimeTiming timing;
 };
 
+// Fixed-goal route failures are cleared by observed positional progress, not by
+// a planner claiming that a route exists. This keeps immediately blocked plans
+// in one bounded failure sequence.
+class PlayerBotFixedTargetFailureTracker
+{
+	public:
+		bool observePosition(bool sameGoal, uint32_t distance)
+		{
+			if (!goalSet || !sameGoal) {
+				goalSet = true;
+				bestDistance = distance;
+				failures = 0;
+				blockedPlanPendingFailure = false;
+				return false;
+			}
+			if (distance >= bestDistance) return false;
+			bestDistance = distance;
+			failures = 0;
+			blockedPlanPendingFailure = false;
+			return true;
+		}
+		void observePlan(bool routeAvailable)
+		{
+			if (routeAvailable) {
+				blockedPlanPendingFailure = false;
+				return;
+			}
+			if (!blockedPlanPendingFailure) ++failures;
+			blockedPlanPendingFailure = false;
+		}
+		void observeBlockedPlan()
+		{
+			++failures;
+			blockedPlanPendingFailure = true;
+		}
+		void reset()
+		{
+			goalSet = false;
+			failures = 0;
+			blockedPlanPendingFailure = false;
+		}
+		uint32_t count() const { return failures; }
+		bool exhausted() const { return failures >= 20; }
+
+	private:
+		uint32_t bestDistance = 0;
+		uint32_t failures = 0;
+		bool goalSet = false;
+		bool blockedPlanPendingFailure = false;
+};
+
 struct PlayerBotNavigationRuntimeOutcome {
 	bool destinationReached = false;
+	bool positionalProgress = false;
 	PlayerBotPendingMovementResult movementResult = PlayerBotPendingMovementResult::None;
 	uint32_t stepFailureCount = 0;
 	std::optional<PlayerBotNavigationOscillation> oscillation;
@@ -129,7 +181,12 @@ class PlayerBotNavigationRuntime
 		PlayerBotNavigationRuntimeOutcome observeStep(const PlayerBotNavigationStepObservation& observation);
 		PlayerBotNavigationRuntimeOutcome observeWorldChange(const PlayerBotNavigationWorldChangeObservation& observation);
 
-		void reset() { session.clear(); fixedTargetRouteFailures = 0; }
+		void reset()
+		{
+			session.clear();
+			fixedTargetFailures.reset();
+			fixedTargetGoal.reset();
+		}
 		void resetPatrolRecovery() { session.clearBlockedPositions(); session.resetStepFailures(); }
 		void clearBlockedPositions() { session.clearBlockedPositions(); }
 
@@ -138,18 +195,21 @@ class PlayerBotNavigationRuntime
 		bool avoidPendingRouteBlocker(uint32_t blockerId, const Position& position, std::chrono::steady_clock::time_point now,
 		                              std::chrono::steady_clock::duration suppression)
 		{
-			return session.avoidPendingRouteBlocker(blockerId, position, now, suppression);
+			if (!session.avoidPendingRouteBlocker(blockerId, position, now, suppression)) return false;
+			fixedTargetFailures.observeBlockedPlan();
+			return true;
 		}
 		bool isRouteCritical(uint32_t blockerId, const Position& position, std::chrono::steady_clock::time_point now) const { return session.isRouteCritical(blockerId, position, now); }
 		std::set<Position> activeBlockedPositions(std::chrono::steady_clock::time_point now) { return session.activeBlockedPositions(now); }
 		bool hasActiveRouteBlock(std::chrono::steady_clock::time_point now) const { return session.hasActiveRouteBlock(now); }
 		bool oscillationDetected() const { return session.oscillationDetected(); }
 		uint32_t stepFailureCount() const { return session.stepFailureCount(); }
-		uint32_t fixedTargetRouteFailureCount() const { return fixedTargetRouteFailures; }
+		uint32_t fixedTargetRouteFailureCount() const { return fixedTargetFailures.count(); }
 	private:
 		void dispatchNextStep(bool canDoAction, PlayerBotNavigationRuntimeOutcome& outcome) const;
 		PlayerBotNavigationSession session;
-		uint32_t fixedTargetRouteFailures = 0;
+		PlayerBotFixedTargetFailureTracker fixedTargetFailures;
+		std::optional<PlayerBotNavigationGoal> fixedTargetGoal;
 };
 
 #endif

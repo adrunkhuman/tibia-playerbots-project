@@ -68,9 +68,32 @@ class PlayerBotDispositionPolicy
 		uint32_t protectedReserve(uint16_t itemId, bool food, uint16_t potionItemId) const;
 		uint32_t sellQuantity(const PlayerBotEconomyInventorySnapshot& inventory, uint16_t reserve) const;
 		PlayerBotEconomyRestockDecision restock(const PlayerBotEconomyInventorySnapshot& inventory,
-		                                         uint32_t unitPrice, uint32_t unitWeight,
-		                                         uint32_t returnThreshold = potionReturnThreshold,
-		                                         uint32_t restockTarget = potionRestockTarget) const;
+		                                        uint32_t unitPrice, uint32_t unitWeight, uint32_t returnThreshold = potionReturnThreshold,
+		                                        uint32_t restockTarget = potionRestockTarget, bool survival = false) const
+		{
+			if (inventory.itemCount >= restockTarget || unitPrice == 0) {
+				return {};
+			}
+			const uint32_t targetGap = restockTarget - inventory.itemCount;
+			const uint64_t totalMoney = inventory.money + inventory.bankBalance;
+			// Survival restock drops the unusable-partial-reserve guard and buys
+			// what the available gold affords, possibly nothing, instead of
+			// failing service.
+			const uint32_t requiredGap = !survival && inventory.itemCount <= returnThreshold ?
+			    returnThreshold + 1 - inventory.itemCount : 0;
+			if (totalMoney / unitPrice < requiredGap) {
+				return {0, true};
+			}
+			uint32_t amount = totalMoney / unitPrice >= targetGap ? targetGap : static_cast<uint32_t>(std::min<uint64_t>(
+			    targetGap, totalMoney > carriedGoldReserve ? (totalMoney - carriedGoldReserve) / unitPrice : 0));
+			if (inventory.itemCount <= returnThreshold) {
+				amount = std::max(amount, static_cast<uint32_t>(std::min<uint64_t>(requiredGap, totalMoney / unitPrice)));
+			}
+			if (unitWeight != 0) {
+				amount = std::min(amount, inventory.freeCapacity / unitWeight);
+			}
+			return {amount, false};
+		}
 		uint32_t bankWithdrawal(const PlayerBotEconomyInventorySnapshot& inventory, uint32_t coinWeight) const;
 };
 

@@ -11,6 +11,7 @@
 #ifndef FS_PLAYERBOTTESTPOLICY_H
 #define FS_PLAYERBOTTESTPOLICY_H
 
+#include <algorithm>
 #include <cstdint>
 
 namespace playerbot {
@@ -59,7 +60,17 @@ namespace playerbot {
 		bool carlinServiceRouteFixture;
 		bool mutablePortalRouteFixture;
 		bool depotRiskFallbackFixture;
+		bool remoteHuntFixture;
+		bool mainlandLoopFixture;
 	};
+
+	inline uint32_t playerBotFixtureHuntPlanningDuration(bool mainlandLoopFixture,
+	                                                    uint32_t configuredDurationSeconds)
+	{
+		constexpr uint32_t mainlandPlanningDurationSeconds = 900;
+		return mainlandLoopFixture ? std::max(configuredDurationSeconds, mainlandPlanningDurationSeconds) :
+		                             configuredDurationSeconds;
+	}
 
 	const PlayerBotTestPolicy& playerBotTestPolicyFromEnvironment();
 

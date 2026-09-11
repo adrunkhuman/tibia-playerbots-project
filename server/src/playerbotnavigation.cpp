@@ -295,17 +295,6 @@ uint32_t PlayerBotNavigationGoal::distance(const Position& candidate) const
 	return remainingCost(candidate, *this) / cardinalCost;
 }
 
-Position PlayerBotNavigationGoal::representative() const
-{
-	return position;
-}
-
-bool PlayerBotNavigationGoal::operator==(const PlayerBotNavigationGoal& other) const
-{
-	return type == other.type && position == other.position && rangeX == other.rangeX && rangeY == other.rangeY &&
-	       rangeZ == other.rangeZ && positions == other.positions;
-}
-
 bool playerBotIsTraversableDoor(const Item& item)
 {
 	const ItemType& type = Item::items[item.getID()];

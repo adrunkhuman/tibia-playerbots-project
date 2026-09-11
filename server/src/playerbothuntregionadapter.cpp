@@ -426,13 +426,20 @@ namespace {
 		const PlayerBotCombatProfile& profile = planningProfile.combat;
 		const uint16_t staminaMinutes = player.getStaminaMinutes();
 		const CachedVariant& cached = huntAtlas.variants[candidateIndex];
+		// Static topology describes walking/tool portals only. A disconnected
+		// variant remains a candidate because the bounded route preflight can
+		// reach it through a verified NPC travel offer.
+		const bool locallyReachable = topologyDistances && topologyRegionReachable(player, cached, *topologyDistances);
+		const PlayerBotTopologyDistances* memberDistances = locallyReachable ? topologyDistances : nullptr;
 		PlayerBotHuntRegion region;
 		region.atlasSiteId = cached.siteId;
 		region.atlasVariantId = cached.variantId;
+		region.atlasRevision = huntAtlasRevision;
 		region.atlasPocketCount = static_cast<uint32_t>(cached.pockets.size());
 		region.atlasSpawnCount = static_cast<uint32_t>(cached.members.size());
 		region.atlasFloorCount = cached.floorCount;
 		region.cashPressure = planningProfile.cashPressure;
+		region.supplyRecovery = planningProfile.supplyRecovery;
 		region.floor = cached.center.z;
 		region.center = cached.center;
 		std::map<std::string, PlayerBotHuntMonsterProfile> profiles;
@@ -445,7 +452,7 @@ namespace {
 		double crowdDamageInflation = 1;
 		for (size_t member : cached.members) {
 			const CachedSpawnBlock& spawn = huntAtlas.spawns[member];
-			const auto approach = nearestApproach(player, spawn.position, topologyDistances);
+			const auto approach = nearestApproach(player, spawn.position, memberDistances);
 			if (!approach) continue;
 			reachableMembers.insert(member);
 			region.patrolPoints.push_back(*approach);
@@ -588,6 +595,25 @@ namespace {
 			region.topologyReachable = bestDistance != std::numeric_limits<uint32_t>::max();
 			if (region.topologyReachable) region.topologyTravelSteps = bestDistance;
 		}
+		uint32_t transportTravelSteps = std::numeric_limits<uint32_t>::max();
+		if (!region.topologyReachable) {
+			region.transportPlausible = false;
+			for (const PlayerBotHuntTransportArrival& arrival : planningProfile.transportArrivals) {
+				if (!arrival.topologyReachability) continue;
+				for (const Position& patrolPoint : region.patrolPoints) {
+					if (!PlayerBotTopology::instance().reachable(*arrival.topologyReachability, patrolPoint)) continue;
+					const uint32_t localSteps = Position::getDistanceX(arrival.position, patrolPoint) +
+					                            Position::getDistanceY(arrival.position, patrolPoint) +
+					                            Position::getDistanceZ(arrival.position, patrolPoint) * 20;
+					const uint32_t totalSteps = arrival.estimatedSteps > UINT32_MAX - localSteps ?
+					    UINT32_MAX : arrival.estimatedSteps + localSteps;
+					if (totalSteps >= transportTravelSteps) continue;
+					transportTravelSteps = totalSteps;
+					region.destination = patrolPoint;
+					region.transportPlausible = true;
+				}
+			}
+		}
 		for (auto& [name, monsterProfile] : profiles) {
 			(void)name;
 			region.monsters.push_back(std::move(monsterProfile));
@@ -606,14 +632,12 @@ namespace {
 		region.challengeBandMaximum = planningProfile.challengeFrontier + challengeHeadroom;
 		region.inChallengeBand = region.threatRatio <= region.challengeBandMaximum;
 		region.predictedLethal = playerBotPredictedLethal(planningProfile.currentHealth, worstFightDamage);
-		withinPlanningScope = !topologyDistances || region.topologyReachable;
+		withinPlanningScope = true;
 		region.suitable = region.sustainedEligible && !region.predictedLethal &&
-		    region.threatRatio <= region.challengeBandMaximum && withinPlanningScope;
+		    region.threatRatio <= region.challengeBandMaximum;
 		if (excludedVariants.find(region.atlasVariantId) != excludedVariants.end()) {
 			region.suitable = false;
 			region.rejectionReason = "observed_danger_cooldown";
-		} else if (!withinPlanningScope) {
-			region.rejectionReason = "topology_unreachable";
 		} else if (region.predictedLethal) {
 			region.rejectionReason = "predicted_lethal";
 		} else if (!region.sustainedEligible) {
@@ -626,11 +650,19 @@ namespace {
 		region.spawnExperiencePerMinute *= experienceStage;
 		region.clearExperiencePerMinute *= experienceStage;
 		region.staminaMinutes = staminaMinutes;
-		if (auto observed = performance.find(region.atlasVariantId); observed != performance.end()) {
-			region.observedExperiencePerMinute = observed->second.observedExperiencePerMinute;
-			region.observedCorrection = observed->second.correction;
+		const PlayerBotHuntCorrection correction = playerBotHuntCorrectionForVariant(
+		    region.atlasVariantId, region.atlasRevision, performance);
+		region.observedExperiencePerMinute = correction.observedExperiencePerMinute;
+		region.observedCoinGoldPerMinute = correction.observedCoinGoldPerMinute;
+		region.observedCorrection = correction.correction;
+		region.calibrationSampleCount = correction.sampleCount;
+		region.calibrationSource = correction.source;
+		if (!region.topologyReachable && !region.transportPlausible) {
+			region.suitable = false;
+			region.rejectionReason = "transport_requirements_unavailable";
 		}
-		const uint32_t estimatedTravelSteps = topologyDistances ? region.topologyTravelSteps : geometricDistance;
+		const uint32_t estimatedTravelSteps = region.topologyReachable ? region.topologyTravelSteps :
+		    region.transportPlausible ? transportTravelSteps : geometricDistance;
 		region.estimatedTravelSeconds = estimatedTravelSteps * player.getStepDuration() / 1000.0;
 		region.availableHuntSeconds = std::max(0.0, huntDurationSeconds - region.estimatedTravelSeconds);
 		region.staminaExperienceMultiplier = projectedStaminaExperienceMultiplier(player, region.availableHuntSeconds);
@@ -678,6 +710,8 @@ uint64_t PlayerBotHuntRegionAdapter::getCacheRevision()
 PlayerBotHuntRegionScan PlayerBotHuntRegionAdapter::beginScan(
 	Player& player, const PlayerBotTopologyDistances* topologyDistances)
 {
+	(void)player;
+	(void)topologyDistances;
 	PlayerBotHuntRegionScan scan;
 	scan.cacheHit = huntAtlas.initialized && huntAtlas.lootRate == g_config.getNumber(ConfigManager::RATE_LOOT) &&
 	                huntAtlas.spawnGeneration == g_game.map.spawns.getGeneration() &&
@@ -685,7 +719,6 @@ PlayerBotHuntRegionScan PlayerBotHuntRegionAdapter::beginScan(
 	if (!scan.cacheHit) buildHuntAtlas(scan.snapshotTimeUs, scan.clusteringTimeUs);
 	scan.revision = huntAtlasRevision;
 	for (size_t index = 0; index < huntAtlas.variants.size(); ++index) {
-		if (topologyDistances && !topologyRegionReachable(player, huntAtlas.variants[index], *topologyDistances)) continue;
 		scan.candidateIndices.push_back(index);
 	}
 	scan.candidateCount = scan.candidateIndices.size();

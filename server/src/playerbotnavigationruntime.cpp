@@ -15,6 +15,12 @@
 PlayerBotNavigationRuntimeOutcome PlayerBotNavigationRuntime::process(const PlayerBotNavigationRuntimeInput& input)
 {
 	PlayerBotNavigationRuntimeOutcome outcome;
+	const bool sameFixedTarget = fixedTargetGoal && playerBotNavigationSameFixedObjective(*fixedTargetGoal, input.goal);
+	outcome.positionalProgress = fixedTargetFailures.observePosition(
+	    sameFixedTarget, input.goal.distance(input.currentPosition));
+	fixedTargetGoal = input.goal;
+	outcome.fixedTargetRouteFailures = fixedTargetFailures.count();
+	outcome.fixedTargetRouteExhausted = fixedTargetFailures.exhausted();
 	if (input.goal.reached(input.currentPosition)) {
 		session.clear();
 		outcome.destinationReached = true;
@@ -70,19 +76,22 @@ PlayerBotNavigationRuntimeOutcome PlayerBotNavigationRuntime::observePlan(Player
 	    (!observation.startsNavigation && observation.plan.steps.empty())) {
 		outcome.routeUnavailable = true;
 		const std::set<Position> activeBlockers = session.activeBlockedPositions(observation.now);
-		if (activeBlockers.empty()) ++fixedTargetRouteFailures;
-		else session.confirmRequiredRouteBlocker();
-		outcome.fixedTargetRouteFailures = fixedTargetRouteFailures;
-		outcome.fixedTargetRouteExhausted = fixedTargetRouteFailures >= 20;
+		fixedTargetFailures.observePlan(false);
+		if (!activeBlockers.empty()) session.confirmRequiredRouteBlocker();
+		outcome.fixedTargetRouteFailures = fixedTargetFailures.count();
+		outcome.fixedTargetRouteExhausted = fixedTargetFailures.exhausted();
 		outcome.command = outcome.fixedTargetRouteExhausted ? PlayerBotNavigationRuntimeCommand::Fail :
 			PlayerBotNavigationRuntimeCommand::Retry;
 		outcome.stepFailureCount = session.stepFailureCount();
 		return outcome;
 	}
-	fixedTargetRouteFailures = 0;
+	fixedTargetFailures.observePlan(true);
 	// A planned route replaces existing work only after planning completed.
+	// Only process() can clear fixed-goal failures after observing real progress.
 	if (observation.startsNavigation) session.adopt(observation.goal, std::move(observation.plan.steps));
 	else session.installRoute(observation.goal, std::move(observation.plan.steps));
+	outcome.fixedTargetRouteFailures = fixedTargetFailures.count();
+	outcome.fixedTargetRouteExhausted = fixedTargetFailures.exhausted();
 	dispatchNextStep(observation.canDoAction, outcome);
 	outcome.stepFailureCount = session.stepFailureCount();
 	return outcome;

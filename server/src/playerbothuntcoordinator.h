@@ -95,13 +95,33 @@ class PlayerBotHuntCoordinator
 		{
 			return hasDefensiveCombat() && transitCombat.defenseExpired(now);
 		}
+		bool beginTransitBreakout(bool routeExhausted, bool adjacentConfirmedHostileBlocker,
+		                          bool routeUnavailable, std::chrono::steady_clock::time_point now)
+		{
+			return transitCombat.beginBreakout(
+			    routeExhausted, adjacentConfirmedHostileBlocker, routeUnavailable, now);
+		}
+		bool transitBreakoutActive() const { return transitCombat.breakoutActive(); }
+		bool transitBreakoutAttempted() const { return transitCombat.breakoutWasAttempted(); }
+		bool transitBreakoutExpired(std::chrono::steady_clock::time_point now) const
+		{
+			return transitCombat.breakoutExpired(now);
+		}
+		bool observeTransitBreakoutNavigation(bool positionalProgress, bool routeAvailable)
+		{
+			return transitCombat.observeBreakoutNavigation(positionalProgress, routeAvailable);
+		}
+		void finishTransitBreakout() { transitCombat.finishBreakout(); }
 
 		void cancelPlanning();
+		void setSupplyRecovery(bool degraded) { huntRuntime.setSupplyRecovery(degraded); }
 		bool planningStartRequired(std::chrono::steady_clock::time_point now) const;
 		bool planningActive() const;
 		PlayerBotHuntRuntimeOutcome advancePlanning(const PlayerBotHuntRuntimePlanningInput& input,
 		                                           std::chrono::steady_clock::time_point now,
 		                                           const PlayerBotHuntPlanningObservation& observation = {});
+		PlayerBotHuntRuntimeOutcome completeTransportWork(
+		    const std::vector<PlayerBotHuntRuntimeTransportObservation>& observations);
 		PlayerBotHuntRuntimeOutcome completeScoreWork(const std::vector<PlayerBotHuntRuntimeScoreObservation>& observations,
 		                                             uint64_t elapsedUs);
 		std::optional<PlayerBotHuntPlanningSession> planningSession() const;
