@@ -228,9 +228,12 @@ void raisedHuntRecoveryReserve()
 	reconcile(xp, 1, funds);
 	assert(!income.cashPressure && income.supplyBudget.fits);
 	assert(selectRuntimeHunt({income, xp}).atlasVariantId == 2);
-	// Candidate outbound + return route facts raise the target beyond fixed ten.
+	assert(recoveryPotionRestockTargetForReserve(1, healthPotionSafetyTarget) == 2);
+	assert(recoveryPotionRestockTargetForReserve(1) == healthPotionAmmoTarget);
+	// Candidate outbound + return route facts raise the target beyond the ammo stack.
 	const uint32_t candidateReserve = 2 + 10;
-	assert(recoveryPotionRestockTargetForReserve(candidateReserve) == 13);
+	assert(recoveryPotionRestockTargetForReserve(candidateReserve) == healthPotionAmmoTarget);
+	assert(recoveryPotionRestockTargetForReserve(healthPotionAmmoTarget + 5) == healthPotionAmmoTarget + 6);
 	assert(recoveryPotionRestockTargetForReserve(UINT32_MAX) == UINT32_MAX);
 	reconcile(income, candidateReserve, funds);
 	reconcile(xp, candidateReserve, funds);
@@ -239,7 +242,8 @@ void raisedHuntRecoveryReserve()
 	income.predictedLethal = true;
 	assert(selectRuntimeHunt({income, xp}).atlasVariantId == 2);
 	income.predictedLethal = false;
-	const uint64_t exactFunds = carriedGoldReserve + 3 * price;
+	const uint64_t exactFunds = carriedGoldReserve +
+	    static_cast<uint64_t>(healthPotionAmmoTarget - income.supplyProfile.potions) * price;
 	reconcile(income, candidateReserve, exactFunds);
 	reconcile(xp, candidateReserve, exactFunds);
 	assert(!income.cashPressure && !income.supplyBudget.fits);
@@ -974,6 +978,7 @@ void recoverySpellPriority()
 	using Goal = PlayerBotGoalArbiter::TopLevelGoal;
 	assert(playerBotRecoverySpendingReserve(2, 2, 45, 100) == 100);
 	assert(playerBotRecoverySpendingReserve(2, 10, 45, 100) == 460);
+	assert(playerBotRecoverySpendingReserve(2, 20, 45, 100) == 910);
 	assert(playerBotRecoverySpendingReserve(2, 4, 45, 100) == 190);
 	assert(playerBotAffordableAfterReserve(270, 100, 170));
 	assert(!playerBotAffordableAfterReserve(269, 100, 170));
@@ -996,6 +1001,12 @@ void recoverySpellPriority()
 	for (Goal goal : {Goal::PickupReward, Goal::BuyEquipment, Goal::SellLoot, Goal::Hunt, Goal::MagicTraining, Goal::Service}) {
 		assert(!candidate(goal).feasible && candidate(goal).reason == "deferred_recovery_spell");
 	}
+	snapshot.missingPotions = 2;
+	candidates = planner.candidates(snapshot);
+	assert(candidate(Goal::LearnSpell).feasible && candidate(Goal::LearnSpell).reason == "priority_recovery_spell");
+	assert(candidate(Goal::Service).feasible && candidate(Goal::Service).reason == "healing_reserve");
+	assert(!candidate(Goal::Hunt).feasible && candidate(Goal::Hunt).reason == "deferred_recovery_spell");
+	snapshot.missingPotions = 0;
 	snapshot.lowCapacity = true;
 	candidates = planner.candidates(snapshot);
 	assert(candidate(Goal::Service).feasible && candidate(Goal::Service).utility > candidate(Goal::LearnSpell).utility);
@@ -1036,6 +1047,22 @@ void projection()
 	assert(std::abs(region.score - 18) < 1e-9);
 	region.reconcileTravel(900, 0, 0);
 	assert(region.score == 0);
+}
+
+void capacityPressureHuntFloor()
+{
+	PlayerBotHuntRuntime runtime({});
+	const auto started = std::chrono::steady_clock::now();
+	runtime.selectPlanningRegion({}, {}, started);
+	runtime.beginCycle(started, 2400);
+	runtime.observeCapacityPressure(started);
+	const auto grace = std::chrono::minutes(5);
+	const auto minimumHunt = std::chrono::minutes(30);
+	assert(!runtime.capacityPressureElapsed(started + grace - std::chrono::milliseconds(1), grace));
+	assert(runtime.capacityPressureElapsed(started + grace, grace));
+	assert(!runtime.capacityPressureElapsed(started + grace, grace, minimumHunt));
+	assert(!runtime.capacityPressureElapsed(started + minimumHunt - std::chrono::milliseconds(1), grace, minimumHunt));
+	assert(runtime.capacityPressureElapsed(started + minimumHunt, grace, minimumHunt));
 }
 
 void oracleRecovery()
@@ -1105,6 +1132,7 @@ int main()
 	supplyBudget();
 	recoverySpellPriority();
 	projection();
+	capacityPressureHuntFloor();
 	oracleRecovery();
 	std::cout << "playerbot contracts passed\n";
 }

@@ -167,6 +167,7 @@ PlayerBotController::PlayerBotController(const Player& player,
 		 std::chrono::milliseconds(corpseNavigationRetryInterval), corpseLootTimeout, preferredFoodCount},
 		fixtureDriver.huntPatrol(),
 		huntCapacityPressureGrace,
+		huntCapacityPressureMinimum,
 	}, sharedHuntRegionCooldowns)
 {}
 
@@ -552,7 +553,7 @@ bool PlayerBotController::executeNavigationStep(Player* player, const PlayerBotN
 			         ",\"fare\":" + std::to_string(step.price) + ",\"future_fare_reserve\":" +
 			         std::to_string(huntTravelFutureFareReserve(huntTravelBudgetPhase)) +
 			         ",\"recovery_funds_reserve\":" + std::to_string(recoverySpendingReserve(
-			             *player, recoveryPotionRestockTargetForReserve(huntRecoveryPotionReserve))));
+			             *player, potionStockTarget(*player, huntRecoveryPotionReserve))));
 			return false;
 		}
 		npc->receiveSpeech(player, TALKTYPE_PRIVATE_PN, "hi");
@@ -1217,7 +1218,7 @@ bool PlayerBotController::huntTravelFareAffordable(
 {
 	if (phase == HuntTravelBudgetPhase::None || fare == 0) return true;
 	const uint64_t recoveryReserve = recoverySpendingReserve(
-	    player, recoveryPotionRestockTargetForReserve(huntRecoveryPotionReserve));
+	    player, potionStockTarget(player, huntRecoveryPotionReserve));
 	return playerBotHuntTravelPaymentAffordable(player.getMoney() + player.getBankBalance(),
 	                                            recoveryReserve, fare,
 	                                            huntTravelFutureFareReserve(phase));
@@ -1449,7 +1450,7 @@ bool PlayerBotController::processNavigation(Player* player, const Position& curr
 		         "},\"fare\":" + std::to_string(outcome.plan.fare) +
 		         ",\"future_fare_reserve\":" + std::to_string(huntTravelFutureFareReserve(huntTravelBudgetPhase)) +
 		         ",\"recovery_funds_reserve\":" + std::to_string(recoverySpendingReserve(
-		             *player, recoveryPotionRestockTargetForReserve(huntRecoveryPotionReserve))));
+		             *player, potionStockTarget(*player, huntRecoveryPotionReserve))));
 		schedule(blockedRouteRetryInterval);
 		return false;
 	}

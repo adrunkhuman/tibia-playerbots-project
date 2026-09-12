@@ -23,6 +23,7 @@ struct PlayerBotHuntCoordinatorConfig {
 	PlayerBotLootWorkflowConfig loot;
 	std::vector<Position> fallbackPatrol;
 	std::chrono::steady_clock::duration capacityPressureGrace = std::chrono::minutes(5);
+	std::chrono::steady_clock::duration capacityPressureMinimumHunt = std::chrono::minutes(30);
 };
 
 struct PlayerBotHuntTurnObservation {
@@ -173,6 +174,7 @@ class PlayerBotHuntCoordinator
 		PlayerBotHuntRuntime huntRuntime;
 		std::map<uint64_t, std::chrono::steady_clock::time_point>& huntRegionCooldowns;
 		std::chrono::steady_clock::duration capacityPressureGrace;
+		std::chrono::steady_clock::duration capacityPressureMinimumHunt;
 };
 
 #endif

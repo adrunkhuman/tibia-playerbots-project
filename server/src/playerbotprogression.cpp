@@ -700,7 +700,7 @@ bool PlayerBotController::findPickupReward(Player& player, const Position& posit
 		const PlayerBotRewardInspectionContext context{currentLoadout,
 			inventoryPolicy.inventoryItemCount(player, potionItemId), inventoryPolicy.foodInventory(player).count,
 			g_game.findItemOfType(&player, ropeItemId, true) != nullptr, g_game.findItemOfType(&player, 2554, true) != nullptr,
-			potionItemId, healthPotionRestockTarget, preferredFoodCount, ropeItemId, 2554,
+			potionItemId, huntPotionRestockTarget, preferredFoodCount, ropeItemId, 2554,
 			missingPotionUtility, foodPreferenceUtility};
 		return rewardPlanner.inspect(snapshot, context);
 	};
@@ -894,7 +894,7 @@ void PlayerBotController::emitGoalCandidate(const Player& player, const GoalCand
 		fields << ",\"potion_item_id\":" << potionItemId
 		       << ",\"potion_count\":" << inventoryPolicy.inventoryItemCount(player, potionItemId)
 		       << ",\"potion_return_threshold\":" << healthPotionReturnThreshold
-		       << ",\"potion_restock_target\":" << healthPotionRestockTarget
+		       << ",\"potion_restock_target\":" << huntPotionRestockTarget
 		       << ",\"food_count\":" << food.count << ",\"food_weight\":" << food.weight
 		       << ",\"food_preferred\":" << preferredFoodCount << ",\"food_gap\":" << foodGap
 		       << ",\"food_utility\":" << foodGap * foodPreferenceUtility
@@ -974,9 +974,11 @@ bool PlayerBotController::selectTopLevelGoal(Player& player, const Position& pos
 	}
 	const uint16_t potionItemId = recoveryPotionItemId(player.getVocationId());
 	const uint32_t potionCount = inventoryPolicy.inventoryItemCount(player, potionItemId);
-	const uint32_t missingPotions = potionCount <= huntPotionReturnThreshold ?
+	huntPotionRestockTarget = potionStockTarget(player);
+	const uint32_t missingPotions = potionCount < huntPotionRestockTarget ?
 	                                  huntPotionRestockTarget - potionCount : 0;
-	const bool criticalHealing = survivalRuntime.needsHealing(survivalSnapshot(player)) && missingPotions != 0;
+	const bool criticalHealing = survivalRuntime.needsHealing(survivalSnapshot(player)) &&
+	                             potionCount <= huntPotionReturnThreshold;
 	const auto requiredGoal = PlayerBotGoalPlanner::requiredGoal(
 	    departurePlanner.required(departureSnapshot(player)), criticalHealing);
 	if (requiredGoal == TopLevelGoal::Service) {

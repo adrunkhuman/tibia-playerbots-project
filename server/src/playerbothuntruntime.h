@@ -190,7 +190,8 @@ class PlayerBotHuntRuntime
 		bool deadlineReached(std::chrono::steady_clock::time_point now) const { return huntDeadline != std::chrono::steady_clock::time_point{} && now >= huntDeadline; }
 		void observeCapacityPressure(std::chrono::steady_clock::time_point now);
 		bool capacityPressureElapsed(std::chrono::steady_clock::time_point now,
-		                             std::chrono::steady_clock::duration grace) const;
+		                             std::chrono::steady_clock::duration grace,
+		                             std::chrono::steady_clock::duration minimumHunt = {}) const;
 		bool capacityPressureActive() const { return capacityPressureStarted != std::chrono::steady_clock::time_point{}; }
 		uint32_t completedCycles() const { return cycles; }
 		bool active() const { return activeRegion.has_value(); }

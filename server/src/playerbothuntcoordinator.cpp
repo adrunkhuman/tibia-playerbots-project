@@ -10,7 +10,8 @@ PlayerBotHuntCoordinator::PlayerBotHuntCoordinator(
 	PlayerBotHuntCoordinatorConfig config, std::map<uint64_t, std::chrono::steady_clock::time_point>& sharedCooldowns) :
 	combatRuntime(std::move(config.combat)), lootWorkflow(std::move(config.loot)),
 	huntRuntime(std::move(config.fallbackPatrol)), huntRegionCooldowns(sharedCooldowns),
-	capacityPressureGrace(config.capacityPressureGrace)
+	capacityPressureGrace(config.capacityPressureGrace),
+	capacityPressureMinimumHunt(config.capacityPressureMinimumHunt)
 {}
 
 std::optional<PlayerBotCombatDecision> PlayerBotHuntCoordinator::selectTraversalAttack(
@@ -130,7 +131,8 @@ void PlayerBotHuntCoordinator::observeCapacityPressure(std::chrono::steady_clock
 PlayerBotHuntTurnObservation PlayerBotHuntCoordinator::observeTurn(bool inHuntPhase, bool selectRegion,
 	std::chrono::steady_clock::time_point now) const
 {
-	const bool pressureElapsed = inHuntPhase && huntRuntime.capacityPressureElapsed(now, capacityPressureGrace);
+	const bool pressureElapsed = inHuntPhase &&
+	    huntRuntime.capacityPressureElapsed(now, capacityPressureGrace, capacityPressureMinimumHunt);
 	return {inHuntPhase && selectRegion && !huntRuntime.active() && !huntRuntime.planningActive(),
 	        huntRuntime.planningActive(), lootWorkflow.navigationSuspended(),
 	        huntRuntime.capacityPressureActive(), pressureElapsed,

@@ -278,12 +278,30 @@ bool PlayerBotController::tryOffensiveSpell(Player* player, const Position& curr
 	    survivalRuntime.decideOffensiveSpell(survivalSnapshot(*player, target), std::chrono::steady_clock::now()));
 }
 
+uint32_t PlayerBotController::potionStockTarget(const Player& player, uint32_t returnReserve) const
+{
+	const Spell* lightHealing = g_spells ? g_spells->getSpellByName("Light Healing") : nullptr;
+	const uint32_t lightHealingLevel = lightHealing ? lightHealing->getLevel() : 9;
+	// Hold gold for Light Healing only once it is actually learnable. Below that
+	// level leftover gold buys hunt ammo so a 40-minute hunt is not stuck on
+	// two-flask trash spawns.
+	const bool saveGoldForLightHealing = !player.hasLearnedInstantSpell("Light Healing") &&
+	                                     player.getLevel() >= lightHealingLevel;
+	const uint32_t base = saveGoldForLightHealing ? healthPotionSafetyTarget : healthPotionAmmoTarget;
+	return recoveryPotionRestockTargetForReserve(returnReserve, base);
+}
+
+uint32_t PlayerBotController::potionStockTarget(const Player& player) const
+{
+	return potionStockTarget(player, huntPotionReturnThreshold);
+}
+
 uint64_t PlayerBotController::spellTrainingReserve(const Player& player, bool emergencyOnly) const
 {
 	const uint16_t potionItemId = recoveryPotionItemId(player.getVocationId());
 	const uint32_t potionCount = inventoryPolicy.inventoryItemCount(player, potionItemId);
 	const uint32_t reserveTarget = emergencyOnly ?
-	    (huntPotionReturnThreshold == UINT32_MAX ? UINT32_MAX : huntPotionReturnThreshold + 1) : healthPotionRestockTarget;
+	    (huntPotionReturnThreshold == UINT32_MAX ? UINT32_MAX : huntPotionReturnThreshold + 1) : potionStockTarget(player);
 	if (emergencyOnly && potionCount >= reserveTarget) return carriedGoldReserve;
 	return recoverySpendingReserve(player, reserveTarget);
 }

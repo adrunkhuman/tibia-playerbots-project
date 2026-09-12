@@ -6,6 +6,7 @@
 #include <map>
 #include <vector>
 
+#include "playerbotinventorypolicy.h"
 #include "position.h"
 
 struct PlayerBotEconomyOffer {
@@ -62,7 +63,7 @@ class PlayerBotDispositionPolicy
 {
 	public:
 		static constexpr uint32_t potionReturnThreshold = 1;
-		static constexpr uint32_t potionRestockTarget = 10;
+		static constexpr uint32_t potionRestockTarget = playerbot::healthPotionAmmoTarget;
 		static constexpr uint32_t carriedGoldReserve = 100;
 
 		uint32_t protectedReserve(uint16_t itemId, bool food, uint16_t potionItemId) const;

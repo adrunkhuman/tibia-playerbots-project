@@ -245,9 +245,14 @@ void PlayerBotHuntRuntime::observeCapacityPressure(std::chrono::steady_clock::ti
 }
 
 bool PlayerBotHuntRuntime::capacityPressureElapsed(std::chrono::steady_clock::time_point now,
-	                                                std::chrono::steady_clock::duration grace) const
+	                                                std::chrono::steady_clock::duration grace,
+	                                                std::chrono::steady_clock::duration minimumHunt) const
 {
 	if (!activeRegion || capacityPressureStarted == std::chrono::steady_clock::time_point{}) return false;
+	if (minimumHunt > std::chrono::steady_clock::duration{} && huntStarted != std::chrono::steady_clock::time_point{} &&
+	    now - huntStarted < minimumHunt) {
+		return false;
+	}
 	return now - capacityPressureStarted >= grace;
 }
 

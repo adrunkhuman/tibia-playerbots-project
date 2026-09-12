@@ -189,8 +189,9 @@ function F.login.onLogin(player)
 		assert(eva and not eva:isRemoved(), "Carlin banker Eva was not spawned")
 		F.removeAll(player, F.smallHealthPotionItemId)
         F.removeAll(player, F.healthPotionItemId)
+        assert(player:learnSpell("Light Healing"), "Carlin service fixture could not unlock ammo restock")
         assert(player:addItem(F.healthPotionItemId, 1), "Carlin service fixture could not seed the return threshold")
-		assert(player:removeMoney(player:getMoney()) and player:setBankBalance(505),
+		assert(player:removeMoney(player:getMoney()) and player:setBankBalance(955),
 			"Carlin service fixture could not fund the restock target")
         F.suppressNearbyMonsters(player:getId())
         addEvent(F.verifyCarlinLocalService, 250, player:getId(), 480)
@@ -382,8 +383,9 @@ function F.login.onLogin(player)
 				"readiness supplies fixture could not reach the Thais depot")
             F.removeAll(player, F.potionItemId)
             F.removeAll(player, F.meatItemId)
+            assert(player:learnSpell("Light Healing"), "readiness supplies fixture could not unlock ammo restock")
             assert(player:addItem(F.potionItemId, 1), "readiness supplies fixture could not seed the return threshold")
-            assert(player:removeMoney(player:getMoney()) and player:addMoney(100) and player:setBankBalance(405),
+            assert(player:removeMoney(player:getMoney()) and player:addMoney(100) and player:setBankBalance(855),
                 "readiness supplies fixture could not fund the restock target")
             addEvent(F.verifyReadiness, 500, player:getId(), "supplies", 240)
         elseif mode == "readiness_no_food" then

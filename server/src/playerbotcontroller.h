@@ -111,6 +111,7 @@ namespace playerbot {
 	inline constexpr int32_t foodPreferenceUtility = 20;
 	inline constexpr uint32_t returnCapacityThreshold = 30 * 100;
 	inline constexpr std::chrono::minutes huntCapacityPressureGrace(5);
+	inline constexpr std::chrono::minutes huntCapacityPressureMinimum(30);
 	inline constexpr uint32_t maximumServiceAttempts = 3;
 	// Prevent a rejected slotted-item move from blocking the service/depot loop.
 	inline constexpr std::chrono::seconds unavailableDispositionCooldown(60);
@@ -303,6 +304,8 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		void finishOracleDeparture(Player* player, const Position& position, const char* result, const char* reason);
 
 		uint64_t recoverySpendingReserve(const Player& player, uint32_t target) const;
+		uint32_t potionStockTarget(const Player& player, uint32_t returnReserve) const;
+		uint32_t potionStockTarget(const Player& player) const;
 		uint64_t spellTrainingReserve(const Player& player, bool emergencyOnly = false) const;
 		void emitSpellCandidate(const Npc& npc, const NpcSpellOffer& offer, const Position& position, const char* result,
 		                        const char* reason, uint64_t reserve = 0, uint32_t travelSteps = 0,
@@ -580,7 +583,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		std::set<Position> huntPatrolPreflightBlockedPositions;
 		std::optional<Position> huntPatrolValidatedDestination;
 		uint32_t huntPotionReturnThreshold = playerbot::healthPotionReturnThreshold;
-		uint32_t huntPotionRestockTarget = playerbot::healthPotionRestockTarget;
+		uint32_t huntPotionRestockTarget = playerbot::healthPotionSafetyTarget;
 		struct {
 			uint32_t npcId = 0;
 			Position coarseDestination;

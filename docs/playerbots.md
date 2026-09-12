@@ -51,7 +51,7 @@ docker compose -f server/compose.yaml logs playerbot-setup server
 
 The controller evaluates top-level goals only at safe boundaries: startup,
 completed or failed pickup, completed service/depot work, and hunt deadline or
-capacity return. Hunt completion enters the neutral `Idle` phase before goal
+capacity return after at least 30 minutes in the hunt. Hunt completion enters the neutral `Idle` phase before goal
 selection so a non-hunt opportunity can compete with the next hunt. The
 controller does not switch goals during movement, combat, looting,
 dialogue, transactions, or pending item verification. Safety can force service;
@@ -318,8 +318,14 @@ healing before combat, then support. Unsupported utility spells such as
 loaded NPC scripts and rejects offers with a registry mismatch, wrong vocation,
 level, premium status, learned
 state, missing supply reserve, insufficient funds after the 100 gp carried
-reserve plus the cost of the current stock gap to the 10-potion restock target,
-or an unavailable route.
+reserve plus the cost of the current stock gap to the potion target, or an
+unavailable route. Light Healing uses only the 1-2 potion safety floor as that
+reserve, and only once the bot is high enough level to learn it. Below that
+level, leftover gold buys up to 20 potions (or more when a return route needs a
+larger reserve) so hunts are not stuck on two-flask trash spawns. After Light
+Healing is learned, leftover gold buys that ammo stack again. Hunt selection
+then uses potions on the belt: a hunt must fit that stock, and among hunts that
+fit, XP wins.
 A selected spell uses normal `hi`, keyword, and `yes`
 dialogue. Completion requires both learned state and the exact total-money
 delta. Learned-spell persistence reconstructs completion after restart and
@@ -458,9 +464,12 @@ arbitration, and normal engine casts under those conditions, not frequency or
 utility on an ordinary long-running server.
 
 The service cycle sells known surplus and returns for the selected recovery
-potion when the carried count reaches one. It buys enough to carry at least two
-and targets 10. Only the selected potion is reserved toward that target; other
-health potions may be deposited. A complete restock takes priority when total
+potion when the carried count reaches one. It restocks to the 2-potion safety
+floor only while Light Healing is level-eligible and still unlearned. Otherwise
+leftover gold buys hunt ammo up to 20 potions, or the return-route reserve if
+that is larger. Only the
+selected potion is reserved toward that target; other health potions may be
+deposited. A complete restock takes priority when total
 carried and bank gold can pay for it; an optional partial restock preserves the
 carried-gold reserve. If total gold cannot raise stock above the return
 threshold, service enters supply recovery instead of stopping: it buys whatever
@@ -518,7 +527,9 @@ items are carried, further food is skipped. Any food remains replaceable by a
 more valuable known item because the preference is not a reserve. Known
 unequipped equipment is also replaceable; equipped gear is outside the backpack
 cargo path. Unknown items, containers, currency, tools, and the potion reserve
-are not replacement candidates. Food count, weight, reclaimable capacity, and preference
+are not replacement candidates. A full backpack starts capacity pressure but does
+not end the hunt until 30 minutes have elapsed; the 40-minute deadline remains
+the hard stop. Food count, weight, reclaimable capacity, and preference
 utility are observable, but food does not yet select a separate acquisition
 goal. Later goal arbitration can weigh measured regeneration benefit against
 travel, capacity, and service costs without restoring a hard requirement.

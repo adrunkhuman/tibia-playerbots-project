@@ -563,7 +563,7 @@ void PlayerBotController::beginService(Player* player, const Position& position,
 void PlayerBotController::updateSupplyRecovery(const Player& player, const Position& position)
 {
 	const uint64_t funds = player.getMoney() + player.getBankBalance();
-	const uint64_t budget = recoverySpendingReserve(player, playerbot::healthPotionRestockTarget);
+	const uint64_t budget = recoverySpendingReserve(player, potionStockTarget(player));
 	if (!supplyRecovery.update(funds, budget)) return;
 	huntCoordinator.setSupplyRecovery(supplyRecovery.active());
 	serviceWorkflow.setSurvivalRestock(supplyRecovery.active());
@@ -664,7 +664,7 @@ void PlayerBotController::processService(Player* player, const Position& current
 	observation.healthPotionItemId = recoveryPotionItemId(player->getVocationId());
 	observation.healthPotionWeight = Item::items[observation.healthPotionItemId].weight;
 	observation.healthPotionReturnThreshold = huntPotionReturnThreshold;
-	observation.healthPotionRestockTarget = huntPotionRestockTarget;
+	observation.healthPotionRestockTarget = potionStockTarget(*player);
 	Item* serviceBackpackItem = player->getInventoryItem(CONST_SLOT_BACKPACK);
 	Container* serviceBackpack = serviceBackpackItem ? serviceBackpackItem->getContainer() : nullptr;
 	observation.actionAvailable = player->canDoAction();
@@ -920,7 +920,7 @@ void PlayerBotController::processService(Player* player, const Position& current
 			// Unaffordable potions degrade operation instead of stopping: hunt
 			// and sell under supply recovery until loot funds a restock.
 			enterSupplyRecovery(currentPosition, observation.money + observation.bankBalance,
-			                    recoverySpendingReserve(*player, playerbot::healthPotionRestockTarget),
+			                    recoverySpendingReserve(*player, potionStockTarget(*player)),
 			                    "insufficient_potion_funds");
 			serviceWorkflow.reset();
 			if (fixtureDriver.progressionGoalLoop(true).selectGoal) {
@@ -1078,7 +1078,7 @@ bool PlayerBotController::findDepositableItem(const Player& player, Container* c
 		}
 		const uint32_t carried = inventoryPolicy.inventoryItemCount(player, item->getID());
 		const uint32_t reserve = item->getID() == recoveryPotionItemId(player.getVocationId()) ?
-			std::max(inventoryPolicy.protectedItemReserve(player, item->getID()), huntPotionRestockTarget) :
+			std::max(inventoryPolicy.protectedItemReserve(player, item->getID()), potionStockTarget(player)) :
 			inventoryPolicy.protectedItemReserve(player, item->getID());
 		const uint32_t movable = item->isStackable() && carried > reserve ?
 			std::min<uint32_t>(item->getItemCount(), carried - reserve) : (carried > reserve ? 1 : 0);
@@ -1730,7 +1730,7 @@ void PlayerBotController::processDeposit(Player* player, const Position& current
 		if (depositItem) {
 			const uint32_t carried = inventoryPolicy.inventoryItemCount(*player, depositItem->getID());
 			const uint32_t reserve = depositItem->getID() == recoveryPotionItemId(player->getVocationId()) ?
-				std::max(inventoryPolicy.protectedItemReserve(*player, depositItem->getID()), huntPotionRestockTarget) :
+				std::max(inventoryPolicy.protectedItemReserve(*player, depositItem->getID()), potionStockTarget(*player)) :
 				inventoryPolicy.protectedItemReserve(*player, depositItem->getID());
 			const uint32_t movable = depositItem->isStackable() && carried > reserve ?
 				std::min<uint32_t>(depositItem->getItemCount(), carried - reserve) : (carried > reserve ? 1 : 0);

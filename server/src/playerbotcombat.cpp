@@ -870,7 +870,7 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 			PlayerBotHuntRegionScan scan = planner.beginScan(player, topologyDistances.get());
 			auto profile = huntPlanningFacts(player, huntCombatProfile(player));
 			profile.cashPressure = playerBotHuntCashPressure(profile.potionCount, huntPotionReturnThreshold,
-			    input.player.funds, recoverySpendingReserve(player, huntPotionRestockTarget));
+			    input.player.funds, recoverySpendingReserve(player, potionStockTarget(player)));
 
 			input.start = {{std::move(scan), std::move(profile), std::move(topologyDistances),
 			                std::move(topologyReachability), huntTransportCatalog(), topologyTimeUs}};
@@ -1087,7 +1087,7 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 			    static_cast<uint64_t>(returnReserve) + outboundReserve));
 			routed.supplyProfile = huntPlanningFacts(player, huntCombatProfile(player)).supply;
 			routed.reconcileRecovery(candidateReserve, player.getMoney() + player.getBankBalance(),
-			    recoverySpendingReserve(player, recoveryPotionRestockTargetForReserve(candidateReserve)));
+			    recoverySpendingReserve(player, potionStockTarget(player, candidateReserve)));
 			const bool needsSupplyRoute = playerBotHuntNeedsSupplyRoute(
 			    routed.supplyBudget.expectedPotions, routed.supplyProfile.potions, candidateReserve);
 			huntSupplyExitApproaches = needsSupplyRoute ? huntSupplyExitCandidates(player, depotApproach) :
@@ -1135,7 +1135,7 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 		const uint32_t candidateReserve = static_cast<uint32_t>(std::min<uint64_t>(UINT32_MAX,
 		    static_cast<uint64_t>(returnReserve) + outboundReserve));
 		const uint64_t recoveryReserve = recoverySpendingReserve(
-		    player, recoveryPotionRestockTargetForReserve(candidateReserve));
+		    player, potionStockTarget(player, candidateReserve));
 		routed.recoveryPotionReserve = candidateReserve;
 		routed.reconcileRecovery(candidateReserve, player.getMoney() + player.getBankBalance(), recoveryReserve);
 		const uint64_t funds = player.getMoney() + player.getBankBalance();
@@ -1207,7 +1207,7 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 	const uint32_t healthLossCost = static_cast<uint32_t>(risk.healthLossCost);
 	huntPotionReturnThreshold = recoveryPotionRouteReserve(
 		player.getVocationId(), player.getMaxHealth(), huntReturnRouteDangerCost, healthLossCost);
-	huntPotionRestockTarget = recoveryPotionRestockTargetForReserve(huntPotionReturnThreshold);
+	huntPotionRestockTarget = potionStockTarget(player, huntPotionReturnThreshold);
 	emit("hunt_supply_reserve", position,
 	     "\"source\":\"selected_return_route\",\"route_danger_cost\":" +
 	         std::to_string(huntReturnRouteDangerCost) + ",\"health_loss_cost\":" + std::to_string(healthLossCost) +
@@ -1509,7 +1509,7 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 				         std::to_string(preflight.metrics.fare) + ",\"future_fare_reserve\":" +
 				         std::to_string(huntTravelFutureFareReserve(budgetPhase)) +
 				         ",\"recovery_funds_reserve\":" + std::to_string(recoverySpendingReserve(
-				             *player, recoveryPotionRestockTargetForReserve(huntRecoveryPotionReserve))));
+				             *player, potionStockTarget(*player, huntRecoveryPotionReserve))));
 			} else if (navigation.routeUnsafe) {
 				emit("navigation_progress", currentPosition,
 				     "\"result\":\"skipped\",\"reason\":\"route_danger_above_tolerance\",\"phase\":\"patrol_preflight\",\"direction\":" +
@@ -1535,7 +1535,7 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 			static_cast<uint32_t>(patrolRisk.healthLossCost));
 		if (requiredReserve > huntPotionReturnThreshold) {
 			huntPotionReturnThreshold = requiredReserve;
-			huntPotionRestockTarget = recoveryPotionRestockTargetForReserve(requiredReserve);
+			huntPotionRestockTarget = potionStockTarget(*player, requiredReserve);
 			emit("hunt_supply_reserve", currentPosition,
 			     "\"source\":\"patrol_return_route\",\"route_danger_cost\":" +
 			         std::to_string(preflight.metrics.dangerCost) + ",\"return_threshold\":" +
