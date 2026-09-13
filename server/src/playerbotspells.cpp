@@ -128,13 +128,10 @@ bool PlayerBotController::dispatchSpellCommand(Player& player, const Position& p
 		if (command.reason.empty()) return false;
 		const PlayerBotSpellDescriptor* descriptor = command.candidateName.empty() ? nullptr :
 		                                              playerBotSpellDescriptor(command.candidateName.c_str());
-		const std::string key = std::string("cast_spell:") + command.reason + ':' + (descriptor ? descriptor->name : "unknown");
-		if (!descriptor || shouldEmitRepeated(key)) {
-			emitSpellCastEvent(position, descriptor ? descriptor->name : nullptr, descriptor ? descriptor->words : nullptr,
-			                   descriptor ? playerBotSpellRoleName(descriptor->role) : nullptr, command.need.empty() ? "unknown" : command.need.c_str(),
-			                   "skipped", "not_attempted", command.reason.c_str(), nullptr, &player,
-			                   descriptor ? fallbackForRole(descriptor->role, potionItemId) : fallbackForNeed(command.need.c_str(), potionItemId));
-		}
+		emitSpellCastEvent(position, descriptor ? descriptor->name : nullptr, descriptor ? descriptor->words : nullptr,
+		                   descriptor ? playerBotSpellRoleName(descriptor->role) : nullptr, command.need.empty() ? "unknown" : command.need.c_str(),
+		                   "skipped", "not_attempted", command.reason.c_str(), nullptr, &player,
+		                   descriptor ? fallbackForRole(descriptor->role, potionItemId) : fallbackForNeed(command.need.c_str(), potionItemId));
 		return false;
 	}
 	const auto& cast = *command.spell;

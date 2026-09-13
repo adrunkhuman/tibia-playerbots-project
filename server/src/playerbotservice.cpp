@@ -577,6 +577,11 @@ void PlayerBotController::updateSupplyRecovery(const Player& player, const Posit
 	     std::string("\"action\":\"supply_recovery\",\"result\":\"") + (supplyRecovery.active() ? "started" : "ended") +
 	         "\",\"funds\":" + std::to_string(funds) + ",\"potion_budget\":" +
 	         (budget == std::numeric_limits<uint64_t>::max() ? std::string("\"unknown\"") : std::to_string(budget)));
+	if (Player* speakingPlayer = g_game.getPlayerByID(playerId)) {
+		say(*speakingPlayer, supplyRecovery.active() ?
+		    "Supply recovery started; prioritizing funds and safe restock." :
+		    "Supply recovery complete; normal goals resumed.");
+	}
 }
 
 void PlayerBotController::enterSupplyRecovery(const Position& position, uint64_t funds, uint64_t potionBudget,
@@ -590,6 +595,9 @@ void PlayerBotController::enterSupplyRecovery(const Position& position, uint64_t
 	     std::string("\"action\":\"supply_recovery\",\"result\":\"started\",\"reason\":") + jsonString(reason) +
 	         ",\"funds\":" + std::to_string(funds) + ",\"potion_budget\":" +
 	         (potionBudget == std::numeric_limits<uint64_t>::max() ? std::string("\"unknown\"") : std::to_string(potionBudget)));
+	if (Player* speakingPlayer = g_game.getPlayerByID(playerId)) {
+		say(*speakingPlayer, "Supply recovery started: " + std::string(reason) + '.');
+	}
 }
 
 void PlayerBotController::finishHuntAndReturn(Player* player, const Position& position, const char* reason)
@@ -903,6 +911,7 @@ void PlayerBotController::processService(Player* player, const Position& current
 			emit("action_result", currentPosition, "\"action\":\"bank_withdraw\",\"result\":\"success\",\"count\":" +
 			     std::to_string(transaction.amount) + ",\"bank_before\":" + std::to_string(transaction.balance) +
 			     ",\"bank_after\":" + std::to_string(observation.bankBalance));
+			say(*player, "Withdrew " + std::to_string(transaction.amount) + " gold for supplies.");
 		} else {
 			emit("action_result", currentPosition, "\"action\":\"bank_deposit\",\"result\":\"success\",\"count\":" +
 			     std::to_string(transaction.money) + ",\"bank_before\":" + std::to_string(transaction.balance) +
@@ -1668,6 +1677,7 @@ void PlayerBotController::processDeposit(Player* player, const Position& current
 		fields << "\"action\":\"deposit\",\"result\":\"complete\",\"depot_id\":" << command.snapshot.selected.depotId
 		       << ",\"container_id\":" << static_cast<uint32_t>(depotChestContainerId) << ",\"cycle\":" << huntCoordinator.completedHuntCycles();
 		emit("action_result", currentPosition, fields.str());
+		say(*player, "Depot work complete; deposited retained loot.");
 		if (pauseDepotFixtureForRestart(*player, DepotRestartCheckpoint::Depart, currentPosition)) return;
 		Container* chest = player->getContainerByID(depotChestContainerId);
 		bool selectedAfterDeposit = false;

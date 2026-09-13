@@ -142,8 +142,8 @@ namespace playerbot {
 	}};
 	inline constexpr const char* botAccountName = "bot-one";
 
-	void emitPlayerbotEvent(const std::string& playerName, uint32_t playerGuid, const char* event,
-	                        const Position& position, const std::string& fields = {});
+	void emitPlayerbotEvent(const std::string& playerName, uint32_t playerGuid, const std::string& controllerId,
+	                        const char* event, const Position& position, const std::string& fields = {});
 }
 
 class PlayerBotController : public std::enable_shared_from_this<PlayerBotController>
@@ -151,7 +151,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 	friend class PlayerBotManager;
 
 	public:
-		explicit PlayerBotController(const Player& player,
+		explicit PlayerBotController(const Player& player, std::string controllerId,
 		                            std::map<uint64_t, std::chrono::steady_clock::time_point>& sharedHuntRegionCooldowns);
 
 		void start(const Position& position, bool recovered, uint32_t recoveryCount);
@@ -182,12 +182,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 			telemetry.emit(event, position, fields);
 		}
 
-		void say(Player& player, const std::string& text) const;
-		bool shouldEmitRepeated(const std::string& key)
-		{
-			return telemetry.shouldEmitRepeated(key);
-		}
-
+		void say(const Player& player, const std::string& text) const;
 		void setStage(ScenarioStage stage, const Position& position);
 
 		PlayerBotExpectedCorpse expectedCorpseFor(const Creature& target) const;
@@ -595,6 +590,8 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		} npcApproach;
 		mutable std::map<std::pair<uint32_t, Position>, std::chrono::steady_clock::time_point> unavailableTravelOffers;
 		bool deathObserved = false;
+		mutable std::string lastAnnouncement;
+		mutable std::chrono::steady_clock::time_point lastAnnouncementAt;
 };
 
 #endif

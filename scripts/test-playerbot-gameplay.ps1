@@ -17,7 +17,11 @@ Runs only the named scenarios. Names must match the gameplay scenario catalog.
 
 .PARAMETER ContinueOnFailure
 Captures diagnostics and continues with the next selected scenario after a failure.
+
+.PARAMETER Verbose
+Shows suppressed Docker Compose command output while the suite runs.
 #>
+[CmdletBinding()]
 param(
 	[ValidateRange(30, 3600)]
 	[int]$TimeoutSeconds = 300,
@@ -133,6 +137,8 @@ $serverLogErrorTask = $null
 $serverLogBuffer = [System.Text.StringBuilder]::new()
 $serverLogLines = [System.Collections.Generic.List[string]]::new()
 $serverPlayerbotEvents = [System.Collections.Generic.List[object]]::new()
+$serverLogSinceUtc = $null
+$composeCommandLogBuffer = [System.Text.StringBuilder]::new()
 $minimumServerOnlineEvents = 0
 
 . $PSScriptRoot/playerbot-gameplay/log-parsing.ps1
@@ -175,7 +181,9 @@ try {
 			throw "-SkipBuild requires an existing angelion-server:latest image."
 		}
 	} else {
+		"PLAYERBOT_GAMEPLAY_TEST PHASE name=build status=start"
 		Invoke-TimedStep -Name "build" -Body { Invoke-Compose build server }
+		"PLAYERBOT_GAMEPLAY_TEST PHASE name=build status=pass duration_seconds=$([Math]::Round($timings.build.TotalSeconds, 2))"
 	}
 
 	if (-not $Focused) {
@@ -217,10 +225,7 @@ finally {
 	try {
 		Stop-ServerLogFollower
 		if (-not $KeepStack -and (Get-Command docker -ErrorAction SilentlyContinue)) {
-			& docker @composeArguments down --volumes --remove-orphans
-			if ($LASTEXITCODE -ne 0) {
-				throw "Could not clean up the playerbot gameplay stack."
-			}
+			Invoke-RawCompose down --volumes --remove-orphans
 		}
 	}
 	finally {

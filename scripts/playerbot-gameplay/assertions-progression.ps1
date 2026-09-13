@@ -365,11 +365,13 @@ function Assert-HuntRegionPlanningEvents {
 		$_.event -eq "hunt_region_scan" -and $_.phase -eq "selected" -and $_.decision_latency_us -gt 0
     })
 	$selectedScan = if ($completed.Count -gt 0) { $completed[$completed.Count - 1] } else { $null }
-    $selectedCandidate = if ($selection) { @($candidates | Where-Object { $_.region_id -eq $selection.region_id }) } else { @() }
-	$reachableCandidates = @($candidates | Where-Object { $_.suitable -and $_.reachable -and $_.route_validated })
+	$routeValidations = @($candidates | Where-Object { $_.route_validated })
+    $selectedCandidate = if ($selection) { @($routeValidations | Where-Object { $_.region_id -eq $selection.region_id }) } else { @() }
+	$reachableCandidates = @($routeValidations | Where-Object { $_.suitable -and $_.reachable })
 	$validatedVariantCount = @($reachableCandidates | Select-Object -ExpandProperty atlas_variant_id -Unique).Count
 	$finiteRouteQueue = $selectedScan -and $selectedScan.route_candidate_policy -eq 'all_cheap_viable_ranked' -and
 		$selectedScan.route_candidate_count -gt 0 -and $selectedScan.route_candidate_count -le $selectedScan.candidate_count -and
+		$routeValidations.Count -le $selectedScan.route_candidate_count -and
 		$validatedVariantCount -le $selectedScan.route_candidate_count -and $selectedScan.transport_offer_count -ge 0 -and
 		$selectedScan.transport_arrival_count -ge 1
 	$budgetCandidates = @($reachableCandidates | Where-Object { $_.supply_budget_fits })
@@ -382,7 +384,6 @@ function Assert-HuntRegionPlanningEvents {
 	$completedTopology = @($completed | Where-Object {
 		$_.topology_time_us -ge 0
 	})
-	$routeValidations = @($candidates | Where-Object { $_.topology_reachable -and $_.topology_travel_steps -gt 0 })
 	$supplyReserves = @($events | Where-Object {
 		$_.event -eq "hunt_supply_reserve" -and $_.source -eq "selected_return_route" -and
 		$_.return_threshold -ge 1 -and $_.restock_target -ge 10 -and $_.restock_target -gt $_.return_threshold

@@ -68,7 +68,7 @@ services:
       driver: local
       options:
         max-size: "10m"
-        max-file: "3"
+        max-file: "10"
     volumes:
       - ./config.lua:/app/config.lua:ro
       - ./data:/app/data

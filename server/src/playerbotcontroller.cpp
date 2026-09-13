@@ -152,10 +152,10 @@ bool PlayerBotController::processNpcApproach(Player* player, const Position& cur
 	return false;
 }
 
-PlayerBotController::PlayerBotController(const Player& player,
+PlayerBotController::PlayerBotController(const Player& player, std::string controllerId,
 	                            std::map<uint64_t, std::chrono::steady_clock::time_point>& sharedHuntRegionCooldowns) :
 	playerId(player.getID()), playerGuid(player.getGUID()), playerName(player.getName()), fixtureDriver(playerBotTestPolicyFromEnvironment()),
-	telemetry(player.getName(), player.getGUID()),
+	telemetry(player.getName(), player.getGUID(), std::move(controllerId)),
 	equipmentPolicy(oracleVocationId),
 	inventoryPolicy(economyCatalog.sellValues(), [this](const Player& candidatePlayer, const Item& item) {
 		return equipmentPolicy.evaluateUpgrade(PlayerBotEquipmentAdapter::player(candidatePlayer),
@@ -242,6 +242,7 @@ void PlayerBotController::start(const Position& position, bool recovered, uint32
 		          << ",\"bankers\":" << bankerProviderCount;
 	telemetry.emit("lifecycle", position, lifecycle.str());
 	if (controlledPlayer) {
+		say(*controlledPlayer, recovered ? "Recovered after death and resumed control." : "Online and starting autonomous operation.");
 		emitFixtureEvents(fixtureDriver.runSpellCalibration(*controlledPlayer), position);
 		emitFixtureEvents(fixtureDriver.runAdaptiveChallenge(*controlledPlayer), position);
 		emitFixtureEvents(fixtureDriver.runDepotRiskFallbackContract(), position);
@@ -290,14 +291,15 @@ const char* PlayerBotController::stageName(ScenarioStage stage)
 	return PlayerBotTurnRouter::scenarioStageName(stage);
 }
 
-void PlayerBotController::say(Player& player, const std::string& text) const
+void PlayerBotController::say(const Player& player, const std::string& text) const
 {
-	Player* admin = g_game.getPlayerByName("GOD Admin");
-	if (!admin || admin->isRemoved()) {
-		return;
-	}
-	admin->sendTextMessage(MESSAGE_STATUS_CONSOLE_ORANGE,
-	                       "[Bot One][" + std::to_string(player.getLevel()) + "] " + text);
+	if (!g_playerBots.announcementsEnabled(playerGuid)) return;
+	const auto now = std::chrono::steady_clock::now();
+	if (text == lastAnnouncement && now - lastAnnouncementAt < std::chrono::seconds(5)) return;
+	lastAnnouncement = text;
+	lastAnnouncementAt = now;
+	g_game.broadcastMessage("[" + playerName + "][" + std::to_string(player.getLevel()) + "] " + text,
+	                        MESSAGE_STATUS_CONSOLE_ORANGE);
 }
 
 void PlayerBotController::setStage(ScenarioStage stage, const Position& position)
@@ -308,10 +310,6 @@ void PlayerBotController::setStage(ScenarioStage stage, const Position& position
 
 	const ScenarioStage previousStage = turnRouter.scenarioStage();
 	turnRouter.setScenarioStage(stage);
-	const std::string repeatKey = std::string("state:") + stageName(previousStage) + ':' + stageName(stage);
-	if (!telemetry.shouldEmitRepeated(repeatKey)) {
-		return;
-	}
 	telemetry.emit("state_transition", position, std::string("\"from\":") + jsonString(stageName(previousStage)) +
 	     ",\"to\":" + jsonString(stageName(stage)));
 }
@@ -323,9 +321,6 @@ std::optional<PlayerBotTraversalTarget> PlayerBotController::clearTraversalTarge
 		return std::nullopt;
 	}
 
-	if (!telemetry.shouldEmitRepeated(std::string("target:clear:") + reason)) {
-		return target;
-	}
 	telemetry.emit("target_changed", position, "\"previous_target_id\":" + std::to_string(target->id) +
 	     ",\"target_id\":null,\"reason\":" + jsonString(reason));
 	return target;
@@ -357,10 +352,32 @@ uint32_t PlayerBotController::getSaleItemCount(const Player& player, uint16_t it
 
 playerbot::PlayerBotTelemetrySummary PlayerBotController::telemetrySummary() const
 {
-	playerbot::PlayerBotTelemetrySummary summary{turnRouter.stateName(), std::nullopt};
+	playerbot::PlayerBotTelemetrySummary summary;
+	summary.state = turnRouter.stateName();
+	summary.goal = objectiveName();
+	summary.phase = cyclePhaseName();
+	summary.activity = stageName(turnRouter.scenarioStage());
 	if (const auto activeTarget = huntCoordinator.activeTarget()) {
 		summary.target = playerbot::PlayerBotTelemetryTarget{activeTarget->id, activeTarget->position};
 	}
+	if (const Player* player = g_game.getPlayerByID(playerId);
+	    player && player->isPlayerBot() && player->getGUID() == playerGuid) {
+		summary.playerStateAvailable = true;
+		summary.health = player->getHealth();
+		summary.maximumHealth = player->getMaxHealth();
+		summary.mana = player->getMana();
+		summary.maximumMana = player->getMaxMana();
+		summary.level = player->getLevel();
+		summary.freeCapacity = player->getFreeCapacity();
+		summary.carriedGold = player->getMoney();
+		summary.bankBalance = player->getBankBalance();
+		summary.healthPotions = inventoryPolicy.inventoryItemCount(*player, recoveryPotionItemId(player->getVocationId()));
+		if (player->getWalkDelay() > 0) summary.waitingReason = "walk_delay";
+		else if (!player->canDoAction()) summary.waitingReason = "action_delay";
+	}
+	if (supplyRecovery.active()) summary.recovery = "supply";
+	else if (huntCoordinator.transitBreakoutActive()) summary.recovery = "transit_breakout";
+	else if (huntCoordinator.retreatingFromDanger()) summary.recovery = "danger_retreat";
 	return summary;
 }
 
@@ -386,10 +403,10 @@ void PlayerBotController::stop(const char* reason, const Position& position)
 	huntCoordinator.cancelPlanning();
 	resetNavigation();
 	if (wasRunning) {
-		const std::string repeatKey = std::string("state:") + previous + ':' + turnRouter.stateName();
-		if (telemetry.shouldEmitRepeated(repeatKey)) {
-			telemetry.emit("state_transition", position, std::string("\"from\":") + jsonString(previous) +
-			     ",\"to\":" + jsonString(turnRouter.stateName()));
+		telemetry.emit("state_transition", position, std::string("\"from\":") + jsonString(previous) +
+		     ",\"to\":" + jsonString(turnRouter.stateName()));
+		if (!deathObserved) {
+			if (Player* player = g_game.getPlayerByID(playerId)) say(*player, "Stopped: " + std::string(reason) + '.');
 		}
 	}
 	telemetry.emitTerminal(reason, position, telemetrySummary());
@@ -400,11 +417,8 @@ void PlayerBotController::pause(const Position& position)
 	if (!turnRouter.running()) return;
 	const char* previous = turnRouter.stateName();
 	turnRouter.pause();
-	const std::string repeatKey = std::string("state:") + previous + ':' + turnRouter.stateName();
-	if (telemetry.shouldEmitRepeated(repeatKey)) {
-		telemetry.emit("state_transition", position, std::string("\"from\":") + jsonString(previous) +
-		     ",\"to\":" + jsonString(turnRouter.stateName()));
-	}
+	telemetry.emit("state_transition", position, std::string("\"from\":") + jsonString(previous) +
+	     ",\"to\":" + jsonString(turnRouter.stateName()));
 }
 
 bool PlayerBotController::findPath(Player* player, const Position& target, std::vector<Direction>& result, const FindPathParams& pathParams)
@@ -571,6 +585,7 @@ bool PlayerBotController::executeNavigationStep(Player* player, const PlayerBotN
 		         ",\"destination\":{\"x\":" + std::to_string(step.expectedPosition.x) +
 		         ",\"y\":" + std::to_string(step.expectedPosition.y) + ",\"z\":" +
 		         std::to_string(static_cast<uint16_t>(step.expectedPosition.z)) + "}");
+		if (travelled) say(*player, "Travelled with " + npc->getName() + " toward the current objective.");
 		return travelled;
 	}
 

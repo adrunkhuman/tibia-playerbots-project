@@ -40,6 +40,7 @@ Run the assertion scripts relevant to the change:
 pwsh -File scripts/test-playerbot-navigation-assertions.ps1
 pwsh -File scripts/test-playerbot-readiness-assertions.ps1
 pwsh -File scripts/test-playerbot-log-parsing.ps1
+pwsh -File scripts/test-playerbot-runtime.ps1
 pwsh -File scripts/test-playerbot-scenario-isolation.ps1
 pwsh -File scripts/test-playerbot-depot-scenario.ps1
 pwsh -File scripts/test-playerbot-death-scenario.ps1
@@ -69,7 +70,7 @@ For server, infrastructure, or cross-stack changes:
 ```powershell
 docker compose -f server/compose.yaml config --quiet
 docker compose -f server/compose.yaml up --build --detach
-docker compose -f server/compose.yaml logs playerbot-setup server
+docker compose -f server/compose.yaml logs --tail 200 playerbot-setup server
 ```
 
 Confirm MariaDB is healthy, the map loads, the server reports online, and `127.0.0.1:7171` and `127.0.0.1:7172` accept connections. `playerbot-setup` must exit successfully, exactly one valid `Bot One` registration must exist, and server JSONL must contain a playerbot `lifecycle` event with `status="online"`.
@@ -86,7 +87,9 @@ pwsh -File scripts/test-playerbot-gameplay.ps1
 
 With no selection arguments, this runs the full suite: the baseline hunt/service cycle and all focused subsystem scenarios. Supplying subsystem switches without `-Focused` still runs the full suite. Use `-Focused` with the smallest switch set matching the change, or `-Scenario <name>` for exact selection; do not combine those selection modes. A passing scenario means its controlled setup reached the required telemetry and state assertions before timeout. It does not mean a normal character will reach that state unaided, repeat it indefinitely, or progress reliably across the real map.
 
-For a normal-stack observation, shorten hunts only when useful, recreate the server, and inspect `goal_*`, `action_result`, `hunt_*`, `navigation_progress`, `summary`, and `terminal` JSONL events. Focused tests prove deterministic transitions; use 20–60 minute hunts to evaluate repeated combat, service, recovery, planner retries, and telemetry volume. Do not report a fixture or short smoke run as proof of sustained progression.
+The normal console output shows build/scenario phases, timings, and results. Use `-Verbose` when Compose lifecycle detail is needed. On a scenario failure, the reported artifact directory contains complete Compose command output, retained and streamed server logs, unfiltered playerbot JSONL evidence, container restart/exit/OOM state, Compose status, and failure metadata. Do not pipe the stored JSONL through summary filters: hunt candidate detail and startup events are part of the evidence.
+
+For a normal-stack observation, shorten hunts only when useful, recreate the server, and inspect `goal_*`, `action_result`, `hunt_*`, `navigation_progress`, `summary`, and `terminal` JSONL events. Focused tests prove deterministic transitions; use 20–60 minute hunts to evaluate repeated combat, service, recovery, planner retries, and telemetry volume. For bounded agent diagnostics, start with `docker compose -f server/compose.yaml logs --tail 200 server`; increase the tail only for a specific missing interval, and save the complete JSONL source when it is test evidence. Do not report a fixture or short smoke run as proof of sustained progression.
 
 ## Client compatibility
 

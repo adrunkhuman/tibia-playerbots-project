@@ -3399,6 +3399,9 @@ bool Game::playerSpeakTo(Player* player, SpeakClasses type, const std::string& r
                          const std::string& text)
 {
 	Player* toPlayer = getPlayerByName(receiver);
+	if (g_playerBots.handleLogControl(*player, receiver, text)) {
+		return true;
+	}
 	if (!toPlayer) {
 		player->sendTextMessage(MESSAGE_STATUS_SMALL, "A player with this name is not online.");
 		return false;
