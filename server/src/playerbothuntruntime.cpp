@@ -13,8 +13,9 @@ PlayerBotHuntRuntime::PlayerBotHuntRuntime(std::vector<Position> fallbackPatrol)
 
 PlayerBotHuntPlanningSnapshot PlayerBotHuntRuntime::snapshot(const PlayerBotHuntRuntimePlayerObservation& player, uint64_t revision)
 {
-	return {player.position, player.level, player.health, player.staminaMinutes, revision, player.topologyGeneration, player.excludedVariants,
-	        player.canUseRope, player.canUseShovel, player.potions, player.mana, player.funds};
+	return {player.position, player.level, player.health, player.staminaMinutes, revision, player.topologyGeneration,
+	        player.npcGeneration, player.excludedVariants,
+	        player.canUseRope, player.canUseShovel, player.premium, player.potions, player.mana, player.funds};
 }
 
 bool PlayerBotHuntRuntime::planningStartRequired(std::chrono::steady_clock::time_point now) const
@@ -29,6 +30,7 @@ PlayerBotHuntRuntimeOutcome PlayerBotHuntRuntime::advancePlanning(const PlayerBo
 	PlayerBotHuntRuntimeOutcome outcome;
 	if (observation.invalidateCacheRevision) {
 		planning.reset();
+		pendingTransportOffers.clear();
 		pendingScoreCandidates.clear();
 		outcome.staleRevision = true;
 		outcome.invalidateCache = true;
@@ -43,10 +45,13 @@ PlayerBotHuntRuntimeOutcome PlayerBotHuntRuntime::advancePlanning(const PlayerBo
 	if (planning && planning->invalidated(current)) {
 		outcome.staleRevision = planning->snapshot().cacheRevision != input.cacheRevision;
 		planning.reset();
+		pendingTransportOffers.clear();
 		pendingScoreCandidates.clear();
 	}
-	if (planning && observation.cancelAtScoreBarrier && !planning->scoring()) {
+	if (planning && observation.cancelAtScoreBarrier && pendingTransportOffers.empty() &&
+	    pendingScoreCandidates.empty()) {
 		planning.reset();
+		pendingTransportOffers.clear();
 		pendingScoreCandidates.clear();
 		outcome.command = PlayerBotHuntRuntimeCommand::PlanningCancelled;
 		return outcome;
@@ -56,7 +61,8 @@ PlayerBotHuntRuntimeOutcome PlayerBotHuntRuntime::advancePlanning(const PlayerBo
 		PlayerBotHuntPlanningProfile profile = planningProfile(input.start->profile);
 		planning.emplace(PlayerBotHuntPlanningStart{input.start->scan, std::move(profile),
 		                                             snapshot(input.player, input.start->scan.revision),
-		                                             input.start->topologyDistances, input.start->topologyDistanceTimeUs,
+		                                             input.start->topologyDistances, input.start->originReachability,
+		                                             input.start->transportOffers, input.start->topologyDistanceTimeUs,
 		                                             input.reason, now});
 		plannedHuntDurationSeconds = input.huntDurationSeconds;
 		outcome.command = PlayerBotHuntRuntimeCommand::PlanningStarted;
@@ -64,6 +70,20 @@ PlayerBotHuntRuntimeOutcome PlayerBotHuntRuntime::advancePlanning(const PlayerBo
 	}
 
 	planning->beginTurn();
+	if (planning->transportPlanning()) {
+		while (const auto work = planning->nextTransportWork(8)) {
+			pendingTransportOffers.push_back(work->offerIndex);
+			outcome.transportWork.push_back({work->offerIndex, work->offer, std::move(work->arrivals),
+			                                 planning->snapshot().playerLevel, planning->snapshot().funds,
+			                                 planning->snapshot().premium, planning->snapshot().canUseRope,
+			                                 planning->snapshot().canUseShovel});
+		}
+		if (outcome.transportWork.empty()) {
+			outcome.command = planning->completeTransport() == PlayerBotHuntPlanningProgress::ScoringYield ?
+			                         PlayerBotHuntRuntimeCommand::PlanningYield : PlayerBotHuntRuntimeCommand::PlanningScored;
+		}
+		return outcome;
+	}
 	if (planning->scoring()) {
 		while (const auto work = planning->nextScoringWork(256)) {
 			pendingScoreCandidates.push_back(work->candidateIndex);
@@ -94,6 +114,32 @@ PlayerBotHuntRuntimeOutcome PlayerBotHuntRuntime::advancePlanning(const PlayerBo
 	return outcome;
 }
 
+PlayerBotHuntRuntimeOutcome PlayerBotHuntRuntime::completeTransportWork(
+	const std::vector<PlayerBotHuntRuntimeTransportObservation>& observations)
+{
+	PlayerBotHuntRuntimeOutcome outcome;
+	if (!planning || !planning->transportPlanning() || observations.size() != pendingTransportOffers.size()) return outcome;
+	for (size_t index = 0; index < observations.size(); ++index) {
+		if (observations[index].offerIndex != pendingTransportOffers[index]) {
+			outcome.staleRevision = true;
+			planning.reset();
+			pendingTransportOffers.clear();
+			pendingScoreCandidates.clear();
+			return outcome;
+		}
+		planning->transportCompleted(observations[index].offerIndex, observations[index].arrival);
+	}
+	pendingTransportOffers.clear();
+	if (planning->completeTransport() == PlayerBotHuntPlanningProgress::ScoringYield) {
+		outcome.command = PlayerBotHuntRuntimeCommand::PlanningYield;
+		return outcome;
+	}
+	// Scoring starts on the next scheduler turn; do not combine the transport
+	// barrier with a 256-candidate scoring batch.
+	outcome.command = PlayerBotHuntRuntimeCommand::PlanningYield;
+	return outcome;
+}
+
 PlayerBotHuntRuntimeOutcome PlayerBotHuntRuntime::completeScoreWork(const std::vector<PlayerBotHuntRuntimeScoreObservation>& observations,
 	                                                                  uint64_t elapsedUs)
 {
@@ -103,6 +149,7 @@ PlayerBotHuntRuntimeOutcome PlayerBotHuntRuntime::completeScoreWork(const std::v
 		if (!observations[index].valid || observations[index].candidateIndex != pendingScoreCandidates[index]) {
 			outcome.staleRevision = true;
 			planning.reset();
+			pendingTransportOffers.clear();
 			pendingScoreCandidates.clear();
 			return outcome;
 		}
@@ -123,21 +170,27 @@ PlayerBotHuntRuntimeOutcome PlayerBotHuntRuntime::completeScoreWork(const std::v
 void PlayerBotHuntRuntime::applyCandidateSuitability(PlayerBotHuntRegion& region,
 	const PlayerBotHuntRuntimeScoreObservation& observation) const
 {
-	region.challengeFrontier = policy.challengeFrontier();
+	const double frontier = playerBotSupplyRecoveryChallengeFrontier(policy.challengeFrontier(), supplyRecoveryDegraded);
+	region.challengeFrontier = frontier;
 	region.challengeBandMinimum = 0;
-	region.challengeBandMaximum = region.challengeFrontier + 0.05;
+	region.challengeBandMaximum = frontier + 0.05;
 	region.inChallengeBand = region.threatRatio <= region.challengeBandMaximum;
 	region.suitable = observation.candidateFactsAvailable && region.sustainedEligible && !region.predictedLethal &&
-	                  region.threatRatio <= region.challengeBandMaximum && observation.withinPlanningScope;
+	                  region.threatRatio <= region.challengeBandMaximum && observation.withinPlanningScope &&
+	                  region.transportPlausible && region.recoverySustainable();
 	if (planning->snapshot().excludedVariants.find(region.atlasVariantId) != planning->snapshot().excludedVariants.end()) {
 		region.suitable = false;
 		region.rejectionReason = "observed_danger_cooldown";
 	} else if (!observation.withinPlanningScope) {
 		region.rejectionReason = "travel_distance";
+	} else if (!region.transportPlausible) {
+		region.rejectionReason = "transport_requirements_unavailable";
 	} else if (region.predictedLethal) {
 		region.rejectionReason = "predicted_lethal";
 	} else if (!region.sustainedEligible) {
 		region.rejectionReason = playerBotHuntViabilityRejection(region.viability);
+	} else if (!region.recoverySustainable()) {
+		region.rejectionReason = "recovery_hunt_not_sustainable";
 	} else if (!region.suitable) {
 		region.rejectionReason = "challenge_frontier";
 	} else {
@@ -150,13 +203,14 @@ PlayerBotHuntRuntimeOutcome PlayerBotHuntRuntime::exhaustScope(std::chrono::stea
 {
 	PlayerBotHuntRuntimeOutcome outcome;
 	outcome.candidates = planning->regions();
-	++scopeExhaustions;
+	scopeExhaustions = std::min<uint32_t>(scopeExhaustions + 1, 3);
 	outcome.command = PlayerBotHuntRuntimeCommand::ScopeExhausted;
 	outcome.scopeExhaustionAttempt = scopeExhaustions;
-	outcome.stopForScopeExhaustion = scopeExhaustions >= 3;
+	outcome.stopForScopeExhaustion = !supplyRecoveryDegraded && scopeExhaustions >= 3;
 	outcome.retryAfter = retryAfter;
 	scopeReevaluationAfter = now + retryAfter;
 	planning.reset();
+	pendingTransportOffers.clear();
 	pendingScoreCandidates.clear();
 	return outcome;
 }
@@ -193,9 +247,14 @@ void PlayerBotHuntRuntime::observeCapacityPressure(std::chrono::steady_clock::ti
 }
 
 bool PlayerBotHuntRuntime::capacityPressureElapsed(std::chrono::steady_clock::time_point now,
-	                                                std::chrono::steady_clock::duration grace) const
+	                                                std::chrono::steady_clock::duration grace,
+	                                                std::chrono::steady_clock::duration minimumHunt) const
 {
 	if (!activeRegion || capacityPressureStarted == std::chrono::steady_clock::time_point{}) return false;
+	if (minimumHunt > std::chrono::steady_clock::duration{} && huntStarted != std::chrono::steady_clock::time_point{} &&
+	    now - huntStarted < minimumHunt) {
+		return false;
+	}
 	return now - capacityPressureStarted >= grace;
 }
 
@@ -221,7 +280,8 @@ bool PlayerBotHuntRuntime::insideHuntArea(const Position& position, uint32_t wes
 
 PlayerBotHuntPlanningProfile PlayerBotHuntRuntime::planningProfile(PlayerBotHuntPlanningProfile profile) const
 {
-	profile.challengeFrontier = policy.challengeFrontier();
+	profile.challengeFrontier = playerBotSupplyRecoveryChallengeFrontier(policy.challengeFrontier(), supplyRecoveryDegraded);
+	profile.supplyRecovery = supplyRecoveryDegraded;
 	return profile;
 }
 
@@ -262,8 +322,15 @@ std::optional<PlayerBotHuntRuntimeCompletion> PlayerBotHuntRuntime::complete(con
 	result.levelBefore = huntStartLevel;
 	result.combat = policy.combatSummary();
 	result.coinGoldAcquired = coinGoldAcquired;
-	result.performance = policy.observePerformance(activeRegion->atlasVariantId, {result.durationSeconds, result.combat.kills, result.experienceGained,
-		activeRegion->projectedExperience, activeRegion->observedCorrection, configuredDurationSeconds});
+	result.performance = policy.observePerformance(activeRegion->atlasVariantId, activeRegion->atlasRevision,
+	    {result.durationSeconds, result.combat.activeSeconds, result.combat.kills, result.experienceGained,
+	     activeRegion->projectedExperience, activeRegion->observedCorrection,
+	     activeRegion->supplyRecovery ? std::min<uint32_t>(configuredDurationSeconds, 120) : configuredDurationSeconds,
+	     result.combat.dangerObserved, result.combat.deathObserved});
+	if (player.supplyCapability == activeRegion->supplyCapability) {
+		result.region.supplyCalibration = policy.observeSupplies(*activeRegion, result.durationSeconds,
+		    player.health, player.maximumHealth, player.mana, player.potions, player.supplyInterrupted);
+	}
 	result.challenge = policy.updateChallengeFrontier({result.durationSeconds, player.maximumHealth});
 	activeRegion.reset();
 	capacityPressureStarted = {};

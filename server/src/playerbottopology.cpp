@@ -12,7 +12,6 @@
 #include "tile.h"
 
 #include <array>
-#include <numeric>
 #include <queue>
 #include <unordered_set>
 
@@ -100,6 +99,8 @@ void PlayerBotTopology::build(const Map& map)
 	walkNodes.clear();
 	nodeComponents.clear();
 	edges.clear();
+	componentEdges.clear();
+	reachabilityCache.clear();
 	topologyPortals.clear();
 	components = 0;
 	size_t walkableTiles = 0;
@@ -189,23 +190,6 @@ void PlayerBotTopology::build(const Map& map)
 	}
 	edges.resize(nodeCount);
 
-	std::vector<uint32_t> nodeParents(nodeCount);
-	std::iota(nodeParents.begin(), nodeParents.end(), 0);
-	auto findNodeRoot = [&nodeParents](uint32_t node) {
-		uint32_t root = node;
-		while (nodeParents[root] != root) root = nodeParents[root];
-		while (nodeParents[node] != node) {
-			const uint32_t parent = nodeParents[node];
-			nodeParents[node] = root;
-			node = parent;
-		}
-		return root;
-	};
-	auto joinNodes = [&nodeParents, &findNodeRoot](uint32_t left, uint32_t right) {
-		left = findNodeRoot(left);
-		right = findNodeRoot(right);
-		if (left != right) nodeParents[right] = left;
-	};
 	auto addEdge = [this](uint32_t from, uint32_t to, const PlayerBotTopologyPortal& portal) {
 		auto& outgoing = edges[from];
 		if (std::none_of(outgoing.begin(), outgoing.end(), [to, &portal](const Edge& edge) {
@@ -217,7 +201,7 @@ void PlayerBotTopology::build(const Map& map)
 			topologyPortals.push_back(portal);
 		}
 	};
-	map.forEachTile([this, &map, &addEdge, &joinNodes](const Tile& tile) {
+	map.forEachTile([this, &map, &addEdge](const Tile& tile) {
 		const Position& position = tile.getPosition();
 		const auto current = walkNodes.find(positionKey(position));
 		if (current == walkNodes.end()) return;
@@ -239,9 +223,16 @@ void PlayerBotTopology::build(const Map& map)
 				portal.minimumLevel = doorMinimumLevel(*targetDoor);
 			}
 			addEdge(from, entry->second, portal);
-			joinNodes(from, entry->second);
 		}
 	});
+	std::vector<PlayerBotTopologyComponentArc> walkArcs;
+	for (uint32_t source = 0; source < edges.size(); ++source) {
+		for (const Edge& edge : edges[source]) {
+			walkArcs.push_back({source, edge.destinationNode, edge.portal.minimumLevel == 0});
+		}
+	}
+	const std::vector<uint32_t> nodeRoots =
+	    playerBotTopologyBidirectionalComponents(nodeCount, walkArcs);
 	auto upperDestination = [this](const Position& target) -> std::optional<Position> {
 		if (target.z == 0) return std::nullopt;
 		const Position upper(target.x, target.y, target.z - 1);
@@ -296,10 +287,20 @@ void PlayerBotTopology::build(const Map& map)
 	std::unordered_map<uint32_t, uint32_t> componentIds;
 	componentIds.reserve(nodeCount);
 	for (uint32_t node = 0; node < nodeCount; ++node) {
-		const uint32_t root = findNodeRoot(node);
+		const uint32_t root = nodeRoots[node];
 		auto [entry, inserted] = componentIds.emplace(root, components);
 		if (inserted) ++components;
 		nodeComponents[node] = entry->second;
+	}
+	componentEdges.resize(components);
+	for (uint32_t sourceNode = 0; sourceNode < edges.size(); ++sourceNode) {
+		const uint32_t sourceComponent = nodeComponents[sourceNode];
+		for (const Edge& edge : edges[sourceNode]) {
+			const uint32_t destinationComponent = nodeComponents[edge.destinationNode];
+			if (sourceComponent == destinationComponent) continue;
+			componentEdges[sourceComponent].push_back(
+			    {destinationComponent, edge.portal.action, edge.portal.minimumLevel});
+		}
 	}
 }
 
@@ -389,6 +390,55 @@ std::optional<uint32_t> PlayerBotTopology::distanceTo(const PlayerBotTopologyDis
 		}
 	}
 	return best;
+}
+
+std::shared_ptr<const PlayerBotTopologyReachability> PlayerBotTopology::reachabilityFrom(
+	const Position& start, bool canUseRope, bool canUseShovel, uint32_t playerLevel) const
+{
+	const auto startNode = walkNodes.find(positionKey(start));
+	if (startNode == walkNodes.end()) return {};
+	const uint32_t startComponent = nodeComponents[startNode->second];
+	const auto key = std::make_tuple(startComponent, canUseRope, canUseShovel, playerLevel);
+	if (auto found = reachabilityCache.find(key); found != reachabilityCache.end()) {
+		if (auto cached = found->second.lock()) return cached;
+		reachabilityCache.erase(found);
+	}
+	constexpr size_t maximumReachabilityCacheEntries = 512;
+	if (reachabilityCache.size() >= maximumReachabilityCacheEntries) {
+		for (auto it = reachabilityCache.begin(); it != reachabilityCache.end();) {
+			if (it->second.expired()) it = reachabilityCache.erase(it);
+			else ++it;
+		}
+		if (reachabilityCache.size() >= maximumReachabilityCacheEntries) reachabilityCache.erase(reachabilityCache.begin());
+	}
+	auto result = std::make_shared<PlayerBotTopologyReachability>();
+	result->generation = topologyGeneration;
+	result->components.assign(components, 0);
+	std::queue<uint32_t> open;
+	result->components[startComponent] = 1;
+	open.push(startComponent);
+	while (!open.empty()) {
+		const uint32_t current = open.front();
+		open.pop();
+		for (const ComponentEdge& edge : componentEdges[current]) {
+			if ((edge.action == PlayerBotTopologyPortalAction::UseRope && !canUseRope) ||
+			    (edge.action == PlayerBotTopologyPortalAction::UseShovel && !canUseShovel) ||
+			    edge.minimumLevel > playerLevel || result->components[edge.destination]) continue;
+			result->components[edge.destination] = 1;
+			open.push(edge.destination);
+		}
+	}
+	reachabilityCache.emplace(key, result);
+	return result;
+}
+
+bool PlayerBotTopology::reachable(
+	const PlayerBotTopologyReachability& reachability, const Position& destination) const
+{
+	if (reachability.generation != topologyGeneration) return false;
+	const auto node = walkNodes.find(positionKey(destination));
+	return node != walkNodes.end() && nodeComponents[node->second] < reachability.components.size() &&
+	       reachability.components[nodeComponents[node->second]] != 0;
 }
 
 std::optional<PlayerBotTopologyRoute> PlayerBotTopology::route(

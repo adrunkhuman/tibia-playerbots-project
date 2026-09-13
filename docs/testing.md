@@ -74,7 +74,7 @@ the lowest expected potion consumption among safe candidates, with XP breaking
 ties. This is not a new hunt eligibility gate: existing readiness and emergency
 return rules still apply. A budget is not permission to spend the reserve.
 
-The uncalibrated static estimate uses spawn probabilities and intervals, existing
+The initial static estimate uses spawn probabilities and intervals, existing
 combat/clear throughput, and conservative local-crowd inflation. Each modeled
 crowd's fight damage is divided by that same crowd's summed isolated damage;
 the largest local ratio is applied to spawn-rate damage, with a floor of one.
@@ -84,17 +84,43 @@ using minimum healing. It credits only legal Exura's audited minimum and the act
 condition. Regeneration uses whole ticks during estimated combat time, expires
 after its current lifetime, and gets no travel credit. Exura retains its mana
 reserve and receives at most one mana pool of credit, not repeated refill cycles.
-No current-health spending, future food, looted supplies, other spells, equipment
-regeneration, expected profit, or observed supply calibration is assumed.
+The static estimate assumes no future food, looted supplies, other spells,
+equipment regeneration, or expected profit. Zero-potion recovery outings are
+capped at 120 seconds; combined hunt and outbound/depot-return route estimates
+may spend only health above 80% of maximum. Recovery candidates must fit supplies
+and yield coin income, but may use smaller spawns than normal long hunts.
 
-The existing 256-candidate scoring turns and eight-route shortlist remain bounded.
-Route validation now compares the safe shortlist instead of accepting its first
-safe entry: at most one outbound or return path per turn. Actual travel time and
-outbound/return potion reserves update the budget before final selection. This
-can take more turns and does not promise the whole-map optimum. Potion changes
-or mana loss invalidate the planning snapshot.
+Per-variant supply calibration uses verified potions per active combat second.
+It raises estimates promptly and lowers them gradually only after substantial,
+completed combat with stable health and mana. Zero inventory is not evidence
+of zero healing demand: depletion, low health, death, and danger cannot lower
+estimates. Changed combat/healing capabilities or atlas revisions invalidate
+observations. See `supplyCalibration()` and `supplyRecoveryMode()` in
+`server/tests/playerbot_contracts.cpp` for calibration, zero-supply budgets,
+emergency spending, safety-only service eligibility, and unchanged-restock
+regressions.
 
-`hunt_region_candidate` reports `supply_estimate_source=static_duration_budget`,
+Before scoring, transport feasibility processes eight loaded offers per turn
+against an immutable player/resource snapshot. Shared compact component
+reachability snapshots replace per-arrival full-graph distance arrays. Each planning
+session captures an immutable offer catalog from current provider positions and
+offers; provider movement does not repeatedly cancel active planning. Repeated bounded
+passes retain the cheapest affordable label and establish true multihop
+connectivity. Scoring then remains bounded at 256 candidates per turn. The cheap
+full-atlas pass keeps only nonlethal, sustainable candidates with static
+connectivity or a plausible eligible registered transport chain. Survivors retain normal policy order; no
+local, remote, tested, untested, or income quota changes that order. Route
+validation checks at most one outbound, depot-exit, or supply path per turn and
+continues beyond failed candidates. Once a safe candidate exists, it skips each
+candidate whose no-travel XP bound and income tier cannot beat that choice, but
+continues to any later competitive candidate. Actual travel time and outbound/return
+potion reserves update the budget before final
+selection. Potion changes, mana loss, cancellation, or snapshot invalidation
+stop the incremental session safely.
+
+`hunt_region_candidate` reports `supply_estimate_source=static_duration_budget`
+or `observed_combat_consumption`, `supply_calibration_samples`,
+`supply_potions_per_combat_minute`,
 `supply_budget_fits`, `supply_expected_damage`, `supply_regeneration_healing`,
 `supply_spell_healing`, `supply_expected_potions`, `supply_reserved_potions`, and
 `supply_routine_potions`. `score` remains projected XP; it is not a composite
@@ -122,8 +148,12 @@ checks the live verifier's exact potion/payment counts and bounded wait.
 Parent/live validation (resets the disposable test stack):
 
 ```powershell
-pwsh -File scripts/test-playerbot-gameplay.ps1 -Scenario adaptive_challenge,spell_training_low_supplies,spell_training_low_supplies_unaffordable,spell_training,spell_training_shortlist,hunt_region_planning
+pwsh -File scripts/test-playerbot-gameplay.ps1 -Scenario supply_recovery,adaptive_challenge,spell_training_low_supplies,spell_training_low_supplies_unaffordable,spell_training,spell_training_shortlist,hunt_region_planning
 ```
+
+`supply_recovery` starts a seeded level-8 Carlin Knight with zero potions and
+zero carried/bank gold. It requires selected-region arrival and normal corpse
+coin looting, and rejects repeated Service selection.
 
 `adaptive_challenge` additionally runs deterministic synthetic candidate facts
 through the real bounded hunt scoring session/runtime: two potions select the
@@ -137,8 +167,78 @@ and budget-fit flags, and the selection rule. Their source is
 the real trainer and payment path: two potions plus 270 gold learn Exura and
 retain both potions/100 gold; 269 gold rejects it. Existing spell persistence,
 shortlist, adaptive-challenge, and hunt-planning assertions remain in place.
-Map extraction, actual route integration, and real combat consumption still need
-live validation; the synthetic contrast alone does not establish sustainable XP.
+Map extraction and real combat consumption still need live validation; the
+synthetic contrast alone does not establish sustainable XP.
+
+## Adaptive challenge and remote hunt routes
+
+Challenge evidence now requires at least 60 active combat seconds and three
+kills. Zero to two potions, or routine Exura casts while the sampled mana floor
+stays healthy, can support a bounded `+0.10` strong-evidence step. A single
+recovery never causes backoff by itself. Three potions cause backoff only at one
+or more uses per active combat minute; slower use holds the frontier. Danger,
+death, critical health, critical mana during healing, and burst potion pressure
+back off by `0.10`. The frontier is capped at `0.60`; predicted-lethal combat,
+route danger, and reserves remain separate hard gates. `hunt_challenge_frontier`
+reports p10 health and mana percentages plus potions per active combat minute.
+
+The atlas no longer discards a hunt only because static walking/tool topology
+cannot reach it. Before expensive routing, a disconnected candidate must match a
+plausible chain of registered travel arrivals whose loaded offers satisfy current
+level, premium, opaque-condition, and aggregate-fare requirements. All cheap
+survivors compete together using calibrated XP and estimated travel; there is no
+remote probe, unobserved slot, execution randomization, or local/remote quota.
+Each scheduler turn validates at most one outbound, depot-exit, or supply route.
+Validation compares static navigation with registered NPC travel, including
+actual offer conditions, fare, travel time, and danger. After route reserves are reconciled, modeled potion use or an available
+potion count at the route threshold also requires a safe route from the depot to
+a loaded potion seller. The combined outbound, exit, and
+supply fares must leave the recovery spending reserve intact. A changed route is
+accepted only if its complete current fare still leaves the later-phase fares
+and current potion-target cost protected; each paid NPC step repeats that check.
+Free routes are never rejected for a cash shortfall, and the protected potion
+cost decreases after restocking. Exit-route validation reserves only later supply
+fare, not the exit fare a second time. Protected post-hunt depot exits cannot use
+the legacy unsafe-route fallback.
+
+A selected hunt must have a safe route to a usable depot near the hunt area; it
+need not return to the selection origin. Depot preflight keeps one approach for
+every distinct loaded depot ID, and supply preflight keeps one approach for every
+loaded matching provider. Neither list has an arbitrary eight/four truncation.
+Both validate one route per turn. Normal post-hunt depot
+discovery also permits NPC travel and replans from the bot's current position.
+For example, a Carlin departure may select a Darashia hunt and then use a
+Darashia depot. No city or home mapping is encoded.
+
+Candidate telemetry exposes `topology_reachable`, `transport_plausible`,
+`calibration_source`, `calibration_sample_count`, `outbound_npc_travel`,
+`outbound_fare`, `exit_npc_travel`, `exit_fare`, `supply_npc_travel`,
+`supply_fare`, the chosen `exit_depot_destination`, and bounded rejection reasons
+such as `transport_requirements_unavailable`, `safe_depot_exit_unavailable`, and
+`travel_fare_breaks_recovery_reserve`. Selection records aggregate
+`route_rejection_counts`. Hunt outcomes report `performance_observed` and
+`performance_evidence_reason`.
+
+`sh server/tests/playerbot_contracts.sh` covers routine Exura and potion use,
+challenge and performance evidence qualification, shared correction averaging,
+variant-local correction priority, exclusion of default/invalid entries,
+non-weighting of repeated outings, more than eight failed route candidates before
+a winner, planning cancellation between bounded scoring turns, absence of route
+quotas, travel-offer requirements, combined fare reserves, and switching from a
+coarse provider route to the live local interaction range. `server/tests/playerbotdepotworkflow_test.cpp`
+checks that post-hunt depot ranking uses the current hunt area instead of the
+departure city. The focused `remote_hunt` gameplay fixture raises the seeded
+Knight to level 15 in Carlin, restricts only the fixture's route candidate queue to atlas candidates outside
+static topology, and requires a registered NPC travel success, remote hunt entry,
+a safe local depot preflight, and the same depot during the real post-hunt workflow:
+
+```powershell
+pwsh -File scripts/test-playerbot-gameplay.ps1 -Scenario remote_hunt
+```
+
+This proves the integrated runtime path against the loaded map and NPC offers. It
+does not calibrate static potion forecasts from observed use or guarantee that a
+remote hunt beats a local hunt in ordinary selection.
 
 ## Sustained hunt eligibility and gross coin income
 
@@ -239,24 +339,15 @@ all-over-budget fallback and emergency/route reserves. Missing recovery offers
 retain the existing unaffordable-reserve behavior. Funds changes invalidate an
 in-progress planning snapshot. There is no personality framework.
 
-Before routing, the planner also checks whether the maximum outbound plus return
-potion reserve allowed by the existing route-risk ceiling could make supplies
-low and recovery unaffordable. Only then does it diversify the eight-candidate
-route shortlist. Supply-fit tiers still precede over-budget tiers, and lower
-potion demand still precedes higher demand when neither fits. Within an
-oversubscribed tier, half the remaining slots (rounded up) retain current-policy
-order; the rest take distinct coin-ranked alternatives, with stable ties. For a
-single large tier this is four policy choices plus four income alternatives.
-Income never displaces a better supply tier or bypasses suitability/reachability.
-
-The shortlist is computed once per completed planning session. Raw scored order,
-region IDs, initial selection, and fixture observations are unchanged. Both
-outbound and return routes still require the existing safety checks; reconciled
-reserves and affordability govern final preference. Affordable or plentiful
-worst-case recovery retains the ordinary shortlist. `hunt_region_scan` reports
-`route_shortlist_policy` (`current_policy` or `supply_tier_policy_and_coin`) and
-`route_shortlist_size`. This bounded diversification does not promise the global
-best route.
+Before routing, supply-fit tiers still precede over-budget tiers, and lower
+potion demand still precedes higher demand when neither fits. Under cash pressure,
+coin income remains the tie-breaker inside that normal policy; it does not receive
+reserved route slots. Both outbound and return routes retain the existing safety,
+reserve, and affordability checks. The planner incrementally replaces rejected
+candidates from the complete cheap-viable queue. It stops after exhausting that
+finite queue or when no remaining optimistic bound can beat the validated choice.
+`hunt_region_scan` reports `route_candidate_policy=all_cheap_viable_ranked` and
+`route_candidate_count`.
 
 `hunt_region_candidate` adds `sustained_eligible`, `reachable_spawns`,
 `replenishing_spawns`, `minimum_away_interval_ratio`,
@@ -433,7 +524,7 @@ the changed behavior:
 | `-StaminaProjection` | Premium bonus, low-stamina penalty, and ordinary stamina projections. |
 | `-HuntRegionPlanning` | Cached atlas batching, threat rejection, reachability, selected-return reserve, cooldowns, and observed correction. |
 | `-AdaptiveChallenge` | Synthetic frontier and planner-helper fixture covering idle and no-kill exclusion, sparse-combat escalation, hysteresis, recovery backoff, equipment/recovery prediction, lethal rejection, local exhaustion, terminal finality, and no post-terminal controller events. It does not validate real combat sampling or long-running hunt behavior. |
-| `-CombatReadiness` | Equipment, the one-potion return threshold and 10-potion restock target, optional-food hunting, generic food consumption and reclaimable capacity, low-wealth banking, carried-upgrade retention through service, and restart reconstruction. It does not cover the terminal case where total funds cannot buy enough potions to exceed the return threshold. |
+| `-CombatReadiness` | Equipment, the one-potion return threshold, safety-floor restock while Light Healing is level-eligible and unlearned, 20-potion ammo restock otherwise, optional-food hunting, generic food consumption and reclaimable capacity, low-wealth banking, carried-upgrade retention through service, and restart reconstruction. It does not cover the terminal case where total funds cannot buy enough potions to exceed the return threshold. |
 | `-EquipmentPurchases` | Justified purchase and equip verification, clean restart persistence, carried-upgrade recovery, displaced-item-space rejection, and rejected transactions. |
 | `-MainlandRewards` | Real Thais reward object from a teleported, high-capacity fixture; scale-armor claim and equip, displaced-item and bundle preservation, restart reconstruction, and non-null battle-axe rejection evidence. It does not prove normal traversal, realistic capacity limits, or a specific rejection reason. |
 | `-Depot` | Real Thais locker/chest discovery from Naji, including exact nearest-locker selection, carried-upgrade equipment, displaced and inferior equipment deposits, one carried rope and shovel, surplus tool deposits, nested loot, move verification, retries, and restart checkpoints. Both normal cycles, all five checkpoint recoveries, and partial moves verify completed inventory while paused at Depart, before optional selling. Rejected moves retain separate exact delta/retry/discard assertions. |
@@ -516,6 +607,11 @@ Each selected scenario owns six environment settings: `PLAYERBOT_GAMEPLAY_MODE`
 and `PLAYERBOT_DEPOT_MOVE_CASE` (`normal`).
 `Invoke-Scenario` applies these defaults before the body; individual cases may
 then override them. It restores incoming values after success or failure.
+The `mainland_loop` fixture keeps its configured 10-second execution deadline for
+fast cycle, restart, and persistence coverage, but scores hunt candidates against
+a 900-second planning horizon. This prevents the fixture-only deadline from making
+every real travel route consume the whole forecast; normal playerbots use the same
+configured duration for planning and execution.
 Skipped scenarios do not touch the environment. Suite CLI options (including
 `-TimeoutSeconds`) and unrelated environment settings remain unchanged; this
 is test-harness ownership, not a change to production configuration.

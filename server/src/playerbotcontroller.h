@@ -25,6 +25,7 @@
 #include "playerbotprogressionruntime.h"
 #include "playerbotprogressionplanners.h"
 #include "playerbotsurvivalruntime.h"
+#include "playerbotsupplyrecovery.h"
 #include "playerbottestpolicy.h"
 #include "playerbotfixturedriver.h"
 #include "playerbottelemetry.h"
@@ -110,6 +111,7 @@ namespace playerbot {
 	inline constexpr int32_t foodPreferenceUtility = 20;
 	inline constexpr uint32_t returnCapacityThreshold = 30 * 100;
 	inline constexpr std::chrono::minutes huntCapacityPressureGrace(5);
+	inline constexpr std::chrono::minutes huntCapacityPressureMinimum(30);
 	inline constexpr uint32_t maximumServiceAttempts = 3;
 	// Prevent a rejected slotted-item move from blocking the service/depot loop.
 	inline constexpr std::chrono::seconds unavailableDispositionCooldown(60);
@@ -157,6 +159,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 	private:
 		using CyclePhase = PlayerBotCyclePhase;
 		using ScenarioStage = PlayerBotScenarioStage;
+		enum class HuntTravelBudgetPhase : uint8_t { None, Outbound, Exit, Supply };
 
 		using TopLevelGoal = PlayerBotGoalArbiter::TopLevelGoal;
 		using GoalCandidate = PlayerBotGoalArbiter::GoalCandidate;
@@ -301,6 +304,8 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		void finishOracleDeparture(Player* player, const Position& position, const char* result, const char* reason);
 
 		uint64_t recoverySpendingReserve(const Player& player, uint32_t target) const;
+		uint32_t potionStockTarget(const Player& player, uint32_t returnReserve) const;
+		uint32_t potionStockTarget(const Player& player) const;
 		uint64_t spellTrainingReserve(const Player& player, bool emergencyOnly = false) const;
 		void emitSpellCandidate(const Npc& npc, const NpcSpellOffer& offer, const Position& position, const char* result,
 		                        const char* reason, uint64_t reserve = 0, uint32_t travelSteps = 0,
@@ -351,6 +356,20 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		void onDeath(const Player& player, const Creature* killer, const Creature* mostDamageKiller);
 
 		void beginService(Player* player, const Position& position, const char* reason);
+		void updateSupplyRecovery(const Player& player, const Position& position);
+		void enterSupplyRecovery(const Position& position, uint64_t funds, uint64_t potionBudget,
+		                         const char* reason);
+		// Handles the fixed-target route exhaustion escalation (breakout entry,
+		// or the terminal stop when no breakout is possible). Returns true when
+		// exhaustion was observed and the caller must stop navigating.
+		bool handleFixedTargetRouteExhausted(Player* player, const Position& currentPosition,
+		                                     const PlayerBotNavigationRuntimeOutcome& outcome,
+		                                     std::chrono::steady_clock::time_point now, bool allowStop);
+		// A failed fixed-goal route with adjacent hostiles means the monsters
+		// seal the exits: confirm them route-critical so transit defense can
+		// engage instead of waiting for a dispatched step to collide.
+		bool confirmAdjacentRouteBlockers(Player* player, const Position& currentPosition,
+		                                  std::chrono::steady_clock::time_point now);
 
 		void finishHuntAndReturn(Player* player, const Position& position, const char* reason);
 
@@ -392,6 +411,15 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		                                                               const std::set<Position>& blockedPositions,
 		                                                               uint64_t maximumExpandedNodes,
 		                                                               bool estimateOnly = false) const;
+		PlayerBotNavigationRoutePlan planHuntTravelRoute(Player& player, const Position& source,
+		                                                 const Position& destination,
+		                                                 const std::set<Position>& blockedPositions = {},
+		                                                 bool estimateOnly = true) const;
+		std::vector<Position> huntDepotExitCandidates(Player& player, const Position& source) const;
+		std::vector<Position> huntSupplyExitCandidates(Player& player, const Position& source) const;
+		uint64_t huntTravelFutureFareReserve(HuntTravelBudgetPhase phase) const;
+		bool huntTravelFareAffordable(const Player& player, uint64_t fare,
+		                              HuntTravelBudgetPhase phase) const;
 
 		uint32_t navigationDecisionDelay(const Player& player) const;
 
@@ -472,6 +500,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		PlayerBotEquipmentPolicy equipmentPolicy;
 		playerbot::PlayerBotInventoryPolicy inventoryPolicy;
 		PlayerBotSurvivalRuntime survivalRuntime;
+		PlayerBotSupplyRecoveryState supplyRecovery;
 		PlayerBotDepotWorkflow depotWorkflow;
 		PlayerBotHuntCoordinator huntCoordinator;
 		PlayerBotProgressionRuntime progressionRuntime;
@@ -512,6 +541,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 			bool sourceAllowNpcTravel = false;
 			uint64_t sourceFare = 0;
 			bool sellerAllowNpcTravel = false;
+			bool survivalSell = false;
 			bool withdrawalPending = false;
 			uint32_t withdrawalInventoryBefore = 0;
 			uint32_t withdrawalDepotBefore = 0;
@@ -523,6 +553,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		size_t sellLootRouteScanOffset = 0;
 		size_t sellLootRouteScanRemaining = 0;
 		bool sellLootSearchPending = false;
+		bool sellLootSurvivalFallback = false;
 		std::optional<PlayerBotTopologyDistances> serviceTopologyDistances;
 		Position serviceTopologyOrigin;
 		bool serviceTopologyCanUseRope = false;
@@ -532,10 +563,18 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		PlayerBotNavigationRuntime navigationRuntime;
 		bool huntRegionReached = false;
 		size_t huntRouteCandidateIndex = 0;
-		size_t huntRouteCandidatesValidated = 0;
 		std::optional<PlayerBotHuntRegion> huntRouteValidationCandidate;
+		std::vector<Position> huntDepotExitApproaches;
+		size_t huntDepotExitCandidateIndex = 0;
+		std::vector<Position> huntSupplyExitApproaches;
+		size_t huntSupplyExitCandidateIndex = 0;
 		std::optional<PlayerBotHuntRegion> huntRouteBestCandidate;
 		std::vector<uint64_t> huntRouteRejectedVariants;
+		std::map<std::string, uint32_t> huntRouteFailureCounts;
+		HuntTravelBudgetPhase huntTravelBudgetPhase = HuntTravelBudgetPhase::None;
+		uint64_t huntExitFareReserve = 0;
+		uint64_t huntSupplyFareReserve = 0;
+		uint32_t huntRecoveryPotionReserve = 0;
 		Position huntReturnDestination;
 		uint32_t huntReturnRouteDangerCost = 0;
 		std::optional<Position> huntPatrolValidationDestination;
@@ -544,7 +583,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		std::set<Position> huntPatrolPreflightBlockedPositions;
 		std::optional<Position> huntPatrolValidatedDestination;
 		uint32_t huntPotionReturnThreshold = playerbot::healthPotionReturnThreshold;
-		uint32_t huntPotionRestockTarget = playerbot::healthPotionRestockTarget;
+		uint32_t huntPotionRestockTarget = playerbot::healthPotionSafetyTarget;
 		struct {
 			uint32_t npcId = 0;
 			Position coarseDestination;

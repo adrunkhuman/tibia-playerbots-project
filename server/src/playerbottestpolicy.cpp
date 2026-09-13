@@ -20,7 +20,8 @@ const playerbot::PlayerBotTestPolicy& playerbot::playerBotTestPolicyFromEnvironm
 		const char* gameplayMode = gameplayModeValue && *gameplayModeValue != '\0' ? gameplayModeValue : nullptr;
 		const char* regressionMode = regressionModeValue && *regressionModeValue != '\0' ? regressionModeValue : nullptr;
 		const bool progressionMode = gameplayMode &&
-			(std::strcmp(gameplayMode, "progression") == 0 ||
+			(std::strcmp(gameplayMode, "supply_recovery") == 0 ||
+			 std::strcmp(gameplayMode, "progression") == 0 ||
 			 std::strcmp(gameplayMode, "progression_bundle") == 0 ||
 			 std::strcmp(gameplayMode, "progression_nested") == 0 ||
 			 std::strcmp(gameplayMode, "progression_resume") == 0 ||
@@ -53,6 +54,7 @@ const playerbot::PlayerBotTestPolicy& playerbot::playerBotTestPolicyFromEnvironm
 			 (std::strncmp(gameplayMode, "magic_training", 14) == 0 &&
 			  std::strcmp(gameplayMode, "magic_training_hunt") != 0));
 		const bool huntAreaArrivalFixture = gameplayMode && std::strcmp(gameplayMode, "hunt_area_arrival") == 0;
+		const bool remoteHuntFixture = gameplayMode && std::strcmp(gameplayMode, "remote_hunt") == 0;
 		const bool depotRiskFallbackFixture = gameplayMode && std::strcmp(gameplayMode, "depot_risk_fallback") == 0;
 		const bool startInHunt = gameplayMode &&
 			(std::strcmp(gameplayMode, "navigation") == 0 || std::strcmp(gameplayMode, "navigation_recovery") == 0 ||
@@ -66,7 +68,7 @@ const playerbot::PlayerBotTestPolicy& playerbot::playerBotTestPolicyFromEnvironm
 			 std::strcmp(gameplayMode, "healing") == 0 || std::strcmp(gameplayMode, "healing_resupply") == 0 ||
 			 std::strcmp(gameplayMode, "value") == 0 || std::strcmp(gameplayMode, "departure_interrupt") == 0 ||
 			 std::strcmp(gameplayMode, "stamina_bonus") == 0 || std::strcmp(gameplayMode, "stamina_boundary") == 0 ||
-			 std::strcmp(gameplayMode, "stamina_normal") == 0 || std::strcmp(gameplayMode, "hunt_planning") == 0 || huntAreaArrivalFixture ||
+			 std::strcmp(gameplayMode, "stamina_normal") == 0 || std::strcmp(gameplayMode, "hunt_planning") == 0 || huntAreaArrivalFixture || remoteHuntFixture ||
 			 std::strcmp(gameplayMode, "adaptive_challenge") == 0 ||
 			 std::strcmp(gameplayMode, "sell_loot") == 0 ||
 			 std::strcmp(gameplayMode, "sell_loot_remote_depot") == 0 ||
@@ -81,10 +83,11 @@ const playerbot::PlayerBotTestPolicy& playerbot::playerBotTestPolicyFromEnvironm
 		const bool adaptiveChallengeFixture = gameplayMode && std::strcmp(gameplayMode, "adaptive_challenge") == 0;
 		const bool spellCalibrationFixture = gameplayMode && std::strcmp(gameplayMode, "spell_calibration") == 0;
 		const bool magicTrainingFixture = gameplayMode && std::strncmp(gameplayMode, "magic_training", 14) == 0;
-		const bool fixedFixtureRoute = gameplayMode && std::strcmp(gameplayMode, "stamina_bonus") != 0 &&
+		const bool fixedFixtureRoute = gameplayMode && std::strcmp(gameplayMode, "supply_recovery") != 0 &&
+		                               std::strcmp(gameplayMode, "stamina_bonus") != 0 &&
 		                               std::strcmp(gameplayMode, "stamina_boundary") != 0 &&
 		                               std::strcmp(gameplayMode, "stamina_normal") != 0 &&
-		                               std::strcmp(gameplayMode, "hunt_planning") != 0 && !huntAreaArrivalFixture &&
+		                               std::strcmp(gameplayMode, "hunt_planning") != 0 && !huntAreaArrivalFixture && !remoteHuntFixture &&
 		                               std::strcmp(gameplayMode, "adaptive_challenge") != 0 &&
 		                               std::strcmp(gameplayMode, "equipment_shadow") != 0 &&
 		                               std::strcmp(gameplayMode, "equipment_shadow_unaffordable") != 0 &&
@@ -149,6 +152,8 @@ const playerbot::PlayerBotTestPolicy& playerbot::playerBotTestPolicyFromEnvironm
 			gameplayMode && std::strcmp(gameplayMode, "carlin_service_route") == 0,
 			gameplayMode && std::strcmp(gameplayMode, "mutable_portal_route") == 0,
 			depotRiskFallbackFixture,
+			remoteHuntFixture,
+			gameplayMode && std::strcmp(gameplayMode, "mainland") == 0,
 		};
 	}();
 	return policy;

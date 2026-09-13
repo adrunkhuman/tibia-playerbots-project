@@ -137,7 +137,7 @@ uint32_t PlayerBotInventoryPolicy::protectedItemReserve(const Player& player, ui
 		return preferredFoodCount;
 	}
 	if (itemId == recoveryPotionItemId(player.getVocationId())) {
-		return healthPotionRestockTarget;
+		return healthPotionAmmoTarget;
 	}
 	return 0;
 }

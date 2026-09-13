@@ -51,7 +51,7 @@ docker compose -f server/compose.yaml logs playerbot-setup server
 
 The controller evaluates top-level goals only at safe boundaries: startup,
 completed or failed pickup, completed service/depot work, and hunt deadline or
-capacity return. Hunt completion enters the neutral `Idle` phase before goal
+capacity return after at least 30 minutes in the hunt. Hunt completion enters the neutral `Idle` phase before goal
 selection so a non-hunt opportunity can compete with the next hunt. The
 controller does not switch goals during movement, combat, looting,
 dialogue, transactions, or pending item verification. Safety can force service;
@@ -102,31 +102,87 @@ relying on topology-based planning again.
 Hunt regions come from all loaded hostile, attackable spawns. At startup, the
 shared atlas groups same-floor spawn pockets, joins reciprocal locally connected
 floor transitions into sites, and exposes pocket, neighborhood, and whole-site
-variants. Each controller scores all topology-reachable variants in batches of
-256 using health, equipment, skill, cooldowns, observed performance, clear time,
-patrol time, and projected XP. It then validates at most eight score-ranked
-candidates through normal navigation. Forward and return routes run on separate
-scheduler turns with one `100000`-node budget per turn, so one hunt decision does
-not synchronously pathfind the whole shortlist.
+variants. Each controller scores variants in batches of 256 using health,
+equipment, skill, cooldowns, observed performance, clear time, patrol time, and
+projected XP. The cheap pass rejects lethal, unsustainable, cooldown-excluded,
+and disconnected candidates across the full atlas. Before scoring, a separate
+transport-feasibility phase checks eight loaded offers per scheduler turn. It
+uses shared, compact walk-component reachability snapshots keyed by topology,
+origin, tools, and level instead of retaining a full node-distance array for every
+arrival. The weak cache retains at most 512 keys; active planning sessions own the
+snapshots they use. Each planning session captures an immutable NPC capability
+catalog from current provider positions and offers. NPC movement does not cancel an
+active plan; the next plan captures the new state, while full route validation remains
+authoritative.
+A disconnected region remains viable only when currently eligible registered NPC
+offers provide a plausible affordable multihop chain. Local, remote, tested, and
+untested hunts then share one policy ranking; there are no reserved slots or
+exploration quotas.
+Qualified potion-use observations can replace the static supply forecast for a
+variant within the controller session. Capability changes currently invalidate
+these observations aggressively; ordinary leveling outings may produce no
+usable samples.
+
+Route preflight compares complete static navigation with registered NPC travel.
+It honors loaded dialogue, fare, level and premium requirements, opaque-condition
+rejection, arrival verification, and normal danger limits. Outbound, depot-exit,
+and relevant potion-supplier routes run on separate scheduler turns with one
+`100000`-node budget per route candidate. A failed candidate advances to the next
+ranked survivor. After a safe candidate is known, validation skips each candidate
+whose no-travel XP bound and income tier cannot beat it, while retaining any later
+candidate that can. It stops when no competitive candidate remains. The finite
+atlas and one-route-leg-per-turn rule bound work without an arbitrary shortlist.
+
+Before committing to a hunt, the controller validates a safe outbound route and
+a safe route from the hunting area to a usable depot. It keeps one ranked approach
+for every distinct loaded depot ID, rather than requiring a return to the selection
+origin or a permanent service base. When the reconciled forecast expects potion
+use, or the route reserve reaches the bot's available potions, it likewise keeps
+one ranked approach for every loaded potion provider. Each route is still
+validated on a separate scheduler turn. Combined
+outbound, exit, and supply fares must leave the recovery spending
+reserve intact. Replanning can choose different NPC offers, but before adopting
+a changed route and again before each paid NPC step, the controller protects the
+remaining exit and supply fares plus the money still needed for the potion target.
+Free routes remain available, and the protected recovery amount falls after a
+successful restock. Post-hunt depot discovery runs
+again from the bot's current position and can use NPC travel; protected hunt
+exits reject the depot workflow's legacy unsafe emergency fallback. No hardcoded
+city/depot mapping is used.
 
 Before moving toward an active-region patrol point, the controller validates the
 complete outbound route on one scheduler turn and the complete route from that
-point back to the selected hunt-return endpoint on the next. Both routes must
-have danger cost at most `500` and peak expected health loss at most `0.08` per
+point back to the selected depot endpoint on the next. Both routes must have
+danger cost at most `500` and peak expected health loss at most `0.08` per
 second. An unsafe waypoint is skipped before movement. The controller installs
 the validated outbound route directly and restarts both checks after displacement
-or a replan request. The validated return route sets the potion reserve for that
+or a replan request. The validated exit route sets the potion reserve for that
 waypoint. `hunt_supply_reserve` uses source `selected_return_route` for the
 initial reserve and `patrol_return_route` when a waypoint requires an increase.
-Navigation remains behind the destination/reachability interface so a later
-navigator can replace tile planning without changing hunt selection.
 
 The bot switches from transit to active hunting when any patrol point in the
 selected region enters normal client view range on the current floor. It does
 not wait to stand on the first patrol point. Outside that area it still ignores
 non-attacking transit monsters; inside it proactively targets the selected
-region's monster types. During transit, one to three adjacent attackers retain
-normal detour and route-blocker handling; four force defensive combat. A visible
+region's monster types. During transit, adjacent attackers retain normal detour
+and route-blocker handling. A transit episode permits one five-second,
+no-chase defense attempt against a route-critical blocker; replans and
+intermediate route legs do not renew that budget, while a goal or phase change
+starts a new episode. A repeated detour onto an already suppressed tile
+proves a persistent corridor blocker and confirms it as route-critical
+immediately, as does any failed fixed-goal route with adjacent hostiles:
+when the planner cannot route out, the monsters sealing the exits become
+attackable instead of waiting for a dispatched step to collide. Adjacent
+approach goal flapping (for example, depot discovery alternating between
+standable tiles of the same depot) does not reset fixed goal failure
+accounting or erase confirmed blockers, and failed depot route validations
+count toward the same exhaustion. If 20 fixed-goal route
+failures confirm that adjacent hostile blockers have sealed the exits, the bot
+enters a final 30-second no-chase breakout, and exhaustion is also honored when
+nominally successful plans would keep dispatching a blocked corridor step.
+Healing keeps turn priority, navigation replans each turn,
+and real positional progress or an open route ends the breakout immediately.
+Expiry falls back to the normal route-unavailable terminal. A visible
 non-adjacent ranged attacker is engaged through bounded target-approach routing
 instead of being allowed to attack indefinitely at range.
 
@@ -154,22 +210,30 @@ does not credit potion or spell recovery before that lethal point.
 
 Each controller starts with a `0.20` pressure frontier. Every nonlethal region at
 or below the frontier plus `0.05` headroom competes by projected XP; there is no
-minimum pressure band. Thirty seconds of active combat, at least one recorded kill,
-near-full health, and no verified recovery escalates the frontier by `0.025`.
-Verified potion or healing-spell pressure, observed danger, or death backs it
-off by `0.05`; the next two qualifying hunts hold before escalation resumes.
-The target stays within `0.10` through `0.40`. It is an adaptation bound, not a
-lethal threshold. Travel, idle full health, and target engagement without a
-kill do not count as easy evidence. Active-combat uptime remains diagnostic; it
-is not an escalation threshold because sparse, fast-kill hunts naturally have
-low uptime.
-Frontier and performance state are per-controller and reset on relog or restart.
+minimum pressure band. Escalation requires at least 60 active combat seconds,
+three kills, p10 health of at least 70%, and no critical pressure. A productive
+hunt with zero to two potions and a healthy mana floor advances by `0.10`; a
+moderate mana floor advances by `0.05`. A single Exura or potion never causes
+automatic backoff. Exura pressure is based on sampled mana rather than cast count.
+Three or more potions back off only when their normalized rate reaches one per
+active combat minute. Danger, death, health below 35%, or healing-time mana below
+20% backs off by `0.10`; the next two qualifying hunts hold before escalation
+resumes. The frontier stays within `0.10` through `0.60`. Predicted lethal damage,
+route danger, and reserves remain independent hard gates. Travel, idle full
+health, and insufficient combat do not escalate. Frontier and performance state
+are per-controller and reset on relog or restart.
 
 Taking one maximum health pool of active-combat damage within the first two
-minutes abandons the region for ten minutes. Completed hunts update a
-per-controller XP correction after at least 30 seconds and one kill; the sample
-is clamped to `0.25` through `2.0` and uses a 65/35 rolling blend. When all
-globally scored candidates are unavailable, the controller emits
+minutes abandons the region for ten minutes. A completed hunt updates its own
+per-controller, per-variant XP correction only after at least 120 seconds (or the
+full configured outing when shorter), 60 active-combat seconds, three kills,
+positive XP, valid projection inputs, and no observed danger or death. The sample
+is clamped to `0.25` through `2.0` and uses a 65/35 rolling blend. An untested
+variant inherits the arithmetic mean of one reliable correction per tested
+variant. Repeated outings refine that variant's value but do not add extra weight
+to the shared mean; default, unreliable, malformed, out-of-range, and prior-atlas-revision
+entries are excluded. A tested variant always keeps its own correction. When all globally
+scored candidates are unavailable, the controller emits
 `hunt_scope_exhausted` and retries after 30 seconds. A
 successful selection resets the counter; three consecutive exhausted scans stop
 the controller instead of rescanning an unchanged world snapshot forever.
@@ -257,8 +321,15 @@ healing before combat, then support. Unsupported utility spells such as
 loaded NPC scripts and rejects offers with a registry mismatch, wrong vocation,
 level, premium status, learned
 state, missing supply reserve, insufficient funds after the 100 gp carried
-reserve plus the cost of the current stock gap to the 10-potion restock target,
-or an unavailable route.
+reserve plus the cost of the current stock gap to the potion target, or an
+unavailable route. Light Healing uses only the 1-2 potion safety floor as that
+reserve, and only once the bot is high enough level to learn it. Below that
+level, leftover gold buys up to 20 potions (or more when a return route needs a
+larger reserve) so hunts are not stuck on two-flask trash spawns. After Light
+Healing is learned, leftover gold buys that ammo stack again. Hunt selection
+then prefers hunts that fit carried supplies, with XP breaking ties. Normal
+selection falls back to the lowest-consumption safe hunt when none fits;
+supply-recovery outings must fit their bounded recovery budget.
 A selected spell uses normal `hi`, keyword, and `yes`
 dialogue. Completion requires both learned state and the exact total-money
 delta. Learned-spell persistence reconstructs completion after restart and
@@ -271,8 +342,10 @@ walk to a provider and from an arrival point is validated through bounded normal
 navigation. A route must fit the bot's carried-plus-bank funds and is unavailable
 while the bot is PZ-locked. Offers with dynamic destinations, custom conditions,
 or custom actions are opaque and excluded rather than reimplemented in C++.
-Execution greets the selected NPC, follows the registered dialogue, relies on
-the normal script for payment and movement, and verifies the exact destination.
+Execution completes a coarse provider route with bounded same-floor navigation to
+the NPC's live three-tile interaction range. It then greets the selected NPC,
+follows the registered dialogue, relies on the normal script for payment and
+movement, and verifies the exact destination.
 A failed NPC/destination pair is suppressed for five minutes. The runtime
 executes one travel leg and replans from the observed arrival position.
 
@@ -394,14 +467,41 @@ All scenarios use controlled Lua setup. They prove forecast arithmetic,
 arbitration, and normal engine casts under those conditions, not frequency or
 utility on an ordinary long-running server.
 
-The service cycle sells known surplus and returns for the selected recovery
-potion when the carried count reaches one. It buys enough to carry at least two
-and targets 10. Only the selected potion is reserved toward that target; other
-health potions may be deposited. A complete restock takes priority when total
-carried and bank gold can pay for it; an optional partial restock preserves the
-carried-gold reserve. If total gold cannot raise stock above the return
-threshold, service stops with `insufficient_potion_funds` without buying an
-unusable partial reserve. The cycle deposits carried money and withdraws up to
+The service cycle sells known surplus. Potion-driven goal selection requests
+service only below the 2-potion safety floor, not for every shortage below the
+shopping target. While already shopping, leftover gold buys up to 20 potions
+(or a larger route reserve). The shopping target stays at two while Light
+Healing is level-eligible and unlearned. Other health potions may be deposited.
+
+If the safety stock is unaffordable, the bot enters supply recovery. Survival
+purchases may spend the 100-gold cash reserve. A completed service visit that
+still leaves stock below two defers another restock until total funds or potion
+count changes; bank transfers alone do not count as progress. While healing is
+still needed, the bot waits at the completed service site for normal recovery.
+
+Recovery hunts prefer coin income under a lowered challenge frontier and last
+at most 120 seconds. They must fit the available supplies and produce coin
+income; small replenishing spawns need not meet normal long-hunt throughput
+requirements. With zero potions, the combined static hunt and outbound/depot-return
+route estimates may spend only health above 80% of maximum. An unaffordable supplier visit is not a prerequisite for earning
+money. If no candidate qualifies, normal bounded planning retries apply; the bot
+does not select an unsafe hunt just because it is broke. Recovery selling may
+use a reachable safe merchant without requiring a profitable trip. Normal
+selection resumes once the safety stock becomes affordable and no unchanged
+restock failure remains.
+
+Potion estimates learn per variant within the controller lifetime. Verified
+potion use is measured per active combat second and projected over the next
+outing's expected combat time. Higher consumption raises the estimate promptly.
+Lower estimates require a completed outing of at least 120 seconds, 60 active
+combat seconds, three kills, healthy health/mana floors, and no material net
+health or mana depletion. Downward updates blend 20% new evidence; repeated
+stable zero-use outings can establish a potion-free estimate. Death, danger,
+or exhausted supplies cannot teach cheaper hunting. Atlas or combat/healing
+capability changes invalidate the relevant observations. Learning never relaxes
+immediate combat or route-safety checks.
+
+The banking cycle deposits carried money and withdraws up to
 100 gp without exceeding the bot's total available gold. It does not buy food
 merely because none is carried. The low-wealth regression isolates this banking
 contract with 56 bank gp, zero carried gp, ten selected health potions, and no
@@ -451,7 +551,9 @@ items are carried, further food is skipped. Any food remains replaceable by a
 more valuable known item because the preference is not a reserve. Known
 unequipped equipment is also replaceable; equipped gear is outside the backpack
 cargo path. Unknown items, containers, currency, tools, and the potion reserve
-are not replacement candidates. Food count, weight, reclaimable capacity, and preference
+are not replacement candidates. A full backpack starts capacity pressure but does
+not end the hunt until 30 minutes have elapsed; the 40-minute deadline remains
+the hard stop. Food count, weight, reclaimable capacity, and preference
 utility are observable, but food does not yet select a separate acquisition
 goal. Later goal arbitration can weigh measured regeneration benefit against
 travel, capacity, and service costs without restoring a hard requirement.
@@ -563,7 +665,7 @@ events are emitted by that controller.
 | Spell casting | `action_result` with `action="cast_spell"` records the need, semantic `policy_candidate`, selected method, mana reserve, normal-path request, engine result, observed outcome, fallback, captured engine bounds, monotonic observation age, target class, distinct synchronous spell-victim count, measured Haste condition ticks, and controller-local calibration counts, range, conservative value, ranking estimate, confidence, and evidence reason. `spell_calibration` separates `classifier_helper` and `profile_math` fixture evidence; `spell_calibration_eviction` records bounded-profile replacement. `legal_candidates` contains only normal-path casts confirmed by resource evidence. |
 | Magic training | `goal_candidate`, `goal_selection`, and `goal_result` expose overflow arbitration. `action_result` with `action="magic_training"` emits a requested `engine_path` record and a success or failure `engine_verification` record with spell, reserve, current/maximum/predicted/lost mana, aggregated gain, aligned interval/remaining time, loaded cost, mana delta, and magic progression. `magic_training_fixture` with `source="authoritative_forecast"` is controlled fixture evidence, not a live cast. |
 | Actions | `action_result`, `target_changed`, `service_discovered`, `service_provider_rejected`, `npc_reply`, `npc_capability_audit`, and `stuck` record externally relevant attempts, discovery health, provider fallback, and outcomes. |
-| Hunting | `hunt_region_candidate`, `hunt_region_scan`, `hunt_region_selection`, `hunt_region_outcome`, `hunt_challenge_frontier`, `hunt_scope_exhausted`, `hunt_region_patrol`, `hunt_supply_reserve`, and `hunt_area_entered` expose planner inputs, recovery assumptions, bounded shortlist and patrol validation, active-combat and kill evidence, reserve changes, area activation, frontier updates, and bounded exhaustion. `action_result` with `action="hunt_waypoint"` records patrol completion. |
+| Hunting | `hunt_region_candidate`, `hunt_region_scan`, `hunt_region_selection`, `hunt_region_outcome`, `hunt_challenge_frontier`, `hunt_scope_exhausted`, `hunt_region_patrol`, `hunt_supply_reserve`, and `hunt_area_entered` expose planner inputs, recovery assumptions, incremental route and patrol validation, active-combat and kill evidence, reserve changes, area activation, frontier updates, and bounded exhaustion. Candidate records include calibration source/sample count and transport plausibility. Outcomes report performance evidence qualification; selections report bounded route-rejection counts. `action_result` with `action="hunt_waypoint"` records patrol completion. |
 | Navigation | `navigation_progress` records bounded recovery such as oscillation suppression; `npc_travel` records verified travel success or failure. Lifecycle records include loaded shop-provider, spell-trainer, travel-offer, and opaque travel-offer counts. |
 | Liquidation | `sell_loot_candidate`, `sell_loot_plan`, `sell_loot_defer`, and `sell_loot_withdraw` expose source depot and seller selection, manifest batches, revenue, fare, time and danger costs, utility, bounded scan progress, defer reasons, and verified inventory/depot deltas. |
 | Health | `summary` reports cumulative timing, action, failure, stuck, and suppression counters every 60 seconds. |

@@ -146,6 +146,10 @@ bool PlayerBotController::planSellLootTrip(Player& player, uint16_t currentDepot
 	});
 	if (sellLootItemScanRemaining == 0) sellLootItemScanRemaining = itemWindowCount;
 	if (sellLootRouteScanRemaining == 0) sellLootRouteScanRemaining = candidates.size();
+	// Supply recovery keeps route availability, safety, and fare affordability
+	// but drops the profit requirement: an unprofitable local sale beats a
+	// bankrupt bot.
+	const bool survivalSell = supplyRecovery.active();
 	const size_t routeScanCount = std::min({candidates.size(), sellLootRouteScanRemaining,
 	                                       maximumSellLootRouteValidationsPerDecision});
 	const size_t routeScanStart = candidates.empty() ? 0 : sellLootRouteScanOffset % candidates.size();
@@ -265,7 +269,7 @@ bool PlayerBotController::planSellLootTrip(Player& player, uint16_t currentDepot
 			continue;
 		}
 		const uint64_t tripCost = fare + timeCost + danger / 10;
-		if (candidate.revenue <= tripCost) {
+		if (!survivalSell && candidate.revenue <= tripCost) {
 			reject("non_positive_utility", nullptr, fare, tripCost, danger);
 			continue;
 		}
@@ -329,11 +333,12 @@ bool PlayerBotController::planSellLootTrip(Player& player, uint16_t currentDepot
 	}
 	std::ostringstream fields;
 	fields << "\"action\":\"sell_loot_plan\",\"result\":" << jsonString(found ? "candidate" : "deferred")
-	       << ",\"reason\":" << jsonString(found ? "profitable_trip_validated" :
+	       << ",\"reason\":" << jsonString(found ? (survivalSell ? "survival_trip_validated" : "profitable_trip_validated") :
 	           sellLootSearchPending ? "candidate_scan_pending" : "no_profitable_trip")
 	       << ",\"top_level_items\":" << scannedItems << ",\"top_level_item_budget\":" << maximumSellLootItems
 	       << ",\"route_validations\":" << routeValidations
-	       << ",\"route_validation_budget\":" << maximumSellLootRouteValidationsPerDecision;
+	       << ",\"route_validation_budget\":" << maximumSellLootRouteValidationsPerDecision
+	       << (survivalSell ? ",\"survival\":true" : "");
 	if (found) {
 		const SellLootPlan& plan = *sellLootPlan;
 		fields << ",\"source_depot_id\":" << plan.sourceDepotId << ",\"npc_id\":" << plan.providerId
@@ -469,6 +474,12 @@ void PlayerBotController::setCyclePhase(CyclePhase phase, const Position& positi
 	if (turnRouter.cyclePhase() == phase) {
 		return;
 	}
+	if (phase == CyclePhase::Hunt) {
+		huntTravelBudgetPhase = HuntTravelBudgetPhase::None;
+		huntExitFareReserve = 0;
+		huntSupplyFareReserve = 0;
+		huntRecoveryPotionReserve = 0;
+	}
 	const char* previous = cyclePhaseName();
 	if (turnRouter.cyclePhase() == CyclePhase::Hunt && phase != CyclePhase::Hunt) {
 		huntCoordinator.cancelPlanning();
@@ -488,6 +499,9 @@ void PlayerBotController::setCyclePhase(CyclePhase phase, const Position& positi
 
 void PlayerBotController::beginReturn(Player* player, const Position& position, const char* reason)
 {
+	if (huntTravelBudgetPhase != HuntTravelBudgetPhase::None) {
+		huntTravelBudgetPhase = HuntTravelBudgetPhase::Exit;
+	}
 	pendingHuntCompletionReason.clear();
 	const auto traversalTarget = huntCoordinator.traversalTarget();
 	const uint32_t previousTarget = traversalTarget ? traversalTarget->id : 0;
@@ -520,6 +534,7 @@ void PlayerBotController::onNpcReply(uint32_t replyingPlayerId, uint32_t npcId, 
 
 void PlayerBotController::beginService(Player* player, const Position& position, const char* reason)
 {
+	updateSupplyRecovery(*player, position);
 	const bool interruptedHunt = fixtureDriver.progressionGoalLoop(true).selectGoal && progressionRuntime.activeGoal() == TopLevelGoal::Hunt &&
 	                             !departurePlanner.hasCompleted(departureSnapshot(*player));
 	finishHuntRegion(*player, position, reason);
@@ -542,7 +557,39 @@ void PlayerBotController::beginService(Player* player, const Position& position,
 	player->closeContainer(corpseContainerId);
 	setStage(ScenarioStage::Traverse, position);
 	serviceWorkflow.reset();
+	serviceWorkflow.setSurvivalRestock(supplyRecovery.active());
 	beginReturn(player, position, reason);
+}
+
+void PlayerBotController::updateSupplyRecovery(const Player& player, const Position& position)
+{
+	const uint64_t funds = player.getMoney() + player.getBankBalance();
+	const uint32_t potions = inventoryPolicy.inventoryItemCount(player, recoveryPotionItemId(player.getVocationId()));
+	const bool wasActive = supplyRecovery.active();
+	supplyRecovery.restockBlocked(funds, potions);
+	const uint64_t spending = recoverySpendingReserve(player, healthPotionSafetyTarget);
+	const uint64_t budget = spending == UINT64_MAX ? spending : spending - carriedGoldReserve;
+	supplyRecovery.update(funds, budget);
+	if (wasActive == supplyRecovery.active()) return;
+	huntCoordinator.setSupplyRecovery(supplyRecovery.active());
+	serviceWorkflow.setSurvivalRestock(supplyRecovery.active());
+	emit("action_result", position,
+	     std::string("\"action\":\"supply_recovery\",\"result\":\"") + (supplyRecovery.active() ? "started" : "ended") +
+	         "\",\"funds\":" + std::to_string(funds) + ",\"potion_budget\":" +
+	         (budget == std::numeric_limits<uint64_t>::max() ? std::string("\"unknown\"") : std::to_string(budget)));
+}
+
+void PlayerBotController::enterSupplyRecovery(const Position& position, uint64_t funds, uint64_t potionBudget,
+                                              const char* reason)
+{
+	if (supplyRecovery.enter()) {
+		huntCoordinator.setSupplyRecovery(true);
+		serviceWorkflow.setSurvivalRestock(true);
+	}
+	emit("action_result", position,
+	     std::string("\"action\":\"supply_recovery\",\"result\":\"started\",\"reason\":") + jsonString(reason) +
+	         ",\"funds\":" + std::to_string(funds) + ",\"potion_budget\":" +
+	         (potionBudget == std::numeric_limits<uint64_t>::max() ? std::string("\"unknown\"") : std::to_string(potionBudget)));
 }
 
 void PlayerBotController::finishHuntAndReturn(Player* player, const Position& position, const char* reason)
@@ -623,7 +670,7 @@ void PlayerBotController::processService(Player* player, const Position& current
 	observation.healthPotionItemId = recoveryPotionItemId(player->getVocationId());
 	observation.healthPotionWeight = Item::items[observation.healthPotionItemId].weight;
 	observation.healthPotionReturnThreshold = huntPotionReturnThreshold;
-	observation.healthPotionRestockTarget = huntPotionRestockTarget;
+	observation.healthPotionRestockTarget = potionStockTarget(*player);
 	Item* serviceBackpackItem = player->getInventoryItem(CONST_SLOT_BACKPACK);
 	Container* serviceBackpack = serviceBackpackItem ? serviceBackpackItem->getContainer() : nullptr;
 	observation.actionAvailable = player->canDoAction();
@@ -801,11 +848,15 @@ void PlayerBotController::processService(Player* player, const Position& current
 		const PlayerBotNavigationRiskProfile risk;
 		const bool routeSafe = command.destination == currentPosition || playerBotNavigationRiskAccepts(
 		    risk, routePlan.metrics.dangerCost, routePlan.metrics.maximumHealthLossPerSecond);
-		lastRouteResult = routeSafe ? routePlan.metrics.result : PlayerBotNavigationResult::Unreachable;
+		const bool routeAffordable = command.destination == currentPosition ||
+		                             huntTravelFareAffordable(*player, routePlan.metrics.fare,
+		                                                      huntTravelBudgetPhase);
+		lastRouteResult = routeSafe && routeAffordable ? routePlan.metrics.result : PlayerBotNavigationResult::Unreachable;
 		lastRouteExpandedNodes = routePlan.metrics.expandedNodes;
 		lastRouteSteps = routePlan.metrics.steps;
 		const bool reached = command.destination == currentPosition ||
-		                     (routePlan.metrics.result == PlayerBotNavigationResult::Reached && !routePlan.steps.empty() && routeSafe);
+		                     (routePlan.metrics.result == PlayerBotNavigationResult::Reached && !routePlan.steps.empty() &&
+		                      routeSafe && routeAffordable);
 		telemetry.recordPathfinding(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - startedAt), reached);
 		routeObservation.approachRoute.result = reached ? PlayerBotServiceRouteResult::Reached : PlayerBotServiceRouteResult::Unreachable;
 		routeObservation.approachRoute.steps = routePlan.metrics.steps;
@@ -859,6 +910,7 @@ void PlayerBotController::processService(Player* player, const Position& current
 			say(*player, "Deposited " + std::to_string(transaction.money) + " gold. Bank: " +
 			    std::to_string(observation.bankBalance) + '.');
 		}
+		updateSupplyRecovery(*player, currentPosition);
 	}
 	if (command.type == PlayerBotServiceCommandType::Fail) {
 		if (sellingLocalLoot) {
@@ -870,7 +922,24 @@ void PlayerBotController::processService(Player* player, const Position& current
 			beginReturn(player, currentPosition, "sell_trip_insufficient_funds");
 			return;
 		}
-		stop(command.outcome == PlayerBotServiceOutcome::InsufficientFunds ? "insufficient_potion_funds" : "required_shop_offer_unavailable", currentPosition);
+		if (command.outcome == PlayerBotServiceOutcome::InsufficientFunds) {
+			supplyRecovery.deferRestock(observation.money + observation.bankBalance,
+			    inventoryPolicy.inventoryItemCount(*player, observation.healthPotionItemId));
+			// Unaffordable potions degrade operation instead of stopping: hunt
+			// and sell under supply recovery until loot funds a restock.
+			enterSupplyRecovery(currentPosition, observation.money + observation.bankBalance,
+			                    recoverySpendingReserve(*player, potionStockTarget(*player)),
+			                    "insufficient_potion_funds");
+			serviceWorkflow.reset();
+			if (fixtureDriver.progressionGoalLoop(true).selectGoal) {
+				selectTopLevelGoal(*player, currentPosition, "supply_recovery_potions_unaffordable");
+			} else {
+				startHunt(player, currentPosition, "supply_recovery_potions_unaffordable");
+			}
+			schedule(SCHEDULER_MINTICKS);
+			return;
+		}
+		stop("required_shop_offer_unavailable", currentPosition);
 		return;
 	}
 	if (command.type == PlayerBotServiceCommandType::Wait && command.itemId != 0 &&
@@ -982,6 +1051,20 @@ void PlayerBotController::processService(Player* player, const Position& current
 		return;
 	}
 	if (command.type == PlayerBotServiceCommandType::Complete) {
+		const uint32_t potions = inventoryPolicy.inventoryItemCount(*player, observation.healthPotionItemId);
+		if (potions < healthPotionSafetyTarget &&
+		    !supplyRecovery.restockBlocked(player->getMoney() + player->getBankBalance(), potions)) {
+			supplyRecovery.deferRestock(player->getMoney() + player->getBankBalance(), potions);
+			huntCoordinator.setSupplyRecovery(true);
+			emit("action_result", currentPosition,
+			     "\"action\":\"restock\",\"result\":\"deferred\",\"reason\":\"safety_stock_unmet\"");
+		}
+		if (supplyRecovery.active() && survivalRuntime.needsHealing(survivalSnapshot(*player))) {
+			// Stay at the completed service site while normal food/spell recovery runs.
+			// Re-entering goal selection here would immediately interrupt another hunt.
+			schedule(1000);
+			return;
+		}
 		if (fixtureDriver.progressionGoalLoop(true).selectGoal) {
 			emit("goal_result", currentPosition,
 			     "\"decision_id\":" + std::to_string(progressionRuntime.decisionId()) +
@@ -1017,7 +1100,7 @@ bool PlayerBotController::findDepositableItem(const Player& player, Container* c
 		}
 		const uint32_t carried = inventoryPolicy.inventoryItemCount(player, item->getID());
 		const uint32_t reserve = item->getID() == recoveryPotionItemId(player.getVocationId()) ?
-			std::max(inventoryPolicy.protectedItemReserve(player, item->getID()), huntPotionRestockTarget) :
+			std::max(inventoryPolicy.protectedItemReserve(player, item->getID()), potionStockTarget(player)) :
 			inventoryPolicy.protectedItemReserve(player, item->getID());
 		const uint32_t movable = item->isStackable() && carried > reserve ?
 			std::min<uint32_t>(item->getItemCount(), carried - reserve) : (carried > reserve ? 1 : 0);
@@ -1089,7 +1172,8 @@ bool PlayerBotController::discoverDepot(Player& player, const Position& currentP
 				++result.standableCandidates;
 				const std::optional<uint32_t> routeCost = topology.distanceTo(
 					distances, PlayerBotNavigationGoal::exact(approach));
-				if (!routeCost && (!sellLootPlan || entry.first != sellLootPlan->sourceDepotId)) continue;
+				// Keep disconnected lockers in the bounded route workflow. Normal
+				// navigation may reach them through a verified NPC travel offer.
 				result.candidates.push_back({entry.first, lockerItemId, lockerPosition, approach,
 				                             routeCost.value_or(playerBotNavigationDistance(currentPosition, approach))});
 			}
@@ -1133,20 +1217,32 @@ bool PlayerBotController::discoverDepot(Player& player, const Position& currentP
 				if (auto paidRoute = planNpcTravelRoute(player, candidate.approachPosition, {},
 				                                        playerBotNavigationMaximumExpandedNodes)) {
 					routePlan = std::move(*paidRoute);
+				} else {
+					// A failed travel-approach plan is still a real attempt: mark it
+					// so the failure feeds exhaustion like any other route failure.
+					routePlan.metrics.attempted = true;
+					routePlan.metrics.result = PlayerBotNavigationResult::Unreachable;
 				}
 			} else {
-				routePlan = planCompleteNavigationRoute(player, candidate.approachPosition);
+				// Respect the navigation session's temporarily suppressed tiles so
+				// a detour loop cannot re-install routes straight through a blocker.
+				routePlan = planNavigationRoute(player, candidate.approachPosition,
+				    navigationRuntime.activeBlockedPositions(startedAt));
 			}
 		}
 		const PlayerBotNavigationRiskProfile risk;
 		const bool routeSafe = candidate.approachPosition == currentPosition || playerBotNavigationRiskAccepts(
 		    risk, routePlan.metrics.dangerCost, routePlan.metrics.maximumHealthLossPerSecond);
-		const bool fareAccepted = !sellLootPlan || candidate.depotId != sellLootPlan->sourceDepotId ||
-		                          routePlan.metrics.fare <= sellLootPlan->sourceFare;
+		const bool fareAccepted = (!sellLootPlan || candidate.depotId != sellLootPlan->sourceDepotId ||
+		                           routePlan.metrics.fare <= sellLootPlan->sourceFare) &&
+		                          huntTravelFareAffordable(player, routePlan.metrics.fare,
+		                                                   huntTravelBudgetPhase);
 		const bool executable = valid && fareAccepted && (candidate.approachPosition == currentPosition ||
 			(routePlan.metrics.result == PlayerBotNavigationResult::Reached && !routePlan.steps.empty()));
 		const bool liquidationSource = sellLootPlan && candidate.depotId == sellLootPlan->sourceDepotId;
-		const bool reached = executable && (routeSafe || (!liquidationSource && command.snapshot.validatingRiskFallback));
+		const bool protectedHuntExit = huntTravelBudgetPhase == HuntTravelBudgetPhase::Exit;
+		const bool reached = executable && playerBotDepotRouteSafetyAccepted(
+		    routeSafe, command.snapshot.validatingRiskFallback, liquidationSource, protectedHuntExit);
 		telemetry.recordPathfinding(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - startedAt), executable);
 		observation.routeResult = reached ? PlayerBotDepotRouteResult::Reached :
 		                          executable ? PlayerBotDepotRouteResult::Unsafe : PlayerBotDepotRouteResult::Unreachable;
@@ -1154,7 +1250,24 @@ bool PlayerBotController::discoverDepot(Player& player, const Position& currentP
 		observation.expandedNodes = routePlan.metrics.expandedNodes;
 		observation.dangerCost = routePlan.metrics.dangerCost;
 		observation.maximumHealthLossPerSecond = routePlan.metrics.maximumHealthLossPerSecond;
-		if (reached) steps = std::move(routePlan.steps);
+		if (reached) {
+			steps = std::move(routePlan.steps);
+		} else if (routePlan.metrics.attempted) {
+			// A failed fixed-goal validation is a no-progress failure toward the
+			// depot. Feed it into the runtime: adjacent hostiles confirm as
+			// route-critical so transit defense engages, and repeated failures
+			// accumulate toward exhaustion and breakout.
+			confirmAdjacentRouteBlockers(&player, currentPosition, startedAt);
+			PlayerBotNavigationRoutePlan failure;
+			failure.metrics = routePlan.metrics;
+			const PlayerBotNavigationRuntimeOutcome fed = navigationRuntime.observePlan(
+			    {PlayerBotNavigationGoal::exact(candidate.approachPosition), std::move(failure),
+			     false, false, startedAt});
+			if (handleFixedTargetRouteExhausted(&player, currentPosition, fed, startedAt, false)) {
+				schedule(blockedRouteRetryInterval);
+				return false;
+			}
+		}
 		command = advance(observation);
 	}
 	if (command.type == PlayerBotDepotCommandType::ValidateRoute) {
@@ -1194,8 +1307,17 @@ bool PlayerBotController::discoverDepot(Player& player, const Position& currentP
 		const char* reason = command.snapshot.inScopeCandidates == 0 ? "no_local_locker" :
 		                     command.snapshot.standableCandidates == 0 ? "no_standable_approach" : "no_reachable_locker";
 		logActionFailure("depot_discover", reason, currentPosition);
-		if (sellLootPlan) deferSellLoot(player, currentPosition, reason);
-		else stop("depot_unavailable", currentPosition);
+		if (sellLootPlan) {
+			deferSellLoot(player, currentPosition, reason);
+		} else if (!navigationRuntime.activeBlockedPositions(now).empty()) {
+			// A temporarily suppressed route blocker (for example a monster in a
+			// one-tile cave corridor) makes every approach unreachable. Transit
+			// defense and breakout handle the blocker; retry discovery instead of
+			// the terminal stop.
+			schedule(blockedRouteRetryInterval);
+		} else {
+			stop("depot_unavailable", currentPosition);
+		}
 		return false;
 	}
 	const uint32_t retryDelay = command.snapshot.retryAt ? static_cast<uint32_t>(std::max<int64_t>(1,
@@ -1393,6 +1515,9 @@ void PlayerBotController::processDeposit(Player* player, const Position& current
 	PlayerBotDepotObservation observation;
 	if (command.snapshot.hasSelectedDepot) {
 		observation.atApproach = fixtureDepot.synthetic || Position::areInRange<1, 1, 0>(currentPosition, command.snapshot.selected.lockerPosition);
+		if (observation.atApproach && huntTravelBudgetPhase == HuntTravelBudgetPhase::Exit) {
+			huntTravelBudgetPhase = HuntTravelBudgetPhase::Supply;
+		}
 		observation.lockerOpen = fixtureDepot.synthetic || player->getContainerByID(depotLockerContainerId) != nullptr;
 		observation.chestOpen = fixtureDepot.synthetic || player->getContainerByID(depotChestContainerId) != nullptr;
 		observation.canDoAction = player->canDoAction();
@@ -1627,7 +1752,7 @@ void PlayerBotController::processDeposit(Player* player, const Position& current
 		if (depositItem) {
 			const uint32_t carried = inventoryPolicy.inventoryItemCount(*player, depositItem->getID());
 			const uint32_t reserve = depositItem->getID() == recoveryPotionItemId(player->getVocationId()) ?
-				std::max(inventoryPolicy.protectedItemReserve(*player, depositItem->getID()), huntPotionRestockTarget) :
+				std::max(inventoryPolicy.protectedItemReserve(*player, depositItem->getID()), potionStockTarget(*player)) :
 				inventoryPolicy.protectedItemReserve(*player, depositItem->getID());
 			const uint32_t movable = depositItem->isStackable() && carried > reserve ?
 				std::min<uint32_t>(depositItem->getItemCount(), carried - reserve) : (carried > reserve ? 1 : 0);

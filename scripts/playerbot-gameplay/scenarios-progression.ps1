@@ -119,6 +119,22 @@
     }
 
 	if ($HuntRegionPlanning) {
+		Invoke-Scenario -Name "supply_recovery" -DefaultTimeoutSeconds 360 -Body {
+			Invoke-Compose down --volumes --remove-orphans
+			$env:PLAYERBOT_GAMEPLAY_MODE = "supply_recovery"
+			$env:PLAYERBOT_HUNT_DURATION_SECONDS = "2400"
+			Invoke-Compose up --detach
+			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST SUPPLY_RECOVERY_START' | Out-Null
+			$logs = Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST SUPPLY_RECOVERY_INCOME_PASS'
+			if ($logs -notmatch '"event":"hunt_region_selection".*"result":"selected"' -or
+			    $logs -notmatch '"event":"hunt_area_entered"' -or
+			    $logs -notmatch '"action":"loot","result":"success","item_id":2148') {
+				throw "Broke-bot income must follow actual selected-region combat, not a reward or fixture grant."
+			}
+			if ($logs -match '"from_goal":"service","to_goal":"service"') {
+				throw "Broke bot repeated Service instead of earning hunt income."
+			}
+		}
         Invoke-Scenario -Name "hunt_region_planning" -DefaultTimeoutSeconds 180 -Body {
             Invoke-Compose down --volumes --remove-orphans
             $env:PLAYERBOT_GAMEPLAY_MODE = "hunt_planning"
@@ -139,6 +155,17 @@
 			Wait-ForLog -Pattern '"event":"hunt_area_entered"' | Out-Null
 			$arrivalLogs = Wait-ForLog -Pattern '"event":"target_changed".*"reason":"visible_monster"'
 			Assert-HuntAreaArrivalEvents -Logs $arrivalLogs
+		}
+		Invoke-Scenario -Name "remote_hunt" -DefaultTimeoutSeconds 600 -Body {
+			Invoke-Compose down --volumes --remove-orphans
+			$env:PLAYERBOT_GAMEPLAY_MODE = "remote_hunt"
+			$env:PLAYERBOT_HUNT_DURATION_SECONDS = "900"
+			Invoke-Compose up --detach
+			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST HUNT_MAINLAND_LOADOUT_PASS remote_hunt' | Out-Null
+			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST REMOTE_HUNT_START' | Out-Null
+			Wait-ForLog -Pattern '"event":"hunt_area_entered"' | Out-Null
+			$remoteLogs = Wait-ForLog -Pattern '"event":"action_result".*"action":"depot_discover".*"result":"success"'
+			Assert-RemoteHuntEvents -Logs $remoteLogs
 		}
 	}
 

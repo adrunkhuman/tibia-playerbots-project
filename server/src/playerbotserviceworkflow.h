@@ -131,6 +131,7 @@ class PlayerBotServiceWorkflow
 	public:
 		void reset(PlayerBotServiceIntent intent = PlayerBotServiceIntent::Resupply);
 		void setLiquidationPlan(PlayerBotServiceLiquidationPlan plan) { liquidationPlan = plan; }
+		void setSurvivalRestock(bool survival) { survivalRestock = survival; }
 		const std::optional<PlayerBotServiceLiquidationPlan>& liquidation() const { return liquidationPlan; }
 		PlayerBotServiceStage stage() const { return serviceStage; }
 		PlayerBotServiceIntent intent() const { return serviceIntent; }
@@ -185,6 +186,7 @@ class PlayerBotServiceWorkflow
 		std::map<uint32_t, uint32_t> providerRouteCosts;
 		std::set<uint32_t> providersRequiringNpcTravel;
 		std::optional<PlayerBotServiceLiquidationPlan> liquidationPlan;
+		bool survivalRestock = false;
 };
 
 #endif

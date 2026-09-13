@@ -63,4 +63,61 @@ $rejected = @(@{ event = 'spell_candidate'; spell = 'Light Healing'; price = 170
 $checkRejected = { param($logs) Assert-LowSupplySpellTrainingEvents -Logs $logs -Unaffordable }
 Test-Evidence $rejected $checkRejected
 Test-Evidence ($rejected + $spell[3]) $checkRejected $true
-Write-Host 'Supply and Exura telemetry assertion contracts passed.'
+
+# Hunt planning may validate more than eight candidates. The finite queue is
+# bounded by the selected scan's cheap-viable candidate count, not a quota.
+$huntPlanning = @(
+    @{ event = 'hunt_region_scan'; phase = 'planning_started'; cache = 'hit'; selection_strategy = 'atlas_topology_selection'
+       snapshot_time_us = 0; clustering_time_us = 0; candidate_count = 20; scored_candidate_count = 0
+       route_candidate_count = 0; transport_offer_count = 12; transport_arrival_count = 1 }
+    @{ event = 'hunt_region_scan'; phase = 'cancelled' }
+    @{ event = 'hunt_region_scan'; phase = 'planning_started'; cache = 'hit'; selection_strategy = 'atlas_topology_selection'
+       snapshot_time_us = 0; clustering_time_us = 0; candidate_count = 20; scored_candidate_count = 0
+       route_candidate_count = 0; transport_offer_count = 12; transport_arrival_count = 1 }
+    @{ event = 'hunt_region_scan'; phase = 'stale_revision' }
+    @{ event = 'hunt_region_scan'; phase = 'planning_started'; cache = 'build'; selection_strategy = 'atlas_topology_selection'
+       snapshot_time_us = 2; clustering_time_us = 3; candidate_count = 20; scored_candidate_count = 0
+       route_candidate_count = 0; transport_offer_count = 12; transport_arrival_count = 1 }
+    @{ event = 'hunt_region_scan'; phase = 'transport_yield'; cache = 'build'; selection_strategy = 'atlas_topology_selection' }
+    @{ event = 'hunt_region_scan'; phase = 'scoring_yield'; cache = 'build'; selection_strategy = 'atlas_topology_selection' }
+    @{ event = 'hunt_region_scan'; phase = 'scored'; cache = 'build'; selection_strategy = 'atlas_topology_selection'
+       snapshot_time_us = 2; clustering_time_us = 3; candidate_count = 20; scored_candidate_count = 20
+       suitable_candidate_count = 10; route_candidate_count = 10 }
+)
+for ($index = 1; $index -le 10; $index++) {
+    $huntPlanning += @{
+        event = 'hunt_region_candidate'; region_id = $index; atlas_variant_id = $index
+        suitable = $true; reachable = $true; route_validated = $true; supply_budget_fits = $true
+        supply_expected_potions = 1; score = 101 - $index; topology_reachable = $true
+        topology_travel_steps = 10; route_danger_cost = 0; center = @{ x = 32400 + $index; y = 31800; z = 7 }
+    }
+}
+$huntPlanning += @(
+    @{ event = 'hunt_region_selection'; result = 'selected'; region_id = 1; selection_rule = 'supply_budget_then_xp' }
+    @{ event = 'hunt_supply_reserve'; source = 'selected_return_route'; route_danger_cost = 100
+       maximum_health = 200; health_loss_cost = 1000; minimum_potion_healing = 125
+       return_threshold = 1; restock_target = 10 }
+    @{ event = 'hunt_region_scan'; phase = 'selected'; cache = 'build'; selection_strategy = 'atlas_topology_selection'
+       topology_time_us = 1; decision_latency_us = 1; candidate_count = 20; route_candidate_count = 10
+       route_candidate_policy = 'all_cheap_viable_ranked'; transport_offer_count = 12; transport_arrival_count = 3 }
+)
+$checkHuntPlanning = { param($logs) Assert-HuntRegionPlanningEvents -Logs $logs }
+Test-Evidence $huntPlanning $checkHuntPlanning
+$originalSelectedScan = $huntPlanning[$huntPlanning.Count - 1]
+$huntPlanning[$huntPlanning.Count - 1] = $originalSelectedScan.Clone()
+$huntPlanning[$huntPlanning.Count - 1].route_candidate_count = 8
+Test-Evidence $huntPlanning $checkHuntPlanning $true
+$huntPlanning[$huntPlanning.Count - 1] = $originalSelectedScan
+
+$completedScore = @($huntPlanning | Where-Object { $_.event -eq 'hunt_region_scan' -and $_.phase -eq 'scored' })[0]
+$completedScore.scored_candidate_count = 19
+Test-Evidence $huntPlanning $checkHuntPlanning $true
+$completedScore.scored_candidate_count = 20
+$cacheHitStart = @($huntPlanning | Where-Object {
+    $_.event -eq 'hunt_region_scan' -and $_.phase -eq 'planning_started' -and $_.cache -eq 'hit'
+})[0]
+$cacheHitStart.snapshot_time_us = 1
+Test-Evidence $huntPlanning $checkHuntPlanning $true
+$cacheHitStart.snapshot_time_us = 0
+
+Write-Host 'Supply, Exura, and hunt-planning telemetry assertion contracts passed.'

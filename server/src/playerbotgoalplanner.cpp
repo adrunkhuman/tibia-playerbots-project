@@ -34,7 +34,7 @@ PlayerBotGoalArbiter::GoalCandidate PlayerBotGoalPlanner::departureCandidate(con
 PlayerBotGoalArbiter::GoalCandidate PlayerBotGoalPlanner::serviceCandidate(const PlayerBotGoalPlannerSnapshot& snapshot) const
 {
 	using Goal = PlayerBotGoalArbiter::TopLevelGoal;
-	const bool feasible = snapshot.lowCapacity || snapshot.missingPotions != 0 || snapshot.cashAdjustment;
+	const bool feasible = snapshot.criticalHealing || snapshot.lowCapacity || snapshot.missingPotions != 0 || snapshot.cashAdjustment;
 	int32_t utility = feasible ? serviceGoalBaseUtility : 0;
 	utility += static_cast<int32_t>(snapshot.missingPotions) * missingPotionUtility;
 	utility += snapshot.cashAdjustment ? 10 : 0;

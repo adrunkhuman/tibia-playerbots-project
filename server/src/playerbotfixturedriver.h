@@ -57,6 +57,11 @@ namespace playerbot {
 			bool mapRewardsEnabled() const { return !policy.equipmentPurchaseFixture; }
 			PlayerBotFixtureHuntObservation huntObservation() const;
 			bool startInHunt() const { return policy.startInHunt; }
+			bool remoteHuntScenario() const { return policy.remoteHuntFixture; }
+			uint32_t huntPlanningDuration(uint32_t configuredDurationSeconds) const
+			{
+				return playerBotFixtureHuntPlanningDuration(policy.mainlandLoopFixture, configuredDurationSeconds);
+			}
 			std::vector<Position> huntPatrol() const;
 			bool depotScenario() const { return policy.depotFixture; }
 			bool spellCalibrationScenario() const { return policy.spellCalibrationFixture; }

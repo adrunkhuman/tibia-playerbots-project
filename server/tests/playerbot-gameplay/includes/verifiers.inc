@@ -5,7 +5,7 @@ function F.verifyReadiness(playerId, mode, attempts)
     assert(player and not player:isRemoved(), "Bot One disappeared during readiness fixture")
     local ready = player:getVocation():getId() == 4 and player:getSlotItem(CONST_SLOT_ARMOR) and
         player:getSlotItem(CONST_SLOT_LEFT) and player:getItemCount(F.potionItemId) > 1
-    if mode == "supplies" then ready = ready and player:getItemCount(F.potionItemId) >= 10 end
+    if mode == "supplies" then ready = ready and player:getItemCount(F.potionItemId) >= 20 end
     if mode == "upgrade" then ready = ready and player:getSlotItem(CONST_SLOT_LEFT):getId() == F.pickupRewardId end
     if mode == "retention" then ready = ready and player:getItemCount(2050) >= 1 and player:getItemCount(F.starterWeaponId) >= 1 end
     if mode == "no_food" then ready = ready and player:getItemCount(F.meatItemId) == 0 end
@@ -236,7 +236,7 @@ end
 function F.verifyCarlinLocalService(playerId, attempts)
     local player = Player(playerId)
     assert(player and not player:isRemoved(), "Bot One disappeared during Carlin service")
-	local complete = player:getItemCount(F.healthPotionItemId) >= 10 and player:getMoney() == 100 and
+	local complete = player:getItemCount(F.healthPotionItemId) >= 20 and player:getMoney() == 100 and
 		player:getBankBalance() == 0
     if not complete and attempts > 0 then
         addEvent(F.verifyCarlinLocalService, 250, playerId, attempts - 1)

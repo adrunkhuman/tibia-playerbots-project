@@ -6,16 +6,26 @@
 #include "playerbothuntpolicy.h"
 
 #include <algorithm>
+#include <cmath>
 #include <numeric>
 
 namespace {
 	constexpr double minimumChallengeFrontier = 0.10;
-	constexpr double maximumChallengeFrontier = 0.40;
-	constexpr double challengeEscalation = 0.025;
-	constexpr double challengeBackoff = 0.05;
-	constexpr double challengeHealthSafetyPercent = 85;
-	constexpr double minimumChallengeActiveSeconds = 30;
-	constexpr uint32_t minimumChallengeKills = 1;
+	// Keep exploration above the old 0.40 ceiling, but below parity threat.
+	// Predicted lethal and route danger remain independent hard gates.
+	constexpr double maximumChallengeFrontier = 0.60;
+	constexpr double challengeEscalation = 0.05;
+	constexpr double strongChallengeEscalation = 0.10;
+	constexpr double challengeBackoff = 0.10;
+	constexpr double challengeHealthSafetyPercent = 70;
+	constexpr double challengeCriticalHealthPercent = 35;
+	constexpr double challengeManaSafetyPercent = 35;
+	constexpr double challengeCriticalManaPercent = 20;
+	constexpr double minimumChallengeActiveSeconds = 60;
+	constexpr uint32_t minimumChallengeKills = 3;
+	constexpr double minimumPerformanceActiveSeconds = 60;
+	constexpr uint32_t minimumPerformanceKills = 3;
+	constexpr uint32_t minimumPerformanceOutingSeconds = 120;
 	constexpr auto dangerObservationWindow = std::chrono::minutes(2);
 }
 
@@ -49,9 +59,13 @@ void PlayerBotHuntPolicy::observeCombat(const PlayerBotHuntCombatSample& sample)
 	}
 	evidence.activeSeconds += std::max(0.0, sample.elapsedSeconds);
 	evidence.minimumHealth = std::min(evidence.minimumHealth, sample.health);
+	evidence.minimumMana = std::min(evidence.minimumMana, sample.mana);
 	const uint8_t healthPercent = sample.maximumHealth <= 0 ? 0 : static_cast<uint8_t>(std::clamp(
 		sample.health * 100 / sample.maximumHealth, 0, 100));
+	const uint8_t manaPercent = sample.maximumMana == 0 ? 100 : static_cast<uint8_t>(std::min<uint64_t>(
+		static_cast<uint64_t>(sample.mana) * 100 / sample.maximumMana, 100));
 	++evidence.healthPercentSamples[healthPercent];
+	++evidence.manaPercentSamples[manaPercent];
 	evidence.maximumAttackerOverlap = std::max(evidence.maximumAttackerOverlap, sample.attackers);
 }
 
@@ -62,7 +76,8 @@ void PlayerBotHuntPolicy::sampleCombat(const PlayerBotHuntCombatSnapshot& snapsh
 		elapsedSeconds = std::chrono::duration<double>(snapshot.observedAt - lastSample).count();
 	}
 	lastSample = snapshot.observedAt;
-	observeCombat({snapshot.active, elapsedSeconds, snapshot.health, snapshot.maximumHealth, snapshot.attackers});
+	observeCombat({snapshot.active, elapsedSeconds, snapshot.health, snapshot.maximumHealth,
+	               snapshot.mana, snapshot.maximumMana, snapshot.attackers});
 }
 
 void PlayerBotHuntPolicy::observeKill()
@@ -108,23 +123,24 @@ PlayerBotHuntCombatSummary PlayerBotHuntPolicy::combatSummary() const
 	summary.spellRecoveries = evidence.spellRecoveries;
 	summary.maximumAttackerOverlap = evidence.maximumAttackerOverlap;
 	summary.minimumHealth = evidence.minimumHealth;
+	summary.minimumMana = evidence.minimumMana;
 	summary.dangerObserved = evidence.dangerObserved;
 	summary.deathObserved = evidence.deathObserved;
 	summary.healthPercentSamples = evidence.healthPercentSamples;
-	const uint32_t samples = std::accumulate(evidence.healthPercentSamples.begin(), evidence.healthPercentSamples.end(), 0U);
-	if (samples == 0) {
-		return summary;
-	}
-	const uint32_t threshold = (samples + 9) / 10;
-	uint32_t cumulative = 0;
-	for (uint8_t percent = 0; percent <= 100; ++percent) {
-		cumulative += evidence.healthPercentSamples[percent];
-		if (cumulative >= threshold) {
-			summary.p10HealthPercent = percent;
-			return summary;
+	summary.manaPercentSamples = evidence.manaPercentSamples;
+	auto percentile10 = [](const std::array<uint32_t, 101>& samples, uint8_t fallback) {
+		const uint32_t count = std::accumulate(samples.begin(), samples.end(), 0U);
+		if (count == 0) return fallback;
+		const uint32_t threshold = (count + 9) / 10;
+		uint32_t cumulative = 0;
+		for (uint16_t percent = 0; percent <= 100; ++percent) {
+			cumulative += samples[percent];
+			if (cumulative >= threshold) return static_cast<uint8_t>(percent);
 		}
-	}
-	summary.p10HealthPercent = 100;
+		return static_cast<uint8_t>(100);
+	};
+	summary.p10HealthPercent = percentile10(evidence.healthPercentSamples, 0);
+	summary.p10ManaPercent = percentile10(evidence.manaPercentSamples, 100);
 	return summary;
 }
 
@@ -139,11 +155,22 @@ PlayerBotHuntChallengeUpdate PlayerBotHuntPolicy::updateChallengeFrontier(const 
 	update.minimumKills = minimumChallengeKills;
 	const bool enoughActiveCombat = update.combat.activeSeconds >= minimumChallengeActiveSeconds &&
 	                                update.combat.kills >= minimumChallengeKills;
-	const bool nearFullHealth = update.combat.minimumHealth != std::numeric_limits<int32_t>::max() &&
-	                            static_cast<int64_t>(update.combat.minimumHealth) * 100 >=
-	                                static_cast<int64_t>(sample.maximumHealth) * challengeHealthSafetyPercent;
-	const bool backoff = update.combat.dangerObserved || update.combat.deathObserved || update.verifiedRecoveries != 0;
-	const bool qualifyingEasy = enoughActiveCombat && nearFullHealth && !backoff;
+	const bool lowHealthPressure = update.combat.p10HealthPercent < challengeHealthSafetyPercent;
+	const bool criticalHealth = update.combat.minimumHealth != std::numeric_limits<int32_t>::max() &&
+	                            static_cast<int64_t>(update.combat.minimumHealth) * 100 <
+	                                static_cast<int64_t>(sample.maximumHealth) * challengeCriticalHealthPercent;
+	const bool manaPressure = update.combat.spellRecoveries != 0 &&
+	                         update.combat.p10ManaPercent < challengeManaSafetyPercent;
+	const bool criticalMana = update.combat.spellRecoveries != 0 &&
+	                         update.combat.p10ManaPercent < challengeCriticalManaPercent;
+	update.potionRecoveriesPerActiveMinute = update.combat.activeSeconds == 0 ? 0 :
+	    update.combat.potionRecoveries * 60.0 / update.combat.activeSeconds;
+	const bool heavyRecovery = update.combat.potionRecoveries >= 3 &&
+	                           update.potionRecoveriesPerActiveMinute >= 1.0;
+	const bool backoff = update.combat.dangerObserved || update.combat.deathObserved || criticalHealth ||
+	                     criticalMana || heavyRecovery;
+	const bool qualifyingEasy = enoughActiveCombat && !lowHealthPressure && !manaPressure && !backoff &&
+	                           update.combat.potionRecoveries <= 2;
 	if (backoff && (update.combat.activeSeconds > 0 || update.combat.deathObserved)) {
 		frontier = std::max(minimumChallengeFrontier, frontier - challengeBackoff);
 		qualifyingHuntsToHold = 2;
@@ -152,42 +179,105 @@ PlayerBotHuntChallengeUpdate PlayerBotHuntPolicy::updateChallengeFrontier(const 
 		--qualifyingHuntsToHold;
 		update.result = PlayerBotHuntChallengeResult::Hold;
 	} else if (qualifyingEasy) {
-		frontier = std::min(maximumChallengeFrontier, frontier + challengeEscalation);
+		const bool strongEvidence = update.combat.potionRecoveries <= 2 && update.combat.p10ManaPercent >= 50;
+		frontier = std::min(maximumChallengeFrontier, frontier +
+		                    (strongEvidence ? strongChallengeEscalation : challengeEscalation));
 		update.result = frontier == update.frontierBefore ? PlayerBotHuntChallengeResult::Clamped :
 		                                                PlayerBotHuntChallengeResult::Escalated;
+	} else if (enoughActiveCombat) {
+		update.result = PlayerBotHuntChallengeResult::Hold;
 	}
 	update.frontierAfter = frontier;
 	update.qualifyingHuntsToHold = qualifyingHuntsToHold;
 	return update;
 }
 
-PlayerBotHuntPerformanceUpdate PlayerBotHuntPolicy::observePerformance(uint64_t variantId,
+PlayerBotSupplyCalibration PlayerBotHuntPolicy::observeSupplies(const PlayerBotHuntRegion& region,
+    uint64_t durationSeconds, int32_t health, int32_t maximumHealth, uint32_t mana, uint32_t potions,
+    bool interrupted)
+{
+	const auto combat = combatSummary();
+	auto& history = performance[region.atlasVariantId];
+	if (history.atlasRevision != region.atlasRevision) history = {};
+	history.atlasRevision = region.atlasRevision;
+	auto& learned = history.supply;
+	if (learned.capability != region.supplyCapability) learned = {region.supplyCapability, 0, 0};
+	if (combat.activeSeconds <= 0) return learned;
+	const double exposure = region.availableHuntSeconds * std::clamp(region.combatFraction, 0.0, 1.0);
+	const double prior = learned.samples != 0 ? learned.potionsPerCombatSecond :
+	    exposure > 0 ? region.supplyBudget.expectedPotions / exposure : 0;
+	const double observed = combat.potionRecoveries / combat.activeSeconds;
+	const bool depleted = region.supplyProfile.potions > 0 && potions == 0;
+	const bool unsafe = combat.dangerObserved || combat.deathObserved || depleted || combat.p10HealthPercent < 70;
+	// Short/failed outings may raise demand, but cannot teach that healing was free.
+	if (unsafe || observed > prior) {
+		learned.potionsPerCombatSecond = std::max(prior, observed);
+		if (unsafe) learned.potionsPerCombatSecond = std::max(learned.potionsPerCombatSecond, 1.0 / 60.0);
+		++learned.samples;
+	} else if (!interrupted && durationSeconds >= 120 && combat.activeSeconds >= 60 && combat.kills >= 3 &&
+	           combat.p10HealthPercent >= 80 && combat.p10ManaPercent >= 50 &&
+	           health >= region.currentHealth - maximumHealth / 20 &&
+	           mana + region.supplyProfile.maximumMana / 20 >= region.supplyProfile.mana) {
+		learned.potionsPerCombatSecond = prior * 0.8 + observed * 0.2;
+		++learned.samples;
+		// Repeated stable, zero-use combat can establish a genuinely potion-free hunt.
+		if (observed == 0 && learned.samples >= 3 && learned.potionsPerCombatSecond * exposure < 1)
+			learned.potionsPerCombatSecond = 0;
+	}
+	return learned;
+}
+
+PlayerBotHuntPerformanceUpdate PlayerBotHuntPolicy::observePerformance(uint64_t variantId, uint64_t atlasRevision,
 	const PlayerBotHuntPerformanceSample& sample)
 {
 	PlayerBotHuntPerformanceUpdate update;
 	update.updatedCorrection = sample.observedCorrection;
-	if (sample.durationSeconds < 30 || sample.kills == 0) {
+	update.actualExperiencePerMinute = sample.durationSeconds == 0 ? 0 :
+	    sample.experienceGained * 60.0 / sample.durationSeconds;
+	const uint64_t requiredOutingSeconds = std::min<uint32_t>(
+	    std::max<uint32_t>(sample.configuredHuntDurationSeconds, 1), minimumPerformanceOutingSeconds);
+	if (sample.dangerObserved || sample.deathObserved) {
+		update.evidenceReason = "unsafe_outing";
 		return update;
 	}
-	update.actualExperiencePerMinute = sample.experienceGained * 60.0 / sample.durationSeconds;
+	if (sample.durationSeconds < requiredOutingSeconds ||
+	    sample.activeCombatSeconds < minimumPerformanceActiveSeconds ||
+	    sample.kills < minimumPerformanceKills) {
+		update.evidenceReason = "insufficient_combat_evidence";
+		return update;
+	}
+	if (sample.experienceGained == 0 || !std::isfinite(sample.projectedExperience) ||
+	    !std::isfinite(sample.observedCorrection) || sample.observedCorrection < 0.25 ||
+	    sample.observedCorrection > 2.0) {
+		update.evidenceReason = "invalid_performance_sample";
+		return update;
+	}
 	const double predictedNetRate = sample.projectedExperience * 60.0 /
 	                                std::max<uint32_t>(1, sample.configuredHuntDurationSeconds);
-	if (predictedNetRate <= 0) {
+	if (!std::isfinite(update.actualExperiencePerMinute) || !std::isfinite(predictedNetRate) ||
+	    predictedNetRate <= 0) {
+		update.evidenceReason = "invalid_performance_sample";
 		return update;
 	}
 	PlayerBotHuntRegionPerformance& regionPerformance = performance[variantId];
+	if (regionPerformance.atlasRevision != atlasRevision) regionPerformance = {};
 	const double sampleCorrection = std::clamp(
 		sample.observedCorrection * update.actualExperiencePerMinute / predictedNetRate, 0.25, 2.0);
-	if (regionPerformance.samples == 0) {
+	if (!regionPerformance.reliable || regionPerformance.samples == 0 ||
+	    regionPerformance.atlasRevision != atlasRevision || !std::isfinite(regionPerformance.correction)) {
 		regionPerformance.observedExperiencePerMinute = update.actualExperiencePerMinute;
 		regionPerformance.correction = sampleCorrection;
+		regionPerformance.samples = 0;
 	} else {
 		regionPerformance.observedExperiencePerMinute = regionPerformance.observedExperiencePerMinute * 0.65 +
 		                                                 update.actualExperiencePerMinute * 0.35;
 		regionPerformance.correction = regionPerformance.correction * 0.65 + sampleCorrection * 0.35;
 	}
 	++regionPerformance.samples;
+	regionPerformance.atlasRevision = atlasRevision;
+	regionPerformance.reliable = true;
 	update.updatedCorrection = regionPerformance.correction;
+	update.evidenceReason = "reliable_combat_outing";
 	update.observed = true;
 	return update;
 }

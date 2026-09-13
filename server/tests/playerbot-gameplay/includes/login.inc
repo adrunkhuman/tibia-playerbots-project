@@ -37,14 +37,14 @@ function F.login.onLogin(player)
         end
     end
 	F.selectHealthPotion(player)
-    assert(mode == "transit_return" or mode == "mainland" or mode == "carlin_local_service" or mode == "cycle" or mode == "depot" or mode == "depot_risk_fallback" or mode == "slotted_loot_seller" or mode == "slotted_loot_no_seller" or mode == "sell_loot" or mode == "sell_loot_remote_depot" or mode == "navigation" or mode == "navigation_recovery" or mode == "carlin_service_route" or mode == "mutable_portal_route" or mode == "patrol_recovery" or mode == "target_approach" or mode == "target_approach_unreachable" or mode == "target_attacker_priority" or mode == "hunt_area_arrival" or mode == "corpse" or mode == "corpse_detour" or mode == "corpse_inaccessible" or mode == "death" or mode == "healing" or mode == "spell_use" or
+    assert(mode == "transit_return" or mode == "mainland" or mode == "carlin_local_service" or mode == "cycle" or mode == "depot" or mode == "depot_risk_fallback" or mode == "slotted_loot_seller" or mode == "slotted_loot_no_seller" or mode == "sell_loot" or mode == "sell_loot_remote_depot" or mode == "navigation" or mode == "navigation_recovery" or mode == "carlin_service_route" or mode == "mutable_portal_route" or mode == "patrol_recovery" or mode == "target_approach" or mode == "target_approach_unreachable" or mode == "target_attacker_priority" or mode == "hunt_area_arrival" or mode == "remote_hunt" or mode == "corpse" or mode == "corpse_detour" or mode == "corpse_inaccessible" or mode == "death" or mode == "healing" or mode == "spell_use" or
         mode == "healing_resupply" or mode == "value" or mode == "progression" or mode == "progression_bundle" or
         mode == "progression_nested" or mode == "progression_resume" or mode == "progression_nested_resume" or
         mode == "progression_space" or mode == "arbitration" or mode == "arbitration_interrupt" or mode == "departure" or
         mode == "departure_interrupt" or mode == "departure_recovery" or mode == "spell_training" or
         mode == "spell_training_shortlist" or mode == "spell_training_low_supplies" or
         mode == "spell_training_low_supplies_unaffordable" or mode == "stamina_bonus" or
-        mode == "stamina_boundary" or mode == "stamina_normal" or mode == "hunt_planning" or mode == "spell_calibration" or
+        mode == "stamina_boundary" or mode == "stamina_normal" or mode == "hunt_planning" or mode == "supply_recovery" or mode == "spell_calibration" or
         mode == "readiness_ready" or mode == "adaptive_challenge" or mode == "readiness_upgrade" or
         mode == "readiness_missing_weapon" or mode == "readiness_supplies" or mode == "readiness_no_food" or
         mode == "readiness_low_wealth" or mode == "readiness_food_capacity" or mode == "readiness_retention" or
@@ -189,8 +189,9 @@ function F.login.onLogin(player)
 		assert(eva and not eva:isRemoved(), "Carlin banker Eva was not spawned")
 		F.removeAll(player, F.smallHealthPotionItemId)
         F.removeAll(player, F.healthPotionItemId)
+        assert(player:learnSpell("Light Healing"), "Carlin service fixture could not unlock ammo restock")
         assert(player:addItem(F.healthPotionItemId, 1), "Carlin service fixture could not seed the return threshold")
-		assert(player:removeMoney(player:getMoney()) and player:setBankBalance(505),
+		assert(player:removeMoney(player:getMoney()) and player:setBankBalance(955),
 			"Carlin service fixture could not fund the restock target")
         F.suppressNearbyMonsters(player:getId())
         addEvent(F.verifyCarlinLocalService, 250, player:getId(), 480)
@@ -357,7 +358,7 @@ function F.login.onLogin(player)
         print("PLAYERBOT_GAMEPLAY_TEST " .. string.upper(mode) .. "_START")
         return true
     end
-    if mode ~= "hunt_planning" and mode ~= "hunt_area_arrival" then
+    if mode ~= "hunt_planning" and mode ~= "hunt_area_arrival" and mode ~= "remote_hunt" and mode ~= "supply_recovery" then
         F.restoreRookgaardBaseline(player, mode ~= "cycle")
     end
 	F.selectHealthPotion(player)
@@ -382,8 +383,9 @@ function F.login.onLogin(player)
 				"readiness supplies fixture could not reach the Thais depot")
             F.removeAll(player, F.potionItemId)
             F.removeAll(player, F.meatItemId)
+            assert(player:learnSpell("Light Healing"), "readiness supplies fixture could not unlock ammo restock")
             assert(player:addItem(F.potionItemId, 1), "readiness supplies fixture could not seed the return threshold")
-            assert(player:removeMoney(player:getMoney()) and player:addMoney(100) and player:setBankBalance(405),
+            assert(player:removeMoney(player:getMoney()) and player:addMoney(100) and player:setBankBalance(855),
                 "readiness supplies fixture could not fund the restock target")
             addEvent(F.verifyReadiness, 500, player:getId(), "supplies", 240)
         elseif mode == "readiness_no_food" then
@@ -425,7 +427,7 @@ function F.login.onLogin(player)
         print("PLAYERBOT_GAMEPLAY_TEST READINESS_" .. string.upper(mode:gsub("readiness_", "")) .. "_START")
         return true
     end
-    if mode == "hunt_planning" or mode == "hunt_area_arrival" then
+    if mode == "hunt_planning" or mode == "hunt_area_arrival" or mode == "remote_hunt" or mode == "supply_recovery" then
         local carlin = Town(F.carlinTownId)
         assert(carlin and player:setTown(carlin) and player:setVocation(4),
             "hunt planning fixture could not select the Carlin Knight")
@@ -440,10 +442,36 @@ function F.login.onLogin(player)
         assert(player:getLevel() == 8 and player:teleportTo(F.carlinTemplePosition),
             "hunt planning fixture could not prepare the level-8 Carlin Knight")
         F.installSeededHuntLoadout(player, mode)
+        if mode == "remote_hunt" then
+            local remoteExperience = Game.getExperienceForLevel(15) - player:getExperience()
+            if remoteExperience > 0 then player:addExperience(remoteExperience) end
+            assert(player:getLevel() == 15, "remote hunt fixture could not prepare the level-15 Knight")
+        end
         assert(player:getItemCount(F.healthPotionItemId) == 10 and player:getItemCount(F.smallHealthPotionItemId) == 0,
             "hunt planning fixture has the wrong healing supplies")
+        if mode == "supply_recovery" then
+            F.removeAllHealthPotions(player)
+            if player:getMoney() > 0 then assert(player:removeMoney(player:getMoney())) end
+            assert(player:setBankBalance(0))
+            assert(player:getMoney() == 0 and player:getBankBalance() == 0 and player:getItemCount(F.potionItemId) == 0,
+                "supply recovery fixture must start broke and without potions")
+            local function verifyIncome(id, attempts)
+                local bot = Player(id)
+                assert(bot, "supply recovery bot disappeared")
+                if bot:getMoney() + bot:getBankBalance() > 0 then
+                    print("PLAYERBOT_GAMEPLAY_TEST SUPPLY_RECOVERY_INCOME_PASS")
+                    return
+                end
+                assert(attempts > 0, "supply recovery did not earn money")
+                addEvent(verifyIncome, 1000, id, attempts - 1)
+            end
+            addEvent(verifyIncome, 1000, player:getId(), 300)
+            print("PLAYERBOT_GAMEPLAY_TEST SUPPLY_RECOVERY_START")
+            return true
+        end
         if mode == "hunt_planning" then F.suppressNearbyMonsters(player:getId()) end
         print(mode == "hunt_area_arrival" and "PLAYERBOT_GAMEPLAY_TEST HUNT_AREA_ARRIVAL_START" or
+            mode == "remote_hunt" and "PLAYERBOT_GAMEPLAY_TEST REMOTE_HUNT_START" or
             "PLAYERBOT_GAMEPLAY_TEST HUNT_PLANNING_START")
         return true
     end

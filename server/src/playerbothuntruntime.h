@@ -8,6 +8,7 @@
 #include "playerbothuntplanningsession.h"
 #include "playerbothuntpolicy.h"
 #include "playerbotnavigationruntime.h"
+#include "playerbotsupplyrecovery.h"
 
 #include <chrono>
 #include <cstdint>
@@ -38,12 +39,16 @@ struct PlayerBotHuntRuntimePlayerObservation {
 	uint16_t staminaMinutes = 0;
 	uint64_t experience = 0;
 	uint64_t topologyGeneration = 0;
+	uint64_t npcGeneration = 0;
 	std::set<uint64_t> excludedVariants;
 	bool canUseRope = false;
 	bool canUseShovel = false;
+	bool premium = false;
 	uint32_t potions = 0;
 	uint32_t mana = 0;
 	uint64_t funds = 0;
+	uint64_t supplyCapability = 0;
+	bool supplyInterrupted = false;
 };
 
 struct PlayerBotHuntRuntimeCooldownCommand {
@@ -55,6 +60,8 @@ struct PlayerBotHuntRuntimePlanningStartObservation {
 	PlayerBotHuntRegionScan scan;
 	PlayerBotHuntPlanningProfile profile;
 	std::shared_ptr<const PlayerBotTopologyDistances> topologyDistances;
+	std::shared_ptr<const PlayerBotTopologyReachability> originReachability;
+	std::shared_ptr<const std::vector<PlayerBotHuntTransportOffer>> transportOffers;
 	uint64_t topologyDistanceTimeUs = 0;
 };
 
@@ -64,6 +71,22 @@ struct PlayerBotHuntRuntimePlanningInput {
 	uint32_t huntDurationSeconds = 0;
 	std::string reason;
 	std::optional<PlayerBotHuntRuntimePlanningStartObservation> start;
+};
+
+struct PlayerBotHuntRuntimeTransportWork {
+	size_t offerIndex = 0;
+	PlayerBotHuntTransportOffer offer;
+	std::shared_ptr<const std::vector<PlayerBotHuntTransportArrival>> arrivals;
+	uint32_t playerLevel = 0;
+	uint64_t funds = 0;
+	bool playerPremium = false;
+	bool canUseRope = false;
+	bool canUseShovel = false;
+};
+
+struct PlayerBotHuntRuntimeTransportObservation {
+	size_t offerIndex = 0;
+	std::optional<PlayerBotHuntTransportArrival> arrival;
 };
 
 struct PlayerBotHuntRuntimeScoreWork {
@@ -86,6 +109,7 @@ struct PlayerBotHuntRuntimeScoreObservation {
 
 struct PlayerBotHuntRuntimeOutcome {
 	PlayerBotHuntRuntimeCommand command = PlayerBotHuntRuntimeCommand::None;
+	std::vector<PlayerBotHuntRuntimeTransportWork> transportWork;
 	std::vector<PlayerBotHuntRuntimeScoreWork> scoreWork;
 	std::optional<PlayerBotHuntRegion> selectedRegion;
 	std::vector<PlayerBotHuntRegion> candidates;
@@ -142,17 +166,21 @@ class PlayerBotHuntRuntime
 	public:
 		explicit PlayerBotHuntRuntime(std::vector<Position> fallbackPatrol);
 
+		void setSupplyRecovery(bool degraded) { supplyRecoveryDegraded = degraded; }
+
 		bool planningStartRequired(std::chrono::steady_clock::time_point now) const;
 		PlayerBotHuntRuntimeOutcome advancePlanning(const PlayerBotHuntRuntimePlanningInput& input,
 		                                            std::chrono::steady_clock::time_point now,
 		                                            const PlayerBotHuntPlanningObservation& observation = {});
+		PlayerBotHuntRuntimeOutcome completeTransportWork(
+		    const std::vector<PlayerBotHuntRuntimeTransportObservation>& observations);
 		PlayerBotHuntRuntimeOutcome completeScoreWork(const std::vector<PlayerBotHuntRuntimeScoreObservation>& observations,
 		                                              uint64_t elapsedUs);
 		// Keep the completed session through final telemetry, then release it.
-		void completePlanningSelection() { planning.reset(); pendingScoreCandidates.clear(); }
+		void completePlanningSelection() { planning.reset(); pendingTransportOffers.clear(); pendingScoreCandidates.clear(); }
 		void selectPlanningRegion(PlayerBotHuntRegion region, const PlayerBotHuntRuntimePlayerObservation& player,
 		                         std::chrono::steady_clock::time_point now) { activate(std::move(region), player, now); }
-		void cancelPlanning() { planning.reset(); pendingScoreCandidates.clear(); }
+		void cancelPlanning() { planning.reset(); pendingTransportOffers.clear(); pendingScoreCandidates.clear(); }
 		bool planningActive() const { return planning.has_value(); }
 		std::optional<PlayerBotHuntPlanningSession> planningSession() const
 		{
@@ -164,7 +192,8 @@ class PlayerBotHuntRuntime
 		bool deadlineReached(std::chrono::steady_clock::time_point now) const { return huntDeadline != std::chrono::steady_clock::time_point{} && now >= huntDeadline; }
 		void observeCapacityPressure(std::chrono::steady_clock::time_point now);
 		bool capacityPressureElapsed(std::chrono::steady_clock::time_point now,
-		                             std::chrono::steady_clock::duration grace) const;
+		                             std::chrono::steady_clock::duration grace,
+		                             std::chrono::steady_clock::duration minimumHunt = {}) const;
 		bool capacityPressureActive() const { return capacityPressureStarted != std::chrono::steady_clock::time_point{}; }
 		uint32_t completedCycles() const { return cycles; }
 		bool active() const { return activeRegion.has_value(); }
@@ -207,6 +236,7 @@ class PlayerBotHuntRuntime
 
 		std::optional<PlayerBotHuntPlanningSession> planning;
 		PlayerBotHuntPolicy policy;
+		bool supplyRecoveryDegraded = false;
 		std::optional<PlayerBotHuntRegion> activeRegion;
 		std::vector<Position> fallbackPatrol;
 		std::chrono::steady_clock::time_point scopeReevaluationAfter;
@@ -225,6 +255,7 @@ class PlayerBotHuntRuntime
 		uint64_t huntStartExperience = 0;
 		uint32_t huntStartLevel = 0;
 		uint32_t plannedHuntDurationSeconds = 0;
+		std::vector<size_t> pendingTransportOffers;
 		std::vector<size_t> pendingScoreCandidates;
 };
 

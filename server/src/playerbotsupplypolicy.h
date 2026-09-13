@@ -1,4 +1,4 @@
-/** Pure, uncalibrated hunt-duration consumption and recovery-spending policy.
+/** Pure hunt-duration consumption and recovery-spending policy.
  * This preference never replaces immediate combat or navigation safety gates.
  */
 #ifndef FS_PLAYERBOTSUPPLYPOLICY_H
@@ -32,6 +32,12 @@ struct PlayerBotSupplyProfile {
 	double healthInterval = 0;
 	uint32_t manaGain = 0;
 	double manaInterval = 0;
+};
+
+struct PlayerBotSupplyCalibration {
+	uint64_t capability = 0;
+	double potionsPerCombatSecond = 0;
+	uint32_t samples = 0;
 };
 
 struct PlayerBotSupplyBudget {
@@ -74,7 +80,8 @@ inline PlayerBotSupplyBudget playerBotSupplyBudget(const PlayerBotSupplyProfile&
 	const double deficit = std::max(0.0, result.expectedDamage - result.regenerationHealing - result.spellHealing);
 	result.expectedPotions = deficit == 0 ? 0 : profile.potionHealing > 0 ?
 	    std::ceil(deficit / profile.potionHealing) : std::numeric_limits<double>::max();
-	result.fits = profile.potions > profile.reserve && result.expectedPotions <= result.routinePotions;
+	result.fits = (profile.potions > profile.reserve || profile.reserve == 0) &&
+	    result.expectedPotions <= result.routinePotions;
 	return result;
 }
 
