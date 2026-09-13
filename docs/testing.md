@@ -16,7 +16,7 @@ For persistence checks, restart or recreate only the server with `--no-deps`. Re
 | Pure playerbot policy or telemetry parsing | `sh server/tests/playerbot_contracts.sh` and affected `scripts/test-playerbot-*-assertions.ps1` | Deterministic contracts and captured-log assertions | Loaded-world integration |
 | Fixtures or scenario isolation | `lua scripts/test-playerbot-fixture-isolation.lua` plus the affected Lua fixture check | Fixture setup is isolated and expected state is seeded | Ordinary autonomous behavior |
 | Server, Compose, or cross-stack behavior | Server smoke test below | Fresh provisioning, startup, lifecycle output, and ports | Gameplay or client compatibility |
-| Navigation or corpse looting | `pwsh -File scripts/test-playerbot-gameplay.ps1 -FullNavigation -CorpseLoot` | Integrated movement, recovery, corpse opening, and bounded loot failure paths | Whole-map routing or a progression soak |
+| Navigation or corpse looting | `pwsh -File scripts/test-playerbot-gameplay.ps1 -Focused -FullNavigation -CorpseLoot` | Integrated movement, recovery, corpse opening, and bounded loot failure paths | Whole-map routing or a progression soak |
 | Target approach | `pwsh -File scripts/test-playerbot-gameplay.ps1 -TargetApproach -Focused` | Reachable, unreachable, and attacker-priority fixtures | General creature memory |
 | A playerbot subsystem | `pwsh -File scripts/test-playerbot-gameplay.ps1 -Focused <switch>` | Selected controlled scenarios and JSONL assertions | Frequency or reliability in ordinary long-running play |
 | One regression | `pwsh -File scripts/test-playerbot-gameplay.ps1 -Scenario <name>` | That catalog scenario only | Neighboring modes |
@@ -67,7 +67,6 @@ A zero exit status and each script's explicit pass marker are the pass signal. T
 For server, infrastructure, or cross-stack changes:
 
 ```powershell
-pwsh -File scripts/bootstrap-client.ps1
 docker compose -f server/compose.yaml config --quiet
 docker compose -f server/compose.yaml up --build --detach
 docker compose -f server/compose.yaml logs playerbot-setup server
@@ -85,11 +84,13 @@ The driver builds or reuses the server image, starts disposable MariaDB, restore
 pwsh -File scripts/test-playerbot-gameplay.ps1
 ```
 
-The baseline covers NPC discovery, selling and supply purchase, banking, fixture-depot handling, and return to hunting. Add the smallest switch set matching the change. A passing scenario means its controlled setup reached the required telemetry and state assertions before timeout. It does not mean a normal character will reach that state unaided, repeat it indefinitely, or progress reliably across the real map.
+With no selection arguments, this runs the full suite: the baseline hunt/service cycle and all focused subsystem scenarios. Supplying subsystem switches without `-Focused` still runs the full suite. Use `-Focused` with the smallest switch set matching the change, or `-Scenario <name>` for exact selection; do not combine those selection modes. A passing scenario means its controlled setup reached the required telemetry and state assertions before timeout. It does not mean a normal character will reach that state unaided, repeat it indefinitely, or progress reliably across the real map.
 
 For a normal-stack observation, shorten hunts only when useful, recreate the server, and inspect `goal_*`, `action_result`, `hunt_*`, `navigation_progress`, `summary`, and `terminal` JSONL events. Focused tests prove deterministic transitions; use 20–60 minute hunts to evaluate repeated combat, service, recovery, planner retries, and telemetry volume. Do not report a fixture or short smoke run as proof of sustained progression.
 
 ## Client compatibility
+
+Client runtime or cross-stack compatibility work requires `pwsh -File scripts/bootstrap-client.ps1`; server-only checks do not require client assets or a local Linux client build.
 
 For protocol or gameplay-facing client changes, manually test:
 

@@ -23,6 +23,11 @@ Any change touching client-assets auto-installation must preserve the runtime co
 
 5. **Verification required in PR description**
    - Explicitly state tested install paths and expected runtime load behavior.
+   - The standard Angelion configuration disables auto-installation and targets
+     protocol 860. The login-triggered installer applies to missing client
+     versions >= 1281. Name the enabled modern-version test configuration used
+     to exercise it, or state why runtime installation was not tested. Do not
+     enable auto-installation in the tracked Angelion configuration for testing.
 
 Reference: `docs/client-assets-auto-install.md`
 

@@ -18,6 +18,14 @@ The narrower rules in `client/AGENTS.md` also apply to work under `client/`.
 - Do not create nested Git repositories or convert the subtrees to submodules.
 - Keep server and client changes in the same commit when they implement one
   cross-stack behavior or protocol change.
+- Before the first upstream update in a checkout, inspect `git remote -v`.
+  Add missing remotes (do not replace existing remotes silently):
+
+```powershell
+git remote add angelion-upstream https://github.com/Giorox/Angelion-TFS-1.5-Downgrade-8.6.git
+git remote add redemption-upstream https://github.com/opentibiabr/otclient.git
+```
+
 - Import upstream updates with squashed subtree pulls:
 
 ```powershell
@@ -78,6 +86,17 @@ git subtree pull --prefix=client redemption-upstream main --squash
   claims on observed command or runtime results, not agent confidence or review
   ceremony.
 
+## Documentation
+
+- README is the entry point; `docs/playerbots.md` owns capabilities and limits,
+  `docs/testing.md` owns check selection, and `docs/client-runtime.md` owns setup.
+- Update capability claims when user-visible behavior changes. Distinguish normal
+  autonomy, focused-fixture evidence, and planned behavior.
+- Keep tunable values in configuration/code and temporary findings or plans in
+  issues. Do not add implementation diaries or duplicate exhaustive test catalogs.
+- Preserve non-obvious intent, safety boundaries, and public contracts in prose;
+  link to code/tests for implementation detail.
+
 ## Protocol And Client
 
 - The compatibility target is standard Tibia protocol 8.60.
@@ -123,8 +142,8 @@ pwsh -File scripts/bootstrap-client.ps1
 - Keep ports `7171` and `7172` bound to `127.0.0.1` unless external exposure is
   explicitly requested and the deployment is hardened first.
 - The local database and world state are disposable. Schema and development
-  accounts must be reproducible from the ordered SQL files mounted in
-  `server/compose.yaml`.
+  accounts must be reproducible through `server/compose.yaml`: ordered MariaDB
+  initialization SQL and the separate `playerbot-setup` provisioning service.
 - During the current development phase, do not preserve database or world state
   at the cost of a simpler reset, rebuild, or restart. Use a clean volume when
   useful unless the task explicitly requires persistence testing.
@@ -150,8 +169,10 @@ pwsh -File scripts/bootstrap-client.ps1
   mechanism.
 - Keep bot-facing UI and network notifications behind null-safe `Player`
   methods; playerbot code and datapack scripts must not dereference `client`.
-- Treat the current Rookgaard hunt/depot loop and bounded map-derived navigator
-  as prototypes, not settled whole-map navigation. Provide destination goals
+- Treat the current autonomous hunt/service/depot loop and bounded map-derived
+  navigator as prototypes, not settled whole-map navigation. Rookgaard
+  progression has focused fixture coverage; the normal seeded bot starts on
+  the mainland. Provide destination goals
   rather than ordered transition checkpoints, and preserve normal movement,
   item-use, action-delay, and replanning behavior.
 - Playerbots must identify corpses through normal corpse/container and ownership
@@ -186,10 +207,12 @@ See `docs/testing.md` for focused scenarios and non-Docker regression checks.
 Persistence tests must restart or recreate only the server with `--no-deps`;
 rerunning provisioning can refill equipment slots and invalidate saved-state checks.
 
-For server, infrastructure, or cross-stack changes, run at minimum:
+For documentation-only changes, check links, command references, and
+`git diff --check`; no runtime build is required.
+
+For server, infrastructure, or cross-stack behavior changes, run at minimum:
 
 ```powershell
-pwsh -File scripts/bootstrap-client.ps1
 docker compose -f server/compose.yaml config --quiet
 docker compose -f server/compose.yaml up --build --detach
 docker compose -f server/compose.yaml logs playerbot-setup server
@@ -201,11 +224,22 @@ ports `7171` and `7172` accept local connections. Confirm that
 exists, and the server emits a valid JSONL `playerbot` `lifecycle` event with
 status `online` for `Bot One`.
 
-For playerbot navigation or looting changes, also run:
+For playerbot navigation or looting changes, also run the focused checks:
 
 ```powershell
-pwsh -File scripts/test-playerbot-gameplay.ps1 -FullNavigation -CorpseLoot
+pwsh -File scripts/test-playerbot-gameplay.ps1 -Focused -FullNavigation -CorpseLoot
 ```
+
+The gameplay driver owns Compose project `angelion`, resets its database, and
+removes the stack afterward. Do not run it alongside a development session
+whose state you need. Use `-KeepStack` only to retain the final stack for debugging.
+Without `-Focused` or exact `-Scenario` selection, the driver runs the full suite,
+not just the supplied subsystem switches. Match other changes to the checks in
+`docs/testing.md`; do not treat focused fixtures as proof of sustained progression.
+
+For client runtime or cross-stack compatibility work, bootstrap the client with
+`pwsh -File scripts/bootstrap-client.ps1`. Server-only checks do not require
+client assets or a local Linux client build.
 
 For protocol or gameplay-facing client changes, also test:
 
