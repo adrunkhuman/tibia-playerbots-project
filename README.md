@@ -8,7 +8,7 @@ A Tibia 8.60 real-map server built toward a population made mostly of autonomous
 
 The development stack controls one seeded character, `Bot One`, a level 8 Knight in Carlin. It can choose map-derived hunting regions, navigate, fight, heal, eat, loot owned corpses, use depots, sell loot, buy supplies and equipment, bank money, learn and cast supported spells, claim supported container rewards, recover after death, and continue from persisted player state.
 
-This is a prototype, not a simulated population. Navigation is bounded rather than a complete whole-map router, quest support is narrow, and most complex behavior is proven by focused fixtures rather than a long-running progression test. Multiple bots, personalities, relationships, parties, guilds, and generated population behavior are planned rather than implemented. See [Playerbots](docs/playerbots.md) for the capability and evidence boundaries.
+This is a prototype, not a simulated population. Navigation combines whole-map routing with local pathfinding and NPC travel. Unsupported transitions, search limits, and changing obstacles can still prevent a journey. Quest support is narrow, and focused gameplay tests do not establish reliable unattended progression. Multiple bots, personalities, relationships, parties, guilds, and generated population behavior are planned rather than implemented. See [Playerbots](docs/playerbots.md) for the capability and evidence boundaries.
 
 ## Run locally
 
