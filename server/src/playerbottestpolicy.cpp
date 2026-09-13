@@ -20,7 +20,8 @@ const playerbot::PlayerBotTestPolicy& playerbot::playerBotTestPolicyFromEnvironm
 		const char* gameplayMode = gameplayModeValue && *gameplayModeValue != '\0' ? gameplayModeValue : nullptr;
 		const char* regressionMode = regressionModeValue && *regressionModeValue != '\0' ? regressionModeValue : nullptr;
 		const bool progressionMode = gameplayMode &&
-			(std::strcmp(gameplayMode, "progression") == 0 ||
+			(std::strcmp(gameplayMode, "supply_recovery") == 0 ||
+			 std::strcmp(gameplayMode, "progression") == 0 ||
 			 std::strcmp(gameplayMode, "progression_bundle") == 0 ||
 			 std::strcmp(gameplayMode, "progression_nested") == 0 ||
 			 std::strcmp(gameplayMode, "progression_resume") == 0 ||
@@ -82,7 +83,8 @@ const playerbot::PlayerBotTestPolicy& playerbot::playerBotTestPolicyFromEnvironm
 		const bool adaptiveChallengeFixture = gameplayMode && std::strcmp(gameplayMode, "adaptive_challenge") == 0;
 		const bool spellCalibrationFixture = gameplayMode && std::strcmp(gameplayMode, "spell_calibration") == 0;
 		const bool magicTrainingFixture = gameplayMode && std::strncmp(gameplayMode, "magic_training", 14) == 0;
-		const bool fixedFixtureRoute = gameplayMode && std::strcmp(gameplayMode, "stamina_bonus") != 0 &&
+		const bool fixedFixtureRoute = gameplayMode && std::strcmp(gameplayMode, "supply_recovery") != 0 &&
+		                               std::strcmp(gameplayMode, "stamina_bonus") != 0 &&
 		                               std::strcmp(gameplayMode, "stamina_boundary") != 0 &&
 		                               std::strcmp(gameplayMode, "stamina_normal") != 0 &&
 		                               std::strcmp(gameplayMode, "hunt_planning") != 0 && !huntAreaArrivalFixture && !remoteHuntFixture &&

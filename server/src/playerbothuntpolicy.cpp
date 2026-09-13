@@ -192,6 +192,41 @@ PlayerBotHuntChallengeUpdate PlayerBotHuntPolicy::updateChallengeFrontier(const 
 	return update;
 }
 
+PlayerBotSupplyCalibration PlayerBotHuntPolicy::observeSupplies(const PlayerBotHuntRegion& region,
+    uint64_t durationSeconds, int32_t health, int32_t maximumHealth, uint32_t mana, uint32_t potions,
+    bool interrupted)
+{
+	const auto combat = combatSummary();
+	auto& history = performance[region.atlasVariantId];
+	if (history.atlasRevision != region.atlasRevision) history = {};
+	history.atlasRevision = region.atlasRevision;
+	auto& learned = history.supply;
+	if (learned.capability != region.supplyCapability) learned = {region.supplyCapability, 0, 0};
+	if (combat.activeSeconds <= 0) return learned;
+	const double exposure = region.availableHuntSeconds * std::clamp(region.combatFraction, 0.0, 1.0);
+	const double prior = learned.samples != 0 ? learned.potionsPerCombatSecond :
+	    exposure > 0 ? region.supplyBudget.expectedPotions / exposure : 0;
+	const double observed = combat.potionRecoveries / combat.activeSeconds;
+	const bool depleted = region.supplyProfile.potions > 0 && potions == 0;
+	const bool unsafe = combat.dangerObserved || combat.deathObserved || depleted || combat.p10HealthPercent < 70;
+	// Short/failed outings may raise demand, but cannot teach that healing was free.
+	if (unsafe || observed > prior) {
+		learned.potionsPerCombatSecond = std::max(prior, observed);
+		if (unsafe) learned.potionsPerCombatSecond = std::max(learned.potionsPerCombatSecond, 1.0 / 60.0);
+		++learned.samples;
+	} else if (!interrupted && durationSeconds >= 120 && combat.activeSeconds >= 60 && combat.kills >= 3 &&
+	           combat.p10HealthPercent >= 80 && combat.p10ManaPercent >= 50 &&
+	           health >= region.currentHealth - maximumHealth / 20 &&
+	           mana + region.supplyProfile.maximumMana / 20 >= region.supplyProfile.mana) {
+		learned.potionsPerCombatSecond = prior * 0.8 + observed * 0.2;
+		++learned.samples;
+		// Repeated stable, zero-use combat can establish a genuinely potion-free hunt.
+		if (observed == 0 && learned.samples >= 3 && learned.potionsPerCombatSecond * exposure < 1)
+			learned.potionsPerCombatSecond = 0;
+	}
+	return learned;
+}
+
 PlayerBotHuntPerformanceUpdate PlayerBotHuntPolicy::observePerformance(uint64_t variantId, uint64_t atlasRevision,
 	const PlayerBotHuntPerformanceSample& sample)
 {
@@ -225,6 +260,7 @@ PlayerBotHuntPerformanceUpdate PlayerBotHuntPolicy::observePerformance(uint64_t 
 		return update;
 	}
 	PlayerBotHuntRegionPerformance& regionPerformance = performance[variantId];
+	if (regionPerformance.atlasRevision != atlasRevision) regionPerformance = {};
 	const double sampleCorrection = std::clamp(
 		sample.observedCorrection * update.actualExperiencePerMinute / predictedNetRate, 0.25, 2.0);
 	if (!regionPerformance.reliable || regionPerformance.samples == 0 ||

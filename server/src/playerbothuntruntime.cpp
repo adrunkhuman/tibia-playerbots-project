@@ -177,7 +177,7 @@ void PlayerBotHuntRuntime::applyCandidateSuitability(PlayerBotHuntRegion& region
 	region.inChallengeBand = region.threatRatio <= region.challengeBandMaximum;
 	region.suitable = observation.candidateFactsAvailable && region.sustainedEligible && !region.predictedLethal &&
 	                  region.threatRatio <= region.challengeBandMaximum && observation.withinPlanningScope &&
-	                  region.transportPlausible;
+	                  region.transportPlausible && region.recoverySustainable();
 	if (planning->snapshot().excludedVariants.find(region.atlasVariantId) != planning->snapshot().excludedVariants.end()) {
 		region.suitable = false;
 		region.rejectionReason = "observed_danger_cooldown";
@@ -189,6 +189,8 @@ void PlayerBotHuntRuntime::applyCandidateSuitability(PlayerBotHuntRegion& region
 		region.rejectionReason = "predicted_lethal";
 	} else if (!region.sustainedEligible) {
 		region.rejectionReason = playerBotHuntViabilityRejection(region.viability);
+	} else if (!region.recoverySustainable()) {
+		region.rejectionReason = "recovery_hunt_not_sustainable";
 	} else if (!region.suitable) {
 		region.rejectionReason = "challenge_frontier";
 	} else {
@@ -201,10 +203,10 @@ PlayerBotHuntRuntimeOutcome PlayerBotHuntRuntime::exhaustScope(std::chrono::stea
 {
 	PlayerBotHuntRuntimeOutcome outcome;
 	outcome.candidates = planning->regions();
-	++scopeExhaustions;
+	scopeExhaustions = std::min<uint32_t>(scopeExhaustions + 1, 3);
 	outcome.command = PlayerBotHuntRuntimeCommand::ScopeExhausted;
 	outcome.scopeExhaustionAttempt = scopeExhaustions;
-	outcome.stopForScopeExhaustion = scopeExhaustions >= 3;
+	outcome.stopForScopeExhaustion = !supplyRecoveryDegraded && scopeExhaustions >= 3;
 	outcome.retryAfter = retryAfter;
 	scopeReevaluationAfter = now + retryAfter;
 	planning.reset();
@@ -322,8 +324,13 @@ std::optional<PlayerBotHuntRuntimeCompletion> PlayerBotHuntRuntime::complete(con
 	result.coinGoldAcquired = coinGoldAcquired;
 	result.performance = policy.observePerformance(activeRegion->atlasVariantId, activeRegion->atlasRevision,
 	    {result.durationSeconds, result.combat.activeSeconds, result.combat.kills, result.experienceGained,
-	     activeRegion->projectedExperience, activeRegion->observedCorrection, configuredDurationSeconds,
+	     activeRegion->projectedExperience, activeRegion->observedCorrection,
+	     activeRegion->supplyRecovery ? std::min<uint32_t>(configuredDurationSeconds, 120) : configuredDurationSeconds,
 	     result.combat.dangerObserved, result.combat.deathObserved});
+	if (player.supplyCapability == activeRegion->supplyCapability) {
+		result.region.supplyCalibration = policy.observeSupplies(*activeRegion, result.durationSeconds,
+		    player.health, player.maximumHealth, player.mana, player.potions, player.supplyInterrupted);
+	}
 	result.challenge = policy.updateChallengeFrontier({result.durationSeconds, player.maximumHealth});
 	activeRegion.reset();
 	capacityPressureStarted = {};

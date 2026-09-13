@@ -538,7 +538,7 @@ function Assert-AdaptiveChallengeEvents {
 		-not $fixture[0].zero_health_lethal -or -not $fixture[0].helper_scope_exhausted -or
 		$fixture[0].capacity_before_grace -or -not $fixture[0].capacity_at_grace -or -not $fixture[0].capacity_cycle_reset -or
 		$fixture[0].knight_route_reserve -ne 4 -or $fixture[0].rook_route_reserve -ne 9 -or
-		$fixture[0].high_health_route_reserve -ne 12 -or $fixture[0].high_health_restock_target -ne 13 -or
+		$fixture[0].high_health_route_reserve -ne 12 -or $fixture[0].high_health_restock_target -ne 20 -or
 		-not $fixture[0].net_value_loss_rejected -or -not $fixture[0].currency_priority_override -or
 		-not $fixture[0].currency_hunt_capacity_excluded -or
 		-not $fixture[0].large_restock_batched -or

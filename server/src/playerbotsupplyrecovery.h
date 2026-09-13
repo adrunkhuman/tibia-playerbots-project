@@ -11,7 +11,20 @@
 class PlayerBotSupplyRecoveryState
 {
 	public:
-		bool active() const { return degraded; }
+		bool active() const { return degraded || restockDeferred; }
+
+		void deferRestock(uint64_t funds, uint32_t potions)
+		{
+			restockDeferred = true;
+			deferredFunds = funds;
+			deferredPotions = potions;
+		}
+
+		bool restockBlocked(uint64_t funds, uint32_t potions)
+		{
+			if (funds != deferredFunds || potions != deferredPotions) restockDeferred = false;
+			return restockDeferred;
+		}
 
 		bool enter()
 		{
@@ -33,7 +46,15 @@ class PlayerBotSupplyRecoveryState
 
 	private:
 		bool degraded = false;
+		bool restockDeferred = false;
+		uint64_t deferredFunds = 0;
+		uint32_t deferredPotions = 0;
 };
+
+inline uint32_t playerBotMandatoryPotionDeficit(uint32_t potions, uint32_t safetyTarget, bool recovery)
+{
+	return !recovery && potions < safetyTarget ? safetyTarget - potions : 0;
+}
 
 inline double playerBotSupplyRecoveryChallengeFrontier(double frontier, bool degraded)
 {

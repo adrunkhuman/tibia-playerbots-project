@@ -73,7 +73,7 @@ $scenarioCatalog = @(
 	"real_depot_restart_deposit", "real_depot_restart_depart", "real_depot_partial_move", "real_depot_rejected_move",
 	"pickup_progression", "pickup_progression_bundle", "pickup_progression_nested", "pickup_progression_resume",
 	"pickup_progression_nested_resume", "pickup_progression_space", "goal_arbitration", "goal_arbitration_interrupt",
-	"stamina_bonus_projection", "stamina_boundary_projection", "stamina_normal_projection", "hunt_region_planning",
+	"stamina_bonus_projection", "stamina_boundary_projection", "stamina_normal_projection", "hunt_region_planning", "supply_recovery",
 	"combat_readiness_ready", "combat_readiness_upgrade", "combat_readiness_missing_weapon", "combat_readiness_supplies",
 	"combat_readiness_no_food", "combat_readiness_low_wealth", "combat_readiness_food_capacity",
 	"combat_readiness_retention", "hunt_area_arrival", "remote_hunt", "equipment_offer_shadow_upgrade", "equipment_offer_shadow_unaffordable",
@@ -94,8 +94,8 @@ foreach ($scenarioName in $scenarioCatalog) {
 		throw "Duplicate gameplay scenario name: $scenarioName"
 	}
 }
-if ($scenarioCatalog.Count -ne 91) {
-	throw "The gameplay scenario catalog must contain 91 scenarios; found $($scenarioCatalog.Count)."
+if ($scenarioCatalog.Count -ne 92) {
+	throw "The gameplay scenario catalog must contain 92 scenarios; found $($scenarioCatalog.Count)."
 }
 $requestedScenarioNames = @($Scenario | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
 $exactScenarioSelection = $requestedScenarioNames.Count -gt 0

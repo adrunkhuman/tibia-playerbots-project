@@ -534,6 +534,7 @@ void PlayerBotController::onNpcReply(uint32_t replyingPlayerId, uint32_t npcId, 
 
 void PlayerBotController::beginService(Player* player, const Position& position, const char* reason)
 {
+	updateSupplyRecovery(*player, position);
 	const bool interruptedHunt = fixtureDriver.progressionGoalLoop(true).selectGoal && progressionRuntime.activeGoal() == TopLevelGoal::Hunt &&
 	                             !departurePlanner.hasCompleted(departureSnapshot(*player));
 	finishHuntRegion(*player, position, reason);
@@ -563,8 +564,13 @@ void PlayerBotController::beginService(Player* player, const Position& position,
 void PlayerBotController::updateSupplyRecovery(const Player& player, const Position& position)
 {
 	const uint64_t funds = player.getMoney() + player.getBankBalance();
-	const uint64_t budget = recoverySpendingReserve(player, potionStockTarget(player));
-	if (!supplyRecovery.update(funds, budget)) return;
+	const uint32_t potions = inventoryPolicy.inventoryItemCount(player, recoveryPotionItemId(player.getVocationId()));
+	const bool wasActive = supplyRecovery.active();
+	supplyRecovery.restockBlocked(funds, potions);
+	const uint64_t spending = recoverySpendingReserve(player, healthPotionSafetyTarget);
+	const uint64_t budget = spending == UINT64_MAX ? spending : spending - carriedGoldReserve;
+	supplyRecovery.update(funds, budget);
+	if (wasActive == supplyRecovery.active()) return;
 	huntCoordinator.setSupplyRecovery(supplyRecovery.active());
 	serviceWorkflow.setSurvivalRestock(supplyRecovery.active());
 	emit("action_result", position,
@@ -917,6 +923,8 @@ void PlayerBotController::processService(Player* player, const Position& current
 			return;
 		}
 		if (command.outcome == PlayerBotServiceOutcome::InsufficientFunds) {
+			supplyRecovery.deferRestock(observation.money + observation.bankBalance,
+			    inventoryPolicy.inventoryItemCount(*player, observation.healthPotionItemId));
 			// Unaffordable potions degrade operation instead of stopping: hunt
 			// and sell under supply recovery until loot funds a restock.
 			enterSupplyRecovery(currentPosition, observation.money + observation.bankBalance,
@@ -1043,6 +1051,20 @@ void PlayerBotController::processService(Player* player, const Position& current
 		return;
 	}
 	if (command.type == PlayerBotServiceCommandType::Complete) {
+		const uint32_t potions = inventoryPolicy.inventoryItemCount(*player, observation.healthPotionItemId);
+		if (potions < healthPotionSafetyTarget &&
+		    !supplyRecovery.restockBlocked(player->getMoney() + player->getBankBalance(), potions)) {
+			supplyRecovery.deferRestock(player->getMoney() + player->getBankBalance(), potions);
+			huntCoordinator.setSupplyRecovery(true);
+			emit("action_result", currentPosition,
+			     "\"action\":\"restock\",\"result\":\"deferred\",\"reason\":\"safety_stock_unmet\"");
+		}
+		if (supplyRecovery.active() && survivalRuntime.needsHealing(survivalSnapshot(*player))) {
+			// Stay at the completed service site while normal food/spell recovery runs.
+			// Re-entering goal selection here would immediately interrupt another hunt.
+			schedule(1000);
+			return;
+		}
 		if (fixtureDriver.progressionGoalLoop(true).selectGoal) {
 			emit("goal_result", currentPosition,
 			     "\"decision_id\":" + std::to_string(progressionRuntime.decisionId()) +

@@ -607,7 +607,7 @@ void PlayerBotController::processTraversalCombat(Player* player, const Position&
 
 bool PlayerBotController::isActiveHuntCombat(const Player& player) const
 {
-	return huntCoordinator.huntActive() && turnRouter.cyclePhase() == CyclePhase::Hunt &&
+	return huntCoordinator.huntActive() && huntRegionReached && turnRouter.cyclePhase() == CyclePhase::Hunt &&
 	       turnRouter.scenarioStage() == ScenarioStage::TraversalCombat &&
 	       const_cast<Player&>(player).getAttackedCreature() != nullptr;
 }
@@ -633,7 +633,7 @@ void PlayerBotController::recordActiveHuntCombat(const Player& player)
 void PlayerBotController::recordHuntRecovery(bool potion)
 {
 	Player* player = g_game.getPlayerByID(playerId);
-	if (!player || !huntCoordinator.huntActive() || !isActiveHuntCombat(*player)) {
+	if (!player || !huntCoordinator.huntActive() || !huntRegionReached || turnRouter.cyclePhase() != CyclePhase::Hunt) {
 		return;
 	}
 	if (potion) {
@@ -691,6 +691,8 @@ void PlayerBotController::emitHuntRegionCandidate(const PlayerBotHuntRegion& reg
 	       << ",\"coin_estimate_source\":\"static_loaded_loot_gross\""
 	       << ",\"expected_coin_gold_per_minute\":" << region.coinGoldPerMinute
 	       << ",\"cash_pressure\":" << (region.cashPressure ? "true" : "false")
+	       << ",\"supply_recovery\":" << (region.supplyRecovery ? "true" : "false")
+	       << ",\"recovery_route_health_loss\":" << region.recoveryRouteHealthLoss
 	       << ",\"sustained_eligible\":" << (region.sustainedEligible ? "true" : "false")
 	       << ",\"reachable_spawns\":" << region.viability.reachableSpawns
 	       << ",\"replenishing_spawns\":" << region.viability.replenishingSpawns
@@ -711,12 +713,15 @@ void PlayerBotController::emitHuntRegionCandidate(const PlayerBotHuntRegion& reg
 	       << ",\"projected_experience\":" << region.projectedExperience
 	       << ",\"optimistic_projected_experience\":" << region.optimisticProjectedExperience
 	       << ",\"route_validated\":" << (region.routeValidated ? "true" : "false")
-	       << ",\"supply_estimate_source\":\"static_duration_budget\""
+	       << ",\"supply_estimate_source\":" << jsonString(region.supplyCalibration.samples != 0 ?
+	           "observed_combat_consumption" : "static_duration_budget")
 	       << ",\"supply_budget_fits\":" << (region.supplyBudget.fits ? "true" : "false")
 	       << ",\"supply_expected_damage\":" << region.supplyBudget.expectedDamage
 	       << ",\"supply_regeneration_healing\":" << region.supplyBudget.regenerationHealing
 	       << ",\"supply_spell_healing\":" << region.supplyBudget.spellHealing
 	       << ",\"supply_expected_potions\":" << region.supplyBudget.expectedPotions
+	       << ",\"supply_calibration_samples\":" << region.supplyCalibration.samples
+	       << ",\"supply_potions_per_combat_minute\":" << region.supplyCalibration.potionsPerCombatSecond * 60
 	       << ",\"supply_reserved_potions\":" << region.supplyBudget.reservedPotions
 	       << ",\"supply_routine_potions\":" << region.supplyBudget.routinePotions
 	       << ",\"threat_ratio\":" << region.threatRatio
@@ -802,7 +807,10 @@ void PlayerBotController::emitHuntRegionPlanning(const PlayerBotHuntPlanningSess
 void PlayerBotController::finishHuntRegion(const Player& player, const Position& position, const char* reason)
 {
 	Player& mutablePlayer = const_cast<Player&>(player);
-	const auto completion = huntCoordinator.finishHunt(huntPlayerObservation(mutablePlayer), std::chrono::steady_clock::now(),
+	auto observation = huntPlayerObservation(mutablePlayer);
+	observation.supplyCapability = playerBotSupplyCapability(huntPlanningFacts(mutablePlayer, huntCombatProfile(mutablePlayer)));
+	observation.supplyInterrupted = std::strcmp(reason, "hunt_deadline") != 0 && std::strcmp(reason, "capacity") != 0;
+	const auto completion = huntCoordinator.finishHunt(observation, std::chrono::steady_clock::now(),
 		static_cast<uint32_t>(std::max<int32_t>(1, g_config.getNumber(ConfigManager::PLAYERBOT_HUNT_DURATION_SECONDS))));
 	if (!completion) return;
 	const auto& combat = completion->combat;
@@ -823,6 +831,8 @@ void PlayerBotController::finishHuntRegion(const Player& player, const Position&
 	       << ",\"updated_observed_correction\":" << completion->performance.updatedCorrection
 	       << ",\"performance_observed\":" << (completion->performance.observed ? "true" : "false")
 	       << ",\"performance_evidence_reason\":" << jsonString(completion->performance.evidenceReason)
+	       << ",\"supply_calibration_samples\":" << completion->region.supplyCalibration.samples
+	       << ",\"supply_potions_per_combat_minute\":" << completion->region.supplyCalibration.potionsPerCombatSecond * 60
 	       << ",\"kills\":" << combat.kills << ",\"damage_taken\":" << combat.damageTaken
 	       << ",\"active_combat_seconds\":" << combat.activeSeconds
 	       << ",\"active_combat_uptime\":" << (completion->durationSeconds == 0 ? 0 : combat.activeSeconds / completion->durationSeconds)
@@ -846,7 +856,8 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 	const PlayerBotHuntPlanningObservation fixtureObservation = fixtureDriver.huntPlanningObservation();
 	const uint32_t configuredDuration = static_cast<uint32_t>(
 	    std::max<int32_t>(1, g_config.getNumber(ConfigManager::PLAYERBOT_HUNT_DURATION_SECONDS)));
-	const uint32_t duration = fixtureDriver.huntPlanningDuration(configuredDuration);
+	const uint32_t duration = fixtureDriver.huntPlanningDuration(
+	    supplyRecovery.active() ? std::min<uint32_t>(configuredDuration, 120) : configuredDuration);
 	auto planningInput = [&]() {
 		PlayerBotHuntRuntimePlanningInput input;
 		input.player = huntPlayerObservation(player);
@@ -969,7 +980,7 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 	}
 	if (outcome.command == PlayerBotHuntRuntimeCommand::ScopeExhausted) {
 		emit("hunt_region_selection", position, "\"result\":\"failed\",\"reason\":\"no_suitable_reachable_region\"");
-		emit("hunt_scope_exhausted", position, "\"reason\":\"local_scope_exhausted\",\"attempt\":" + std::to_string(outcome.scopeExhaustionAttempt) + ",\"maximum_attempts\":3,\"retry_delay_ms\":" + std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(outcome.retryAfter).count()));
+		emit("hunt_scope_exhausted", position, "\"reason\":\"local_scope_exhausted\",\"attempt\":" + std::to_string(outcome.scopeExhaustionAttempt) + ",\"maximum_attempts\":" + (supplyRecovery.active() ? "null" : "3") + ",\"retry_delay_ms\":" + std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(outcome.retryAfter).count()));
 		if (outcome.stopForScopeExhaustion) stop("hunt_scope_exhausted", position);
 		return false;
 	}
@@ -1088,7 +1099,7 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 			routed.supplyProfile = huntPlanningFacts(player, huntCombatProfile(player)).supply;
 			routed.reconcileRecovery(candidateReserve, player.getMoney() + player.getBankBalance(),
 			    recoverySpendingReserve(player, potionStockTarget(player, candidateReserve)));
-			const bool needsSupplyRoute = playerBotHuntNeedsSupplyRoute(
+			const bool needsSupplyRoute = !routed.supplyRecovery && playerBotHuntNeedsSupplyRoute(
 			    routed.supplyBudget.expectedPotions, routed.supplyProfile.potions, candidateReserve);
 			huntSupplyExitApproaches = needsSupplyRoute ? huntSupplyExitCandidates(player, depotApproach) :
 			                                                   std::vector<Position>{};
@@ -1099,7 +1110,7 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 				return false;
 			}
 		}
-		const bool needsSupplyRoute = playerBotHuntNeedsSupplyRoute(
+		const bool needsSupplyRoute = !routed.supplyRecovery && playerBotHuntNeedsSupplyRoute(
 		    routed.supplyBudget.expectedPotions, routed.supplyProfile.potions,
 		    routed.supplyBudget.reservedPotions);
 		if (needsSupplyRoute && routed.supplyDestination == Position()) {
@@ -1137,7 +1148,16 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 		const uint64_t recoveryReserve = recoverySpendingReserve(
 		    player, potionStockTarget(player, candidateReserve));
 		routed.recoveryPotionReserve = candidateReserve;
+		routed.recoveryRouteHealthLoss = (static_cast<double>(routed.routeDangerCost) + routed.returnRouteDangerCost) *
+		    player.getMaxHealth() / risk.healthLossCost;
 		routed.reconcileRecovery(candidateReserve, player.getMoney() + player.getBankBalance(), recoveryReserve);
+		if (!routed.recoverySustainable()) {
+			routed.suitable = false;
+			routed.rejectionReason = "recovery_hunt_not_sustainable";
+			rejectRouteCandidate(routed);
+			if (retryAfter) *retryAfter = std::chrono::milliseconds(SCHEDULER_MINTICKS);
+			return false;
+		}
 		const uint64_t funds = player.getMoney() + player.getBankBalance();
 		if (!playerBotHuntTravelAffordable(funds, recoveryReserve, routed.outboundFare,
 		                                  routed.exitFare, routed.supplyFare)) {
@@ -1239,7 +1259,8 @@ void PlayerBotController::beginHuntCycle(Player* player, const Position& positio
 {
 	pendingHuntCompletionReason.clear();
 	const uint32_t duration = static_cast<uint32_t>(std::max<int32_t>(1, g_config.getNumber(ConfigManager::PLAYERBOT_HUNT_DURATION_SECONDS)));
-	huntCoordinator.beginHuntCycle(std::chrono::steady_clock::now(), duration);
+	huntCoordinator.beginHuntCycle(std::chrono::steady_clock::now(),
+	    supplyRecovery.active() ? std::min<uint32_t>(duration, 120) : duration);
 	// A fallback patrol is already a deliberate hunt; selected regions have a
 	// separate outbound leg before the bot enters their observed hunt area.
 	huntRegionReached = !fixtureDriver.huntObservation().selectRegion;

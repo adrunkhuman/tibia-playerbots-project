@@ -90,7 +90,7 @@ PlayerBotEquipmentReadinessInput PlayerBotController::equipmentReadinessInput(co
 	const Item* backpack = player.getInventoryItem(CONST_SLOT_BACKPACK);
 	const uint16_t potionItemId = recoveryPotionItemId(player.getVocationId());
 	return {backpack && backpack->getContainer(),
-	        inventoryPolicy.inventoryItemCount(player, potionItemId) > huntPotionReturnThreshold,
+	        supplyRecovery.active() || inventoryPolicy.inventoryItemCount(player, potionItemId) > huntPotionReturnThreshold,
 	        inventoryPolicy.huntFreeCapacity(player), returnCapacityThreshold};
 }
 
@@ -974,9 +974,10 @@ bool PlayerBotController::selectTopLevelGoal(Player& player, const Position& pos
 	}
 	const uint16_t potionItemId = recoveryPotionItemId(player.getVocationId());
 	const uint32_t potionCount = inventoryPolicy.inventoryItemCount(player, potionItemId);
+	updateSupplyRecovery(player, position);
 	huntPotionRestockTarget = potionStockTarget(player);
-	const uint32_t missingPotions = potionCount < huntPotionRestockTarget ?
-	                                  huntPotionRestockTarget - potionCount : 0;
+	const uint32_t missingPotions = playerBotMandatoryPotionDeficit(
+	    potionCount, healthPotionSafetyTarget, supplyRecovery.active());
 	const bool criticalHealing = survivalRuntime.needsHealing(survivalSnapshot(player)) &&
 	                             potionCount <= huntPotionReturnThreshold;
 	const auto requiredGoal = PlayerBotGoalPlanner::requiredGoal(
@@ -1025,7 +1026,7 @@ bool PlayerBotController::selectTopLevelGoal(Player& player, const Position& pos
 		player.getVocation()->getId() != 0, player.getLevel() < oracleMinimumLevel,
 		player.getLevel() > oracleMaximumLevel,
 		lowCapacity, criticalHealing, missingPotions, sellable,
-		player.getMoney() != inventoryPolicy.desiredCarriedGold(player),
+		!supplyRecovery.active() && player.getMoney() != inventoryPolicy.desiredCarriedGold(player),
 		pickupCoolingDown, pickupFound, pickupUtility,
 		spellTrainingCoolingDown, spellTrainingFound,
 		equipmentPurchaseCoolingDown, fixtureDriver.observeEquipmentOffer(true).available, equipmentFound,

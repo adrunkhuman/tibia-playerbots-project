@@ -644,6 +644,99 @@ void adaptiveChallenge()
 	assert(std::abs(bounded.challengeFrontier() - 0.60) < 1e-12);
 }
 
+void supplyCalibration()
+{
+	PlayerBotHuntPolicy policy;
+	PlayerBotHuntRegion region;
+	region.atlasVariantId = 1;
+	region.atlasRevision = 2;
+	region.supplyCapability = 3;
+	region.supplyRecovery = true;
+	region.currentHealth = region.maximumHealth = 100;
+	region.supplyProfile.potionHealing = 125;
+	region.supplyProfile.maximumMana = region.supplyProfile.mana = 100;
+	region.combatFraction = 0.5;
+	region.availableHuntSeconds = 120;
+	region.supplyBudget.expectedPotions = 1;
+	auto observe = [&](uint32_t potions, int32_t health, uint32_t mana, bool interrupted = false) {
+		policy.resetCombatEvidence();
+		policy.observeCombat({true, 60, health, 100, mana, 100, 1});
+		for (unsigned i = 0; i < 3; ++i) policy.observeKill();
+		for (unsigned i = 0; i < potions; ++i) policy.observeRecovery(true);
+		return policy.observeSupplies(region, 120, health, 100, mana, 0, interrupted);
+	};
+	assert(observe(0, 90, 100).samples == 0); // Health loss is unpaid demand.
+	assert(observe(0, 100, 80).samples == 0); // Spending the mana pool is not sustain.
+	assert(observe(0, 100, 100, true).samples == 0);
+	assert(observe(0, 100, 100).potionsPerCombatSecond > 0);
+	observe(0, 100, 100);
+	region.supplyCalibration = observe(0, 100, 100);
+	assert(region.supplyCalibration.potionsPerCombatSecond == 0);
+	region.reconcileSupplies(1);
+	assert(region.supplyBudget.fits && region.supplyBudget.expectedPotions == 0);
+	region.supplyCalibration = observe(2, 100, 100);
+	region.reconcileSupplies(1);
+	assert(region.supplyBudget.expectedPotions == 2 && !region.supplyBudget.fits);
+	region.reconcileTravel(240, 0, 1);
+	assert(region.supplyBudget.expectedPotions == 4);
+	const auto unsafe = observe(0, 50, 100);
+	assert(unsafe.potionsPerCombatSecond >= region.supplyCalibration.potionsPerCombatSecond);
+	region.supplyCapability = 4;
+	assert(observe(0, 100, 100, true).samples == 0);
+	region.atlasRevision = 3;
+	assert(observe(0, 100, 100, true).samples == 0);
+
+	PlayerBotHuntRuntime runtime({});
+	PlayerBotHuntRuntimePlayerObservation player;
+	player.health = player.maximumHealth = player.mana = 100;
+	player.supplyCapability = region.supplyCapability;
+	const auto start = std::chrono::steady_clock::time_point{};
+	runtime.selectPlanningRegion(region, player, start);
+	runtime.sampleCombat({true, start + std::chrono::seconds(1), 100, 100, 100, 100, 1});
+	runtime.sampleCombat({true, start + std::chrono::seconds(61), 100, 100, 100, 100, 1});
+	for (unsigned i = 0; i < 3; ++i) runtime.observeKill();
+	const auto completed = runtime.complete(player, start + std::chrono::seconds(120), 2400);
+	assert(completed && completed->region.supplyCalibration.samples == 1);
+	assert(runtime.regionPerformance().at(region.atlasVariantId).supply.samples == 1);
+	assert(!runtime.complete(player, start + std::chrono::seconds(121), 2400));
+
+	PlayerBotHuntPlanningProfile capabilities;
+	const auto original = playerBotSupplyCapability(capabilities);
+	capabilities.supply.spellLegal = true;
+	assert(playerBotSupplyCapability(capabilities) != original);
+	capabilities.supply.spellLegal = false;
+	capabilities.combat.armor = 5;
+	assert(playerBotSupplyCapability(capabilities) != original);
+
+	PlayerBotHuntRegion recovery;
+	recovery.supplyRecovery = true;
+	recovery.currentHealth = recovery.maximumHealth = 100;
+	recovery.supplyProfile.potionHealing = 125;
+	recovery.expectedDamagePerSecond = 0.1;
+	recovery.reconcileTravel(120, 0, 1);
+	assert(recovery.supplyBudget.expectedPotions == 0 && recovery.supplyBudget.fits);
+	recovery.supplyProfile.potions = 1;
+	recovery.reconcileSupplies(1);
+	assert(recovery.supplyBudget.expectedPotions == 0 && recovery.supplyBudget.fits);
+	recovery.supplyProfile.potions = 0;
+	recovery.coinGoldPerMinute = 1;
+	recovery.atlasVariantId = 1;
+	recovery.reachable = true;
+	assert(recovery.recoverySustainable());
+	recovery.recoveryRouteHealthLoss = 10;
+	recovery.reconcileSupplies(1);
+	assert(!recovery.supplyBudget.fits); // 12 hunt + 10 travel damage exceeds 20 HP.
+	auto affordable = recovery;
+	affordable.atlasVariantId = 2;
+	affordable.recoveryRouteHealthLoss = 5;
+	affordable.reconcileSupplies(1);
+	assert(affordable.recoverySustainable());
+	assert(selectRuntimeHunt({recovery, affordable}).atlasVariantId == 2);
+	recovery.currentHealth = 80;
+	recovery.reconcileSupplies(1);
+	assert(!recovery.supplyBudget.fits);
+}
+
 void sharedHuntPerformanceCalibration()
 {
 	auto reliableSample = [](uint64_t experience) {
@@ -673,9 +766,9 @@ void sharedHuntPerformanceCalibration()
 
 	// Default, malformed, stale, and explicitly unreliable entries are not observations.
 	performance.emplace(4, PlayerBotHuntRegionPerformance{});
-	performance.emplace(5, PlayerBotHuntRegionPerformance{10, 9, 1, atlasRevision, true});
-	performance.emplace(6, PlayerBotHuntRegionPerformance{10, 1.25, 1, atlasRevision, false});
-	performance.emplace(8, PlayerBotHuntRegionPerformance{10, 1.75, 1, atlasRevision - 1, true});
+	performance.emplace(5, PlayerBotHuntRegionPerformance{10, 0, 9, 1, atlasRevision, true, {}});
+	performance.emplace(6, PlayerBotHuntRegionPerformance{10, 0, 1.25, 1, atlasRevision, false, {}});
+	performance.emplace(8, PlayerBotHuntRegionPerformance{10, 0, 1.75, 1, atlasRevision - 1, true, {}});
 	const auto filtered = playerBotHuntCorrectionForVariant(7, atlasRevision, performance);
 	assert(filtered.sampleCount == 2 && std::abs(filtered.correction - 1.5) < 1e-12);
 	assert(std::string(playerBotHuntCorrectionForVariant(4, atlasRevision, {}).source) == "default");
@@ -726,7 +819,27 @@ void supplyRecoveryMode()
 	assert(!survival.insufficientFunds && survival.amount == 0);
 	PlayerBotEconomyInventorySnapshot richer{1, 100, 146, 0};
 	const auto partial = policy.restock(richer, 45, 0, 1, 10, true);
-	assert(!partial.insufficientFunds && partial.amount == 1); // 146 - 100 reserve = 46 gp.
+	assert(!partial.insufficientFunds && partial.amount == 3); // Survival may spend the cash reserve.
+	assert(policy.restock({0, 100, 45, 0}, 45, 0, 1, 20, true).amount == 1);
+	assert(policy.restock({0, 0, 45, 0}, 45, 10, 1, 20, true).amount == 0);
+
+	PlayerBotSupplyRecoveryState deferred;
+	deferred.deferRestock(126, 0);
+	assert(deferred.active() && deferred.restockBlocked(126, 0));
+	assert(!deferred.restockBlocked(171, 0) && !deferred.active());
+	deferred.deferRestock(126, 0);
+	assert(!deferred.restockBlocked(126, 1));
+	PlayerBotGoalPlanner planner;
+	PlayerBotGoalPlannerSnapshot goal;
+	for (uint32_t potions : {0U, 1U, 2U, 19U, 20U}) {
+		goal.missingPotions = playerBotMandatoryPotionDeficit(potions, 2, false);
+		assert(planner.serviceCandidate(goal).feasible == (potions < 2));
+		goal.missingPotions = playerBotMandatoryPotionDeficit(potions, 2, true);
+		assert(!planner.serviceCandidate(goal).feasible);
+	}
+
+	goal.criticalHealing = true;
+	assert(planner.serviceCandidate(goal).feasible);
 
 	const PlayerBotSurvivalSellCandidate rejected{
 	    true, true, true, true, 10, 500};
@@ -938,6 +1051,9 @@ void supplyBudget()
 	assert(!playerBotSupplyBudget(profile, 0, 0, 900, 0).fits);
 	profile.potions = 0;
 	assert(!playerBotSupplyBudget(profile, 0, 0, 900, 0).fits);
+	profile.reserve = 0;
+	assert(playerBotSupplyBudget(profile, 0, 0, 900, 0).fits);
+	profile.reserve = 1;
 	profile.potions = 2;
 	profile.regenerationSeconds = 900;
 	profile.healthGain = 10;
@@ -1124,6 +1240,7 @@ int main()
 	adaptiveChallenge();
 	sharedHuntPerformanceCalibration();
 	supplyRecoveryMode();
+	supplyCalibration();
 	navigationFixedObjective();
 	topologyComponentCompression();
 	fixtureHuntHorizons();

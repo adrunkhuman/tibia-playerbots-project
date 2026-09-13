@@ -74,7 +74,7 @@ the lowest expected potion consumption among safe candidates, with XP breaking
 ties. This is not a new hunt eligibility gate: existing readiness and emergency
 return rules still apply. A budget is not permission to spend the reserve.
 
-The uncalibrated static estimate uses spawn probabilities and intervals, existing
+The initial static estimate uses spawn probabilities and intervals, existing
 combat/clear throughput, and conservative local-crowd inflation. Each modeled
 crowd's fight damage is divided by that same crowd's summed isolated damage;
 the largest local ratio is applied to spawn-rate damage, with a floor of one.
@@ -84,8 +84,21 @@ using minimum healing. It credits only legal Exura's audited minimum and the act
 condition. Regeneration uses whole ticks during estimated combat time, expires
 after its current lifetime, and gets no travel credit. Exura retains its mana
 reserve and receives at most one mana pool of credit, not repeated refill cycles.
-No current-health spending, future food, looted supplies, other spells, equipment
-regeneration, expected profit, or observed supply calibration is assumed.
+The static estimate assumes no future food, looted supplies, other spells,
+equipment regeneration, or expected profit. Zero-potion recovery outings are
+capped at 120 seconds; combined hunt and outbound/depot-return route estimates
+may spend only health above 80% of maximum. Recovery candidates must fit supplies
+and yield coin income, but may use smaller spawns than normal long hunts.
+
+Per-variant supply calibration uses verified potions per active combat second.
+It raises estimates promptly and lowers them gradually only after substantial,
+completed combat with stable health and mana. Zero inventory is not evidence
+of zero healing demand: depletion, low health, death, and danger cannot lower
+estimates. Changed combat/healing capabilities or atlas revisions invalidate
+observations. See `supplyCalibration()` and `supplyRecoveryMode()` in
+`server/tests/playerbot_contracts.cpp` for calibration, zero-supply budgets,
+emergency spending, safety-only service eligibility, and unchanged-restock
+regressions.
 
 Before scoring, transport feasibility processes eight loaded offers per turn
 against an immutable player/resource snapshot. Shared compact component
@@ -105,7 +118,9 @@ potion reserves update the budget before final
 selection. Potion changes, mana loss, cancellation, or snapshot invalidation
 stop the incremental session safely.
 
-`hunt_region_candidate` reports `supply_estimate_source=static_duration_budget`,
+`hunt_region_candidate` reports `supply_estimate_source=static_duration_budget`
+or `observed_combat_consumption`, `supply_calibration_samples`,
+`supply_potions_per_combat_minute`,
 `supply_budget_fits`, `supply_expected_damage`, `supply_regeneration_healing`,
 `supply_spell_healing`, `supply_expected_potions`, `supply_reserved_potions`, and
 `supply_routine_potions`. `score` remains projected XP; it is not a composite
@@ -133,8 +148,12 @@ checks the live verifier's exact potion/payment counts and bounded wait.
 Parent/live validation (resets the disposable test stack):
 
 ```powershell
-pwsh -File scripts/test-playerbot-gameplay.ps1 -Scenario adaptive_challenge,spell_training_low_supplies,spell_training_low_supplies_unaffordable,spell_training,spell_training_shortlist,hunt_region_planning
+pwsh -File scripts/test-playerbot-gameplay.ps1 -Scenario supply_recovery,adaptive_challenge,spell_training_low_supplies,spell_training_low_supplies_unaffordable,spell_training,spell_training_shortlist,hunt_region_planning
 ```
+
+`supply_recovery` starts a seeded level-8 Carlin Knight with zero potions and
+zero carried/bank gold. It requires selected-region arrival and normal corpse
+coin looting, and rejects repeated Service selection.
 
 `adaptive_challenge` additionally runs deterministic synthetic candidate facts
 through the real bounded hunt scoring session/runtime: two potions select the

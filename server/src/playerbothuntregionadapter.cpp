@@ -566,10 +566,19 @@ namespace {
 		// time, danger and supply costs, but never count them as recurring yield.
 		const auto yield = playerBotSustainedHuntYield(replenishment, region.viability, cycleSeconds);
 		region.coinGoldPerMinute = yield.coinGoldPerMinute;
+		// Small replenishing spawns can fund recovery without long-hunt throughput.
+		if (region.supplyRecovery && region.coinGoldPerMinute > 0 && expectedCycleExperience > 0)
+			region.sustainedEligible = true;
 		region.spawnExperiencePerMinute = yield.spawnExperiencePerMinute;
 		region.clearExperiencePerMinute = yield.clearExperiencePerMinute;
 		region.experiencePerMinute = std::min(yield.spawnExperiencePerMinute, yield.clearExperiencePerMinute);
 		region.supplyProfile = planningProfile.supply;
+		region.supplyCapability = playerBotSupplyCapability(planningProfile);
+		if (const auto found = performance.find(region.atlasVariantId);
+		    found != performance.end() && found->second.atlasRevision == region.atlasRevision &&
+		    found->second.supply.capability == region.supplyCapability) {
+			region.supplyCalibration = found->second.supply;
+		}
 		region.destination = *std::min_element(region.patrolPoints.begin(), region.patrolPoints.end(),
 			[&player](const Position& left, const Position& right) {
 				const uint32_t leftDistance = Position::getDistanceX(player.getPosition(), left) +
@@ -623,6 +632,7 @@ namespace {
 		                                   Position::getDistanceZ(player.getPosition(), region.destination) * 20;
 		region.predictedFightSeconds = worstFightSeconds;
 		region.currentHealth = planningProfile.currentHealth;
+		region.maximumHealth = profile.maximumHealth;
 		region.recovery = playerBotPredictRecovery(planningProfile, worstFightSeconds);
 		region.rawThreatRatio = worstFightDamage / std::max<int32_t>(profile.maximumHealth, 1);
 		region.threatRatio = std::max(0.0, worstFightDamage - region.recovery.totalMinimumHealing) /
@@ -672,6 +682,10 @@ namespace {
 		                                       1.5 * huntDurationSeconds / 60.0;
 		region.score = region.projectedExperience;
 		region.reconcileSupplies(planningProfile.supply.reserve);
+		if (!region.recoverySustainable()) {
+			region.suitable = false;
+			region.rejectionReason = "recovery_hunt_not_sustainable";
+		}
 		region.reachable = withinPlanningScope;
 		region.travelSteps = estimatedTravelSteps;
 		return region;

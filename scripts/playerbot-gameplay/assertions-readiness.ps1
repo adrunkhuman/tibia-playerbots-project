@@ -33,7 +33,7 @@ function Assert-CombatReadinessEvents {
 	if ($Mode -eq "supplies") {
 		$service = @($events | Where-Object { $_.event -eq "combat_readiness" -and $_.selected_recovery -eq "service" })
 		$potions = @($events | Where-Object {
-			$_.action -eq "buy_potions" -and $_.result -eq "success" -and $_.item_id -eq 7618 -and $_.count -eq 9
+			$_.action -eq "buy_potions" -and $_.result -eq "success" -and $_.item_id -eq 7618 -and $_.count -eq 19
 		})
 		$food = @($events | Where-Object { $_.action -eq "buy_meat" -and $_.result -eq "success" })
 		if ($service.Count -lt 1 -or $potions.Count -lt 1 -or $food.Count -ne 0) { throw "Missing healing supplies did not select potion-only service recovery." }

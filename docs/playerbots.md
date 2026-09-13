@@ -118,7 +118,10 @@ A disconnected region remains viable only when currently eligible registered NPC
 offers provide a plausible affordable multihop chain. Local, remote, tested, and
 untested hunts then share one policy ranking; there are no reserved slots or
 exploration quotas.
-Observed potion use does not calibrate the static supply forecast.
+Qualified potion-use observations can replace the static supply forecast for a
+variant within the controller session. Capability changes currently invalidate
+these observations aggressively; ordinary leveling outings may produce no
+usable samples.
 
 Route preflight compares complete static navigation with registered NPC travel.
 It honors loaded dialogue, fare, level and premium requirements, opaque-condition
@@ -324,8 +327,9 @@ reserve, and only once the bot is high enough level to learn it. Below that
 level, leftover gold buys up to 20 potions (or more when a return route needs a
 larger reserve) so hunts are not stuck on two-flask trash spawns. After Light
 Healing is learned, leftover gold buys that ammo stack again. Hunt selection
-then uses potions on the belt: a hunt must fit that stock, and among hunts that
-fit, XP wins.
+then prefers hunts that fit carried supplies, with XP breaking ties. Normal
+selection falls back to the lowest-consumption safe hunt when none fits;
+supply-recovery outings must fit their bounded recovery budget.
 A selected spell uses normal `hi`, keyword, and `yes`
 dialogue. Completion requires both learned state and the exact total-money
 delta. Learned-spell persistence reconstructs completion after restart and
@@ -463,21 +467,41 @@ All scenarios use controlled Lua setup. They prove forecast arithmetic,
 arbitration, and normal engine casts under those conditions, not frequency or
 utility on an ordinary long-running server.
 
-The service cycle sells known surplus and returns for the selected recovery
-potion when the carried count reaches one. It restocks to the 2-potion safety
-floor only while Light Healing is level-eligible and still unlearned. Otherwise
-leftover gold buys hunt ammo up to 20 potions, or the return-route reserve if
-that is larger. Only the
-selected potion is reserved toward that target; other health potions may be
-deposited. A complete restock takes priority when total
-carried and bank gold can pay for it; an optional partial restock preserves the
-carried-gold reserve. If total gold cannot raise stock above the return
-threshold, service enters supply recovery instead of stopping: it buys whatever
-the gold affords, sells eligible loot at the nearest reachable safe merchant
-even without a profitable trip, and hunts under a lowered challenge frontier
-that prefers observed coin income and safety. Normal profit-seeking selling and
-the full challenge frontier resume once gold covers the restock again. The
-cycle deposits carried money and withdraws up to
+The service cycle sells known surplus. Potion-driven goal selection requests
+service only below the 2-potion safety floor, not for every shortage below the
+shopping target. While already shopping, leftover gold buys up to 20 potions
+(or a larger route reserve). The shopping target stays at two while Light
+Healing is level-eligible and unlearned. Other health potions may be deposited.
+
+If the safety stock is unaffordable, the bot enters supply recovery. Survival
+purchases may spend the 100-gold cash reserve. A completed service visit that
+still leaves stock below two defers another restock until total funds or potion
+count changes; bank transfers alone do not count as progress. While healing is
+still needed, the bot waits at the completed service site for normal recovery.
+
+Recovery hunts prefer coin income under a lowered challenge frontier and last
+at most 120 seconds. They must fit the available supplies and produce coin
+income; small replenishing spawns need not meet normal long-hunt throughput
+requirements. With zero potions, the combined static hunt and outbound/depot-return
+route estimates may spend only health above 80% of maximum. An unaffordable supplier visit is not a prerequisite for earning
+money. If no candidate qualifies, normal bounded planning retries apply; the bot
+does not select an unsafe hunt just because it is broke. Recovery selling may
+use a reachable safe merchant without requiring a profitable trip. Normal
+selection resumes once the safety stock becomes affordable and no unchanged
+restock failure remains.
+
+Potion estimates learn per variant within the controller lifetime. Verified
+potion use is measured per active combat second and projected over the next
+outing's expected combat time. Higher consumption raises the estimate promptly.
+Lower estimates require a completed outing of at least 120 seconds, 60 active
+combat seconds, three kills, healthy health/mana floors, and no material net
+health or mana depletion. Downward updates blend 20% new evidence; repeated
+stable zero-use outings can establish a potion-free estimate. Death, danger,
+or exhausted supplies cannot teach cheaper hunting. Atlas or combat/healing
+capability changes invalidate the relevant observations. Learning never relaxes
+immediate combat or route-safety checks.
+
+The banking cycle deposits carried money and withdraws up to
 100 gp without exceeding the bot's total available gold. It does not buy food
 merely because none is carried. The low-wealth regression isolates this banking
 contract with 56 bank gp, zero carried gp, ten selected health potions, and no

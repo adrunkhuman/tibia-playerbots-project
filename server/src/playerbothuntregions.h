@@ -77,6 +77,22 @@ struct PlayerBotHuntPlanningProfile {
 	PlayerBotSupplyProfile supply;
 };
 
+inline uint64_t playerBotSupplyCapability(const PlayerBotHuntPlanningProfile& profile)
+{
+	uint64_t key = 14695981039346656037ULL;
+	for (uint64_t value : {uint64_t(profile.combat.level), uint64_t(profile.combat.maximumHealth),
+	     uint64_t(profile.combat.armor), uint64_t(profile.combat.defense), uint64_t(profile.combat.attack),
+	     uint64_t(profile.combat.attackSkill), uint64_t(profile.combat.attackFactor * 1000),
+	     uint64_t(profile.magicLevel), uint64_t(profile.supply.maximumMana), uint64_t(profile.supply.spellLegal),
+	     uint64_t(profile.supply.spellHealing), uint64_t(profile.supply.spellMana),
+	     uint64_t(profile.supply.potionHealing), uint64_t(profile.supply.healthGain), uint64_t(profile.supply.manaGain),
+	     uint64_t(profile.supply.spellInterval * 1000), uint64_t(profile.supply.healthInterval * 1000),
+	     uint64_t(profile.supply.manaInterval * 1000), uint64_t(profile.supply.regenerationSeconds > 0)}) {
+		key = (key ^ value) * 1099511628211ULL;
+	}
+	return key;
+}
+
 struct PlayerBotHuntMonsterProfile {
 	std::string name;
 	double expectedSpawns = 0;
@@ -133,6 +149,7 @@ struct PlayerBotHuntRegion {
 	uint32_t corridorSpawnBlocks = 0;
 	bool corridorDangerAvailable = false;
 	int32_t currentHealth = 0;
+	int32_t maximumHealth = 0;
 	double predictedFightSeconds = 0;
 	double challengeFrontier = 0;
 	double challengeBandMinimum = 0;
@@ -140,9 +157,12 @@ struct PlayerBotHuntRegion {
 	PlayerBotRecoveryPrediction recovery;
 	PlayerBotSupplyProfile supplyProfile;
 	PlayerBotSupplyBudget supplyBudget;
+	PlayerBotSupplyCalibration supplyCalibration;
+	uint64_t supplyCapability = 0;
 	double expectedDamagePerSecond = 0;
 	double combatFraction = 0;
 	uint32_t returnRouteDangerCost = 0;
+	double recoveryRouteHealthLoss = 0;
 	uint64_t outboundFare = 0;
 	uint64_t exitFare = 0;
 	uint64_t supplyFare = 0;
@@ -165,6 +185,12 @@ struct PlayerBotHuntRegion {
 	bool inChallengeBand = false;
 	bool predictedLethal = false;
 	std::string rejectionReason;
+
+	bool recoverySustainable() const
+	{
+		return !supplyRecovery || (coinGoldPerMinute > 0 && supplyBudget.fits &&
+		    availableHuntSeconds > 0 && currentHealth >= maximumHealth * 0.8);
+	}
 
 	void reconcileTravel(double durationSeconds, double travelSeconds, double staminaMultiplier)
 	{
@@ -189,6 +215,24 @@ struct PlayerBotHuntRegion {
 		supplyProfile.reserve = reserve;
 		supplyBudget = playerBotSupplyBudget(supplyProfile, expectedDamagePerSecond, combatFraction,
 		                                    availableHuntSeconds, estimatedTravelSeconds);
+		if (supplyRecovery && supplyProfile.potions <= reserve) {
+			// A short recovery outing may spend only health above the 80% floor.
+			const double healthBudget = std::max(0.0, currentHealth - maximumHealth * 0.8 - recoveryRouteHealthLoss);
+			const double deficit = std::max(0.0, supplyBudget.expectedDamage - supplyBudget.regenerationHealing -
+			    supplyBudget.spellHealing - healthBudget);
+			supplyBudget.expectedPotions = deficit == 0 ? 0 : supplyProfile.potionHealing > 0 ?
+			    std::ceil(deficit / supplyProfile.potionHealing) : std::numeric_limits<double>::max();
+			supplyBudget.fits = supplyBudget.expectedPotions == 0 &&
+			    recoveryRouteHealthLoss <= currentHealth - maximumHealth * 0.8;
+		}
+		if (supplyCalibration.samples != 0 && supplyCalibration.capability == supplyCapability) {
+			supplyBudget.expectedPotions = std::ceil(supplyCalibration.potionsPerCombatSecond *
+			    availableHuntSeconds * std::clamp(combatFraction, 0.0, 1.0));
+			supplyBudget.fits = (supplyRecovery && supplyBudget.expectedPotions == 0 &&
+			    recoveryRouteHealthLoss <= currentHealth - maximumHealth * 0.8) ||
+			    ((supplyProfile.potions > reserve || reserve == 0) &&
+			     supplyBudget.expectedPotions <= supplyBudget.routinePotions);
+		}
 	}
 };
 
@@ -199,6 +243,7 @@ struct PlayerBotHuntRegionPerformance {
 	uint32_t samples = 0;
 	uint64_t atlasRevision = 0;
 	bool reliable = false;
+	PlayerBotSupplyCalibration supply;
 };
 
 struct PlayerBotHuntSharedCorrection {

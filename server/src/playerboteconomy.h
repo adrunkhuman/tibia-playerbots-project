@@ -85,7 +85,8 @@ class PlayerBotDispositionPolicy
 			if (totalMoney / unitPrice < requiredGap) {
 				return {0, true};
 			}
-			uint32_t amount = totalMoney / unitPrice >= targetGap ? targetGap : static_cast<uint32_t>(std::min<uint64_t>(
+			uint32_t amount = survival ? static_cast<uint32_t>(std::min<uint64_t>(targetGap, totalMoney / unitPrice)) :
+			    totalMoney / unitPrice >= targetGap ? targetGap : static_cast<uint32_t>(std::min<uint64_t>(
 			    targetGap, totalMoney > carriedGoldReserve ? (totalMoney - carriedGoldReserve) / unitPrice : 0));
 			if (inventory.itemCount <= returnThreshold) {
 				amount = std::max(amount, static_cast<uint32_t>(std::min<uint64_t>(requiredGap, totalMoney / unitPrice)));

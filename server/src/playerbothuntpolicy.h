@@ -119,6 +119,9 @@ class PlayerBotHuntPolicy
 		PlayerBotHuntPerformanceUpdate observePerformance(uint64_t variantId, uint64_t atlasRevision,
 		                                                  const PlayerBotHuntPerformanceSample& sample);
 
+		PlayerBotSupplyCalibration observeSupplies(const PlayerBotHuntRegion& region, uint64_t durationSeconds,
+		    int32_t health, int32_t maximumHealth, uint32_t mana, uint32_t potions, bool interrupted);
+
 		double challengeFrontier() const { return frontier; }
 		const std::map<uint64_t, PlayerBotHuntRegionPerformance>& regionPerformance() const { return performance; }
 
