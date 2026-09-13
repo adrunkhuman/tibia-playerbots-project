@@ -1,108 +1,23 @@
 # tibia-playerbots
 
-A Tibia 8.60 real-map server built for a population made mostly of bots.
+A Tibia 8.60 real-map server built toward a population made mostly of autonomous players. The aim is a persistent world where bots use the same game mechanics as humans rather than a separate simulation. Bots run inside the server as database-backed `Player` objects: no graphical client, network connection, external bot API, renderer, or dedicated thread is required for each bot.
 
-Bots run inside the server as database-backed `Player` objects. They need no
-OTClient, renderer, external bot API, network connection, or dedicated thread.
-They walk, fight, loot, eat, heal, trade, bank, claim rewards, die, and relog
-through the same server operations that handle human actions.
+## Current state
 
-The target is hundreds of bots on the real map, with personalities and
-relationships that persist. The nearest relative is the WoW Playerbots project.
+The development stack controls one seeded character, `Bot One`, a level 8 Knight in Carlin. It can choose map-derived hunting regions, navigate, fight, heal, eat, loot owned corpses, use depots, sell loot, buy supplies and equipment, bank money, learn and cast supported spells, claim supported container rewards, recover after death, and continue from persisted player state.
 
-## What a bot does
+This is a prototype, not a simulated population. Navigation is bounded rather than a complete whole-map router, quest support is narrow, and most complex behavior is proven by focused fixtures rather than a long-running progression test. Multiple bots, personalities, relationships, parties, guilds, and generated population behavior are planned rather than implemented. See [Playerbots](docs/playerbots.md) for the capability and evidence boundaries.
 
-On a clean development stack, Bot One starts as a level 8 Knight in Carlin. It
-picks hunting grounds by evaluating live spawns against its own gear, fights what
-it can handle, loots by value, keeps itself fed and healed, sells to NPCs and
-banks the money, claims supported quest rewards and equips upgrades it finds,
-and recovers from death. Focused fixtures also exercise the earlier lifecycle
-from level 1 in Rookgaard through Oracle departure to the mainland.
+## Run locally
 
-Normal hunting and Oracle navigation derive destination goals from loaded map
-and spawn data rather than following an ordered route. Shops, spell trainers,
-travel providers, and bankers are discovered from loaded NPC state; the bespoke
-Oracle role remains explicit. Shared map topology bounds global discovery while
-detailed route planning retains per-decision limits. The navigator remains a
-prototype rather than a complete hierarchical world router.
+Requirements:
 
-## Design constraints
+- PowerShell 7+ (`pwsh`)
+- Docker Desktop on Windows, or Docker Engine with Compose v2 on Linux
+- Windows: GitHub CLI authentication when the pinned private client executable must be downloaded
+- Linux: a locally built `client/otclient`
 
-From the original architecture notes, still holding:
-
-- Bots are `Player` instances controlled by a server extension. Runtime bot
-  behavior uses normal movement, combat, item-use, and action-delay APIs rather
-  than directly mutating player or world state.
-- Movement, navigation, and combat stay deterministic. Language models are for
-  speech, later, and never in the decision path.
-- Bots may use static world facts that a player could learn and retain, such as
-  geography, known hunting grounds, and known quest locations. They must not use
-  hidden live state to bypass game mechanics.
-- Focused tests may use scenario coordinates and direct fixture setup. Those
-  must not leak into the production world-knowledge model.
-- Persistence uses the normal player save path. There is no parallel bot store.
-
-Two more came out of the work:
-
-**No observer-gated simulation.** Bots do not get cheaper when nobody is
-watching. Many humans will be connected in different places, and a world that is
-only real where someone is standing is a stage set.
-
-**Map knowledge is not live omniscience.** A bot may know roughly where spawns
-and quest chests are because players can learn those facts. It does not get
-hidden live state: it identifies a corpse through normal corpse and ownership
-metadata and has to open it before it knows what is inside.
-
-## Decisions
-
-A bot observes, proposes goal candidates, scores them, commits to one, works it,
-verifies the result, and reevaluates. Survival and pending irreversible actions
-outrank anything discretionary.
-
-The hunt planner derives regions from loaded spawns, estimates threat
-against the bot's health, armor, defense, weapon, and skill, clusters suitable
-spawns, and checks reachability. Selected regions provide patrol destinations;
-navigation callers provide destination goals rather than transition
-checkpoints. Focused regression fixtures retain fixed destinations for
-deterministic assertions.
-
-Significant decisions, transitions, candidates, outcomes, and failures emit
-JSON Lines on stdout with schema version `1`. The stable envelope and event
-families are documented in [`docs/playerbots.md`](docs/playerbots.md). Repeated
-events may be suppressed, and successful movement is not logged once per tile.
-Tests assert against this stream rather than scraping human-readable output.
-
-## 8.60 fidelity
-
-The datapack is a downgrade and it shows. NPC dialogue, monster stats, spells,
-loot tables, and quest rewards are reconciled against real 8.60 behavior as
-problems turn up.
-
-Bots are useful here as a side effect. Repeated merchant, dialogue, combat, and
-item interactions expose broken content faster than occasional manual play.
-Several content fixes started as bot failures.
-
-## Layout
-
-| Path | Contents |
-| ---- | -------- |
-| `server/` | Angelion TFS 1.5 downgrade, branch `8.60`, imported as a squashed subtree. Bot code is under `src/playerbot*`. |
-| `client/` | OTClient Redemption, imported as a squashed subtree and configured for this project. |
-| `scripts/` | Client bootstrap and gameplay test drivers. |
-| `docs/` | Playerbot behavior, testing, and client runtime documentation. |
-| `.subtree/` | Pinned upstream baselines. |
-
-`AGENTS.md` contains the working rules and their rationale. Read it before
-changing either subtree.
-
-## Running it
-
-Use PowerShell 7+ (`pwsh`) with Docker Desktop on Windows or Docker Engine with
-Compose v2 on Linux. Linux bootstrap uses a locally built `client/otclient` and
-installs the same verified assets; it does not download a Windows executable.
-GitHub CLI authentication is needed only to download the pinned Windows runtime.
-See [client runtime](docs/client-runtime.md) and [testing](docs/testing.md) for
-Linux usage and Docker privilege limits.
+From the repository root:
 
 ```powershell
 pwsh -File scripts/bootstrap-client.ps1
@@ -110,82 +25,31 @@ docker compose -f server/compose.yaml up --build --detach
 docker compose -f server/compose.yaml logs --follow server
 ```
 
-On Windows, launch `client/launch-angelion-redemption.cmd`; on Linux, run
-`(cd client && ./otclient)` from a POSIX shell. Ports `7171` and `7172` bind to
-localhost only.
-
-The tracked accounts are local development defaults:
+Launch `client/launch-angelion-redemption.cmd` on Windows. On Linux, run `(cd client && ./otclient)` from a POSIX shell. The server listens only on `127.0.0.1:7171` and `127.0.0.1:7172`.
 
 | Account | Password | Characters |
-| ------- | -------- | ---------- |
+| --- | --- | --- |
 | `admin` | `admin` | `GOD Admin`, `Rook Tester` |
 | `bot-one` | `bot-one` | `Bot One` |
 
-A human client cannot take control of `Bot One` while the server owns it.
-Database and world state are disposable; reset them with:
+A human client cannot control `Bot One` while the server owns it. Local database and world state are disposable. This command deletes them:
 
 ```powershell
 docker compose -f server/compose.yaml down --volumes
 ```
 
-## Testing
+## Development
 
-CI runs a smoke test on server changes: fresh stack, database health, bot
-provisioning, startup, lifecycle telemetry, and local game ports.
+| Task | Documentation |
+| --- | --- |
+| Understand behavior and limits | [Playerbots](docs/playerbots.md) |
+| Choose and run checks | [Testing](docs/testing.md) |
+| Install or update the client runtime | [Client runtime](docs/client-runtime.md) |
+| Contribute changes | [Contributing](CONTRIBUTING.md) |
+| Follow repository maintenance rules | [AGENTS.md](AGENTS.md) |
 
-The gameplay suite is local and PowerShell-based. It boots scenario worlds with
-fixture monsters and asserts on the event stream, covering corpse handling,
-value looting, healing, death recovery, goal arbitration and interruption,
-reward claiming, Oracle departure, equipment purchasing, spell training, and
-spell use. Focused scenarios also cover target approach, adaptive hunt planning,
-depot risk recovery, and local or remote loot liquidation.
-
-```powershell
-pwsh -File scripts/test-playerbot-gameplay.ps1 -FullNavigation -CorpseLoot
-pwsh -File scripts/test-playerbot-gameplay.ps1 -Focused -EquipmentPurchases
-pwsh -File scripts/test-playerbot-gameplay.ps1 -Focused -MainlandRewards
-pwsh -File scripts/test-playerbot-gameplay.ps1 -Focused -SpellTraining
-pwsh -File scripts/test-playerbot-gameplay.ps1 -Focused -SpellUse
-pwsh -File scripts/test-playerbot-gameplay.ps1 -Focused -SellLoot
-```
-
-Most gameplay fixtures use controlled destinations. Hunt-region planning,
-hunt-area arrival, service-route, and target-approach modes exercise dynamic
-planning on the loaded map, but they do not replace a long-running progression
-soak. Client compatibility is checked manually against the list in `AGENTS.md`;
-a successful login alone proves nothing.
-
-## Deferred
-
-Roughly in order. Each stage waits for the preceding behavior to be real rather
-than assumed.
-
-| Stage | Work |
-| ----- | ---- |
-| Mechanical quests | Hazardous transit: plan entry, objective, and exit; budget damage; abort on risk. |
-| Multiple bots | Fleet scheduling, shared world knowledge, and performance work. |
-| Population | Generated characters, level spread, and login rhythm. |
-| Economy | Give a large population economic drains instead of only loot faucets. |
-| Society | Parties, guilds, trade, and a relationship graph fed by server events. |
-| Speech | Language models voicing personalities already represented in persistent data. |
-
-Tibia's skull and frag system is a mechanical reputation substrate for the
-social layer rather than something to reinvent. Progress lives in the issue
-tracker, not here.
+Current plans and temporary findings belong in [GitHub issues](https://github.com/adrunkhuman/tibia-playerbots-project/issues). Configuration and code own tunable values; pull requests and Git history own implementation history.
 
 ## Upstreams
 
-| Component | Upstream | Branch |
-| --------- | -------- | ------ |
-| Server | [Giorox/Angelion-TFS-1.5-Downgrade-8.6](https://github.com/Giorox/Angelion-TFS-1.5-Downgrade-8.6) | `8.60` |
-| Client | [opentibiabr/otclient](https://github.com/opentibiabr/otclient) | `main` |
-
-Both are squashed subtrees, not submodules. Pinned baselines live in
-`.subtree/`.
-
-```powershell
-git subtree pull --prefix=server angelion-upstream 8.60 --squash
-git subtree pull --prefix=client redemption-upstream main --squash
-```
-
-Review and test upstream updates before merging them into `master`.
+The repository integrates [Giorox Angelion TFS 1.5 downgrade](https://github.com/Giorox/Angelion-TFS-1.5-Downgrade-8.6) branch `8.60` under `server/` and [OTClient Redemption](https://github.com/opentibiabr/otclient) branch `main` under `client/`. Both are squashed Git subtrees, not submodules. Pinned baselines are recorded in `.subtree/`; review and test upstream updates before merging them into `master`.
