@@ -10,7 +10,7 @@ This design is intended to scale without one thread, graphical client, renderer,
 
 ## Capabilities and limits
 
-“Ordinary” means available to the normal autonomous controller. “Focused evidence” means the runtime path is implemented and exercised under controlled setup, but the suite does not prove that ordinary long-running progression will reach or sustain it.
+“Ordinary” means available to the normal autonomous controller. “Focused evidence” describes controlled test coverage, not a fixture-only capability. Those tests do not establish how reliably an ordinary character will reach or sustain the behavior during long-running progression.
 
 | Area | Status and evidence | Current boundary |
 | --- | --- | --- |
@@ -18,16 +18,18 @@ This design is intended to scale without one thread, graphical client, renderer,
 | Hunting | Ordinary; map-derived selection has focused real-map coverage | Scores loaded hostile spawns against equipment, skills, health, supplies, route safety, expected XP, and cash pressure. Adaptive challenge and performance estimates reset with the controller; no long progression soak is established. |
 | Combat and healing | Ordinary | Approaches reachable same-floor targets, handles attackers, uses melee, potions, and supported Knight spells. Transit combat is restricted to confirmed route blockers; group tactics and other vocations are not developed. |
 | Loot | Ordinary; edge cases have focused evidence | Opens owned corpse containers through normal item use before inspecting contents, ranks known saleable loot by value and weight, and retries inaccessible corpses within bounds. Skinning and other secondary corpse actions are unsupported. |
-| Navigation | Ordinary; complex routes have focused evidence | Uses destination goals, loaded map topology, tools, doors, floor changes, teleports, and registered NPC travel. Search and recovery are bounded; this is not a complete hierarchical whole-map router, and dynamic topology changes may require a supported reload or restart. |
+| Navigation | Ordinary; transition and recovery scenarios have focused evidence | Routes across the loaded map using a shared coarse topology, then plans and executes local paths and supported transitions. Supports tools, doors, floor changes, teleports, and registered NPC travel. Detailed search and recovery have budgets; unsupported transitions and changing obstacles can prevent a journey. Static topology changes may require a supported reload or restart. |
 | NPC service | Ordinary | Discovers loaded shops, bankers, spell trainers, and registered travel offers; buys supplies, sells known loot, banks, and verifies transactions. Custom dialogue or opaque travel conditions are excluded unless explicitly modeled. |
 | Equipment and depots | Ordinary; restart and remote liquidation paths have focused evidence | Buys or equips supported upgrades, deposits retained loot, and can sell from local or remote depots. Two-handed loadout trade-offs are unsupported and those items remain protected. |
 | Spells | Ordinary for audited Knight spells; calibration and overflow training have focused evidence | Can learn and use selected healing, support, and offensive spells through normal speech. Loaded spell rules remain authoritative. Observations may rank legal casts but never weaken safety or legality. |
-| Rewards and Oracle | Focused evidence | Claims supported shared container rewards and one legacy doublet case. The tagged Oracle departure path supports an unpromoted level 8–10 character. Scripted quests, levers, hazardous quest transit, and general dialogue reasoning are unsupported. |
+| Rewards and Oracle | Ordinary goal selection; claiming and departure have focused evidence | Claims supported shared container rewards and one legacy doublet case. The tagged Oracle departure path supports a level 8–10 character with no vocation. Scripted quests, levers, hazardous quest transit, and general dialogue reasoning are unsupported. |
 | Death and restart | Ordinary; failure paths have focused evidence | Uses normal death, save, temple login, and bounded relog recovery. It reconstructs intent from persisted state rather than resuming an interrupted route, conversation, open container, or transaction in place. |
 | Social behavior | Planned | Multiple bots, parties, guilds, trading between players, relationships, personalities, and generated login rhythms are not implemented. |
 | Speech | Planned | No language-model dialogue or personality voice exists. |
 
 Focused scenarios often use fixed destinations, controlled monsters, teleports, or seeded state. Dynamic hunt, route, and target-approach scenarios exercise loaded-world planning, but none proves unattended progression, stable economics, or hundreds-of-bots performance. Plans and temporary gaps belong in the [issue tracker](https://github.com/adrunkhuman/tibia-playerbots-project/issues), not this document.
+
+Navigation is hierarchical: [`PlayerBotTopology`](../server/src/playerbottopology.cpp) indexes the loaded map into connected local regions and transition edges. The [controller](../server/src/playerbotcontroller.cpp) selects a global route, refines its next segment into tile-level actions, and considers eligible NPC travel connections. Whole-map routing describes its scope, not a guarantee that every destination is reachable.
 
 ## Knowledge and game boundaries
 

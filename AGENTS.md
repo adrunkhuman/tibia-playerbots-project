@@ -170,12 +170,15 @@ pwsh -File scripts/bootstrap-client.ps1
   mechanism.
 - Keep bot-facing UI and network notifications behind null-safe `Player`
   methods; playerbot code and datapack scripts must not dereference `client`.
-- Treat the current autonomous hunt/service/depot loop and bounded map-derived
-  navigator as prototypes, not settled whole-map navigation. Rookgaard
-  progression has focused fixture coverage; the normal seeded bot starts on
-  the mainland. Provide destination goals
-  rather than ordered transition checkpoints, and preserve normal movement,
-  item-use, action-delay, and replanning behavior.
+- Navigation already combines whole-map coarse topology, local pathfinding,
+  and NPC travel. Preserve detailed-search and recovery budgets; do not confuse
+  those limits with a lack of global routing. Supported transitions and runtime
+  obstacles still constrain reachability.
+- Provide destination goals rather than ordered transition checkpoints, and
+  preserve normal movement, item-use, action-delay, and replanning behavior.
+  Rookgaard progression has focused fixture coverage; the normal seeded bot
+  starts on the mainland. Fixture coverage does not establish reliable
+  unattended progression.
 - Playerbots must identify corpses through normal corpse/container and ownership
   metadata, open them through normal item use, and inspect contents only after
   opening. Do not use server-only corpse contents for pre-opening decisions.
