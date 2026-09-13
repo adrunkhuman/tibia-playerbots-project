@@ -52,14 +52,21 @@ Playerbot telemetry is JSON Lines on server stdout. Every record has this stable
 - `schema: 1`
 - UTC RFC 3339 `ts`
 - `component: "playerbot"`
+- `server_run_id`, which correlates all playerbot records from one server process
+- monotonic server-run `sequence`
+- `controller_id`, which changes when a controller is reconstructed; manager-only lifecycle records use `null` and identify the related controller separately
 - `event`, `bot`, persistent `player_id`, and `position`
 
-Event-specific fields are conditional. Machine-readable states, actions, results, statuses, and reasons use lowercase values. The main families cover lifecycle and goals, action verification, navigation and NPC travel, hunting and supplies, rewards and equipment, spells, liquidation, and periodic health summaries. Successful movement is not emitted once per tile, and repeated events may be suppressed. A controller's `terminal` event is final.
+Manager startup failures can occur before a database identity is known. Those records use the requested name in `bot` and the legacy `player_id: 0` sentinel. If another controller is already active, `related_controller_id`, `active_bot`, and `active_player_id` identify it separately from the requested bot.
+
+Event-specific fields are conditional. Machine-readable states, actions, results, statuses, and reasons use lowercase values. The main families cover lifecycle and goals, action verification, navigation and NPC travel, hunting and supplies, rewards and equipment, spells, liquidation, and periodic operational summaries. Summaries include `player_state_available`, the current goal, phase, activity, target, inexpensive character resources, and applicable waiting or recovery context. Resource fields are `null` unless the controller can resolve its expected server-owned player identity. Successful movement is not emitted once per tile, but emitted JSONL events are not repeat-suppressed. Completed hunt planning emits every scored candidate; telemetry does not apply a separate candidate cap, while planner and per-turn work budgets still apply normally. A controller's `terminal` event is final; later manager lifecycle records are outside that terminated controller stream.
 
 ```powershell
 docker compose -f server/compose.yaml logs --no-log-prefix --since 30m server | Where-Object { $_ -match '"component":"playerbot"' }
 ```
 
-JSONL is authoritative; private messages shown to `GOD Admin` are only an aid. Producers in [`playerbot.cpp`](../server/src/playerbot.cpp) and [`playerbottelemetry.cpp`](../server/src/playerbottelemetry.cpp), plus the assertions under [`scripts/playerbot-gameplay/`](../scripts/playerbot-gameplay/), own event detail. Consumers must tolerate additional event-specific fields and suppression rather than depending on human-readable logs or per-step output.
+JSONL is authoritative and is unaffected by in-game announcement settings. Docker still rotates server logs at the configured retention limit (three 10 MiB files); capture the stream to an artifact when a development run needs longer-lived evidence. By default, concise playerbot intent and outcome messages go to every online player's orange console feed, without a center-screen announcement. Any character can send the managed bot the exact private message `logs off` or `logs on` to disable or enable only that bot's announcements. The bot confirms the setting privately. The setting survives that bot's death and controller reconstruction, but resets to enabled when the server restarts. Human announcements have separate short-window deduplication.
+
+Producers in [`playerbot.cpp`](../server/src/playerbot.cpp) and [`playerbottelemetry.cpp`](../server/src/playerbottelemetry.cpp), plus the assertions under [`scripts/playerbot-gameplay/`](../scripts/playerbot-gameplay/), own event detail. Consumers must tolerate additional event-specific fields rather than depending on human-readable logs or per-step output.
 
 See [Testing](testing.md) for checks and evidence limits. Repository invariants and maintenance rules live in [AGENTS.md](../AGENTS.md).

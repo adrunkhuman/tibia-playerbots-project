@@ -83,10 +83,8 @@ void PlayerBotController::beginLoot(Player* player, const Position& currentPosit
 		setStage(ScenarioStage::Traverse, currentPosition);
 		return;
 	}
-	if (shouldEmitRepeated("target:clear:target_defeated")) {
-		emit("target_changed", currentPosition, "\"previous_target_id\":" + std::to_string(defeatedTarget.target.id) +
-		     ",\"target_id\":null,\"reason\":\"target_defeated\"");
-	}
+	emit("target_changed", currentPosition, "\"previous_target_id\":" + std::to_string(defeatedTarget.target.id) +
+	     ",\"target_id\":null,\"reason\":\"target_defeated\"");
 	const PlayerBotLootCommand command = huntCoordinator.beginLoot(defeatedTarget, currentPosition, std::chrono::steady_clock::now());
 	if (command.outcome == PlayerBotLootOutcome::CorpseNotLootable) {
 		std::ostringstream fields;

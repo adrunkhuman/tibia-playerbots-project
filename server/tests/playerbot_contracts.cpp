@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <iostream>
 
+#include "playerbot.h"
 #include "playerbotdepotworkflow.h"
 #include "playerboteconomy.h"
 #include "playerbotgoalplanner.h"
@@ -14,10 +15,33 @@
 #include "playerbothuntruntime.h"
 #include "playerbotinventorypolicy.h"
 #include "playerbotsupplyrecovery.h"
+#include "playerbottelemetry.h"
 #include "playerbottestpolicy.h"
 #include "playerbotturnrouter.h"
 
 namespace {
+void loggingContracts()
+{
+	playerbot::PlayerBotTelemetrySummary unavailableSummary;
+	assert(!unavailableSummary.playerStateAvailable);
+
+	using playerbot::PlayerBotLogControl;
+	assert(playerbot::parseLogControl("logs on") == PlayerBotLogControl::On);
+	assert(playerbot::parseLogControl("logs off") == PlayerBotLogControl::Off);
+	assert(playerbot::parseLogControl("Logs on") == PlayerBotLogControl::None);
+	assert(playerbot::parseLogControl("logs on ") == PlayerBotLogControl::None);
+	assert(playerbot::parseLogControl("status") == PlayerBotLogControl::None);
+
+	playerbot::PlayerBotAnnouncementSettings settings;
+	assert(settings.enabled(10));
+	assert(settings.enabled(20));
+	settings.set(10, false);
+	assert(!settings.enabled(10));
+	assert(settings.enabled(20));
+	settings.set(10, true);
+	assert(settings.enabled(10));
+}
+
 void huntEconomy()
 {
 	// Inclusive roll and strict comparison: even chance=100000 misses one roll.
@@ -204,6 +228,23 @@ PlayerBotHuntRuntimeOutcome planRuntimeHunts(const std::vector<PlayerBotHuntRegi
 PlayerBotHuntRegion selectRuntimeHunt(const std::vector<PlayerBotHuntRegion>& candidates)
 {
 	return *planRuntimeHunts(candidates).selectedRegion;
+}
+
+void huntCandidateTelemetryCompleteness()
+{
+	// The completed runtime outcome is the controller's telemetry source. Keep
+	// every candidate beyond the former 64-record telemetry-only cap.
+	std::vector<PlayerBotHuntRegion> candidates(65);
+	for (size_t index = 0; index < candidates.size(); ++index) {
+		candidates[index].atlasVariantId = index + 1;
+		candidates[index].suitable = true;
+		candidates[index].reachable = true;
+		candidates[index].supplyBudget.fits = true;
+		candidates[index].score = static_cast<double>(candidates.size() - index);
+	}
+	const PlayerBotHuntRuntimeOutcome outcome = planRuntimeHunts(candidates);
+	assert(outcome.candidates.size() == candidates.size());
+	assert(outcome.candidates.back().atlasVariantId == candidates.size());
 }
 
 void raisedHuntRecoveryReserve()
@@ -1227,10 +1268,12 @@ void oracleRecovery()
 
 int main()
 {
+	loggingContracts();
 	huntEconomy();
 	patrolOpportunity();
 	mixedSustainedYield();
 	raisedHuntRecoveryReserve();
+	huntCandidateTelemetryCompleteness();
 	incrementalHuntValidationPipeline();
 	lootArithmeticMemo();
 	modeledPatrolFailure();

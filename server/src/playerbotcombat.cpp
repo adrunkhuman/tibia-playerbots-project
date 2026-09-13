@@ -22,7 +22,6 @@ using namespace playerbot;
 extern Spells* g_spells;
 
 namespace {
-	constexpr size_t maximumHuntCandidateTelemetry = 64;
 	constexpr uint64_t maximumTargetApproachExpandedNodes = 10000;
 
 	double projectedHuntStaminaMultiplier(const Player& player, double availableHuntSeconds)
@@ -244,19 +243,17 @@ bool PlayerBotController::handleHealing(Player* player, const Position& currentP
 	if (command.type == PlayerBotSurvivalCommandType::CastSpell) return dispatchSpellCommand(*player, currentPosition, command);
 	if (command.type == PlayerBotSurvivalCommandType::Wait) return true;
 	if (command.type == PlayerBotSurvivalCommandType::InterruptForService) {
-		if (shouldEmitRepeated("heal:missing_supply")) {
-			std::ostringstream fields;
-			fields << "\"action\":\"heal\",\"result\":\"skipped\",\"reason\":\"missing_supply\""
-			       << ",\"method\":" << jsonString(snapshot.potionItemId == smallHealthPotionItemId ? "small_health_potion" : "health_potion")
-			       << ",\"item_id\":" << snapshot.potionItemId
-			       << ",\"trigger\":\"health_threshold\",\"objective\":" << jsonString(objectiveName())
-			       << ",\"state\":" << jsonString(turnRouter.stateName())
-			       << ",\"health_before\":" << player->getHealth()
-			       << ",\"health_after\":" << player->getHealth()
-			       << ",\"health_max\":" << player->getMaxHealth()
-			       << ",\"resource_before\":0,\"resource_after\":0";
-			emit("action_result", currentPosition, fields.str());
-		}
+		std::ostringstream fields;
+		fields << "\"action\":\"heal\",\"result\":\"skipped\",\"reason\":\"missing_supply\""
+		       << ",\"method\":" << jsonString(snapshot.potionItemId == smallHealthPotionItemId ? "small_health_potion" : "health_potion")
+		       << ",\"item_id\":" << snapshot.potionItemId
+		       << ",\"trigger\":\"health_threshold\",\"objective\":" << jsonString(objectiveName())
+		       << ",\"state\":" << jsonString(turnRouter.stateName())
+		       << ",\"health_before\":" << player->getHealth()
+		       << ",\"health_after\":" << player->getHealth()
+		       << ",\"health_max\":" << player->getMaxHealth()
+		       << ",\"resource_before\":0,\"resource_after\":0";
+		emit("action_result", currentPosition, fields.str());
 		if (progressionRuntime.session().active() != PlayerBotProgressionProcedure::None) {
 			if (progressionRuntime.session().active(PlayerBotProgressionProcedure::OracleDeparture)) {
 				finishOracleDeparture(player, currentPosition, "interrupted", "healing_supply_missing");
@@ -358,12 +355,10 @@ bool PlayerBotController::attackVisibleMonster(Player* player, const Position& c
 			if (route.metrics.result != PlayerBotNavigationResult::Reached) {
 				huntCoordinator.suppressTraversalTarget(target->getID(), std::chrono::steady_clock::now(),
 				                                              navigationBlockSuppression);
-				if (shouldEmitRepeated("target:skip:route_unavailable:" + std::to_string(target->getID()))) {
-					emit("action_result", currentPosition,
-					     "\"action\":\"target_approach\",\"result\":\"skipped\",\"reason\":\"route_unavailable\",\"target_id\":" +
-					         std::to_string(target->getID()) + ",\"same_floor\":true,\"expanded_nodes\":" +
-					         std::to_string(route.metrics.expandedNodes));
-				}
+				emit("action_result", currentPosition,
+				     "\"action\":\"target_approach\",\"result\":\"skipped\",\"reason\":\"route_unavailable\",\"target_id\":" +
+				         std::to_string(target->getID()) + ",\"same_floor\":true,\"expanded_nodes\":" +
+				         std::to_string(route.metrics.expandedNodes));
 				return false;
 			}
 		}
@@ -972,11 +967,8 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 		                    outcome.command == PlayerBotHuntRuntimeCommand::PlanningScored ? "scored" : "planning_yield";
 		emitHuntRegionPlanning(*planning, position, phase);
 	}
-	if (outcome.command != PlayerBotHuntRuntimeCommand::RegionSelected) {
-		const size_t telemetryCandidates = std::min(outcome.candidates.size(), maximumHuntCandidateTelemetry);
-		for (size_t index = 0; index < telemetryCandidates; ++index) {
-			emitHuntRegionCandidate(outcome.candidates[index], position);
-		}
+	for (const PlayerBotHuntRegion& candidate : outcome.candidates) {
+		emitHuntRegionCandidate(candidate, position);
 	}
 	if (outcome.command == PlayerBotHuntRuntimeCommand::ScopeExhausted) {
 		emit("hunt_region_selection", position, "\"result\":\"failed\",\"reason\":\"no_suitable_reachable_region\"");
@@ -1247,7 +1239,8 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 		std::to_string(selected.center.z) + "}");
 	if (const auto planning = huntCoordinator.planningSession()) emitHuntRegionPlanning(*planning, position, "selected");
 	std::ostringstream speech;
-	speech << "Going hunting. Expecting: ";
+	speech << "Going hunting to " << selected.destination.x << ',' << selected.destination.y << ','
+	       << static_cast<uint16_t>(selected.destination.z) << ". Expecting: ";
 	for (size_t index = 0; index < selected.monsters.size(); ++index) { if (index != 0) speech << ", "; speech << selected.monsters[index].name; }
 	speech << ". Projected " << std::fixed << std::setprecision(0) << selected.projectedExperience << " experience after " << selected.estimatedTravelSeconds << " seconds travel.";
 	say(player, speech.str());

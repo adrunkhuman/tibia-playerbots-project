@@ -15,8 +15,8 @@
 
 using namespace playerbot;
 
-PlayerBotTelemetry::PlayerBotTelemetry(std::string playerName, uint32_t playerGuid) :
-	playerName(std::move(playerName)), playerGuid(playerGuid)
+PlayerBotTelemetry::PlayerBotTelemetry(std::string playerName, uint32_t playerGuid, std::string controllerId) :
+	playerName(std::move(playerName)), playerGuid(playerGuid), controllerId(std::move(controllerId))
 {
 }
 
@@ -42,28 +42,12 @@ PlayerBotTelemetry::DecisionTimer PlayerBotTelemetry::recordDecision()
 
 void PlayerBotTelemetry::emit(const char* event, const Position& position, const std::string& fields) const
 {
-	emitPlayerbotEvent(playerName, playerGuid, event, position, fields);
-}
-
-bool PlayerBotTelemetry::shouldEmitRepeated(const std::string& key)
-{
-	const auto now = std::chrono::steady_clock::now();
-	auto it = repeatedEventTimes.find(key);
-	if (it != repeatedEventTimes.end() && now - it->second < repeatedEventInterval) {
-		++suppressedEvents;
-		return false;
-	}
-
-	repeatedEventTimes[key] = now;
-	return true;
+	emitPlayerbotEvent(playerName, playerGuid, controllerId, event, position, fields);
 }
 
 void PlayerBotTelemetry::logActionFailure(const char* action, const char* reason, const Position& position)
 {
 	++actionsFailed;
-	if (!shouldEmitRepeated(std::string("action:") + action + ':' + reason)) {
-		return;
-	}
 	emit("action_result", position, std::string("\"action\":") + jsonString(action) +
 	     ",\"result\":\"failed\",\"reason\":" + jsonString(reason));
 }
@@ -111,7 +95,25 @@ void PlayerBotTelemetry::emitSummary(const Position& position, bool final, const
 	fields << "\"final\":" << (final ? "true" : "false")
 	       << ",\"uptime_ms\":" << uptimeMs
 	       << ",\"state\":" << jsonString(summary.state)
-	       << ",\"target_id\":";
+	       << ",\"goal\":" << jsonString(summary.goal)
+	       << ",\"phase\":" << jsonString(summary.phase)
+	       << ",\"activity\":" << jsonString(summary.activity)
+	       << ",\"waiting_reason\":" << (summary.waitingReason.empty() ? "null" : jsonString(summary.waitingReason))
+	       << ",\"recovery\":" << (summary.recovery.empty() ? "null" : jsonString(summary.recovery))
+	       << ",\"player_state_available\":" << (summary.playerStateAvailable ? "true" : "false")
+	       << ",\"health\":";
+	if (summary.playerStateAvailable) {
+		fields << summary.health << ",\"maximum_health\":" << summary.maximumHealth
+		       << ",\"mana\":" << summary.mana << ",\"maximum_mana\":" << summary.maximumMana
+		       << ",\"level\":" << summary.level << ",\"free_capacity\":" << summary.freeCapacity
+		       << ",\"carried_gold\":" << summary.carriedGold << ",\"bank_balance\":" << summary.bankBalance
+		       << ",\"health_potions\":" << summary.healthPotions;
+	} else {
+		fields << "null,\"maximum_health\":null,\"mana\":null,\"maximum_mana\":null"
+		       << ",\"level\":null,\"free_capacity\":null,\"carried_gold\":null"
+		       << ",\"bank_balance\":null,\"health_potions\":null";
+	}
+	fields << ",\"target_id\":";
 	if (!summary.target) {
 		fields << "null";
 	} else {
@@ -128,7 +130,7 @@ void PlayerBotTelemetry::emitSummary(const Position& position, bool final, const
 	       << ",\"actions_attempted\":" << actionsAttemptedCount
 	       << ",\"actions_failed\":" << actionsFailed
 	       << ",\"stuck_events\":" << stuckEvents
-	       << ",\"suppressed_events\":" << suppressedEvents;
+	       << ",\"suppressed_events\":0";
 	emit("summary", position, fields.str());
 }
 
