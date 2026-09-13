@@ -116,8 +116,9 @@ git subtree pull --prefix=client redemption-upstream main --squash
 
 ## Runtime Assets
 
-- Never commit `Tibia.dat`, `Tibia.spr`, OTClient executables, logs, screenshots,
-  minimap caches, or database volumes.
+- Never commit `Tibia.dat`, `Tibia.spr`, OTClient executables, logs, incidental
+  screenshots, minimap caches, or database volumes. Curated documentation images
+  belong in `docs/assets/`; this exception does not cover test artifacts.
 - Use PowerShell 7+ (`pwsh`) on Windows or Linux. On Windows, bootstrap restores
   the pinned client runtime and assets. On Linux, first build `client/otclient`;
   bootstrap installs verified assets and leaves that executable untouched:

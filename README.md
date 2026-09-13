@@ -2,6 +2,8 @@
 
 A Tibia 8.60 real-map server built toward a population made mostly of autonomous players. The aim is a persistent world where bots use the same game mechanics as humans rather than a separate simulation. Bots run inside the server as database-backed `Player` objects: no graphical client, network connection, external bot API, renderer, or dedicated thread is required for each bot.
 
+![Bot One fighting a troll, with recent banking, equipment, and hunting activity in the log](docs/assets/bot-one-hunting.png)
+
 ## Current state
 
 The development stack controls one seeded character, `Bot One`, a level 8 Knight in Carlin. It can choose map-derived hunting regions, navigate, fight, heal, eat, loot owned corpses, use depots, sell loot, buy supplies and equipment, bank money, learn and cast supported spells, claim supported container rewards, recover after death, and continue from persisted player state.
