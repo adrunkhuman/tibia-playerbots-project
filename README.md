@@ -2,7 +2,7 @@
 
 A Tibia 8.60 real-map server built toward a population made mostly of autonomous players. The aim is a persistent world where bots use the same game mechanics as humans rather than a separate simulation. Bots run inside the server as database-backed `Player` objects: no graphical client, network connection, external bot API, renderer, or dedicated thread is required for each bot.
 
-![Bot One fighting a troll, with recent banking, equipment, and hunting activity in the log](https://github.com/user-attachments/assets/2f1ccafa-af8e-4f7e-8bf7-34edf0a9811b)
+![Bot One fighting a troll, with recent banking, equipment, and hunting activity in the log](docs/assets/bot-one-hunting.png)
 
 ## Current state
 

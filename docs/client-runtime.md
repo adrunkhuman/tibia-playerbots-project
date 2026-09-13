@@ -15,7 +15,7 @@ pwsh -File scripts/bootstrap-client.ps1
 
 Use `-Force` to reinstall assets on either platform and the executable on Windows. The bootstrap script verifies the downloaded Windows executable, asset archive, and extracted assets with SHA-256. It does not validate Linux build dependencies, executable permissions, display/input behavior, or in-game compatibility.
 
-Runtime assets are installed at `client/data/things/860/Tibia.dat` and `client/data/things/860/Tibia.spr`. Client auto-installation remains disabled; [`scripts/bootstrap-client.ps1`](../scripts/bootstrap-client.ps1) is the supported installer. Never commit client executables, DAT/SPR assets, logs, screenshots, or minimap caches.
+Runtime assets are installed at `client/data/things/860/Tibia.dat` and `client/data/things/860/Tibia.spr`. Client auto-installation remains disabled; [`scripts/bootstrap-client.ps1`](../scripts/bootstrap-client.ps1) is the supported installer. Never commit client executables, DAT/SPR assets, logs, incidental screenshots, or minimap caches. Curated documentation images belong in `docs/assets/`.
 
 ## Protocol contract
 
