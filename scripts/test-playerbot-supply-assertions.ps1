@@ -64,26 +64,34 @@ $checkRejected = { param($logs) Assert-LowSupplySpellTrainingEvents -Logs $logs 
 Test-Evidence $rejected $checkRejected
 Test-Evidence ($rejected + $spell[3]) $checkRejected $true
 
-# Hunt planning may validate more than eight candidates. The finite queue is
-# bounded by the selected scan's cheap-viable candidate count, not a quota.
+# The complete scored-candidate stream can be much larger than the route queue.
+# Only candidates marked route_validated consume the selected scan's route budget.
 $huntPlanning = @(
     @{ event = 'hunt_region_scan'; phase = 'planning_started'; cache = 'hit'; selection_strategy = 'atlas_topology_selection'
-       snapshot_time_us = 0; clustering_time_us = 0; candidate_count = 20; scored_candidate_count = 0
+       snapshot_time_us = 0; clustering_time_us = 0; candidate_count = 90; scored_candidate_count = 0
        route_candidate_count = 0; transport_offer_count = 12; transport_arrival_count = 1 }
     @{ event = 'hunt_region_scan'; phase = 'cancelled' }
     @{ event = 'hunt_region_scan'; phase = 'planning_started'; cache = 'hit'; selection_strategy = 'atlas_topology_selection'
-       snapshot_time_us = 0; clustering_time_us = 0; candidate_count = 20; scored_candidate_count = 0
+       snapshot_time_us = 0; clustering_time_us = 0; candidate_count = 90; scored_candidate_count = 0
        route_candidate_count = 0; transport_offer_count = 12; transport_arrival_count = 1 }
     @{ event = 'hunt_region_scan'; phase = 'stale_revision' }
     @{ event = 'hunt_region_scan'; phase = 'planning_started'; cache = 'build'; selection_strategy = 'atlas_topology_selection'
-       snapshot_time_us = 2; clustering_time_us = 3; candidate_count = 20; scored_candidate_count = 0
+       snapshot_time_us = 2; clustering_time_us = 3; candidate_count = 90; scored_candidate_count = 0
        route_candidate_count = 0; transport_offer_count = 12; transport_arrival_count = 1 }
     @{ event = 'hunt_region_scan'; phase = 'transport_yield'; cache = 'build'; selection_strategy = 'atlas_topology_selection' }
     @{ event = 'hunt_region_scan'; phase = 'scoring_yield'; cache = 'build'; selection_strategy = 'atlas_topology_selection' }
     @{ event = 'hunt_region_scan'; phase = 'scored'; cache = 'build'; selection_strategy = 'atlas_topology_selection'
-       snapshot_time_us = 2; clustering_time_us = 3; candidate_count = 20; scored_candidate_count = 20
+       snapshot_time_us = 2; clustering_time_us = 3; candidate_count = 90; scored_candidate_count = 90
        suitable_candidate_count = 10; route_candidate_count = 10 }
 )
+for ($index = 1; $index -le 80; $index++) {
+    $huntPlanning += @{
+        event = 'hunt_region_candidate'; region_id = 100 + $index; atlas_variant_id = 100 + $index
+        suitable = $false; reachable = $true; route_validated = $false; supply_budget_fits = $true
+        supply_expected_potions = 1; score = $index; topology_reachable = $true
+        topology_travel_steps = 10; route_danger_cost = 0; center = @{ x = 32500 + $index; y = 31800; z = 7 }
+    }
+}
 for ($index = 1; $index -le 10; $index++) {
     $huntPlanning += @{
         event = 'hunt_region_candidate'; region_id = $index; atlas_variant_id = $index
@@ -98,7 +106,7 @@ $huntPlanning += @(
        maximum_health = 200; health_loss_cost = 1000; minimum_potion_healing = 125
        return_threshold = 1; restock_target = 10 }
     @{ event = 'hunt_region_scan'; phase = 'selected'; cache = 'build'; selection_strategy = 'atlas_topology_selection'
-       topology_time_us = 1; decision_latency_us = 1; candidate_count = 20; route_candidate_count = 10
+       topology_time_us = 1; decision_latency_us = 1; candidate_count = 90; route_candidate_count = 10
        route_candidate_policy = 'all_cheap_viable_ranked'; transport_offer_count = 12; transport_arrival_count = 3 }
 )
 $checkHuntPlanning = { param($logs) Assert-HuntRegionPlanningEvents -Logs $logs }
@@ -109,10 +117,15 @@ $huntPlanning[$huntPlanning.Count - 1].route_candidate_count = 8
 Test-Evidence $huntPlanning $checkHuntPlanning $true
 $huntPlanning[$huntPlanning.Count - 1] = $originalSelectedScan
 
-$completedScore = @($huntPlanning | Where-Object { $_.event -eq 'hunt_region_scan' -and $_.phase -eq 'scored' })[0]
-$completedScore.scored_candidate_count = 19
+$unvalidatedCandidate = @($huntPlanning | Where-Object { $_.event -eq 'hunt_region_candidate' -and -not $_.route_validated })[0]
+$unvalidatedCandidate.route_validated = $true
 Test-Evidence $huntPlanning $checkHuntPlanning $true
-$completedScore.scored_candidate_count = 20
+$unvalidatedCandidate.route_validated = $false
+
+$completedScore = @($huntPlanning | Where-Object { $_.event -eq 'hunt_region_scan' -and $_.phase -eq 'scored' })[0]
+$completedScore.scored_candidate_count = 89
+Test-Evidence $huntPlanning $checkHuntPlanning $true
+$completedScore.scored_candidate_count = 90
 $cacheHitStart = @($huntPlanning | Where-Object {
     $_.event -eq 'hunt_region_scan' -and $_.phase -eq 'planning_started' -and $_.cache -eq 'hit'
 })[0]

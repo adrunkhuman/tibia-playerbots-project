@@ -1,26 +1,66 @@
+function Add-ComposeCommandLog {
+    param(
+        [string[]]$Arguments,
+        [object[]]$Output,
+        [int]$ExitCode
+    )
+
+    $commandArguments = @($script:composeArguments) + @($Arguments)
+    [void]$script:composeCommandLogBuffer.AppendLine("`$ docker $($commandArguments -join ' ')")
+    foreach ($line in $Output) {
+        [void]$script:composeCommandLogBuffer.AppendLine("$line")
+    }
+    [void]$script:composeCommandLogBuffer.AppendLine("[exit $ExitCode]")
+}
+
 function Invoke-RawCompose {
     param([Parameter(ValueFromRemainingArguments)][string[]]$Arguments)
 
-    & docker @composeArguments @Arguments
-    if ($LASTEXITCODE -ne 0) {
-        throw "docker compose failed: $($Arguments -join ' ')"
+    $output = @(& docker @composeArguments @Arguments 2>&1)
+    $exitCode = $LASTEXITCODE
+    Add-ComposeCommandLog -Arguments $Arguments -Output $output -ExitCode $exitCode
+    Write-Verbose "docker compose $($Arguments -join ' ')"
+    foreach ($line in $output) {
+        Write-Verbose "$line"
+    }
+    if ($exitCode -ne 0) {
+        foreach ($line in $output) {
+            Write-Host "$line"
+        }
+        throw "docker compose failed with exit code ${exitCode}: $($Arguments -join ' ')"
     }
 }
 
 function Stop-ServerLogFollower {
-    if ($script:serverLogProcess -and -not $script:serverLogProcess.HasExited) {
-        $script:serverLogProcess.Kill($true)
-        $script:serverLogProcess.WaitForExit()
+    if ($script:serverLogProcess) {
+        Update-ServerLogs
+        if (-not $script:serverLogProcess.HasExited) {
+            $script:serverLogProcess.Kill($true)
+            $script:serverLogProcess.WaitForExit()
+        }
+        # ReadLineAsync can complete as the process exits. Drain those final lines
+        # before releasing the tasks, including when the follower exited itself.
+        Update-ServerLogs
     }
     $script:serverLogProcess = $null
     $script:serverLogOutputTask = $null
     $script:serverLogErrorTask = $null
 }
 
+function Reset-ServerLogCollection {
+    $script:serverLogBuffer.Clear() | Out-Null
+    $script:serverLogLines.Clear()
+    $script:serverPlayerbotEvents.Clear()
+}
+
 function Start-ServerLogFollower {
     Stop-ServerLogFollower
 
-    $arguments = @($composeArguments) + @("logs", "--follow", "--no-log-prefix", "server")
+    $arguments = @($composeArguments) + @("logs", "--follow", "--no-log-prefix")
+    if ($script:serverLogSinceUtc) {
+        $arguments += @("--since", $script:serverLogSinceUtc.ToString("o"))
+    }
+    $arguments += "server"
     $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
     $startInfo.FileName = "docker"
     $startInfo.UseShellExecute = $false
@@ -30,9 +70,6 @@ function Start-ServerLogFollower {
         [void]$startInfo.ArgumentList.Add($argument)
     }
 
-    $script:serverLogBuffer.Clear() | Out-Null
-    $script:serverLogLines.Clear()
-    $script:serverPlayerbotEvents.Clear()
     $script:serverLogProcess = [System.Diagnostics.Process]::new()
     $script:serverLogProcess.StartInfo = $startInfo
     if (-not $script:serverLogProcess.Start()) {
@@ -84,6 +121,8 @@ function Update-ServerLogs {
 
 function Reset-ScenarioStack {
     Stop-ServerLogFollower
+    Reset-ServerLogCollection
+    $script:serverLogSinceUtc = $null
     $script:minimumServerOnlineEvents = 0
 
     if (-not $script:testStackInitialized) {
@@ -142,14 +181,24 @@ function Invoke-Compose {
         Stop-ServerLogFollower
     }
     if (($Arguments -join ' ') -eq "up --detach") {
+        $script:serverLogSinceUtc = [DateTime]::UtcNow
         Invoke-RawCompose up --no-deps --detach server
+        Start-ServerLogFollower
         return
     }
     if (($Arguments -join ' ') -eq "up --detach server") {
         $script:minimumServerOnlineEvents = @($script:serverPlayerbotEvents | Where-Object {
             $_.event -eq "lifecycle" -and $_.status -eq "online"
         }).Count + 1
+        $script:serverLogSinceUtc = [DateTime]::UtcNow
         Invoke-RawCompose up --no-deps --detach server
+        Start-ServerLogFollower
+        return
+    }
+    if ($Arguments.Count -gt 0 -and $Arguments[0] -eq "up" -and $Arguments -contains "server") {
+        $script:serverLogSinceUtc = [DateTime]::UtcNow
+        Invoke-RawCompose @Arguments
+        Start-ServerLogFollower
         return
     }
     Invoke-RawCompose @Arguments
@@ -324,6 +373,34 @@ function Add-ScenarioResult {
 	})
 }
 
+function Merge-PlayerbotFailureEvents {
+	param(
+		[string]$StreamedLogs,
+		[string]$FetchedLogs
+	)
+
+	$streamedEvents = @(ConvertFrom-PlayerbotLogs -Logs $StreamedLogs)
+	$fetchedEvents = @(ConvertFrom-PlayerbotLogs -Logs $FetchedLogs)
+	$fetchedIdentities = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+	foreach ($event in $fetchedEvents) {
+		if ($event.server_run_id -and $null -ne $event.sequence) {
+			[void]$fetchedIdentities.Add("$($event.server_run_id):$($event.sequence)")
+		}
+	}
+
+	foreach ($event in $streamedEvents) {
+		$identity = if ($event.server_run_id -and $null -ne $event.sequence) {
+			"$($event.server_run_id):$($event.sequence)"
+		} else {
+			$null
+		}
+		if (-not $identity -or -not $fetchedIdentities.Contains($identity)) {
+			$event
+		}
+	}
+	$fetchedEvents
+}
+
 function Save-ScenarioFailureArtifacts {
 	param(
 		[string]$Name,
@@ -345,18 +422,28 @@ function Save-ScenarioFailureArtifacts {
 	}
 
 	$serverLogs = ""
+	$streamedServerLogs = ""
+	$serverLogsFetched = $false
 	try {
 		Update-ServerLogs
+		$streamedServerLogs = $script:serverLogBuffer.ToString().TrimEnd("`r", "`n")
+		[System.IO.File]::WriteAllText((Join-Path $directory "server-stream.log"), $streamedServerLogs)
+	}
+	catch {
+		[void]$collectionErrors.Add("server-stream.log: $($_.Exception.Message)")
+	}
+	try {
 		$serverLogs = ((& docker @composeArguments logs --no-log-prefix server 2>&1) -join "`n")
 		if ($LASTEXITCODE -ne 0) {
 			throw "docker compose logs exited with code $LASTEXITCODE"
 		}
+		$serverLogsFetched = $true
 		[System.IO.File]::WriteAllText((Join-Path $directory "server.log"), $serverLogs)
 	}
 	catch {
 		[void]$collectionErrors.Add("server.log: $($_.Exception.Message)")
+		$serverLogs = $streamedServerLogs
 		try {
-			$serverLogs = Get-ServerLogs
 			[System.IO.File]::WriteAllText((Join-Path $directory "server.log"), $serverLogs)
 		}
 		catch {
@@ -366,6 +453,7 @@ function Save-ScenarioFailureArtifacts {
 
 	try {
 		$composeStatus = (& docker @composeArguments ps --all 2>&1) -join "`n"
+		if ($LASTEXITCODE -ne 0) { throw "docker compose ps exited with code $LASTEXITCODE" }
 		[System.IO.File]::WriteAllText((Join-Path $directory "compose-ps.txt"), $composeStatus)
 	}
 	catch {
@@ -373,7 +461,32 @@ function Save-ScenarioFailureArtifacts {
 	}
 
 	try {
-		$eventLines = foreach ($event in ConvertFrom-PlayerbotLogs -Logs $serverLogs) {
+		$containerId = (& docker @composeArguments ps --all --quiet server 2>&1 | Select-Object -Last 1)
+		if ($LASTEXITCODE -ne 0 -or -not $containerId) { throw "server container ID unavailable" }
+		$stateFormat = 'Name={{.Name}} RestartCount={{.RestartCount}} Status={{.State.Status}} Running={{.State.Running}} OOMKilled={{.State.OOMKilled}} ExitCode={{.State.ExitCode}} Error={{json .State.Error}} StartedAt={{.State.StartedAt}} FinishedAt={{.State.FinishedAt}}'
+		$containerState = (& docker inspect --format $stateFormat $containerId 2>&1) -join "`n"
+		if ($LASTEXITCODE -ne 0) { throw "docker inspect exited with code $LASTEXITCODE" }
+		[System.IO.File]::WriteAllText((Join-Path $directory "server-container-state.txt"), $containerState)
+	}
+	catch {
+		[void]$collectionErrors.Add("server-container-state.txt: $($_.Exception.Message)")
+	}
+
+	try {
+		[System.IO.File]::WriteAllText((Join-Path $directory "compose-commands.log"), $script:composeCommandLogBuffer.ToString())
+	}
+	catch {
+		[void]$collectionErrors.Add("compose-commands.log: $($_.Exception.Message)")
+	}
+
+	try {
+		$events = if ($serverLogsFetched) {
+			Merge-PlayerbotFailureEvents -StreamedLogs $streamedServerLogs -FetchedLogs $serverLogs
+		} else {
+			ConvertFrom-PlayerbotLogs -Logs $streamedServerLogs
+		}
+		$eventLines = foreach ($event in $events) {
+			# Keep every playerbot event. Assertions and candidate detail are evidence, not console filtering targets.
 			$event | ConvertTo-Json -Compress -Depth 20
 		}
 		[System.IO.File]::WriteAllText((Join-Path $directory "playerbot-events.jsonl"), ($eventLines -join "`n"))
@@ -444,6 +557,7 @@ function Invoke-Scenario {
 	$script:currentWaitTimeoutSeconds = if ($timeoutOverridden) { $TimeoutSeconds } else { $DefaultTimeoutSeconds }
 	$script:currentScenarioDeadline = [DateTime]::UtcNow.AddSeconds($currentWaitTimeoutSeconds)
 	$startedAt = [DateTime]::UtcNow
+	"PLAYERBOT_GAMEPLAY_TEST PHASE name=$Name status=start timeout_seconds=$currentWaitTimeoutSeconds"
 	# Scenario-owned settings only; defaults match the gameplay Compose stack.
 	$scenarioDefaults = @{
 		PLAYERBOT_GAMEPLAY_MODE = "cycle"

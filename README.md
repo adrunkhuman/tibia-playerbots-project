@@ -24,7 +24,7 @@ From the repository root:
 ```powershell
 pwsh -File scripts/bootstrap-client.ps1
 docker compose -f server/compose.yaml up --build --detach
-docker compose -f server/compose.yaml logs --follow server
+docker compose -f server/compose.yaml logs --tail 100 --follow server
 ```
 
 Launch `client/launch-angelion-redemption.cmd` on Windows. On Linux, run `(cd client && ./otclient)` from a POSIX shell. The server listens only on `127.0.0.1:7171` and `127.0.0.1:7172`.
