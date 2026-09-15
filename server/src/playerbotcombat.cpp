@@ -269,6 +269,7 @@ bool PlayerBotController::handleHealing(Player* player, const Position& currentP
 	if (command.type == PlayerBotSurvivalCommandType::CastSpell) return dispatchSpellCommand(*player, currentPosition, command);
 	if (command.type == PlayerBotSurvivalCommandType::Wait) return true;
 	if (command.type == PlayerBotSurvivalCommandType::InterruptForService) {
+		if (progressionRuntime.equipmentBackpackRecoveryActive()) return false;
 		std::ostringstream fields;
 		fields << "\"action\":\"heal\",\"result\":\"skipped\",\"reason\":\"missing_supply\""
 		       << ",\"method\":" << jsonString(snapshot.potionItemId == smallHealthPotionItemId ? "small_health_potion" : "health_potion")
@@ -281,6 +282,7 @@ bool PlayerBotController::handleHealing(Player* player, const Position& currentP
 		       << ",\"resource_before\":0,\"resource_after\":0";
 		emit("action_result", currentPosition, fields.str());
 		if (progressionRuntime.session().active() != PlayerBotProgressionProcedure::None) {
+			if (interruptBackpackUpgradeForService(*player, currentPosition, "healing_supply_missing")) return true;
 			if (progressionRuntime.session().active(PlayerBotProgressionProcedure::OracleDeparture)) {
 				finishOracleDeparture(player, currentPosition, "interrupted", "healing_supply_missing");
 			} else {

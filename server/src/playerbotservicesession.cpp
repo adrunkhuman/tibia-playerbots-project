@@ -3,8 +3,6 @@
  * Copyright (C) 2019 Mark Samman
  */
 
-#include "otpch.h"
-
 #include "playerbotservicesession.h"
 
 void PlayerBotServiceSession::reset()

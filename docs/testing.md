@@ -52,6 +52,7 @@ On Linux, the C++ contract checks require a C++17 compiler. Lua fixture checks r
 
 ```sh
 sh server/tests/playerbot_contracts.sh
+sh server/tests/playerbot_equipment_purchase_contracts.sh
 lua scripts/test-playerbot-fixture-isolation.lua
 lua scripts/test-playerbot-hunt-fixture.lua
 lua scripts/test-playerbot-depot-fixture.lua

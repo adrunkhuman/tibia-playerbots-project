@@ -36,17 +36,17 @@ void PlayerBotProgressionRuntime::enterHunt()
 	arbiter.setActiveGoal(PlayerBotGoalArbiter::TopLevelGoal::Hunt);
 }
 
-void PlayerBotProgressionRuntime::completeReward(bool succeeded, std::chrono::steady_clock::duration cooldown)
+void PlayerBotProgressionRuntime::completeReward(bool, std::chrono::steady_clock::duration cooldown)
 {
 	arbiter.setCooldown(PlayerBotGoalArbiter::TopLevelGoal::PickupReward, cooldown);
 }
 
-void PlayerBotProgressionRuntime::completeSpellTraining(bool succeeded, std::chrono::steady_clock::duration cooldown)
+void PlayerBotProgressionRuntime::completeSpellTraining(bool, std::chrono::steady_clock::duration cooldown)
 {
 	arbiter.setCooldown(PlayerBotGoalArbiter::TopLevelGoal::LearnSpell, cooldown);
 }
 
-void PlayerBotProgressionRuntime::completeEquipmentPurchase(bool succeeded, std::chrono::steady_clock::duration cooldown)
+void PlayerBotProgressionRuntime::completeEquipmentPurchase(bool, std::chrono::steady_clock::duration cooldown)
 {
 	arbiter.setCooldown(PlayerBotGoalArbiter::TopLevelGoal::BuyEquipment, cooldown);
 }
@@ -99,6 +99,14 @@ void PlayerBotProgressionRuntime::beginEquipmentPurchase(PlayerBotEquipmentOffer
 	progression.begin(PlayerBotProgressionProcedure::BuyEquipment);
 }
 
+void PlayerBotProgressionRuntime::resumeEquipmentBackpack(PlayerBotEquipmentOfferEvaluation plan, bool staged, bool purchased)
+{
+	beginEquipmentPurchase(std::move(plan));
+	if (purchased) equipmentPurchaseSession.markPurchased();
+	if (staged) equipmentPurchaseSession.setStage(purchased ? PlayerBotEquipmentPurchaseStage::ReturnDepot :
+		PlayerBotEquipmentPurchaseStage::Travel);
+}
+
 void PlayerBotProgressionRuntime::finish()
 {
 	switch (progression.active()) {
@@ -148,6 +156,13 @@ void PlayerBotProgressionRuntime::restartEquipmentConversation()
 	npcSession.reset(equipmentPurchaseSession.plan().npcId);
 }
 
+void PlayerBotProgressionRuntime::beginEquipmentBackpackRecovery(const char* reason, bool purchased)
+{
+	if (equipmentPurchaseSession.backpackRecoveryActive()) return;
+	if (purchased) equipmentPurchaseSession.markPurchased();
+	equipmentPurchaseSession.beginBackpackRecovery(reason);
+}
+
 PlayerBotEquipmentShopCommand PlayerBotProgressionRuntime::advanceEquipmentShop(const PlayerBotNpcShopObservation& observation,
                                                                                   uint32_t maximumRetries)
 {
@@ -181,7 +196,7 @@ PlayerBotReadinessEquipmentCommand PlayerBotProgressionRuntime::beginReadinessEq
 	if (observation.openContainerRequired) {
 		if (!observation.containerAccessAvailable || ++readinessEquipment.attempts >= maximumRetries) {
 			const PlayerBotReadinessEquipmentCommand command{PlayerBotReadinessEquipmentCommandType::ServiceFallback, 0,
-				CONST_SLOT_WHEREEVER, readinessEquipment.attempts, "access_attempts_exhausted"};
+				static_cast<slots_t>(0), readinessEquipment.attempts, "access_attempts_exhausted"};
 			readinessEquipment = {};
 			return command;
 		}
@@ -220,7 +235,7 @@ PlayerBotProgressionOutcome PlayerBotProgressionRuntime::advanceDeparture(const 
 {
 	const auto outcome = [this](PlayerBotProgressionCommandType type, PlayerBotProgressionOutcomeType result, const char* reason) {
 		return PlayerBotProgressionOutcome{{type, progression.active(), static_cast<uint8_t>(departureSession.stage()), departureSession.retries(), reason},
-		                                   result, departureSession.retries(), reason};
+		                                   result, departureSession.retries(), reason, {}};
 	};
 	switch (departureSession.stage()) {
 		case PlayerBotOracleDepartureStage::Travel:
@@ -262,7 +277,7 @@ PlayerBotProgressionOutcome PlayerBotProgressionRuntime::advanceSpellTraining(co
 {
 	const auto outcome = [this](PlayerBotProgressionCommandType type, PlayerBotProgressionOutcomeType result, const char* reason) {
 		return PlayerBotProgressionOutcome{{type, progression.active(), static_cast<uint8_t>(spellTrainingSession.stage()), spellTrainingSession.retries(), reason},
-		                                   result, spellTrainingSession.retries(), reason};
+		                                   result, spellTrainingSession.retries(), reason, {}};
 	};
 	switch (spellTrainingSession.stage()) {
 		case PlayerBotSpellTrainingStage::Travel:
@@ -306,7 +321,7 @@ PlayerBotProgressionOutcome PlayerBotProgressionRuntime::advanceReward(const Pla
 {
 	const auto outcome = [this](PlayerBotProgressionCommandType type, PlayerBotProgressionOutcomeType result, const char* reason) {
 		return PlayerBotProgressionOutcome{{type, progression.active(), static_cast<uint8_t>(rewardSession.stage()), rewardSession.retries(), reason},
-		                                   result, rewardSession.retries(), reason};
+		                                   result, rewardSession.retries(), reason, {}};
 	};
 	switch (rewardSession.stage()) {
 		case PlayerBotRewardStage::Travel:
@@ -350,7 +365,7 @@ PlayerBotProgressionOutcome PlayerBotProgressionRuntime::advanceReward(const Pla
 				}
 			}
 			rewardSession.resetRetries();
-			if (rewardSession.plan().slot == CONST_SLOT_WHEREEVER) return outcome(PlayerBotProgressionCommandType::Finish, PlayerBotProgressionOutcomeType::Succeeded, "reward_bundle_claimed");
+			if (rewardSession.plan().slot == static_cast<slots_t>(0)) return outcome(PlayerBotProgressionCommandType::Finish, PlayerBotProgressionOutcomeType::Succeeded, "reward_bundle_claimed");
 			rewardSession.setStage(PlayerBotRewardStage::EquipReward);
 			return outcome(PlayerBotProgressionCommandType::None, PlayerBotProgressionOutcomeType::Pending, "reward_claimed");
 		case PlayerBotRewardStage::EquipReward:
@@ -409,76 +424,188 @@ PlayerBotProgressionOutcome PlayerBotProgressionRuntime::advanceReward(const Pla
 PlayerBotProgressionOutcome PlayerBotProgressionRuntime::advanceEquipmentPurchase(
 	const PlayerBotEquipmentPurchaseObservation& observation, uint32_t maximumRetries)
 {
-	const auto outcome = [this](PlayerBotProgressionCommandType type, PlayerBotProgressionOutcomeType result, const char* reason) {
+	const auto result = [this](PlayerBotProgressionCommandType type, PlayerBotProgressionOutcomeType value, const char* reason) {
 		return PlayerBotProgressionOutcome{{type, progression.active(), static_cast<uint8_t>(equipmentPurchaseSession.stage()), equipmentPurchaseSession.retries(), reason},
-		                                   result, equipmentPurchaseSession.retries(), reason};
+		                                   value, equipmentPurchaseSession.retries(), reason, {}};
+	};
+	const auto failOrRecover = [this, &result, &observation](const char* reason) {
+		if (equipmentPurchaseSession.plan().bagUpgrade && observation.oldBagAtDepot) {
+			if (observation.equipmentVerified) equipmentPurchaseSession.markPurchased();
+			equipmentPurchaseSession.beginBackpackRecovery(reason);
+			return result(PlayerBotProgressionCommandType::None, PlayerBotProgressionOutcomeType::Retry, "restore_old_bag");
+		}
+		return result(PlayerBotProgressionCommandType::Finish, PlayerBotProgressionOutcomeType::Failed, reason);
 	};
 	switch (equipmentPurchaseSession.stage()) {
+		case PlayerBotEquipmentPurchaseStage::TravelDepot:
+			if (!observation.depotAvailable || observation.depotNavigationFailed) return result(PlayerBotProgressionCommandType::Finish, PlayerBotProgressionOutcomeType::Failed, "backpack_depot_unavailable");
+			if (!observation.depotReached) return result(PlayerBotProgressionCommandType::Navigate, PlayerBotProgressionOutcomeType::Pending, "stage_old_bag");
+			equipmentPurchaseSession.setStage(PlayerBotEquipmentPurchaseStage::OpenDepotForStage);
+			return result(PlayerBotProgressionCommandType::None, PlayerBotProgressionOutcomeType::Pending, nullptr);
+		case PlayerBotEquipmentPurchaseStage::OpenDepotForStage:
+			if (!observation.depotAvailable) return result(PlayerBotProgressionCommandType::Finish, PlayerBotProgressionOutcomeType::Failed, "backpack_depot_unavailable");
+			if (!observation.depotOpen) {
+				if (!observation.actionAvailable) return result(PlayerBotProgressionCommandType::None, PlayerBotProgressionOutcomeType::Pending, "action_unavailable");
+				if (equipmentPurchaseSession.incrementRetries() >= maximumRetries) return result(PlayerBotProgressionCommandType::Finish, PlayerBotProgressionOutcomeType::Failed, "backpack_depot_open_failed");
+				return result(PlayerBotProgressionCommandType::Open, PlayerBotProgressionOutcomeType::Pending, "open_backpack_depot");
+			}
+			equipmentPurchaseSession.resetRetries();
+			equipmentPurchaseSession.setStage(PlayerBotEquipmentPurchaseStage::StageBackpack);
+			return result(PlayerBotProgressionCommandType::None, PlayerBotProgressionOutcomeType::Pending, nullptr);
+		case PlayerBotEquipmentPurchaseStage::StageBackpack:
+			if (!observation.bankFundingAvailable) return result(PlayerBotProgressionCommandType::Finish, PlayerBotProgressionOutcomeType::Failed, "bank_funding_required");
+			if (observation.oldBagAtDepot && observation.backpackReceiptSafe) {
+				equipmentPurchaseSession.resetRetries();
+				equipmentPurchaseSession.setStage(PlayerBotEquipmentPurchaseStage::Travel);
+				return result(PlayerBotProgressionCommandType::None, PlayerBotProgressionOutcomeType::Pending, nullptr);
+			}
+			if (!observation.oldBagEquipped || !observation.depotOpen) return result(PlayerBotProgressionCommandType::Finish, PlayerBotProgressionOutcomeType::Failed, "old_bag_stage_source_unavailable");
+			if (!observation.actionAvailable) return result(PlayerBotProgressionCommandType::None, PlayerBotProgressionOutcomeType::Pending, "action_unavailable");
+			equipmentPurchaseSession.setStage(PlayerBotEquipmentPurchaseStage::VerifyBackpackStaging);
+			return result(PlayerBotProgressionCommandType::Equip, PlayerBotProgressionOutcomeType::Pending, "depot_stage_old_bag");
+		case PlayerBotEquipmentPurchaseStage::VerifyBackpackStaging:
+			if (observation.oldBagAtDepot && observation.backpackReceiptSafe) {
+				equipmentPurchaseSession.resetRetries();
+				equipmentPurchaseSession.setStage(PlayerBotEquipmentPurchaseStage::Travel);
+				return result(PlayerBotProgressionCommandType::None, PlayerBotProgressionOutcomeType::Pending, nullptr);
+			}
+			if (equipmentPurchaseSession.incrementRetries() >= maximumRetries) return result(PlayerBotProgressionCommandType::Finish, PlayerBotProgressionOutcomeType::Failed, "old_bag_stage_not_verified");
+			equipmentPurchaseSession.setStage(PlayerBotEquipmentPurchaseStage::StageBackpack);
+			return result(PlayerBotProgressionCommandType::None, PlayerBotProgressionOutcomeType::Retry, "depot_stage_old_bag");
 		case PlayerBotEquipmentPurchaseStage::Travel:
-			if (observation.navigationFailed) return outcome(PlayerBotProgressionCommandType::Finish, PlayerBotProgressionOutcomeType::Failed, "route_unavailable");
-			if (!observation.navigationReached) return outcome(PlayerBotProgressionCommandType::Navigate, PlayerBotProgressionOutcomeType::Pending, nullptr);
+			if (observation.navigationFailed) return failOrRecover("route_unavailable");
+			if (!observation.navigationReached) return result(PlayerBotProgressionCommandType::Navigate, PlayerBotProgressionOutcomeType::Pending, nullptr);
 			equipmentPurchaseSession.setStage(PlayerBotEquipmentPurchaseStage::Purchase);
-			return outcome(PlayerBotProgressionCommandType::None, PlayerBotProgressionOutcomeType::Pending, nullptr);
+			return result(PlayerBotProgressionCommandType::None, PlayerBotProgressionOutcomeType::Pending, nullptr);
 		case PlayerBotEquipmentPurchaseStage::Purchase:
-			if (!observation.providerAvailable) return outcome(PlayerBotProgressionCommandType::Finish, PlayerBotProgressionOutcomeType::Failed, "provider_unavailable");
-			if (!observation.offerAvailable) return outcome(PlayerBotProgressionCommandType::Finish, PlayerBotProgressionOutcomeType::Failed, "offer_changed");
-			if (!observation.providerInRange) return outcome(PlayerBotProgressionCommandType::Finish, PlayerBotProgressionOutcomeType::Failed, "provider_moved");
-			if (!observation.shopReady) return outcome(PlayerBotProgressionCommandType::Shop, PlayerBotProgressionOutcomeType::Pending, "open_shop");
-			if (!observation.fundingAvailable) return outcome(PlayerBotProgressionCommandType::Finish, PlayerBotProgressionOutcomeType::Failed, "reserve_changed");
+			if (!observation.providerAvailable) return failOrRecover("provider_unavailable");
+			if (!observation.offerAvailable) return failOrRecover("offer_changed");
+			if (!observation.providerInRange) return failOrRecover("provider_moved");
+			if (!observation.shopReady) return result(PlayerBotProgressionCommandType::Shop, PlayerBotProgressionOutcomeType::Pending, "open_shop");
+			if (!observation.fundingAvailable) return failOrRecover("reserve_changed");
+			if (equipmentPurchaseSession.plan().backpackAcquisition && !observation.backpackReceiptSafe) return failOrRecover("backpack_receipt_unsafe");
 			equipmentTransaction.beginShopTransaction({equipmentPurchaseSession.plan().itemId, 1, observation.itemCount,
 				observation.money, observation.bankBalance, equipmentPurchaseSession.plan().price, 0});
 			equipmentPurchaseSession.setStage(PlayerBotEquipmentPurchaseStage::VerifyPurchase);
-			return outcome(PlayerBotProgressionCommandType::Shop, PlayerBotProgressionOutcomeType::Pending, "purchase_equipment");
-		case PlayerBotEquipmentPurchaseStage::VerifyPurchase:
-			{
-				const PlayerBotServiceVerification verification = equipmentTransaction.verifyShopTransaction(observation.itemCount,
-					observation.money, observation.bankBalance, true, maximumRetries);
-				if (verification.result == PlayerBotServiceVerificationResult::Mismatch) {
-					return outcome(PlayerBotProgressionCommandType::Finish, PlayerBotProgressionOutcomeType::Failed, "transaction_delta_mismatch");
-				}
-				if (verification.result == PlayerBotServiceVerificationResult::Rejected) {
-					return outcome(PlayerBotProgressionCommandType::Finish, PlayerBotProgressionOutcomeType::Failed, "transaction_rejected");
-				}
-				if (verification.result == PlayerBotServiceVerificationResult::Success) {
-					equipmentPurchaseSession.resetRetries();
-					equipmentPurchaseSession.setStage(PlayerBotEquipmentPurchaseStage::Equip);
-					return {command(PlayerBotProgressionCommandType::None), PlayerBotProgressionOutcomeType::Pending, 0, nullptr,
-					        verification.before};
-				}
-				return outcome(PlayerBotProgressionCommandType::None, PlayerBotProgressionOutcomeType::Retry, "purchase_equipment");
+			return result(PlayerBotProgressionCommandType::Shop, PlayerBotProgressionOutcomeType::Pending, "purchase_equipment");
+		case PlayerBotEquipmentPurchaseStage::VerifyPurchase: {
+			const PlayerBotServiceVerification verification = equipmentTransaction.verifyShopTransaction(observation.itemCount,
+				observation.money, observation.bankBalance, true, maximumRetries);
+			if (verification.result == PlayerBotServiceVerificationResult::Mismatch) return failOrRecover("transaction_delta_mismatch");
+			if (verification.result == PlayerBotServiceVerificationResult::Rejected) return failOrRecover("transaction_rejected");
+			if (verification.result == PlayerBotServiceVerificationResult::Success) {
+				equipmentPurchaseSession.resetRetries();
+				if (equipmentPurchaseSession.plan().bagUpgrade) {
+					equipmentPurchaseSession.markPurchased();
+					equipmentPurchaseSession.setStage(PlayerBotEquipmentPurchaseStage::ReturnDepot);
+				} else equipmentPurchaseSession.setStage(PlayerBotEquipmentPurchaseStage::Equip);
+				return {command(PlayerBotProgressionCommandType::None), PlayerBotProgressionOutcomeType::Pending, 0, nullptr, verification.before};
 			}
+			return result(PlayerBotProgressionCommandType::None, PlayerBotProgressionOutcomeType::Retry, "purchase_equipment");
+		}
+		case PlayerBotEquipmentPurchaseStage::ReturnDepot:
+			if (!observation.depotAvailable || observation.depotNavigationFailed) return result(PlayerBotProgressionCommandType::Finish, PlayerBotProgressionOutcomeType::Failed, "old_bag_recovery_route_unavailable");
+			if (!observation.depotReached) return result(PlayerBotProgressionCommandType::Navigate, PlayerBotProgressionOutcomeType::Pending, "recover_old_bag");
+			equipmentPurchaseSession.setStage(PlayerBotEquipmentPurchaseStage::OpenDepotForRetrieve);
+			return result(PlayerBotProgressionCommandType::None, PlayerBotProgressionOutcomeType::Pending, nullptr);
+		case PlayerBotEquipmentPurchaseStage::OpenDepotForRetrieve:
+			if (!observation.depotAvailable) return result(PlayerBotProgressionCommandType::Finish, PlayerBotProgressionOutcomeType::Failed, "old_bag_recovery_depot_unavailable");
+			if (!observation.depotOpen) {
+				if (!observation.actionAvailable) return result(PlayerBotProgressionCommandType::None, PlayerBotProgressionOutcomeType::Pending, "action_unavailable");
+				if (equipmentPurchaseSession.incrementRetries() >= maximumRetries) return result(PlayerBotProgressionCommandType::Finish, PlayerBotProgressionOutcomeType::Failed, "old_bag_recovery_depot_open_failed");
+				return result(PlayerBotProgressionCommandType::Open, PlayerBotProgressionOutcomeType::Pending, "open_backpack_depot");
+			}
+			equipmentPurchaseSession.resetRetries();
+			equipmentPurchaseSession.setStage(equipmentPurchaseSession.backpackPurchased() && observation.equipmentVerified ?
+				PlayerBotEquipmentPurchaseStage::RetrieveBackpack :
+				(observation.replacementBagEquipped || observation.replacementBagAtDepot ?
+					PlayerBotEquipmentPurchaseStage::StageReplacementBackpack : PlayerBotEquipmentPurchaseStage::RestoreBackpack));
+			return result(PlayerBotProgressionCommandType::None, PlayerBotProgressionOutcomeType::Pending, nullptr);
+		case PlayerBotEquipmentPurchaseStage::StageReplacementBackpack:
+			if (observation.replacementBagAtDepot && observation.backpackReceiptSafe) {
+				equipmentPurchaseSession.resetRetries();
+				equipmentPurchaseSession.setStage(PlayerBotEquipmentPurchaseStage::RestoreBackpack);
+				return result(PlayerBotProgressionCommandType::None, PlayerBotProgressionOutcomeType::Pending, nullptr);
+			}
+			if (!observation.oldBagAtDepot || !observation.replacementBagEquipped || !observation.depotOpen) {
+				return result(PlayerBotProgressionCommandType::Finish, PlayerBotProgressionOutcomeType::Failed, "old_bag_recovery_replacement_source_unavailable");
+			}
+			if (!observation.actionAvailable) return result(PlayerBotProgressionCommandType::None, PlayerBotProgressionOutcomeType::Pending, "action_unavailable");
+			equipmentPurchaseSession.setStage(PlayerBotEquipmentPurchaseStage::VerifyReplacementBackpackStaging);
+			return result(PlayerBotProgressionCommandType::Equip, PlayerBotProgressionOutcomeType::Pending, "depot_stage_replacement_bag");
+		case PlayerBotEquipmentPurchaseStage::VerifyReplacementBackpackStaging:
+			if (observation.replacementBagAtDepot && observation.backpackReceiptSafe) {
+				equipmentPurchaseSession.resetRetries();
+				equipmentPurchaseSession.setStage(PlayerBotEquipmentPurchaseStage::RestoreBackpack);
+				return result(PlayerBotProgressionCommandType::None, PlayerBotProgressionOutcomeType::Pending, nullptr);
+			}
+			if (equipmentPurchaseSession.incrementRetries() >= maximumRetries) {
+				return result(PlayerBotProgressionCommandType::Finish, PlayerBotProgressionOutcomeType::Failed, "old_bag_recovery_replacement_stage_exhausted");
+			}
+			equipmentPurchaseSession.setStage(PlayerBotEquipmentPurchaseStage::StageReplacementBackpack);
+			return result(PlayerBotProgressionCommandType::None, PlayerBotProgressionOutcomeType::Retry, "depot_stage_replacement_bag");
+		case PlayerBotEquipmentPurchaseStage::RetrieveBackpack:
+			if (observation.oldBagPreserved) {
+				if (!equipmentPurchaseSession.backpackRecoveryReason().empty()) return result(PlayerBotProgressionCommandType::Finish, PlayerBotProgressionOutcomeType::Failed, equipmentPurchaseSession.backpackRecoveryReason().c_str());
+				equipmentPurchaseSession.setStage(PlayerBotEquipmentPurchaseStage::VerifyEquipment);
+				return result(PlayerBotProgressionCommandType::None, PlayerBotProgressionOutcomeType::Pending, nullptr);
+			}
+			if (!observation.oldBagAtDepot || !observation.equipmentVerified) return result(PlayerBotProgressionCommandType::Finish, PlayerBotProgressionOutcomeType::Failed, "old_bag_recovery_source_unavailable");
+			if (!observation.actionAvailable) return result(PlayerBotProgressionCommandType::None, PlayerBotProgressionOutcomeType::Pending, "action_unavailable");
+			if (!observation.backpackDestinationOpen) return result(PlayerBotProgressionCommandType::Open, PlayerBotProgressionOutcomeType::Pending, "open_backpack_upgrade_destination");
+			equipmentPurchaseSession.setStage(PlayerBotEquipmentPurchaseStage::VerifyBackpackRetrieved);
+			return result(PlayerBotProgressionCommandType::Equip, PlayerBotProgressionOutcomeType::Pending, "depot_retrieve_old_bag");
+		case PlayerBotEquipmentPurchaseStage::VerifyBackpackRetrieved:
+			if (observation.oldBagPreserved) {
+				equipmentPurchaseSession.resetRetries();
+				if (!equipmentPurchaseSession.backpackRecoveryReason().empty()) return result(PlayerBotProgressionCommandType::Finish, PlayerBotProgressionOutcomeType::Failed, equipmentPurchaseSession.backpackRecoveryReason().c_str());
+				equipmentPurchaseSession.setStage(PlayerBotEquipmentPurchaseStage::VerifyEquipment);
+				return result(PlayerBotProgressionCommandType::None, PlayerBotProgressionOutcomeType::Pending, nullptr);
+			}
+			if (equipmentPurchaseSession.incrementRetries() >= maximumRetries) return result(PlayerBotProgressionCommandType::Finish, PlayerBotProgressionOutcomeType::Failed, "old_bag_recovery_exhausted");
+			equipmentPurchaseSession.setStage(PlayerBotEquipmentPurchaseStage::RetrieveBackpack);
+			return result(PlayerBotProgressionCommandType::None, PlayerBotProgressionOutcomeType::Retry, "depot_retrieve_old_bag");
+		case PlayerBotEquipmentPurchaseStage::RestoreBackpack:
+			if (observation.oldBagEquipped) return result(PlayerBotProgressionCommandType::Finish, PlayerBotProgressionOutcomeType::Failed, equipmentPurchaseSession.backpackRecoveryReason().c_str());
+			if (!observation.oldBagAtDepot || !observation.backpackReceiptSafe) return result(PlayerBotProgressionCommandType::Finish, PlayerBotProgressionOutcomeType::Failed, "old_bag_restore_source_unavailable");
+			if (!observation.actionAvailable) return result(PlayerBotProgressionCommandType::None, PlayerBotProgressionOutcomeType::Pending, "action_unavailable");
+			equipmentPurchaseSession.setStage(PlayerBotEquipmentPurchaseStage::VerifyBackpackRestored);
+			return result(PlayerBotProgressionCommandType::Equip, PlayerBotProgressionOutcomeType::Pending, "depot_restore_old_bag");
+		case PlayerBotEquipmentPurchaseStage::VerifyBackpackRestored:
+			if (observation.oldBagEquipped) return result(PlayerBotProgressionCommandType::Finish, PlayerBotProgressionOutcomeType::Failed, equipmentPurchaseSession.backpackRecoveryReason().c_str());
+			if (equipmentPurchaseSession.incrementRetries() >= maximumRetries) return result(PlayerBotProgressionCommandType::Finish, PlayerBotProgressionOutcomeType::Failed, "old_bag_restore_exhausted");
+			equipmentPurchaseSession.setStage(PlayerBotEquipmentPurchaseStage::RestoreBackpack);
+			return result(PlayerBotProgressionCommandType::None, PlayerBotProgressionOutcomeType::Retry, "depot_restore_old_bag");
 		case PlayerBotEquipmentPurchaseStage::Equip:
 			if (observation.equipmentVerified) {
 				equipmentPurchaseSession.setStage(PlayerBotEquipmentPurchaseStage::VerifyEquipment);
-				return outcome(PlayerBotProgressionCommandType::None, PlayerBotProgressionOutcomeType::Pending, nullptr);
+				return result(PlayerBotProgressionCommandType::None, PlayerBotProgressionOutcomeType::Pending, nullptr);
 			}
 			if (!observation.equipmentAvailable) {
-				if (equipmentPurchaseSession.incrementRetries() >= 3) return outcome(PlayerBotProgressionCommandType::Finish, PlayerBotProgressionOutcomeType::Failed, "purchased_item_unavailable");
-				return outcome(PlayerBotProgressionCommandType::None, PlayerBotProgressionOutcomeType::Retry, "purchased_item_unavailable");
+				if (equipmentPurchaseSession.incrementRetries() >= maximumRetries) return result(PlayerBotProgressionCommandType::Finish, PlayerBotProgressionOutcomeType::Failed, "purchased_item_unavailable");
+				return result(PlayerBotProgressionCommandType::None, PlayerBotProgressionOutcomeType::Retry, "purchased_item_unavailable");
 			}
 			if (!observation.openContainerRequired) equipmentPurchaseSession.observeContainerOpen(observation.containerDepth);
 			if (observation.displacedMoveRequired || observation.openContainerRequired) {
-				if (observation.openContainerRequired && !observation.containerAccessAvailable) {
-					return outcome(PlayerBotProgressionCommandType::Finish, PlayerBotProgressionOutcomeType::Failed, "purchased_item_container_unavailable");
-				}
-				if (equipmentPurchaseSession.retries() >= 3) return outcome(PlayerBotProgressionCommandType::Finish, PlayerBotProgressionOutcomeType::Failed,
-					observation.displacedMoveRequired ? "displaced_item_move_not_verified" : "purchased_item_container_unavailable");
+				if (observation.openContainerRequired && !observation.containerAccessAvailable) return result(PlayerBotProgressionCommandType::Finish, PlayerBotProgressionOutcomeType::Failed, "purchased_item_container_unavailable");
+				if (equipmentPurchaseSession.retries() >= maximumRetries) return result(PlayerBotProgressionCommandType::Finish, PlayerBotProgressionOutcomeType::Failed, observation.displacedMoveRequired ? "displaced_item_move_not_verified" : "purchased_item_container_unavailable");
 				equipmentPurchaseSession.incrementRetries();
 				if (observation.openContainerRequired) equipmentPurchaseSession.beginContainerAccess(observation.containerDepth);
-				return outcome(observation.openContainerRequired ? PlayerBotProgressionCommandType::Open : PlayerBotProgressionCommandType::Equip,
+				return result(observation.openContainerRequired ? PlayerBotProgressionCommandType::Open : PlayerBotProgressionCommandType::Equip,
 					PlayerBotProgressionOutcomeType::Retry, observation.openContainerRequired ? "open_equipment_container" : "preserve_displaced_equipment");
 			}
-			if (!observation.actionAvailable) return outcome(PlayerBotProgressionCommandType::None, PlayerBotProgressionOutcomeType::Pending, "action_unavailable");
-			if (!observation.equipmentPositionAvailable) return outcome(PlayerBotProgressionCommandType::Finish, PlayerBotProgressionOutcomeType::Failed, "purchased_item_position_unavailable");
+			if (!observation.actionAvailable) return result(PlayerBotProgressionCommandType::None, PlayerBotProgressionOutcomeType::Pending, "action_unavailable");
+			if (!observation.equipmentPositionAvailable) return result(PlayerBotProgressionCommandType::Finish, PlayerBotProgressionOutcomeType::Failed, "purchased_item_position_unavailable");
 			equipmentPurchaseSession.captureDisplacedItemCounts(observation.displacedCounts);
 			equipmentPurchaseSession.setStage(PlayerBotEquipmentPurchaseStage::VerifyEquipment);
-			return outcome(PlayerBotProgressionCommandType::Equip, PlayerBotProgressionOutcomeType::Pending, "equip_equipment");
+			return result(PlayerBotProgressionCommandType::Equip, PlayerBotProgressionOutcomeType::Pending, "equip_equipment");
 		case PlayerBotEquipmentPurchaseStage::VerifyEquipment:
-			if (observation.equipmentVerified && equipmentPurchaseSession.displacedItemsPreserved(observation.displacedCounts)) return outcome(PlayerBotProgressionCommandType::Finish, PlayerBotProgressionOutcomeType::Succeeded, "upgrade_equipped");
-			if (equipmentPurchaseSession.incrementRetries() >= 3) return outcome(PlayerBotProgressionCommandType::Finish, PlayerBotProgressionOutcomeType::Failed,
-				equipmentPurchaseSession.displacedItemsPreserved(observation.displacedCounts) ? "equip_not_verified" : "displaced_item_lost");
-			equipmentPurchaseSession.setStage(PlayerBotEquipmentPurchaseStage::Equip);
-			return outcome(PlayerBotProgressionCommandType::None, PlayerBotProgressionOutcomeType::Retry, "equip_equipment");
+			if (observation.equipmentVerified && (!equipmentPurchaseSession.plan().bagUpgrade || observation.oldBagPreserved) && equipmentPurchaseSession.displacedItemsPreserved(observation.displacedCounts)) {
+				return result(PlayerBotProgressionCommandType::Finish, PlayerBotProgressionOutcomeType::Succeeded, equipmentPurchaseSession.plan().backpackAcquisition ? "backpack_acquired" : "upgrade_equipped");
+			}
+			if (equipmentPurchaseSession.incrementRetries() >= maximumRetries) return result(PlayerBotProgressionCommandType::Finish, PlayerBotProgressionOutcomeType::Failed, "equip_not_verified");
+			equipmentPurchaseSession.setStage(equipmentPurchaseSession.plan().bagUpgrade ? PlayerBotEquipmentPurchaseStage::RetrieveBackpack : PlayerBotEquipmentPurchaseStage::Equip);
+			return result(PlayerBotProgressionCommandType::None, PlayerBotProgressionOutcomeType::Retry, "equip_equipment");
 	}
-	return outcome(PlayerBotProgressionCommandType::Finish, PlayerBotProgressionOutcomeType::Failed, "invalid_equipment_stage");
+	return result(PlayerBotProgressionCommandType::Finish, PlayerBotProgressionOutcomeType::Failed, "invalid_equipment_stage");
 }

@@ -251,6 +251,11 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		void beginEquipmentPurchase(Player& player, const Position& position, EquipmentOfferEvaluation evaluation);
 		void processEquipmentPurchase(Player* player, const Position& position);
 		void finishEquipmentPurchase(Player* player, const Position& position, const char* result, const char* reason);
+		bool resumeBackpackUpgrade(Player& player, const Position& position);
+		bool interruptBackpackUpgradeForService(Player& player, const Position& position, const char* reason);
+		Item* taggedBackpackUpgradeBag(Player& player, uint32_t* matches = nullptr) const;
+		Item* taggedBackpackUpgradeReplacementBag(Player& player, uint32_t* matches = nullptr) const;
+		void clearBackpackUpgradePersistence(Player& player, bool clearItemMarker);
 
 		std::string rewardInspectionItemsJson(const RewardInspection& inspection) const;
 
@@ -496,6 +501,9 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		std::string pendingHuntCompletionReason;
 		PlayerBotRewardPlanner rewardPlanner;
 		PlayerBotEquipmentProviderPlanner equipmentProviderPlanner;
+		std::optional<PlayerBotDepotCandidate> backpackUpgradeDepot;
+		int32_t backpackUpgradeToken = 0;
+		uint16_t backpackUpgradeDepotId = 0;
 		size_t equipmentProviderScanOffset = 0;
 		size_t equipmentOfferScanOffset = 0;
 		PlayerBotSpellTrainingPlanner spellTrainingPlanner;

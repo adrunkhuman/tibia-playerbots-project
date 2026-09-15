@@ -3,8 +3,6 @@
  * Copyright (C) 2019 Mark Samman
  */
 
-#include "otpch.h"
-
 #include "playerbotprogressionsession.h"
 
 void PlayerBotRewardSession::begin(PlayerBotRewardPlan value)
@@ -85,8 +83,11 @@ void PlayerBotSpellTrainingSession::reset()
 void PlayerBotEquipmentPurchaseSession::begin(PlayerBotEquipmentOfferEvaluation value)
 {
 	purchase = std::move(value);
-	currentStage = purchase.carried ? PlayerBotEquipmentPurchaseStage::Equip : PlayerBotEquipmentPurchaseStage::Travel;
+	currentStage = purchase.carried ? PlayerBotEquipmentPurchaseStage::Equip :
+		purchase.bagUpgrade ? PlayerBotEquipmentPurchaseStage::TravelDepot : PlayerBotEquipmentPurchaseStage::Travel;
 	attempts = 0;
+	purchased = false;
+	recoveryReason.clear();
 	displaced.clear();
 	nestedContainer = {};
 }
@@ -96,6 +97,8 @@ void PlayerBotEquipmentPurchaseSession::reset()
 	purchase = {};
 	currentStage = PlayerBotEquipmentPurchaseStage::Travel;
 	attempts = 0;
+	purchased = false;
+	recoveryReason.clear();
 	displaced.clear();
 	nestedContainer = {};
 }

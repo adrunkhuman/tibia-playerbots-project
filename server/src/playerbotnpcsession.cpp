@@ -8,7 +8,7 @@
  * (at your option) any later version.
  */
 
-#include "otpch.h"
+#include <cstdint>
 
 #include "const.h"
 #include "playerbotnpcsession.h"

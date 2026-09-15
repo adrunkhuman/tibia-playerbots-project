@@ -11,7 +11,6 @@
 #include <string>
 #include <vector>
 
-#include "creature.h"
 #include "playerbotequipmentpolicy.h"
 #include "position.h"
 
@@ -32,7 +31,7 @@ struct PlayerBotRewardPlan {
 	uint16_t rootOrdinal = 0;
 	Position itemPosition;
 	Position approachPosition;
-	slots_t slot = CONST_SLOT_WHEREEVER;
+	slots_t slot = static_cast<slots_t>(0);
 	int32_t benefit = 0;
 	std::string metric;
 	int32_t currentValue = 0;
@@ -191,9 +190,21 @@ class PlayerBotSpellTrainingSession
 };
 
 enum class PlayerBotEquipmentPurchaseStage : uint8_t {
+	TravelDepot,
+	OpenDepotForStage,
+	StageBackpack,
+	VerifyBackpackStaging,
 	Travel,
 	Purchase,
 	VerifyPurchase,
+	ReturnDepot,
+	OpenDepotForRetrieve,
+	StageReplacementBackpack,
+	VerifyReplacementBackpackStaging,
+	RetrieveBackpack,
+	VerifyBackpackRetrieved,
+	RestoreBackpack,
+	VerifyBackpackRestored,
 	Equip,
 	VerifyEquipment,
 };
@@ -210,6 +221,11 @@ class PlayerBotEquipmentPurchaseSession
 	void begin(PlayerBotEquipmentOfferEvaluation purchase);
 	void reset();
 	void setStage(PlayerBotEquipmentPurchaseStage stage) { currentStage = stage; }
+	void beginBackpackRecovery(const char* reason) { recoveryReason = reason ? reason : "backpack_purchase_failed"; currentStage = PlayerBotEquipmentPurchaseStage::ReturnDepot; attempts = 0; }
+	const std::string& backpackRecoveryReason() const { return recoveryReason; }
+	bool backpackRecoveryActive() const { return !recoveryReason.empty(); }
+	void markPurchased() { purchased = true; }
+	bool backpackPurchased() const { return purchased; }
 	uint32_t incrementRetries() { return ++attempts; }
 	void resetRetries() { attempts = 0; }
 	void captureDisplacedItemCounts(std::map<uint16_t, uint32_t> counts) { displaced = std::move(counts); }
@@ -219,6 +235,8 @@ class PlayerBotEquipmentPurchaseSession
 	PlayerBotEquipmentOfferEvaluation purchase;
 	PlayerBotEquipmentPurchaseStage currentStage = PlayerBotEquipmentPurchaseStage::Travel;
 	uint32_t attempts = 0;
+	bool purchased = false;
+	std::string recoveryReason;
 	std::map<uint16_t, uint32_t> displaced;
 	PlayerBotNestedContainerAccessState nestedContainer;
 };

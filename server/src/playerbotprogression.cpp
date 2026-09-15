@@ -220,6 +220,16 @@ bool PlayerBotController::ensureCombatReady(Player* player, const Position& posi
 		schedule(navigationInterval);
 		return false;
 	}
+	if (readiness.recovery == "acquire_backpack") {
+		auto backpack = evaluateEquipmentOffers(*player, position);
+		if (backpack && backpack->backpackAcquisition) {
+			beginEquipmentPurchase(*player, position, std::move(*backpack));
+			schedule(SCHEDULER_MINTICKS);
+		} else {
+			stop("combat_readiness_backpack_unavailable", position);
+		}
+		return false;
+	}
 	stop(("combat_readiness_" + readiness.terminalReason).c_str(), position);
 	return false;
 }

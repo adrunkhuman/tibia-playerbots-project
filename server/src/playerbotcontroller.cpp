@@ -178,9 +178,11 @@ void PlayerBotController::start(const Position& position, bool recovered, uint32
 	refreshItemValues();
 	const bool startInHunt = !recovered && fixtureDriver.startInHunt();
 	Player* controlledPlayer = g_game.getPlayerByID(playerId);
+	const bool backpackUpgradeResumed = controlledPlayer && resumeBackpackUpgrade(*controlledPlayer, position);
+	if (!turnRouter.running()) return;
 	const bool departureComplete = controlledPlayer && departurePlanner.hasCompleted(departureSnapshot(*controlledPlayer));
 	const bool departureRequired = controlledPlayer && departurePlanner.required(departureSnapshot(*controlledPlayer));
-	const bool useGoalSelector = controlledPlayer && !startInHunt &&
+	const bool useGoalSelector = controlledPlayer && !backpackUpgradeResumed && !startInHunt &&
 	                             (departureRequired || (!recovered && fixtureDriver.startWithGoalSelection()));
 	if (!fixtureDriver.magicTrainingScenario() && !fixtureDriver.deferInitialization() && useGoalSelector &&
 	    !selectTopLevelGoal(*controlledPlayer, position, "startup")) {
@@ -231,7 +233,9 @@ void PlayerBotController::start(const Position& position, bool recovered, uint32
 	lifecycle << "\"status\":\"online\",\"message\":\"Playerbot online\""
 	          << ",\"recovered\":" << (recovered ? "true" : "false")
 	          << ",\"recovery_count\":" << recoveryCount
-	          << ",\"objective\":" << jsonString((fixtureDriver.magicTrainingScenario() || fixtureDriver.deferInitialization()) ? "fixture_pending" : useGoalSelector ? PlayerBotGoalArbiter::goalName(progressionRuntime.activeGoal()) :
+	          << ",\"objective\":" << jsonString(backpackUpgradeResumed ? "buy_equipment" :
+	                                                    (fixtureDriver.magicTrainingScenario() || fixtureDriver.deferInitialization()) ? "fixture_pending" :
+	                                                    useGoalSelector ? PlayerBotGoalArbiter::goalName(progressionRuntime.activeGoal()) :
 	                                                    (startInHunt ? "hunt" : "service"))
 	          << ",\"step_speed\":" << (g_game.getPlayerByID(playerId) ? g_game.getPlayerByID(playerId)->getSpeed() : 0)
 		          << ",\"spell_calibration_profiles\":" << survivalRuntime.calibrationSize()
@@ -247,7 +251,9 @@ void PlayerBotController::start(const Position& position, bool recovered, uint32
 		emitFixtureEvents(fixtureDriver.runAdaptiveChallenge(*controlledPlayer), position);
 		emitFixtureEvents(fixtureDriver.runDepotRiskFallbackContract(), position);
 	}
-	if (fixtureDriver.magicTrainingScenario() || fixtureDriver.deferInitialization()) {
+	if (backpackUpgradeResumed) {
+		// Durable backpack recovery owns the normal progression command until resolved.
+	} else if (fixtureDriver.magicTrainingScenario() || fixtureDriver.deferInitialization()) {
 		fixtureDriver.beginDelayedInitialization();
 	} else if (useGoalSelector) {
 		// The selected goal initialized its own executor state.
