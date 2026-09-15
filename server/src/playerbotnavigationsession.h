@@ -47,6 +47,10 @@ class PlayerBotNavigationSession
 		void clearRoute() { steps.clear(); }
 		size_t routeSize() const { return steps.size(); }
 		bool hasPendingWork() const { return movementPending || worldChangePending || !steps.empty(); }
+		std::optional<Position> pendingMoveTarget() const
+		{
+			return movementPending ? std::optional<Position>(stepTarget) : std::nullopt;
+		}
 
 		PlayerBotPendingMovementResult observeMovement(const Position& currentPosition, bool actionPending,
 		                                                   std::chrono::steady_clock::time_point now,
@@ -58,19 +62,12 @@ class PlayerBotNavigationSession
 
 		std::set<Position> activeBlockedPositions(std::chrono::steady_clock::time_point now);
 		void suppress(const Position& position, std::chrono::steady_clock::time_point expires);
-		bool avoidPendingRouteBlocker(uint32_t blockerId, const Position& position, std::chrono::steady_clock::time_point now,
-		                              std::chrono::steady_clock::duration suppression);
-		void confirmRequiredRouteBlocker();
-		void confirmRouteBlocker(uint32_t blockerId, const Position& position, std::chrono::steady_clock::time_point now,
-		                         std::chrono::steady_clock::duration suppression);
-		void clearRequiredRouteBlockers() { requiredRouteBlockerIds.clear(); }
-		void clearBlockedPositions() { temporarilyBlockedPositions.clear(); clearRequiredRouteBlockers(); pendingRouteBlocker.reset(); pendingRouteBlockerId.reset(); }
+		void clearBlockedPositions() { temporarilyBlockedPositions.clear(); }
 
 		std::optional<PlayerBotNavigationOscillation> observeProgress(
 			const Position& currentPosition, const PlayerBotNavigationGoal& goal,
 			std::chrono::steady_clock::time_point now, std::chrono::steady_clock::duration suppression);
 
-		bool isRouteCritical(uint32_t blockerId, const Position& position, std::chrono::steady_clock::time_point now) const;
 		bool hasActiveRouteBlock(std::chrono::steady_clock::time_point now) const { return now < blockedTargetExpires; }
 		bool oscillationDetected() const { return detectedOscillation; }
 		uint32_t stepFailureCount() const { return blockedStepCount; }
@@ -93,9 +90,6 @@ class PlayerBotNavigationSession
 		std::chrono::steady_clock::time_point blockedTargetExpires;
 		PlayerBotNavigationStep worldChangeStep;
 		std::map<Position, std::chrono::steady_clock::time_point> temporarilyBlockedPositions;
-		std::set<uint32_t> requiredRouteBlockerIds;
-		std::optional<Position> pendingRouteBlocker;
-		std::optional<uint32_t> pendingRouteBlockerId;
 		uint32_t blockedStepCount = 0;
 		bool movementPending = false;
 		bool worldChangePending = false;

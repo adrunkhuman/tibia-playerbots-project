@@ -8,6 +8,8 @@
 #include "playerbotdepotworkflow.h"
 #include "playerboteconomy.h"
 #include "playerbotgoalplanner.h"
+#include "playerbotcombatruntime.h"
+#include "playerbotcombattarget.h"
 #include "playerbotnavigationruntime.h"
 #include "playerbottransitcombat.h"
 #include "playerbottopology.h"
@@ -514,83 +516,103 @@ void transitCombat()
 	assert(PlayerBotTransitCombat::required(Phase::Hunt, Stage::LootCorpse, true, false));
 	assert(PlayerBotTransitCombat::required(Phase::Hunt, Stage::Traverse, true, true));
 	assert(!PlayerBotTransitCombat::required(Phase::Hunt, Stage::Traverse, true, false));
+	assert(PlayerBotTransitCombat::lootDeadlineRequiresRelease(true, true));
+	assert(!PlayerBotTransitCombat::lootDeadlineRequiresRelease(true, false));
+	assert(!PlayerBotTransitCombat::lootDeadlineRequiresRelease(false, true));
+
+	const Position stalled(100, 100, 7);
+	const Position intended(101, 100, 7);
 	PlayerBotTransitCombat episode;
-	const auto start = std::chrono::steady_clock::time_point{};
-	assert(episode.observe(true, 1, Phase::ReturnToDepot));
-	episode.beginDefense(42, start);
-	for (int turn = 0; turn < 100; ++turn) {
-		assert(!episode.observe(true, 1, Phase::ReturnToDepot));
-		assert(!episode.allowsDefense(42, true));
-		assert(!episode.allowsDefense(43, true)); // the budget belongs to the episode, not the monster ID
-		for (uint32_t id = 43; id < 48; ++id) assert(!episode.allowsDefense(id, false));
-	}
-	// Wall-clock expiry is independent of how many turns healing consumes.
-	assert(episode.defenseExpired(start + std::chrono::seconds(5)));
+	assert(episode.observe(true, 1, Phase::Service));
+	assert(!episode.movementFallbackRequired()); // planning and legitimate waits do not create evidence
+	episode.observePosition(Position(101, 100, 7));
+	assert(!episode.movementFallbackRequired()); // ordinary movement does not create evidence either
+	assert(!episode.allowsDefense(42, true));
+	episode.observeMovementFailure(stalled); // failed NPC/depot planning has no adjacent waypoint
+	assert(episode.movementFallbackRequired() && !episode.intendedStep());
+	assert(episode.allowsDefense(42, true));
+	episode.beginDefense(42, false);
+	// No five- or sixty-second timer can cycle a live passage target.
+	assert(episode.retainsDefense(42, stalled, intended, true));
+	assert(episode.retainsDefense(42, stalled, intended, true));
+	assert(!playerBotDefensiveCombatTimeoutApplies(true, true));
+	assert(playerBotDefensiveCombatTimeoutApplies(false, true));
+	PlayerBotDefensiveTarget runtimeTarget;
+	runtimeTarget.id = 42;
+	runtimeTarget.position = intended;
+	runtimeTarget.name = "Frost Troll";
+	runtimeTarget.routeCritical = true;
+	PlayerBotCombatTargetSnapshot liveTarget;
+	liveTarget.present = true;
+	assert(!playerBotDefensiveLifetimeCompletion(runtimeTarget, liveTarget));
+	liveTarget.dead = true;
+	const auto deadCompletion = playerBotDefensiveLifetimeCompletion(runtimeTarget, liveTarget);
+	assert(deadCompletion && deadCompletion->command == PlayerBotCombatCommand::CompleteDefensiveCombat);
+	assert(std::string(deadCompletion->result) == "success" && std::string(deadCompletion->reason) == "target_defeated");
+	liveTarget.dead = false;
+	liveTarget.removed = true;
+	assert(std::string(playerBotDefensiveLifetimeCompletion(runtimeTarget, liveTarget)->reason) == "target_defeated");
+	assert(!episode.allowsDefense(43, true));
+	assert(!episode.retainsDefense(42, stalled, intended, false)); // live safety release
+	episode.clearFallback();
+	assert(!episode.movementFallbackRequired() && !episode.allowsDefense(42, true));
+
+	episode.observeMovementFailure(stalled, intended);
+	episode.beginDefense(42, true);
+	assert(episode.retainsDefense(42, stalled, intended, true));
+	assert(!episode.retainsDefense(42, stalled, Position(100, 101, 7), true)); // intended blocker moved
+	episode.clearFallback();
+	episode.observeMovementFailure(stalled, intended);
+	episode.beginDefense(43, false);
+	assert(episode.retainsDefense(43, stalled, Position(100, 101, 7), true)); // alternate target is retained
+	assert(!episode.allowsDefense(42, true));
+	episode.clearFallback();
+	episode.observeMovementFailure(stalled);
+	episode.observePosition(Position(100, 101, 7));
+	assert(!episode.movementFallbackRequired()); // actual progress clears the stall
+	episode.observeMovementFailure(stalled, intended);
+	episode.observeViableMovement();
+	assert(!episode.movementFallbackRequired()); // a usable first step resumes navigation
+	episode.observeMovementFailure(stalled);
+	episode.beginDefense(42, false);
+	episode.clearFallback();
+	assert(!episode.movementFallbackRequired()); // target death completes the fallback
+
+	// Goal abandonment is an explicit interruption; replans within a goal are not.
+	episode.observeMovementFailure(stalled);
+	assert(!episode.observe(true, 1, Phase::Service));
+	assert(episode.movementFallbackRequired());
 	assert(episode.observe(true, 2, Phase::ReturnToDepot));
-	assert(episode.allowsDefense(42, true));
-	episode.beginDefense(42, start);
-	assert(episode.observe(true, 2, Phase::Service));
-	assert(episode.allowsDefense(42, true));
-	episode.beginDefense(42, start);
-	// NPC approach completes a coarse leg and then a local leg under the
-	// same goal/phase. Neither arrival completes the transit episode.
-	for (int approachLeg = 0; approachLeg < 2; ++approachLeg) {
-		assert(!episode.observe(true, 2, Phase::Service));
-		assert(!episode.allowsDefense(42, true));
-		assert(episode.defenseExpired(start + std::chrono::seconds(5 + approachLeg)));
-	}
-	// Semantic completion (the next phase), rather than a route-leg arrival,
-	// permits a fresh attempt on a subsequent transit episode.
-	assert(episode.observe(false, 2, Phase::Hunt));
-	assert(episode.allowsDefense(42, false));
+	assert(!episode.movementFallbackRequired());
 
-	PlayerBotTransitCombat retreat;
-	const auto now = std::chrono::steady_clock::time_point{};
-	assert(!retreat.active());
-	assert(retreat.allowsDefense(42, false));
-	retreat.begin();
-	assert(retreat.active());
-	// Adjacent attackers (including a crowd) never override escape without
-	// navigation's failed-detour evidence. Repeated turns cannot reacquire them.
-	for (int turn = 0; turn < 100; ++turn) {
-		for (uint32_t id = 42; id < 46; ++id) assert(!retreat.allowsDefense(id, false));
-	}
-	assert(retreat.allowsDefense(42, true));
-	retreat.beginDefense(42, now);
-	assert(!retreat.defenseExpired(now + std::chrono::seconds(4)));
-	assert(retreat.defenseExpired(now + std::chrono::seconds(5)));
-	assert(!retreat.allowsDefense(42, true));
-	// Re-entering service must not renew a spent combat budget.
-	retreat.begin();
-	assert(!retreat.allowsDefense(42, true));
-	assert(retreat.defenseExpired(now + std::chrono::seconds(75)));
-	assert(!retreat.allowsDefense(43, true));
+	// The same fallback contract also applies to active hunt patrol movement.
+	assert(episode.observe(false, 3, Phase::Hunt));
+	episode.observeMovementFailure(stalled, intended);
+	assert(episode.movementFallbackRequired() && episode.allowsDefense(42, true));
+	assert(episode.allowsDefense(42, false)); // ordinary hunt defense remains available
 
-	// Route exhaustion can spend a separate bounded escape window. It permits
-	// route-critical targets regardless of the planner's nominal success (a
-	// corridor plan can "succeed" straight through a blocked tile), exits on
-	// real progress, and never renews on replans.
-	assert(!retreat.beginBreakout(false, true, true, now + std::chrono::seconds(75)));
-	assert(!retreat.beginBreakout(true, false, true, now + std::chrono::seconds(75)));
-	assert(retreat.beginBreakout(true, true, false, now + std::chrono::seconds(75)));
-	assert(retreat.breakoutActive() && retreat.allowsDefense(43, true));
-	assert(!retreat.beginBreakout(true, true, true, now + std::chrono::seconds(76)));
-	assert(!retreat.breakoutExpired(now + std::chrono::seconds(104)));
-	assert(retreat.breakoutExpired(now + std::chrono::seconds(105)));
-	assert(retreat.observeBreakoutNavigation(true, false));
-	assert(!retreat.breakoutActive() && !retreat.allowsDefense(43, true));
-	assert(!retreat.beginBreakout(true, true, true, now + std::chrono::seconds(110)));
-	assert(retreat.observe(true, 2, Phase::ReturnToDepot));
-	assert(retreat.beginBreakout(true, true, true, now + std::chrono::seconds(110)));
-	assert(retreat.observeBreakoutNavigation(false, true));
-	assert(!retreat.breakoutActive());
-	retreat.finish();
-	assert(!retreat.active());
-	assert(!retreat.defenseExpired(now + std::chrono::hours(1)));
-	assert(retreat.allowsDefense(42, false));
-	retreat.begin();
-	assert(retreat.allowsDefense(42, true));
-	assert(!retreat.allowsDefense(42, false));
+	// Four attackers are accepted when their real aggregate estimate is survivable.
+	assert(playerBotPassageFightManageable(500, 0, 20.0, 20.0));
+	assert(!playerBotPassageFightManageable(400, 0, 20.0, 20.0));
+	assert(playerBotPassageFightManageable(350, 100, 20.0, 20.0));
+
+	PlayerBotDefensiveTarget easy;
+	easy.id = 10;
+	easy.position = Position(99, 100, 7);
+	easy.routeCritical = true;
+	easy.predictedFightDamage = 100;
+	easy.predictedFightSeconds = 5;
+	PlayerBotDefensiveTarget intendedAttacker = easy;
+	intendedAttacker.id = 20;
+	intendedAttacker.position = intended;
+	intendedAttacker.intendedStep = true;
+	intendedAttacker.predictedFightDamage = 200;
+	assert(playerBotPreferDefensiveTarget(intendedAttacker, easy, stalled));
+	intendedAttacker.intendedStep = false;
+	assert(playerBotPreferDefensiveTarget(easy, intendedAttacker, stalled));
+
+	episode.finish();
+	assert(!episode.active() && !episode.movementFallbackRequired());
 
 	PlayerBotTurnRouter router;
 	assert(router.route({}) == PlayerBotTurnCommand::ReturnToDepot);

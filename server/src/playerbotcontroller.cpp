@@ -376,7 +376,6 @@ playerbot::PlayerBotTelemetrySummary PlayerBotController::telemetrySummary() con
 		else if (!player->canDoAction()) summary.waitingReason = "action_delay";
 	}
 	if (supplyRecovery.active()) summary.recovery = "supply";
-	else if (huntCoordinator.transitBreakoutActive()) summary.recovery = "transit_breakout";
 	else if (huntCoordinator.retreatingFromDanger()) summary.recovery = "danger_retreat";
 	return summary;
 }
@@ -1354,57 +1353,11 @@ void PlayerBotController::onHealthGain(Creature* healer, const Creature& target,
 	survivalRuntime.observeHealthGain(healer && healer->getID() == playerId, target.getID() == playerId, gain);
 }
 
-bool PlayerBotController::confirmAdjacentRouteBlockers(Player* player, const Position& currentPosition,
-	std::chrono::steady_clock::time_point now)
+bool PlayerBotController::handleFixedTargetRouteExhausted(Player*, const Position& currentPosition,
+	const PlayerBotNavigationRuntimeOutcome& outcome, std::chrono::steady_clock::time_point, bool allowStop)
 {
-	if (!player) return false;
-	bool confirmed = false;
-	SpectatorVec spectators;
-	g_game.map.getSpectators(spectators, currentPosition);
-	for (Creature* creature : spectators) {
-		if (!creature->getMonster() || creature->isRemoved() || creature->isDead() ||
-		    !player->canSee(creature->getPosition()) ||
-		    !Position::areInRange<1, 1, 0>(currentPosition, creature->getPosition())) {
-			continue;
-		}
-		navigationRuntime.confirmRouteBlocker(creature->getID(), creature->getPosition(), now,
-		                                      navigationBlockSuppression);
-		confirmed = true;
-	}
-	return confirmed;
-}
-
-bool PlayerBotController::handleFixedTargetRouteExhausted(Player* player, const Position& currentPosition,
-	const PlayerBotNavigationRuntimeOutcome& outcome, std::chrono::steady_clock::time_point now, bool allowStop)
-{
-	if (!outcome.fixedTargetRouteExhausted) return false;
-	bool adjacentConfirmedHostileBlocker = false;
-	SpectatorVec spectators;
-	g_game.map.getSpectators(spectators, currentPosition);
-	for (Creature* creature : spectators) {
-		if (creature->getMonster() && !creature->isRemoved() && !creature->isDead() &&
-		    player->canSee(creature->getPosition()) &&
-		    Position::areInRange<1, 1, 0>(currentPosition, creature->getPosition()) &&
-		    navigationRuntime.isRouteCritical(creature->getID(), creature->getPosition(), now)) {
-			adjacentConfirmedHostileBlocker = true;
-			break;
-		}
-	}
-	const bool breakoutStarted = huntCoordinator.beginTransitBreakout(
-	    outcome.fixedTargetRouteExhausted, adjacentConfirmedHostileBlocker,
-	    outcome.routeUnavailable, now);
-	if (huntCoordinator.transitBreakoutActive()) {
-		if (breakoutStarted) {
-			emit("navigation_progress", currentPosition,
-			     "\"result\":\"recovering\",\"reason\":\"transit_breakout\",\"duration_seconds\":30");
-		}
-		return true;
-	}
-	// A previous breakout failed to free the tile and no blocker is currently
-	// attackable: continuing would loop the same no-progress plan sequence.
-	if (allowStop || huntCoordinator.transitBreakoutAttempted()) {
-		stop("navigation_route_unavailable", currentPosition);
-	}
+	if (!outcome.fixedTargetRouteExhausted || !allowStop) return false;
+	stop("navigation_route_unavailable", currentPosition);
 	return true;
 }
 
@@ -1431,6 +1384,8 @@ bool PlayerBotController::processNavigation(Player* player, const Position& curr
 	PlayerBotNavigationRuntimeOutcome outcome = navigationRuntime.process({
 		currentPosition, goal, player->getWalkDelay() > 0 || !player->canDoAction(), player->canDoAction(), timing,
 	});
+	huntCoordinator.observeTransitPosition(currentPosition);
+	if (outcome.fixedTargetChanged) huntCoordinator.clearTransitMovementFallback();
 	if (outcome.routeRequest && !allowRoutePlanning) {
 		if (navigationOutcome) *navigationOutcome = outcome;
 		return false;
@@ -1448,9 +1403,11 @@ bool PlayerBotController::processNavigation(Player* player, const Position& curr
 			                                std::min(fixturePlan.maximumExpandedNodes, routeNodeBudget), sameFloorOnly);
 		}
 		const PlayerBotPendingMovementResult movementResult = outcome.movementResult;
+		const std::optional<Position> failedMovementTarget = outcome.failedMovementTarget;
 		const bool positionalProgress = outcome.positionalProgress;
 		outcome = navigationRuntime.observePlan({goal, std::move(routePlan), player->canDoAction(), false, now});
 		outcome.movementResult = movementResult;
+		outcome.failedMovementTarget = failedMovementTarget;
 		outcome.positionalProgress = positionalProgress;
 	}
 	if (outcome.plan.attempted && !outcome.routeUnavailable &&
@@ -1472,6 +1429,7 @@ bool PlayerBotController::processNavigation(Player* player, const Position& curr
 	if (risk && outcome.plan.attempted && !outcome.routeUnavailable) {
 		if (!playerBotNavigationRiskAccepts(*risk, outcome.plan.dangerCost,
 		                                    outcome.plan.maximumHealthLossPerSecond)) {
+			huntCoordinator.clearTransitMovementFallback();
 			outcome.routeUnsafe = true;
 			outcome.routeUnavailable = true;
 			navigationRuntime.reset();
@@ -1487,30 +1445,10 @@ bool PlayerBotController::processNavigation(Player* player, const Position& curr
 			return false;
 		}
 	}
-	bool immediateEscapeStepOpen = outcome.nextStep.has_value();
-	if (immediateEscapeStepOpen && outcome.nextStep->action == PlayerBotNavigationAction::Move) {
-		SpectatorVec spectators;
-		g_game.map.getSpectators(spectators, currentPosition);
-		immediateEscapeStepOpen = std::none_of(spectators.begin(), spectators.end(), [&outcome](Creature* creature) {
-			return creature->getMonster() && !creature->isRemoved() && !creature->isDead() &&
-			       creature->getPosition() == outcome.nextStep->target;
-		});
-	}
-	if (huntCoordinator.observeTransitBreakoutNavigation(outcome.positionalProgress, immediateEscapeStepOpen)) {
-		if (huntCoordinator.hasDefensiveCombat()) {
-			finishDefensiveCombat(player, currentPosition, "skipped", "transit_breakout_route_open");
-		} else {
-			resetNavigation();
-		}
-		emit("navigation_progress", currentPosition,
-		     "\"result\":\"recovered\",\"reason\":\"transit_breakout_route_open\"");
-		schedule(SCHEDULER_MINTICKS);
-		if (navigationOutcome) *navigationOutcome = outcome;
-		return false;
-	}
 	if (navigationOutcome) *navigationOutcome = outcome;
 	fixtureDriver.observeNavigationPlan(outcome.plan.attempted);
 	if (outcome.destinationReached) {
+		huntCoordinator.clearTransitMovementFallback();
 		// A navigation leg (for example, coarse NPC approach) can finish
 		// without completing the transit goal or renewing blocker attempts.
 		resetNavigation();
@@ -1541,6 +1479,7 @@ bool PlayerBotController::processNavigation(Player* player, const Position& curr
 		return false;
 	}
 	if (outcome.movementResult == PlayerBotPendingMovementResult::Mismatch) {
+		huntCoordinator.observeTransitMovementFailure(currentPosition, outcome.failedMovementTarget);
 		telemetry.logActionFailure("navigate", "step_result_mismatch", currentPosition);
 		if (outcome.stepFailureCount >= maximumRepeatedNavigationStepFailures) {
 			schedule(blockedRouteRetryInterval);
@@ -1560,6 +1499,7 @@ bool PlayerBotController::processNavigation(Player* player, const Position& curr
 	if (outcome.plan.attempted) {
 		telemetry.recordPathfinding(outcome.plan.elapsed, !outcome.routeUnavailable);
 		if (outcome.routeUnavailable) {
+			huntCoordinator.observeTransitMovementFailure(currentPosition);
 			telemetry.emit("navigation_progress", currentPosition,
 			     "\"result\":\"failed\",\"reason\":\"route_unavailable\",\"cycle_phase\":" +
 			         jsonString(cyclePhaseName()) + ",\"destination\":{\"x\":" + std::to_string(destination.x) +
@@ -1573,20 +1513,11 @@ bool PlayerBotController::processNavigation(Player* player, const Position& curr
 			         std::to_string(outcome.plan.waypoint.x) + ",\"y\":" + std::to_string(outcome.plan.waypoint.y) +
 			         ",\"z\":" + std::to_string(static_cast<uint16_t>(outcome.plan.waypoint.z)) + "}");
 			telemetry.logActionFailure("navigate", "route_unavailable", currentPosition);
-			confirmAdjacentRouteBlockers(player, currentPosition, now);
 			if (handleFixedTargetRouteExhausted(player, currentPosition, outcome, now, true)) {
 				schedule(blockedRouteRetryInterval);
 				return false;
 			}
 			schedule(blockedRouteRetryInterval);
-			return false;
-		}
-		// Exhaustion can also accumulate while plans keep nominally succeeding
-		// (the only corridor step is occupied by a stationary monster). Escalate
-		// before dispatching another doomed step.
-		if (handleFixedTargetRouteExhausted(player, currentPosition, outcome, now, false)) {
-			schedule(blockedRouteRetryInterval);
-			if (navigationOutcome) *navigationOutcome = outcome;
 			return false;
 		}
 		std::ostringstream fields;
@@ -1612,10 +1543,21 @@ bool PlayerBotController::processNavigation(Player* player, const Position& curr
 		return false;
 	}
 	PlayerBotNavigationStep step = *outcome.nextStep;
+	if (step.action == PlayerBotNavigationAction::Move) {
+		SpectatorVec spectators;
+		g_game.map.getSpectators(spectators, currentPosition);
+		const bool occupied = std::any_of(spectators.begin(), spectators.end(), [&step](Creature* creature) {
+			return !creature->isRemoved() && !creature->isDead() && creature->getPosition() == step.target;
+		});
+		if (!occupied) huntCoordinator.observeViableTransitMovement();
+	}
 	if (step.topologyPortal) {
 		step = resolveTopologyPortal(*player, step, navigationRuntime.activeBlockedPositions(now));
 	}
 	if (!executeNavigationStep(player, step)) {
+		if (step.action == PlayerBotNavigationAction::Move) {
+			huntCoordinator.observeTransitMovementFailure(currentPosition, step.target);
+		}
 		navigationRuntime.observeStep({step, PlayerBotNavigationStepResult::Rejected,
 		                               std::chrono::steady_clock::now(), navigationBlockSuppression});
 		telemetry.logActionFailure("navigate", "transition_unavailable", currentPosition);
@@ -1714,18 +1656,6 @@ void PlayerBotController::navigate()
 		if (huntCoordinator.traversalTarget()) {
 			finishTraversalCombat(player, currentPosition, "transit_goal_changed");
 		}
-	}
-	const auto transitNow = std::chrono::steady_clock::now();
-	if (huntCoordinator.transitBreakoutExpired(transitNow)) {
-		huntCoordinator.finishTransitBreakout();
-		if (huntCoordinator.hasDefensiveCombat()) {
-			finishDefensiveCombat(player, currentPosition, "skipped", "transit_breakout_timeout");
-		}
-		stop("navigation_route_unavailable", currentPosition);
-		return;
-	}
-	if (huntCoordinator.transitDefenseExpired(transitNow)) {
-		finishDefensiveCombat(player, currentPosition, "skipped", "transit_combat_budget");
 	}
 	const bool accessingReward = progressionRuntime.session().active(PlayerBotProgressionProcedure::PickupReward) &&
 	                             (progressionRuntime.reward().stage() == PlayerBotRewardStage::VerifyReward ||

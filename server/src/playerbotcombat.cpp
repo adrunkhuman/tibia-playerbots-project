@@ -16,6 +16,8 @@
 #include "playerbottopology.h"
 #include "spells.h"
 
+#include <utility>
+
 // Playerbot survival, combat targeting, and hunt orchestration.
 using namespace playerbot;
 
@@ -72,6 +74,30 @@ namespace {
 		return {player.getLevel(), player.getMaxHealth(), player.getArmor(), player.getDefense(),
 		        weapon ? weapon->getAttack() : 7,
 		        weapon ? player.getWeaponSkill(weapon) : player.getSkillLevel(SKILL_FIST), player.getAttackFactor()};
+	}
+
+	std::optional<std::pair<double, double>> manageablePassageFight(
+		Player& player, const std::vector<Creature*>& attackers, const Creature& target)
+	{
+		const PlayerBotCombatProfile combat = huntCombatProfile(player);
+		double incomingDamagePerSecond = 0;
+		double targetFightSeconds = 0;
+		for (Creature* attacker : attackers) {
+			const PlayerBotFightEstimate estimate = PlayerBotHuntRegionAdapter::fightEstimate(
+			    combat, attacker->getName(), attacker->getHealth());
+			if (estimate.incomingDamagePerSecond <= 0 || estimate.fightSeconds <= 0) return std::nullopt;
+			incomingDamagePerSecond += estimate.incomingDamagePerSecond;
+			if (attacker->getID() == target.getID()) targetFightSeconds = estimate.fightSeconds;
+		}
+		if (targetFightSeconds <= 0) return std::nullopt;
+		const double predictedDamage = incomingDamagePerSecond * targetFightSeconds;
+		const PlayerBotRecoveryPrediction recovery = playerBotPredictRecovery(
+		    huntPlanningFacts(player, combat), targetFightSeconds);
+		if (!playerBotPassageFightManageable(player.getHealth(), recovery.totalMinimumHealing,
+		                                     incomingDamagePerSecond, targetFightSeconds)) {
+			return std::nullopt;
+		}
+		return std::pair{predictedDamage, targetFightSeconds};
 	}
 
 	std::shared_ptr<const std::vector<PlayerBotHuntTransportOffer>> huntTransportCatalog()
@@ -388,64 +414,45 @@ bool PlayerBotController::attackDefensiveThreat(Player* player, const Position& 
 	if (huntCoordinator.traversalTarget()) return false;
 	SpectatorVec spectators;
 	g_game.map.getSpectators(spectators, currentPosition);
-	const auto now = std::chrono::steady_clock::now();
-	const size_t adjacentAttackers = std::count_if(spectators.begin(), spectators.end(), [player, &currentPosition](Creature* creature) {
-		return creature->getMonster() && !creature->isRemoved() && !creature->isDead() &&
-		       creature->getAttackedCreature() == player && player->canSee(creature->getPosition()) &&
-		       Position::areInRange<1, 1, 0>(currentPosition, creature->getPosition());
-	});
-	if (!huntCoordinator.transitBreakoutActive() && (huntCoordinator.inTransit() || adjacentAttackers < 4)) {
-		for (Creature* creature : spectators) {
-			if (!creature->getMonster() || creature->isRemoved() || creature->isDead() ||
-			    !player->canSee(creature->getPosition()) ||
-			    !Position::areInRange<1, 1, 0>(currentPosition, creature->getPosition())) continue;
-			if (!navigationRuntime.avoidPendingRouteBlocker(creature->getID(), creature->getPosition(), now, navigationBlockSuppression)) continue;
-			emit("navigation_progress", currentPosition,
-			     "\"result\":\"replanning\",\"reason\":\"hostile_detour\",\"blocker_id\":" +
-			         std::to_string(creature->getID()) + ",\"blocker_position\":{\"x\":" +
-			         std::to_string(creature->getPosition().x) + ",\"y\":" +
-			         std::to_string(creature->getPosition().y) + ",\"z\":" +
-			         std::to_string(creature->getPosition().z) + "}");
-			return true;
-		}
-	}
-	auto isRouteCritical = [this, now](const Creature* creature) {
-		return navigationRuntime.isRouteCritical(creature->getID(), creature->getPosition(), now);
-	};
-	const bool blockerOnly = huntCoordinator.inTransit();
-	std::vector<PlayerBotDefensiveTarget> candidates;
+	const bool movementFallback = huntCoordinator.transitMovementFallbackRequired();
+	const std::optional<Position> intendedStep = huntCoordinator.transitIntendedStep();
+	std::vector<Creature*> adjacentAttackers;
 	for (Creature* creature : spectators) {
-		const bool adjacentAttacker = creature->getAttackedCreature() == player &&
-		                              Position::areInRange<1, 1, 0>(currentPosition, creature->getPosition());
-		const bool routeCritical = isRouteCritical(creature) ||
-		                           (huntCoordinator.transitBreakoutActive() && adjacentAttacker);
 		if (!creature->getMonster() || creature->isRemoved() || creature->isDead() ||
-		    (!routeCritical && (blockerOnly || creature->getAttackedCreature() != player)) ||
-		    !player->canSee(creature->getPosition()) ||
-		    !Position::areInRange<1, 1, 0>(currentPosition, creature->getPosition())) {
-			continue;
-		}
+		    creature->getAttackedCreature() != player || !player->canSee(creature->getPosition()) ||
+		    !Position::areInRange<1, 1, 0>(currentPosition, creature->getPosition())) continue;
+		adjacentAttackers.push_back(creature);
+	}
 
-		PlayerBotDefensiveTarget candidate;
-		candidate.id = creature->getID();
-		candidate.position = creature->getPosition();
-		candidate.name = creature->getName();
-		candidate.routeCritical = routeCritical;
-		candidates.push_back(std::move(candidate));
+	std::vector<PlayerBotDefensiveTarget> candidates;
+	if (movementFallback) {
+		for (Creature* creature : adjacentAttackers) {
+			const auto risk = manageablePassageFight(*player, adjacentAttackers, *creature);
+			if (!risk) continue;
+			PlayerBotDefensiveTarget candidate;
+			candidate.id = creature->getID();
+			candidate.position = creature->getPosition();
+			candidate.name = creature->getName();
+			candidate.routeCritical = true;
+			candidate.intendedStep = intendedStep && creature->getPosition() == *intendedStep;
+			candidate.predictedFightDamage = risk->first;
+			candidate.predictedFightSeconds = risk->second;
+			candidates.push_back(std::move(candidate));
+		}
+	} else if (!huntCoordinator.inTransit()) {
+		for (Creature* creature : adjacentAttackers) {
+			candidates.push_back({creature->getID(), creature->getPosition(), creature->getName()});
+		}
 	}
 	const auto command = huntCoordinator.selectDefensiveAttack(std::move(candidates), currentPosition);
-	if (!command) {
-		return false;
-	}
+	if (!command) return false;
 	Creature* target = g_game.getCreatureByID(command->target.id);
-	if (!target) {
-		return false;
-	}
+	if (!target) return false;
 	telemetry.recordActionAttempt();
 	g_game.playerSetFightModes(playerId, FIGHTMODE_ATTACK, false, false);
 	g_game.playerSetAttackedCreature(playerId, target->getID());
-	const PlayerBotCombatDecision started = huntCoordinator.confirmCombatAttack(*command, player->getAttackedCreature() == target,
-	                                                                  std::chrono::steady_clock::now());
+	const PlayerBotCombatDecision started = huntCoordinator.confirmCombatAttack(
+	    *command, player->getAttackedCreature() == target, std::chrono::steady_clock::now());
 	if (!started.result || std::strcmp(started.result, "started") != 0) {
 		logActionFailure("defensive_combat", "target_rejected", currentPosition);
 		return false;
@@ -459,6 +466,19 @@ bool PlayerBotController::attackDefensiveThreat(Player* player, const Position& 
 	             << static_cast<uint16_t>(started.target.position.z) << "},\"reason\":"
 	             << jsonString(started.routeCritical ? "defensive_path_blocker" : "defensive_attacker")
 	             << ",\"route_critical\":" << (started.routeCritical ? "true" : "false");
+	if (started.routeCritical) {
+		targetFields << ",\"fallback_cause\":\"movement_stalled\",\"selected_intended_step\":"
+		             << (started.intendedStep ? "true" : "false")
+		             << ",\"predicted_fight_damage\":" << started.predictedFightDamage
+		             << ",\"predicted_fight_seconds\":" << started.predictedFightSeconds
+		             << ",\"intended_step\":";
+		if (intendedStep) {
+			targetFields << "{\"x\":" << intendedStep->x << ",\"y\":" << intendedStep->y
+			             << ",\"z\":" << static_cast<uint16_t>(intendedStep->z) << '}';
+		} else {
+			targetFields << "null";
+		}
+	}
 	emit("target_changed", currentPosition, targetFields.str());
 	emit("action_result", currentPosition,
 	     "\"action\":\"defensive_combat\",\"result\":\"started\",\"target_id\":" +
@@ -469,34 +489,88 @@ bool PlayerBotController::attackDefensiveThreat(Player* player, const Position& 
 
 void PlayerBotController::finishDefensiveCombat(Player* player, const Position& currentPosition, const char* result, const char* reason)
 {
-	const uint32_t previousTarget = huntCoordinator.defensiveTarget() ? huntCoordinator.defensiveTarget()->id : 0;
+	const auto previous = huntCoordinator.defensiveTarget();
+	const uint32_t previousTarget = previous ? previous->id : 0;
+	const std::optional<Position> intendedStep = previous && previous->routeCritical ?
+	    huntCoordinator.transitIntendedStep() : std::nullopt;
 	huntCoordinator.clearDefensiveTarget();
+	if (previous && previous->routeCritical) huntCoordinator.clearTransitMovementFallback();
 	if (player->getAttackedCreature() && player->getAttackedCreature()->getID() == previousTarget) {
 		g_game.playerSetAttackedCreature(playerId, 0);
 	}
 	resetNavigation();
 	emit("target_changed", currentPosition, "\"previous_target_id\":" + std::to_string(previousTarget) +
 	     ",\"target_id\":null,\"reason\":" + jsonString(reason));
-	emit("action_result", currentPosition, "\"action\":\"defensive_combat\",\"result\":" +
-	     jsonString(result) + ",\"target_id\":" + std::to_string(previousTarget) +
-	     ",\"reason\":" + jsonString(reason));
+	std::ostringstream resultFields;
+	resultFields << "\"action\":\"defensive_combat\",\"result\":" << jsonString(result)
+	             << ",\"target_id\":" << previousTarget << ",\"reason\":" << jsonString(reason);
+	if (previous && previous->routeCritical) {
+		resultFields << ",\"fallback_cause\":\"movement_stalled\",\"intended_step\":";
+		if (intendedStep) {
+			resultFields << "{\"x\":" << intendedStep->x << ",\"y\":" << intendedStep->y
+			             << ",\"z\":" << static_cast<uint16_t>(intendedStep->z) << '}';
+		} else {
+			resultFields << "null";
+		}
+	}
+	emit("action_result", currentPosition, resultFields.str());
 }
 
 void PlayerBotController::processDefensiveCombat(Player* player, const Position& currentPosition)
 {
 	const auto defensive = huntCoordinator.defensiveTarget();
 	Creature* target = defensive ? g_game.getCreatureByID(defensive->id) : nullptr;
-	if (huntCoordinator.inTransit() && target && target->getPosition() != defensive->position) {
-		finishDefensiveCombat(player, currentPosition, "skipped", "transit_blocker_moved");
-		schedule(navigationInterval);
-		return;
-	}
 	PlayerBotCombatTargetSnapshot observed;
-	if (target) observed = {true, target->isRemoved(), target->isDead(), player->canSee(target->getPosition()), player->canSeeCreature(target),
-	                        Position::areInRange<1, 1, 0>(currentPosition, target->getPosition()), target->getAttackedCreature() == player,
-	                        player->getAttackedCreature() == target, {target->getID(), target->getPosition(), target->getName()}};
+	if (target) {
+		observed.present = true;
+		observed.removed = target->isRemoved();
+		observed.dead = target->isDead();
+		if (!observed.removed && !observed.dead) {
+			observed.visible = player->canSee(target->getPosition());
+			observed.visibleCreature = player->canSeeCreature(target);
+			observed.adjacent = Position::areInRange<1, 1, 0>(currentPosition, target->getPosition());
+			observed.attacksPlayer = target->getAttackedCreature() == player;
+			observed.attackedByPlayer = player->getAttackedCreature() == target;
+			observed.target = {target->getID(), target->getPosition(), target->getName()};
+		}
+	}
+	const bool targetLifetimeComplete = defensive &&
+	    playerBotDefensiveLifetimeCompletion(*defensive, observed).has_value();
+	if (defensive && defensive->routeCritical && target && !targetLifetimeComplete) {
+		const std::optional<Position> intendedStep = huntCoordinator.transitIntendedStep();
+		if (intendedStep) {
+			Tile* intendedTile = g_game.map.getTile(*intendedStep);
+			if (intendedTile && intendedTile->queryAdd(0, *player, 1, 0) == RETURNVALUE_NOERROR) {
+				finishDefensiveCombat(player, currentPosition, "skipped", "transit_passage_open");
+				schedule(navigationInterval);
+				return;
+			}
+		}
+		SpectatorVec spectators;
+		g_game.map.getSpectators(spectators, currentPosition);
+		std::vector<Creature*> adjacentAttackers;
+		for (Creature* creature : spectators) {
+			if (!creature->getMonster() || creature->isRemoved() || creature->isDead() ||
+			    !player->canSee(creature->getPosition()) ||
+			    !Position::areInRange<1, 1, 0>(currentPosition, creature->getPosition())) continue;
+			if (creature->getAttackedCreature() == player || creature == target) {
+				adjacentAttackers.push_back(creature);
+			}
+		}
+		const bool targetAdjacent = Position::areInRange<1, 1, 0>(currentPosition, target->getPosition());
+		const bool safe = targetAdjacent && manageablePassageFight(*player, adjacentAttackers, *target).has_value();
+		if (!huntCoordinator.retainTransitDefense(defensive->id, currentPosition, target->getPosition(), safe)) {
+			const char* reason = !targetAdjacent ? "transit_blocker_moved" :
+			                     !safe ? "transit_passage_unsafe" : "transit_passage_open";
+			finishDefensiveCombat(player, currentPosition, "skipped", reason);
+			schedule(navigationInterval);
+			return;
+		}
+	}
 	const PlayerBotCombatDecision decision = huntCoordinator.advanceCombat({currentPosition, std::chrono::steady_clock::now(), {}, observed});
-	if (decision.command == PlayerBotCombatCommand::CompleteDefensiveCombat) finishDefensiveCombat(player, currentPosition, decision.result, decision.reason);
+	if (decision.command == PlayerBotCombatCommand::CompleteDefensiveCombat) {
+		finishDefensiveCombat(player, currentPosition, decision.result, decision.reason);
+	}
 	schedule(navigationInterval);
 }
 
@@ -1307,14 +1381,17 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 		return;
 	}
 	if (huntCoordinator.hasDefensiveCombat()) {
-		if (turnRouter.scenarioStage() == ScenarioStage::LootCorpse && huntCoordinator.lootNavigationSuspended() &&
-		    huntCoordinator.lootTimedOut(std::chrono::steady_clock::now())) {
+		if (PlayerBotTransitCombat::lootDeadlineRequiresRelease(
+		        turnRouter.scenarioStage() == ScenarioStage::LootCorpse,
+		        huntCoordinator.lootTimedOut(std::chrono::steady_clock::now()))) {
 			finishLootFailure(player, currentPosition, "corpse_inaccessible");
+			schedule(navigationInterval);
+			return;
 		}
 		processDefensiveCombat(player, currentPosition);
-		if (!huntCoordinator.transitBreakoutActive()) return;
+		return;
 	}
-	if (attackDefensiveThreat(player, currentPosition) && !huntCoordinator.transitBreakoutActive()) {
+	if (attackDefensiveThreat(player, currentPosition)) {
 		schedule(navigationInterval);
 		return;
 	}
@@ -1515,6 +1592,7 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 		if (!routeSafe) {
 			navigation.plan = preflight.metrics;
 			navigation.routeUnavailable = true;
+			if (!routeReached) huntCoordinator.observeTransitMovementFailure(currentPosition);
 			navigation.routeUnsafe = routeAffordable;
 			if (routeReached && !routeAffordable) {
 				emit("navigation_progress", currentPosition,

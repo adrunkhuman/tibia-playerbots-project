@@ -326,78 +326,24 @@ function Assert-InaccessibleCorpseEvents {
 	param([string]$Logs)
 
 	$events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
-	$failedDetour = @($events | Where-Object {
-		$_.event -eq "navigation_progress" -and $_.result -eq "failed" -and
-		$_.reason -eq "route_unavailable"
-	})
 	$terminalResult = @($events | Where-Object {
 		$_.event -eq "action_result" -and $_.action -eq "loot" -and $_.result -eq "failed" -and
 		$_.reason -eq "corpse_inaccessible"
 	})
-	$combatPreemption = @($events | Where-Object {
-		$_.event -eq "target_changed" -and
-		$_.reason -in @("defensive_path_blocker", "defensive_attacker")
-	})
-	$blockerEngaged = @($events | Where-Object {
-		$_.event -eq "action_result" -and $_.action -eq "defensive_combat" -and $_.result -eq "started"
-	})
-	$blockerReleased = @($events | Where-Object {
-		$_.event -eq "action_result" -and $_.action -eq "defensive_combat" -and $_.result -ne "started"
-	})
-	$targetCleared = @($events | Where-Object {
-		$_.event -eq "target_changed" -and $null -eq $_.target_id -and $_.reason -eq "transit_combat_budget"
-	})
-	$suspended = @($events | Where-Object {
-		$_.event -eq "navigation_progress" -and $_.result -eq "suspended" -and $_.reason -eq "corpse_route_unchanged"
-	})
-	$resumed = @($events | Where-Object {
-		$_.event -eq "navigation_progress" -and $_.result -eq "resumed" -and $_.reason -eq "corpse_retry"
+	$passageCombat = @($events | Where-Object {
+		$_.event -eq "action_result" -and $_.action -eq "defensive_combat"
 	})
 	$controllerTerminal = @($events | Where-Object {
 		$_.event -in @("terminal", "death") -or
 		($_.event -eq "lifecycle" -and $_.status -in @("dead", "removed", "recovery_abandoned"))
 	})
-	if ($failedDetour.Count -lt 1 -or $combatPreemption.Count -ne 1 -or $blockerEngaged.Count -ne 1 -or
-		$blockerReleased.Count -ne 1 -or $targetCleared.Count -ne 1 -or
-		$suspended.Count -ne 1 -or $resumed.Count -ne 1 -or
-		$terminalResult.Count -ne 1 -or $controllerTerminal.Count -ne 0) {
-		throw "Inaccessible corpse work was not bounded. failed_detour=$($failedDetour.Count), preemption=$($combatPreemption.Count)/$($blockerEngaged.Count)/$($blockerReleased.Count), clear=$($targetCleared.Count), retry=$($suspended.Count)/$($resumed.Count), results=$($terminalResult.Count), terminal=$($controllerTerminal.Count)."
+	if ($terminalResult.Count -ne 1 -or $passageCombat.Count -ne 0 -or $controllerTerminal.Count -ne 0) {
+		throw "Inaccessible corpse work was not bounded. loot=$($terminalResult.Count), passage_combat=$($passageCombat.Count), terminal=$($controllerTerminal.Count)."
 	}
-	$target = $combatPreemption[0]
-	$engaged = $blockerEngaged[0]
-	$released = $blockerReleased[0]
 	$loot = $terminalResult[0]
-	if ($target.target_name -ne "Playerbot Corpse Blocker" -or $target.reason -ne "defensive_path_blocker" -or
-		$target.route_critical -ne $true -or $target.target_id -le 0 -or
-		$engaged.target_id -ne $target.target_id -or $engaged.route_critical -ne $true -or $engaged.chase -ne $false -or
-		$released.target_id -ne $target.target_id -or $released.result -ne "skipped" -or $released.reason -ne "transit_combat_budget" -or
-		$targetCleared[0].previous_target_id -ne $target.target_id -or
-		$loot.target_id -le 0 -or $loot.target_id -eq $target.target_id -or
-		$loot.navigation_failures -lt 1 -or $loot.navigation_failures -gt 6 -or
-		$loot.navigation_suspensions -ne 1 -or $loot.elapsed_ms -le 0 -or $loot.elapsed_ms -gt 70000 -or
-		-not $engaged.ts -or -not $released.ts) {
-		throw "Inaccessible corpse work was not bounded: invalid blocker, release, or loot budget."
-	}
-	# Five-second wall-clock budget, checked on the next running turn. Allow
-	# one navigationInterval (1000 ms) for scheduler dispatch, not the old combat timeout.
-	$combatMs = ([DateTimeOffset]$released.ts - [DateTimeOffset]$engaged.ts).TotalMilliseconds
-	if ($combatMs -lt 5000 -or $combatMs -gt 6000) {
-		throw "Inaccessible corpse work was not bounded: blocker combat lasted $combatMs ms."
-	}
-	$order = @($failedDetour[0], $target, $engaged, $targetCleared[0], $released,
-		$suspended[0], $resumed[0], $failedDetour[-1], $loot)
-	$previous = -1
-	foreach ($event in $order) {
-		$index = [Array]::IndexOf($events, $event)
-		if ($index -le $previous) {
-			throw "Inaccessible corpse work was not bounded: detour, combat release, and resumed loot retry were out of order."
-		}
-		$previous = $index
-	}
-	if ($suspended[0].navigation_failures -lt 1 -or
-		$resumed[0].navigation_failures -ne $suspended[0].navigation_failures -or
-		$loot.navigation_failures -le $resumed[0].navigation_failures) {
-		throw "Inaccessible corpse work was not bounded: resumed loot did not retain and advance its failure budget."
+	if ($loot.target_id -le 0 -or $loot.elapsed_ms -lt 18000 -or $loot.elapsed_ms -gt 22000 -or
+		$loot.navigation_failures -gt 6 -or $loot.navigation_suspensions -gt 1) {
+		throw "Inaccessible corpse work was not bounded: invalid independent 20-second loot deadline."
 	}
 }
 

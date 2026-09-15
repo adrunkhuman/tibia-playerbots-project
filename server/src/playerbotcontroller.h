@@ -354,17 +354,11 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		void updateSupplyRecovery(const Player& player, const Position& position);
 		void enterSupplyRecovery(const Position& position, uint64_t funds, uint64_t potionBudget,
 		                         const char* reason);
-		// Handles the fixed-target route exhaustion escalation (breakout entry,
-		// or the terminal stop when no breakout is possible). Returns true when
-		// exhaustion was observed and the caller must stop navigating.
+		// Fixed-goal failure accounting remains a navigation bound. It no longer
+		// widens combat eligibility after repeated planning failures.
 		bool handleFixedTargetRouteExhausted(Player* player, const Position& currentPosition,
 		                                     const PlayerBotNavigationRuntimeOutcome& outcome,
 		                                     std::chrono::steady_clock::time_point now, bool allowStop);
-		// A failed fixed-goal route with adjacent hostiles means the monsters
-		// seal the exits: confirm them route-critical so transit defense can
-		// engage instead of waiting for a dispatched step to collide.
-		bool confirmAdjacentRouteBlockers(Player* player, const Position& currentPosition,
-		                                  std::chrono::steady_clock::time_point now);
 
 		void finishHuntAndReturn(Player* player, const Position& position, const char* reason);
 

@@ -57,8 +57,13 @@ std::optional<PlayerBotCombatDecision> PlayerBotCombatRuntime::selectDefensiveAt
 	if (!selected) {
 		return std::nullopt;
 	}
-	return PlayerBotCombatDecision{PlayerBotCombatCommand::AttackDefensive, {selected->id, selected->position, selected->name}, {}, {},
-	                               selected->routeCritical};
+	PlayerBotCombatDecision decision{PlayerBotCombatCommand::AttackDefensive,
+	                                 {selected->id, selected->position, selected->name}, {}, {},
+	                                 selected->routeCritical};
+	decision.intendedStep = selected->intendedStep;
+	decision.predictedFightDamage = selected->predictedFightDamage;
+	decision.predictedFightSeconds = selected->predictedFightSeconds;
+	return decision;
 }
 
 PlayerBotCombatDecision PlayerBotCombatRuntime::confirmAttack(const PlayerBotCombatDecision& command, bool accepted,
@@ -77,7 +82,15 @@ PlayerBotCombatDecision PlayerBotCombatRuntime::confirmAttack(const PlayerBotCom
 		return result;
 	}
 	if (command.command == PlayerBotCombatCommand::AttackDefensive) {
-		session->value.beginDefensiveCombat({command.target.id, command.target.position, command.target.name, command.routeCritical}, now);
+		PlayerBotDefensiveTarget target;
+		target.id = command.target.id;
+		target.position = command.target.position;
+		target.name = command.target.name;
+		target.routeCritical = command.routeCritical;
+		target.intendedStep = command.intendedStep;
+		target.predictedFightDamage = command.predictedFightDamage;
+		target.predictedFightSeconds = command.predictedFightSeconds;
+		session->value.beginDefensiveCombat(std::move(target), now);
 		result.result = "started";
 		return result;
 	}
@@ -89,9 +102,8 @@ PlayerBotCombatDecision PlayerBotCombatRuntime::advance(const PlayerBotCombatSna
 {
 	if (const auto defensive = session->value.defensiveTarget()) {
 		const PlayerBotCombatTargetSnapshot& target = snapshot.defensive;
-		if (!target.present || target.removed || target.dead) {
-			return {PlayerBotCombatCommand::CompleteDefensiveCombat, {defensive->id, defensive->position, defensive->name}, {}, {},
-			        defensive->routeCritical, "success", "target_defeated"};
+		if (const auto completion = playerBotDefensiveLifetimeCompletion(*defensive, target)) {
+			return *completion;
 		}
 		if ((!defensive->routeCritical && !target.attacksPlayer) || !target.visible || !target.adjacent) {
 			return {PlayerBotCombatCommand::CompleteDefensiveCombat, {defensive->id, defensive->position, defensive->name}, {}, {},
@@ -101,7 +113,11 @@ PlayerBotCombatDecision PlayerBotCombatRuntime::advance(const PlayerBotCombatSna
 			return {PlayerBotCombatCommand::CompleteDefensiveCombat, {defensive->id, defensive->position, defensive->name}, {}, {},
 			        defensive->routeCritical, "failed", "target_lost"};
 		}
-		if (session->value.defensiveCombatTimedOut(snapshot.now, config.combatTimeout)) {
+		// A movement fallback must not release and reacquire the same persistent
+		// attacker merely because the generic defensive-combat timer elapsed.
+		if (playerBotDefensiveCombatTimeoutApplies(
+		        defensive->routeCritical,
+		        session->value.defensiveCombatTimedOut(snapshot.now, config.combatTimeout))) {
 			return {PlayerBotCombatCommand::CompleteDefensiveCombat, {defensive->id, defensive->position, defensive->name}, {}, {},
 			        defensive->routeCritical, "failed", "combat_timeout"};
 		}

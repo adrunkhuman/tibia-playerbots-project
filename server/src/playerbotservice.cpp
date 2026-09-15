@@ -876,6 +876,9 @@ void PlayerBotController::processService(Player* player, const Position& current
 			[](const PlayerBotNavigationStep& step) { return step.action == PlayerBotNavigationAction::NpcTravel; });
 		routeObservation.approachRoute.requiresNpcTravel = lastRouteRequiresNpcTravel;
 		if (reached) approachSteps = std::move(routePlan.steps);
+		else if (routePlan.metrics.result != PlayerBotNavigationResult::Reached) {
+			huntCoordinator.observeTransitMovementFailure(currentPosition);
+		}
 		command = serviceWorkflow.advance(routeObservation, economyCatalog, dispositionPolicy);
 		if (reached && command.type == PlayerBotServiceCommandType::Wait &&
 		    command.outcome == PlayerBotServiceOutcome::Success) {
@@ -1261,12 +1264,10 @@ bool PlayerBotController::discoverDepot(Player& player, const Position& currentP
 		observation.maximumHealthLossPerSecond = routePlan.metrics.maximumHealthLossPerSecond;
 		if (reached) {
 			steps = std::move(routePlan.steps);
-		} else if (routePlan.metrics.attempted) {
-			// A failed fixed-goal validation is a no-progress failure toward the
-			// depot. Feed it into the runtime: adjacent hostiles confirm as
-			// route-critical so transit defense engages, and repeated failures
-			// accumulate toward exhaustion and breakout.
-			confirmAdjacentRouteBlockers(&player, currentPosition, startedAt);
+		} else if (routePlan.metrics.attempted &&
+		           routePlan.metrics.result != PlayerBotNavigationResult::Reached) {
+			huntCoordinator.observeTransitMovementFailure(currentPosition);
+			// Feed failed fixed-goal validation into the shared navigation bound.
 			PlayerBotNavigationRoutePlan failure;
 			failure.metrics = routePlan.metrics;
 			const PlayerBotNavigationRuntimeOutcome fed = navigationRuntime.observePlan(
@@ -1319,10 +1320,8 @@ bool PlayerBotController::discoverDepot(Player& player, const Position& currentP
 		if (sellLootPlan) {
 			deferSellLoot(player, currentPosition, reason);
 		} else if (!navigationRuntime.activeBlockedPositions(now).empty()) {
-			// A temporarily suppressed route blocker (for example a monster in a
-			// one-tile cave corridor) makes every approach unreachable. Transit
-			// defense and breakout handle the blocker; retry discovery instead of
-			// the terminal stop.
+			// A temporarily suppressed blocker can make every approach unreachable.
+			// Retry discovery while the shared suppression remains active.
 			schedule(blockedRouteRetryInterval);
 		} else {
 			stop("depot_unavailable", currentPosition);
