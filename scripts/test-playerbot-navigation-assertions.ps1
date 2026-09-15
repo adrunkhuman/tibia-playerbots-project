@@ -94,55 +94,31 @@ if ($DangerRetreatLogPath) {
 
 function New-InaccessibleCorpseFixture {
     return @(
-        @{ event = "navigation_progress"; result = "failed"; reason = "route_unavailable" }
-        @{ event = "target_changed"; target_id = 42; target_name = "Playerbot Corpse Blocker";
-            reason = "defensive_path_blocker"; route_critical = $true }
-        @{ event = "action_result"; action = "defensive_combat"; result = "started"; target_id = 42;
-            chase = $false; route_critical = $true; ts = "2026-09-09T16:36:29.485Z" }
-        @{ event = "target_changed"; previous_target_id = 42; target_id = $null; reason = "transit_combat_budget" }
-        @{ event = "action_result"; action = "defensive_combat"; result = "skipped"; target_id = 42;
-            reason = "transit_combat_budget"; ts = "2026-09-09T16:36:34.486Z" }
-        @{ event = "navigation_progress"; result = "suspended"; reason = "corpse_route_unchanged"; navigation_failures = 3 }
-        @{ event = "navigation_progress"; result = "resumed"; reason = "corpse_retry"; navigation_failures = 3 }
-        @{ event = "navigation_progress"; result = "failed"; reason = "route_unavailable" }
         @{ event = "action_result"; action = "loot"; result = "failed"; reason = "corpse_inaccessible";
-            target_id = 41; navigation_failures = 6; navigation_suspensions = 1; elapsed_ms = 12150 }
+            target_id = 41; navigation_failures = 6; navigation_suspensions = 1; elapsed_ms = 20056 }
     )
 }
 Assert-InaccessibleCorpseEvents -Logs (ConvertTo-FixtureLogs (New-InaccessibleCorpseFixture))
-foreach ($case in @("old_timeout", "early_release", "late_release", "missing_timestamp", "optional_attacker",
-    "unconfirmed_blocker", "chase", "missing_chase", "wrong_release_target", "missing_target_clear",
-    "reacquired", "no_suspension", "no_resume", "no_retry", "detour_after_combat", "retry_before_resume",
-    "reset_failure_budget", "no_failure_progress", "too_many_failures", "loot_overrun", "duplicate_loot", "terminal")) {
-    $events = New-InaccessibleCorpseFixture
+foreach ($case in @("early_deadline", "late_deadline", "combat_timeout", "too_many_failures", "duplicate_loot", "terminal")) {
+    $events = @(New-InaccessibleCorpseFixture)
     switch ($case) {
-        "old_timeout" { $events[4].result = "failed"; $events[4].reason = "combat_timeout" }
-        "early_release" { $events[4].ts = "2026-09-09T16:36:34.484Z" }
-        "late_release" { $events[4].ts = "2026-09-09T16:36:35.486Z" }
-        "missing_timestamp" { $events[4].Remove("ts") }
-        "optional_attacker" { $events[1].reason = "defensive_attacker" }
-        "unconfirmed_blocker" { $events[1].route_critical = $false }
-        "chase" { $events[2].chase = $true }
-        "missing_chase" { $events[2].Remove("chase") }
-        "wrong_release_target" { $events[4].target_id = 43 }
-        "missing_target_clear" { $events = @($events[0..2]) + @($events[4..8]) }
-        "reacquired" { $events = @($events[0..6]) + @($events[1], $events[2]) + @($events[7..8]) }
-        "no_suspension" { $events = @($events[0..4]) + @($events[6..8]) }
-        "no_resume" { $events = @($events[0..5]) + @($events[7..8]) }
-        "no_retry" { $events = @($events[0..6]) + @($events[8]) }
-        "detour_after_combat" { $events = @($events[1..4]) + @($events[0]) + @($events[5..8]) }
-        "retry_before_resume" { $events = @($events[0..5]) + @($events[7], $events[6], $events[8]) }
-        "reset_failure_budget" { $events[6].navigation_failures = 0 }
-        "no_failure_progress" { $events[8].navigation_failures = 3 }
-        "too_many_failures" { $events[8].navigation_failures = 7 }
-        "loot_overrun" { $events[8].elapsed_ms = 70001 }
-        "duplicate_loot" { $events += $events[8] }
+        "early_deadline" { $events[0].elapsed_ms = 17999 }
+        "late_deadline" { $events[0].elapsed_ms = 22001 }
+        "combat_timeout" {
+            $events = @(
+                @{ event = "action_result"; action = "defensive_combat"; result = "failed";
+                    reason = "combat_timeout"; target_id = 42 }
+            ) + $events
+        }
+        "too_many_failures" { $events[0].navigation_failures = 7 }
+        "duplicate_loot" { $events += $events[0] }
         "terminal" { $events += @{ event = "terminal"; reason = "controlled_player_dead" } }
     }
     Assert-Rejected "Inaccessible corpse $case" {
         Assert-InaccessibleCorpseEvents -Logs (ConvertTo-FixtureLogs $events)
     } "Inaccessible corpse work was not bounded"
 }
+
 if ($InaccessibleCorpseLogPath) {
     Assert-InaccessibleCorpseEvents -Logs (Get-Content -Raw -LiteralPath $InaccessibleCorpseLogPath)
 }

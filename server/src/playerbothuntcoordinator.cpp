@@ -35,7 +35,7 @@ PlayerBotCombatDecision PlayerBotHuntCoordinator::confirmCombatAttack(const Play
 {
 	const auto result = combatRuntime.confirmAttack(command, accepted, now);
 	if (accepted && result.command == PlayerBotCombatCommand::AttackDefensive) {
-		transitCombat.beginDefense(command.target.id, now);
+		transitCombat.beginDefense(command.target.id, command.intendedStep);
 	}
 	return result;
 }

@@ -5,6 +5,11 @@
 #include "playerbothuntregions.h"
 #include "playerbotnavigation.h"
 
+struct PlayerBotFightEstimate {
+	double incomingDamagePerSecond = 0;
+	double fightSeconds = 0;
+};
+
 // The cache is shared across bots and is not synchronized; use this adapter
 // only from the server's serialized game execution context. Candidate indices
 // returned by beginScan() are valid only for that scan's revision. score()
@@ -30,6 +35,9 @@ class PlayerBotHuntRegionAdapter
 		static PlayerBotHuntPlanningProfile planningProfile(const Player& player, const PlayerBotCombatProfile& combat,
 		                                                     double challengeFrontier);
 		static double travelDanger(const PlayerBotCombatProfile& combat, const Position& position);
+		static PlayerBotFightEstimate fightEstimate(const PlayerBotCombatProfile& combat,
+		                                              const std::string& monsterName,
+		                                              int32_t remainingHealth);
 		static PlayerBotHuntCorridorDanger corridorDanger(const PlayerBotCombatProfile& combat,
 		                                                   const std::deque<PlayerBotNavigationStep>& steps,
 		                                                   const Position& destinationCenter, uint32_t stepDurationMs);

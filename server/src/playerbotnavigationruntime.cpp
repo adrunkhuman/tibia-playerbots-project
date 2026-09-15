@@ -16,6 +16,7 @@ PlayerBotNavigationRuntimeOutcome PlayerBotNavigationRuntime::process(const Play
 {
 	PlayerBotNavigationRuntimeOutcome outcome;
 	const bool sameFixedTarget = fixedTargetGoal && playerBotNavigationSameFixedObjective(*fixedTargetGoal, input.goal);
+	outcome.fixedTargetChanged = fixedTargetGoal && !sameFixedTarget;
 	outcome.positionalProgress = fixedTargetFailures.observePosition(
 	    sameFixedTarget, input.goal.distance(input.currentPosition));
 	fixedTargetGoal = input.goal;
@@ -37,10 +38,11 @@ PlayerBotNavigationRuntimeOutcome PlayerBotNavigationRuntime::process(const Play
 		return outcome;
 	}
 
+	const std::optional<Position> pendingMoveTarget = session.pendingMoveTarget();
 	outcome.movementResult = session.observeMovement(input.currentPosition, input.actionPending, input.timing.now,
 	                                                input.timing.stepTimeout, input.timing.blockSuppression);
-	if (outcome.movementResult == PlayerBotPendingMovementResult::Mismatch && session.stepFailureCount() >= 3) {
-		session.confirmRequiredRouteBlocker();
+	if (outcome.movementResult == PlayerBotPendingMovementResult::Mismatch) {
+		outcome.failedMovementTarget = pendingMoveTarget;
 	}
 	if (outcome.movementResult == PlayerBotPendingMovementResult::Waiting) {
 		outcome.command = PlayerBotNavigationRuntimeCommand::Retry;
@@ -75,9 +77,8 @@ PlayerBotNavigationRuntimeOutcome PlayerBotNavigationRuntime::observePlan(Player
 	if (observation.plan.metrics.result != PlayerBotNavigationResult::Reached ||
 	    (!observation.startsNavigation && observation.plan.steps.empty())) {
 		outcome.routeUnavailable = true;
-		const std::set<Position> activeBlockers = session.activeBlockedPositions(observation.now);
+		session.activeBlockedPositions(observation.now);
 		fixedTargetFailures.observePlan(false);
-		if (!activeBlockers.empty()) session.confirmRequiredRouteBlocker();
 		outcome.fixedTargetRouteFailures = fixedTargetFailures.count();
 		outcome.fixedTargetRouteExhausted = fixedTargetFailures.exhausted();
 		outcome.command = outcome.fixedTargetRouteExhausted ? PlayerBotNavigationRuntimeCommand::Fail :

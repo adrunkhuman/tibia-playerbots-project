@@ -121,7 +121,9 @@ class PlayerBotFixedTargetFailureTracker
 struct PlayerBotNavigationRuntimeOutcome {
 	bool destinationReached = false;
 	bool positionalProgress = false;
+	bool fixedTargetChanged = false;
 	PlayerBotPendingMovementResult movementResult = PlayerBotPendingMovementResult::None;
+	std::optional<Position> failedMovementTarget;
 	uint32_t stepFailureCount = 0;
 	std::optional<PlayerBotNavigationOscillation> oscillation;
 	std::optional<PlayerBotNavigationStep> pendingWorldChange;
@@ -192,19 +194,6 @@ class PlayerBotNavigationRuntime
 
 		size_t routeSize() const { return session.routeSize(); }
 		bool hasPendingWork() const { return session.hasPendingWork(); }
-		bool avoidPendingRouteBlocker(uint32_t blockerId, const Position& position, std::chrono::steady_clock::time_point now,
-		                              std::chrono::steady_clock::duration suppression)
-		{
-			if (!session.avoidPendingRouteBlocker(blockerId, position, now, suppression)) return false;
-			fixedTargetFailures.observeBlockedPlan();
-			return true;
-		}
-		bool isRouteCritical(uint32_t blockerId, const Position& position, std::chrono::steady_clock::time_point now) const { return session.isRouteCritical(blockerId, position, now); }
-		void confirmRouteBlocker(uint32_t blockerId, const Position& position, std::chrono::steady_clock::time_point now,
-		                         std::chrono::steady_clock::duration suppression)
-		{
-			session.confirmRouteBlocker(blockerId, position, now, suppression);
-		}
 		std::set<Position> activeBlockedPositions(std::chrono::steady_clock::time_point now) { return session.activeBlockedPositions(now); }
 		bool hasActiveRouteBlock(std::chrono::steady_clock::time_point now) const { return session.hasActiveRouteBlock(now); }
 		bool oscillationDetected() const { return session.oscillationDetected(); }

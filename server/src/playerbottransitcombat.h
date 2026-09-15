@@ -1,9 +1,9 @@
-/** Pure transit combat session. Navigation resets do not renew blocker attempts. */
+/** Pure transit movement-fallback state. Route replans do not change its chosen target. */
 #ifndef FS_PLAYERBOTTRANSITCOMBAT_H
 #define FS_PLAYERBOTTRANSITCOMBAT_H
 
-#include <chrono>
 #include <cstdint>
+#include <optional>
 
 #include "playerbotturnrouter.h"
 
@@ -16,78 +16,81 @@ class PlayerBotTransitCombat
 			return phase != PlayerBotCyclePhase::Hunt || !huntReached || progressionActive ||
 			       stage == PlayerBotScenarioStage::LootCorpse;
 		}
-		// Goal decisions and phase transitions start new episodes, not route
-		// replans or intermediate arrivals within the same goal.
+		static bool lootDeadlineRequiresRelease(bool lootCorpseStage, bool lootTimedOut)
+		{
+			return lootCorpseStage && lootTimedOut;
+		}
+		// Goal decisions and phase transitions start new episodes. Replans and
+		// intermediate arrivals within one goal do not.
 		bool observe(bool transit, uint64_t goal, PlayerBotCyclePhase phase)
 		{
 			const bool changed = transit != active() || goal != goalId || phase != cyclePhase;
 			if (changed) {
 				finish();
-				if (transit) begin();
+				if (transit) travelling = true;
 				goalId = goal;
 				cyclePhase = phase;
 			}
 			return changed;
 		}
-		void begin() { travelling = true; }
 		void finish()
 		{
 			travelling = false;
-			defenseAttempted = false;
-			breakoutAttempted = false;
-			breakout = false;
+			clearFallback();
 		}
 		bool active() const { return travelling; }
-		bool allowsDefense(uint32_t, bool routeCritical) const
+
+		void observeMovementFailure(const Position& currentPosition,
+		                           std::optional<Position> intendedStep = std::nullopt)
 		{
-			return !travelling || (routeCritical && (!defenseAttempted || breakout));
+			stalled = true;
+			stalledPosition = currentPosition;
+			if (intendedStep) intendedMovementStep = intendedStep;
 		}
-		void beginDefense(uint32_t, std::chrono::steady_clock::time_point now)
+		void observePosition(const Position& currentPosition)
 		{
-			if (!travelling) return;
-			if (!defenseAttempted) defenseDeadline = now + std::chrono::seconds(5);
-			defenseAttempted = true;
+			if (stalled && currentPosition != stalledPosition) clearFallback();
 		}
-		bool defenseExpired(std::chrono::steady_clock::time_point now) const
+		void observeViableMovement() { clearFallback(); }
+		bool movementFallbackRequired() const { return stalled; }
+		std::optional<Position> intendedStep() const { return intendedMovementStep; }
+
+		bool allowsDefense(uint32_t blockerId, bool routeCritical) const
 		{
-			return travelling && defenseAttempted && !breakout && now >= defenseDeadline;
+			return (!travelling && !routeCritical) || (routeCritical && movementFallbackRequired() &&
+			       (defensiveBlockerId == 0 || defensiveBlockerId == blockerId));
 		}
-		bool beginBreakout(bool routeExhausted, bool adjacentConfirmedHostileBlocker,
-		                   [[maybe_unused]] bool routeUnavailable,
-		                   std::chrono::steady_clock::time_point now,
-		                   std::chrono::steady_clock::duration duration = std::chrono::seconds(30))
+		void beginDefense(uint32_t blockerId, bool selectedIntendedStep)
 		{
-			if (!travelling || breakoutAttempted || !routeExhausted || !adjacentConfirmedHostileBlocker) {
-				return false;
-			}
-			breakoutAttempted = true;
-			breakout = true;
-			breakoutDeadline = now + duration;
-			return true;
+			if (!movementFallbackRequired()) return;
+			defensiveBlockerId = blockerId;
+			defensiveTargetWasIntendedStep = selectedIntendedStep;
 		}
-		bool breakoutWasAttempted() const { return breakoutAttempted; }
-		bool breakoutActive() const { return travelling && breakout; }
-		bool breakoutExpired(std::chrono::steady_clock::time_point now) const
+		bool retainsDefense(uint32_t blockerId, const Position& currentPosition,
+		                    const Position& blockerPosition, bool safe) const
 		{
-			return breakoutActive() && now >= breakoutDeadline;
+			return movementFallbackRequired() && defensiveBlockerId == blockerId && safe &&
+			       currentPosition == stalledPosition &&
+			       (!defensiveTargetWasIntendedStep || !intendedMovementStep ||
+			        blockerPosition == *intendedMovementStep);
 		}
-		bool observeBreakoutNavigation(bool positionalProgress, bool routeAvailable)
+		void clearFallback()
 		{
-			if (!breakoutActive() || (!positionalProgress && !routeAvailable)) return false;
-			breakout = false;
-			return true;
+			stalled = false;
+			intendedMovementStep.reset();
+			defensiveBlockerId = 0;
+			defensiveTargetWasIntendedStep = false;
 		}
-		void finishBreakout() { breakout = false; }
 
 	private:
 		bool travelling = false;
-		bool defenseAttempted = false;
-		bool breakoutAttempted = false;
-		bool breakout = false;
+		bool stalled = false;
+		bool defensiveTargetWasIntendedStep = false;
+		uint32_t defensiveBlockerId = 0;
 		uint64_t goalId = 0;
 		PlayerBotCyclePhase cyclePhase = PlayerBotCyclePhase::Idle;
-		std::chrono::steady_clock::time_point defenseDeadline{};
-		std::chrono::steady_clock::time_point breakoutDeadline{};
+		Position stalledPosition;
+		std::optional<Position> intendedMovementStep;
 };
 
 #endif

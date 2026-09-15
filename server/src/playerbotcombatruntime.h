@@ -35,6 +35,9 @@ struct PlayerBotCombatDecision {
 	bool routeCritical = false;
 	const char* result = nullptr;
 	const char* reason = nullptr;
+	bool intendedStep = false;
+	double predictedFightDamage = 0;
+	double predictedFightSeconds = 0;
 };
 
 struct PlayerBotCombatTargetSnapshot {
@@ -56,10 +59,24 @@ struct PlayerBotCombatSnapshot {
 	PlayerBotCombatTargetSnapshot defensive;
 };
 
+inline std::optional<PlayerBotCombatDecision> playerBotDefensiveLifetimeCompletion(
+	const PlayerBotDefensiveTarget& active, const PlayerBotCombatTargetSnapshot& observed)
+{
+	if (observed.present && !observed.removed && !observed.dead) return std::nullopt;
+	return PlayerBotCombatDecision{PlayerBotCombatCommand::CompleteDefensiveCombat,
+	                               {active.id, active.position, active.name}, {}, {},
+	                               active.routeCritical, "success", "target_defeated"};
+}
+
 struct PlayerBotCombatRuntimeConfig {
 	std::chrono::steady_clock::duration combatTimeout;
 	std::chrono::steady_clock::duration traversalSuppression;
 };
+
+inline bool playerBotDefensiveCombatTimeoutApplies(bool movementFallback, bool timedOut)
+{
+	return !movementFallback && timedOut;
+}
 
 // Owns combat transitions. The controller supplies already eligible world candidates and executes commands.
 class PlayerBotCombatRuntime

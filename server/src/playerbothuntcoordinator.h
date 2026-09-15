@@ -92,27 +92,21 @@ class PlayerBotHuntCoordinator
 		}
 		void enterHuntArea() { transitCombat.finish(); }
 		bool inTransit() const { return transitCombat.active(); }
-		bool transitDefenseExpired(std::chrono::steady_clock::time_point now) const
+		void observeTransitMovementFailure(const Position& currentPosition,
+		                                  std::optional<Position> intendedStep = std::nullopt)
 		{
-			return hasDefensiveCombat() && transitCombat.defenseExpired(now);
+			transitCombat.observeMovementFailure(currentPosition, intendedStep);
 		}
-		bool beginTransitBreakout(bool routeExhausted, bool adjacentConfirmedHostileBlocker,
-		                          bool routeUnavailable, std::chrono::steady_clock::time_point now)
+		void observeTransitPosition(const Position& currentPosition) { transitCombat.observePosition(currentPosition); }
+		void observeViableTransitMovement() { transitCombat.observeViableMovement(); }
+		bool transitMovementFallbackRequired() const { return transitCombat.movementFallbackRequired(); }
+		std::optional<Position> transitIntendedStep() const { return transitCombat.intendedStep(); }
+		bool retainTransitDefense(uint32_t blockerId, const Position& currentPosition,
+		                          const Position& blockerPosition, bool safe) const
 		{
-			return transitCombat.beginBreakout(
-			    routeExhausted, adjacentConfirmedHostileBlocker, routeUnavailable, now);
+			return transitCombat.retainsDefense(blockerId, currentPosition, blockerPosition, safe);
 		}
-		bool transitBreakoutActive() const { return transitCombat.breakoutActive(); }
-		bool transitBreakoutAttempted() const { return transitCombat.breakoutWasAttempted(); }
-		bool transitBreakoutExpired(std::chrono::steady_clock::time_point now) const
-		{
-			return transitCombat.breakoutExpired(now);
-		}
-		bool observeTransitBreakoutNavigation(bool positionalProgress, bool routeAvailable)
-		{
-			return transitCombat.observeBreakoutNavigation(positionalProgress, routeAvailable);
-		}
-		void finishTransitBreakout() { transitCombat.finishBreakout(); }
+		void clearTransitMovementFallback() { transitCombat.clearFallback(); }
 
 		void cancelPlanning();
 		void setSupplyRecovery(bool degraded) { huntRuntime.setSupplyRecovery(degraded); }

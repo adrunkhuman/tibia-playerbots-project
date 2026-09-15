@@ -21,6 +21,7 @@
 
 extern Game g_game;
 extern ConfigManager g_config;
+extern Monsters g_monsters;
 extern Spells* g_spells;
 
 namespace {
@@ -804,6 +805,15 @@ PlayerBotHuntPlanningProfile PlayerBotHuntRegionAdapter::planningProfile(const P
 double PlayerBotHuntRegionAdapter::travelDanger(const PlayerBotCombatProfile& combat, const Position& position)
 {
 	return expectedDamagePerSecondAt(combat, position) / std::max<int32_t>(combat.maximumHealth, 1);
+}
+
+PlayerBotFightEstimate PlayerBotHuntRegionAdapter::fightEstimate(
+	const PlayerBotCombatProfile& combat, const std::string& monsterName, int32_t remainingHealth)
+{
+	const MonsterType* monsterType = g_monsters.getMonsterType(monsterName, false);
+	if (!monsterType) return {};
+	return {expectedMonsterDamagePerSecond(*monsterType, combat),
+	        std::max<int32_t>(remainingHealth, 1) / expectedPlayerDamagePerSecond(combat, *monsterType)};
 }
 
 PlayerBotHuntCorridorDanger PlayerBotHuntRegionAdapter::corridorDanger(const PlayerBotCombatProfile& combat,

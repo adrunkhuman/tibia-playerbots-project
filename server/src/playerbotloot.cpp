@@ -107,6 +107,9 @@ void PlayerBotController::finishLoot(Player* player, const Position& currentPosi
 
 void PlayerBotController::finishLootFailure(Player* player, const Position& currentPosition, const char* reason)
 {
+	if (huntCoordinator.hasDefensiveCombat()) {
+		finishDefensiveCombat(player, currentPosition, "skipped", reason);
+	}
 	telemetry.recordActionFailure();
 	const auto elapsed = huntCoordinator.lootElapsedMilliseconds(std::chrono::steady_clock::now());
 	std::ostringstream fields;

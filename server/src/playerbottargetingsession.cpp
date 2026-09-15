@@ -47,12 +47,7 @@ std::optional<PlayerBotDefensiveTarget> PlayerBotTargetingSession::selectDefensi
 {
 	std::sort(candidates.begin(), candidates.end(), [&currentPosition](const PlayerBotDefensiveTarget& left,
 	                                                                  const PlayerBotDefensiveTarget& right) {
-		if (left.routeCritical != right.routeCritical) {
-			return left.routeCritical;
-		}
-		const uint32_t leftDistance = targetDistance(currentPosition, left.position);
-		const uint32_t rightDistance = targetDistance(currentPosition, right.position);
-		return leftDistance == rightDistance ? left.id < right.id : leftDistance < rightDistance;
+		return playerBotPreferDefensiveTarget(left, right, currentPosition);
 	});
 	return candidates.empty() ? std::nullopt : std::optional<PlayerBotDefensiveTarget>(candidates.front());
 }
