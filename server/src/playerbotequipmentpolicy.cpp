@@ -1,5 +1,3 @@
-#include "otpch.h"
-
 #include "playerbotequipmentpolicy.h"
 
 #include <algorithm>
@@ -105,7 +103,8 @@ std::optional<PlayerBotEquipmentCarriedUpgrade> PlayerBotEquipmentPolicy::findCa
 		const auto& candidate = candidates[index];
 		auto upgrade = evaluateUpgrade(player, loadout, candidate.item);
 		if (!candidate.actionable || !candidate.item.inContainer || !upgrade || (requiresKnightCombatReadiness(player) &&
-		    candidate.item.weaponType != PlayerBotEquipmentWeaponType::None && !isKnightMeleeWeapon(player, candidate.item)) ||
+		    candidate.item.weaponType != PlayerBotEquipmentWeaponType::None &&
+		    candidate.item.weaponType != PlayerBotEquipmentWeaponType::Shield && !isKnightMeleeWeapon(player, candidate.item)) ||
 		    (selected && upgrade->benefit <= selected->upgrade.benefit)) continue;
 		selected = PlayerBotEquipmentCarriedUpgrade{index, *upgrade};
 	}
@@ -192,6 +191,18 @@ bool PlayerBotEquipmentPolicy::loadoutReady(const PlayerBotEquipmentPlayerSnapsh
 	       static_cast<uint64_t>(readiness.effectiveFreeCapacity) >= static_cast<uint64_t>(readiness.minimumFreeCapacity) + additionalWeight;
 }
 
+PlayerBotBackpackAcquisition PlayerBotEquipmentPolicy::standardBackpackAcquisition(
+	const PlayerBotEquipmentPlayerSnapshot& player, uint16_t currentBackItemId, bool currentBackIsContainer,
+	uint32_t currentBackItems, uint32_t currentBackCapacity) const
+{
+	if (!requiresKnightCombatReadiness(player)) return {false, false, "unsupported_vocation"};
+	if (currentBackItemId == 0) return {true, false, nullptr};
+	if (currentBackItemId != 1987 || !currentBackIsContainer || currentBackItems > currentBackCapacity) {
+		return {false, false, "back_slot_not_upgradeable"};
+	}
+	return {true, true, nullptr};
+}
+
 PlayerBotEquipmentReadiness PlayerBotEquipmentPolicy::combatReadiness(const PlayerBotEquipmentPlayerSnapshot& player,
 	const PlayerBotEquipmentLoadout& loadout, bool carriedUpgrade, const PlayerBotEquipmentReadinessInput& readiness) const
 {
@@ -206,7 +217,7 @@ PlayerBotEquipmentReadiness PlayerBotEquipmentPolicy::combatReadiness(const Play
 	if (weaponReady && armorReady && readiness.backpackReady && readiness.suppliesReady && readiness.effectiveFreeCapacity >= readiness.minimumFreeCapacity) { result.ready = true; return result; }
 	if (!weaponReady) result.terminalReason = "missing_legal_melee_weapon";
 	else if (!armorReady) result.terminalReason = "missing_legal_armor";
-	else if (!readiness.backpackReady) result.terminalReason = "missing_backpack";
+	else if (!readiness.backpackReady) result.recovery = "acquire_backpack";
 	else result.recovery = "service";
 	return result;
 }

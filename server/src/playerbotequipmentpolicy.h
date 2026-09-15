@@ -118,6 +118,8 @@ struct PlayerBotEquipmentOfferEvaluation {
 	bool currentReady = false;
 	bool candidateReady = false;
 	bool carried = false;
+	bool backpackAcquisition = false;
+	bool bagUpgrade = false;
 	bool simulated = false;
 	std::string rejection;
 	PlayerBotEquipmentDecisionRule rule = PlayerBotEquipmentDecisionRule::None;
@@ -128,6 +130,12 @@ struct PlayerBotEquipmentReadiness {
 	bool ready = false;
 	std::string recovery;
 	std::string terminalReason;
+};
+
+struct PlayerBotBackpackAcquisition {
+	bool eligible = false;
+	bool requiresStaging = false;
+	const char* rejection = nullptr;
 };
 
 struct PlayerBotEquipmentReadinessInput {
@@ -159,6 +167,9 @@ class PlayerBotEquipmentPolicy
 		                                     const PlayerBotEquipmentLoadout& loadout) const;
 		bool loadoutReady(const PlayerBotEquipmentPlayerSnapshot& player, const PlayerBotEquipmentLoadout& loadout,
 		                  const PlayerBotEquipmentReadinessInput& readiness, uint32_t additionalWeight = 0) const;
+		PlayerBotBackpackAcquisition standardBackpackAcquisition(const PlayerBotEquipmentPlayerSnapshot& player,
+		                                                       uint16_t currentBackItemId, bool currentBackIsContainer,
+		                                                       uint32_t currentBackItems, uint32_t currentBackCapacity) const;
 		PlayerBotEquipmentReadiness combatReadiness(const PlayerBotEquipmentPlayerSnapshot& player,
 		                                            const PlayerBotEquipmentLoadout& loadout, bool carriedUpgrade,
 		                                            const PlayerBotEquipmentReadinessInput& readiness) const;

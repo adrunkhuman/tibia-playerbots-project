@@ -1,6 +1,7 @@
 /** Pure candidate selection for playerbot progression. */
 #include "otpch.h"
 
+#include "creature.h"
 #include "playerbotprogressionplanners.h"
 #include "playerbotsupplypolicy.h"
 
@@ -82,7 +83,10 @@ PlayerBotEquipmentProviderDecision PlayerBotEquipmentProviderPlanner::select(con
 			if (displaced.second != 0 && countedSlots.insert(displaced.first).second) ++displacedSlots;
 		}
 		const uint32_t requiredSlots = displacedSlots + (evaluation.carried ? 0 : 1);
-		if (!rejection && (!offer.backpackAvailable || offer.freeBackpackSlots < requiredSlots)) rejection = "insufficient_displaced_item_space";
+		if (!rejection && !evaluation.backpackAcquisition &&
+		    (!offer.backpackAvailable || offer.freeBackpackSlots < requiredSlots)) {
+			rejection = "insufficient_displaced_item_space";
+		}
 		if (!rejection && !evaluation.carried && !offer.purchaseAvailable) rejection = "offer_not_for_sale";
 		if (!rejection && !evaluation.carried && !snapshot.reserveAvailable) rejection = "recovery_reserve_unavailable";
 		if (!rejection && !evaluation.carried && snapshot.totalMoney < snapshot.reserve + evaluation.price) rejection = "unaffordable_after_reserves";

@@ -82,6 +82,7 @@ struct PlayerBotEquipmentPurchaseObservation {
 	bool shopReady = false;
 	bool otherShopOpen = false;
 	bool fundingAvailable = true;
+	bool bankFundingAvailable = true;
 	uint32_t itemCount = 0;
 	uint64_t money = 0;
 	uint64_t bankBalance = 0;
@@ -93,6 +94,17 @@ struct PlayerBotEquipmentPurchaseObservation {
 	bool containerAccessAvailable = true;
 	size_t containerDepth = 0;
 	bool displacedMoveRequired = false;
+	bool depotReached = false;
+	bool depotNavigationFailed = false;
+	bool depotAvailable = true;
+	bool depotOpen = false;
+	bool oldBagEquipped = false;
+	bool oldBagAtDepot = false;
+	bool replacementBagEquipped = false;
+	bool replacementBagAtDepot = false;
+	bool backpackReceiptSafe = true;
+	bool oldBagPreserved = false;
+	bool backpackDestinationOpen = false;
 	std::map<uint16_t, uint32_t> displacedCounts;
 };
 
@@ -100,7 +112,7 @@ struct PlayerBotReadinessEquipmentObservation {
 	bool actionAvailable = false;
 	bool upgradeAvailable = false;
 	uint16_t itemId = 0;
-	slots_t slot = CONST_SLOT_WHEREEVER;
+	slots_t slot = static_cast<slots_t>(0);
 	bool openContainerRequired = false;
 	bool containerAccessAvailable = true;
 	bool equipmentVerified = false;
@@ -114,14 +126,14 @@ enum class PlayerBotReadinessEquipmentCommandType : uint8_t {
 struct PlayerBotReadinessEquipmentCommand {
 	PlayerBotReadinessEquipmentCommandType type = PlayerBotReadinessEquipmentCommandType::None;
 	uint16_t itemId = 0;
-	slots_t slot = CONST_SLOT_WHEREEVER;
+	slots_t slot = static_cast<slots_t>(0);
 	uint32_t attempts = 0;
 	const char* reason = nullptr;
 };
 
 struct PlayerBotReadinessEquipmentSnapshot {
 	uint16_t itemId = 0;
-	slots_t slot = CONST_SLOT_WHEREEVER;
+	slots_t slot = static_cast<slots_t>(0);
 	uint32_t attempts = 0;
 	bool pending = false;
 };
@@ -158,6 +170,7 @@ class PlayerBotProgressionRuntime {
 		void beginDeparture(PlayerBotOracleDeparturePlan plan);
 		void beginSpellTraining(PlayerBotSpellTrainingPlan plan);
 		void beginEquipmentPurchase(PlayerBotEquipmentOfferEvaluation plan);
+		void resumeEquipmentBackpack(PlayerBotEquipmentOfferEvaluation plan, bool staged, bool purchased);
 		void finish();
 		bool reportNpcReply(uint32_t playerId, uint32_t replyingPlayerId, uint32_t npcId, uint8_t type);
 		bool greetingAcknowledged() const { return npcSession.isGreetingAcknowledged(); }
@@ -165,6 +178,8 @@ class PlayerBotProgressionRuntime {
 		void restartDepartureConversation();
 		void restartSpellTrainingConversation();
 		void restartEquipmentConversation();
+		void beginEquipmentBackpackRecovery(const char* reason, bool purchased);
+		bool equipmentBackpackRecoveryActive() const { return equipmentPurchaseSession.backpackRecoveryActive(); }
 		PlayerBotEquipmentShopCommand advanceEquipmentShop(const PlayerBotNpcShopObservation& observation,
 		                                                  uint32_t maximumRetries);
 		bool readinessEquipmentPending() const { return readinessEquipment.pending; }
@@ -199,7 +214,7 @@ class PlayerBotProgressionRuntime {
 		PlayerBotProgressionOutcome outcome(PlayerBotProgressionCommand command, PlayerBotProgressionOutcomeType type,
 		                                    uint32_t attempts = 0, const char* reason = nullptr) const
 		{
-			return {command, type, attempts, reason};
+			return {command, type, attempts, reason, {}};
 		}
 
 	private:
@@ -216,7 +231,7 @@ class PlayerBotProgressionRuntime {
 		PlayerBotServiceSession equipmentTransaction;
 		struct {
 			uint16_t itemId = 0;
-			slots_t slot = CONST_SLOT_WHEREEVER;
+			slots_t slot = static_cast<slots_t>(0);
 			uint32_t attempts = 0;
 			bool pending = false;
 			bool resumeService = false;

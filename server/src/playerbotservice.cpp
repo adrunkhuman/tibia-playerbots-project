@@ -1169,6 +1169,7 @@ bool PlayerBotController::discoverDepot(Player& player, const Position& currentP
 		const PlayerBotTopologyDistances distances = topology.distancesFrom(
 			currentPosition, canUseRope, canUseShovel, player.getLevel());
 		for (const auto& entry : g_game.map.getDepotLockerPositions()) {
+			if (backpackUpgradeDepotId != 0 && entry.first != backpackUpgradeDepotId) continue;
 			if (sellLootPlan && entry.first != sellLootPlan->sourceDepotId) continue;
 			for (const Position& lockerPosition : entry.second) {
 			++result.indexedCandidates;

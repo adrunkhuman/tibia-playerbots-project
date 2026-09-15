@@ -7,5 +7,5 @@ trap 'rm -rf "$build"' EXIT HUP INT TERM
 "${CXX:-c++}" -std=c++17 -Wall -Wextra -Werror -I"$root/src" \
     "$root/tests/playerbot_contracts.cpp" "$root/src/playerbotgoalplanner.cpp" \
     "$root/src/playerbothuntruntime.cpp" "$root/src/playerbothuntplanningsession.cpp" \
-    "$root/src/playerbothuntpolicy.cpp" -o "$build/playerbot_contracts"
+    "$root/src/playerbothuntpolicy.cpp" "$root/src/playerbotequipmentpolicy.cpp" -o "$build/playerbot_contracts"
 "$build/playerbot_contracts"

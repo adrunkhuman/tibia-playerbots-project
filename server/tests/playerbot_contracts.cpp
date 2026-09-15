@@ -7,6 +7,7 @@
 #include "playerbot.h"
 #include "playerbotdepotworkflow.h"
 #include "playerboteconomy.h"
+#include "playerbotequipmentpolicy.h"
 #include "playerbotgoalplanner.h"
 #include "playerbotcombatruntime.h"
 #include "playerbotcombattarget.h"
@@ -1288,8 +1289,105 @@ void oracleRecovery()
 
 }
 
+static void backpackAcquisition()
+{
+	PlayerBotEquipmentPolicy policy(4);
+	PlayerBotEquipmentPlayerSnapshot knight;
+	knight.vocationId = 4;
+	auto acquisition = policy.standardBackpackAcquisition(knight, 0, false, 0, 0);
+	assert(acquisition.eligible && !acquisition.requiresStaging && acquisition.rejection == nullptr);
+
+	// A full bag is safe because the complete container is staged, not its contents.
+	acquisition = policy.standardBackpackAcquisition(knight, 1987, true, 8, 8);
+	assert(acquisition.eligible && acquisition.requiresStaging && acquisition.rejection == nullptr);
+	acquisition = policy.standardBackpackAcquisition(knight, 1987, false, 0, 0);
+	assert(!acquisition.eligible && std::string(acquisition.rejection) == "back_slot_not_upgradeable");
+	for (uint16_t unchanged : {uint16_t{1988}, uint16_t{2000}}) {
+		acquisition = policy.standardBackpackAcquisition(knight, unchanged, true, 20, 20);
+		assert(!acquisition.eligible && std::string(acquisition.rejection) == "back_slot_not_upgradeable");
+	}
+	knight.vocationId = 3;
+	acquisition = policy.standardBackpackAcquisition(knight, 0, false, 0, 0);
+	assert(!acquisition.eligible && std::string(acquisition.rejection) == "unsupported_vocation");
+
+	PlayerBotEquipmentLoadout loadout;
+	PlayerBotEquipmentReadinessInput readiness{false, true, 10000, 100};
+	auto combat = policy.combatReadiness(PlayerBotEquipmentPlayerSnapshot{0, 0, 4}, loadout, false, readiness);
+	assert(combat.recovery.empty()); // Missing weapon remains the earlier, terminal readiness gap.
+	assert(combat.terminalReason == "missing_legal_melee_weapon");
+	PlayerBotEquipmentItemSnapshot sword;
+	sword.itemId = 2376;
+	sword.weaponType = PlayerBotEquipmentWeaponType::Sword;
+	sword.attack = 14;
+	sword.left = sword.pickupable = true;
+	loadout.items[6] = sword;
+	PlayerBotEquipmentItemSnapshot armor;
+	armor.itemId = 2463;
+	armor.armorSlot = armor.pickupable = true;
+	armor.armor = 10;
+	loadout.items[4] = armor;
+	combat = policy.combatReadiness(PlayerBotEquipmentPlayerSnapshot{0, 0, 4}, loadout, false, readiness);
+	assert(combat.recovery == "acquire_backpack" && combat.terminalReason.empty());
+}
+
+static void carriedShieldUpgrade()
+{
+	PlayerBotEquipmentPolicy policy(4);
+	PlayerBotEquipmentPlayerSnapshot knight;
+	knight.vocationId = 4;
+	knight.level = 20;
+	PlayerBotEquipmentLoadout loadout;
+	auto& sword = loadout.items[6];
+	sword.itemId = 2376;
+	sword.weaponType = PlayerBotEquipmentWeaponType::Sword;
+	sword.attack = 14;
+	sword.left = sword.pickupable = true;
+	loadout.itemIds[6] = sword.itemId;
+	PlayerBotEquipmentItemSnapshot shield;
+	shield.itemId = 2512;
+	shield.weaponType = PlayerBotEquipmentWeaponType::Shield;
+	shield.defense = 14;
+	shield.right = shield.pickupable = shield.inContainer = true;
+	auto selected = policy.findCarriedUpgrade(knight, loadout, {{shield, true}, {shield, true}});
+	assert(selected && selected->index == 0);
+	assert(static_cast<uint8_t>(selected->upgrade.slot) == 5);
+	assert(std::string(selected->upgrade.metric) == "defense");
+	assert(selected->upgrade.benefit == 14);
+	loadout.items[5] = shield;
+	loadout.itemIds[5] = shield.itemId;
+	assert(!policy.findCarriedUpgrade(knight, loadout, {{shield, true}}));
+	shield.defense = 13;
+	assert(!policy.findCarriedUpgrade(knight, loadout, {{shield, true}}));
+	shield.defense = 16;
+	selected = policy.findCarriedUpgrade(knight, loadout, {{shield, true}});
+	assert(selected && selected->upgrade.benefit == 2);
+	assert(!policy.findCarriedUpgrade(knight, loadout, {{shield, false}}));
+	shield.inContainer = false;
+	assert(!policy.findCarriedUpgrade(knight, loadout, {{shield, true}}));
+	shield.inContainer = true;
+	shield.minimumLevel = 21;
+	assert(!policy.findCarriedUpgrade(knight, loadout, {{shield, true}}));
+	shield.minimumLevel = 0;
+	shield.pickupable = false;
+	assert(!policy.findCarriedUpgrade(knight, loadout, {{shield, true}}));
+	shield.pickupable = true;
+	shield.attack = 100;
+	for (auto type : {PlayerBotEquipmentWeaponType::Distance, PlayerBotEquipmentWeaponType::Ammo,
+	                 PlayerBotEquipmentWeaponType::Other}) {
+		shield.weaponType = type;
+		assert(!policy.findCarriedUpgrade(knight, loadout, {{shield, true}}));
+	}
+	for (auto type : {PlayerBotEquipmentWeaponType::Sword, PlayerBotEquipmentWeaponType::Axe,
+	                 PlayerBotEquipmentWeaponType::Club}) {
+		shield.weaponType = type;
+		assert(policy.findCarriedUpgrade(knight, loadout, {{shield, true}}));
+	}
+}
+
 int main()
 {
+	backpackAcquisition();
+	carriedShieldUpgrade();
 	loggingContracts();
 	huntEconomy();
 	patrolOpportunity();
