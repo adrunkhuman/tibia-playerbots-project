@@ -478,6 +478,11 @@ PlayerBotProgressionOutcome PlayerBotProgressionRuntime::advanceEquipmentPurchas
 			equipmentPurchaseSession.setStage(PlayerBotEquipmentPurchaseStage::Purchase);
 			return result(PlayerBotProgressionCommandType::None, PlayerBotProgressionOutcomeType::Pending, nullptr);
 		case PlayerBotEquipmentPurchaseStage::Purchase:
+			// Recheck before the shop request so a concurrently acquired tool is
+			// never duplicated after the initial nested-inventory scan.
+			if (equipmentPurchaseSession.plan().toolAcquisition && observation.itemCount != 0) {
+				return result(PlayerBotProgressionCommandType::Finish, PlayerBotProgressionOutcomeType::Succeeded, "tool_already_acquired");
+			}
 			if (!observation.providerAvailable) return failOrRecover("provider_unavailable");
 			if (!observation.offerAvailable) return failOrRecover("offer_changed");
 			if (!observation.providerInRange) return failOrRecover("provider_moved");
@@ -498,7 +503,8 @@ PlayerBotProgressionOutcome PlayerBotProgressionRuntime::advanceEquipmentPurchas
 				if (equipmentPurchaseSession.plan().bagUpgrade) {
 					equipmentPurchaseSession.markPurchased();
 					equipmentPurchaseSession.setStage(PlayerBotEquipmentPurchaseStage::ReturnDepot);
-				} else equipmentPurchaseSession.setStage(PlayerBotEquipmentPurchaseStage::Equip);
+				} else equipmentPurchaseSession.setStage(equipmentPurchaseSession.plan().toolAcquisition ?
+					PlayerBotEquipmentPurchaseStage::VerifyEquipment : PlayerBotEquipmentPurchaseStage::Equip);
 				return {command(PlayerBotProgressionCommandType::None), PlayerBotProgressionOutcomeType::Pending, 0, nullptr, verification.before};
 			}
 			return result(PlayerBotProgressionCommandType::None, PlayerBotProgressionOutcomeType::Retry, "purchase_equipment");
@@ -601,7 +607,9 @@ PlayerBotProgressionOutcome PlayerBotProgressionRuntime::advanceEquipmentPurchas
 			return result(PlayerBotProgressionCommandType::Equip, PlayerBotProgressionOutcomeType::Pending, "equip_equipment");
 		case PlayerBotEquipmentPurchaseStage::VerifyEquipment:
 			if (observation.equipmentVerified && (!equipmentPurchaseSession.plan().bagUpgrade || observation.oldBagPreserved) && equipmentPurchaseSession.displacedItemsPreserved(observation.displacedCounts)) {
-				return result(PlayerBotProgressionCommandType::Finish, PlayerBotProgressionOutcomeType::Succeeded, equipmentPurchaseSession.plan().backpackAcquisition ? "backpack_acquired" : "upgrade_equipped");
+				return result(PlayerBotProgressionCommandType::Finish, PlayerBotProgressionOutcomeType::Succeeded,
+					equipmentPurchaseSession.plan().backpackAcquisition ? "backpack_acquired" :
+					equipmentPurchaseSession.plan().toolAcquisition ? "tool_acquired" : "upgrade_equipped");
 			}
 			if (equipmentPurchaseSession.incrementRetries() >= maximumRetries) return result(PlayerBotProgressionCommandType::Finish, PlayerBotProgressionOutcomeType::Failed, "equip_not_verified");
 			equipmentPurchaseSession.setStage(equipmentPurchaseSession.plan().bagUpgrade ? PlayerBotEquipmentPurchaseStage::RetrieveBackpack : PlayerBotEquipmentPurchaseStage::Equip);

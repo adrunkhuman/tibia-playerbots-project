@@ -22,6 +22,7 @@ namespace {
 	constexpr size_t maximumEquipmentProviderApproaches = 4;
 	constexpr uint64_t maximumEquipmentProviderPathNodes = 5000;
 	constexpr size_t maximumEquipmentCatalogOffers = 64;
+	constexpr uint16_t shovelItemId = 2554;
 
 	// Internal playerbot state. Keep these below TFS's reserved 10,000,000 range and outside datapack quest keys.
 	constexpr uint32_t backpackUpgradeStatusStorage = 9990000;
@@ -249,6 +250,7 @@ void PlayerBotController::emitEquipmentOffer(const Player& player, const Equipme
 	       << ",\"rule\":" << jsonString(PlayerBotEquipmentPolicy::decisionRuleName(evaluation.rule))
 	       << ",\"carried\":" << (evaluation.carried ? "true" : "false")
 	       << ",\"backpack_acquisition\":" << (evaluation.backpackAcquisition ? "true" : "false")
+	       << ",\"tool_acquisition\":" << (evaluation.toolAcquisition ? "true" : "false")
 	       << ",\"bag_upgrade\":" << (evaluation.bagUpgrade ? "true" : "false")
 	       << ",\"provider_position\":{\"x\":" << evaluation.npcPosition.x << ",\"y\":" << evaluation.npcPosition.y
 	       << ",\"z\":" << static_cast<uint16_t>(evaluation.npcPosition.z) << '}';
@@ -283,6 +285,12 @@ std::optional<PlayerBotController::EquipmentOfferEvaluation> PlayerBotController
 		currentBackContainer ? static_cast<uint32_t>(currentBackContainer->size()) : 0,
 		currentBackContainer ? currentBackContainer->capacity() : 0);
 	const bool backpackAcquisition = backpackPlan.eligible;
+	const bool standardBackpackEquipped = backpackItem && backpackItem->getID() == ITEM_BACKPACK && currentBackContainer;
+	// A deep engine search includes containers within the equipped backpack, so a
+	// tool kept in a nested bag is already sufficient and never bought again.
+	const uint16_t missingToolItemId = !standardBackpackEquipped ? 0 :
+		g_game.findItemOfType(&player, playerbot::ropeItemId, true) == nullptr ? playerbot::ropeItemId :
+		g_game.findItemOfType(&player, shovelItemId, true) == nullptr ? shovelItemId : 0;
 	std::map<uint16_t, EquipmentOfferEvaluation> evaluatedItems;
 	std::map<uint32_t, std::optional<PlayerBotRouteEstimate>> providerRoutes;
 	std::set<uint32_t> providerRouteNodeLimits;
@@ -369,15 +377,19 @@ std::optional<PlayerBotController::EquipmentOfferEvaluation> PlayerBotController
 		return leftCost && rightCost && *leftCost != *rightCost && *leftCost < *rightCost;
 	});
 	Npc* backpackProvider = nullptr;
-	if (backpackAcquisition) {
-		for (Npc* provider : shopProviders) {
-			const auto& offers = provider->getShopOffers();
-			if (std::any_of(offers.begin(), offers.end(), [](const ShopInfo& offer) {
-				return offer.itemId == ITEM_BACKPACK && offer.buyPrice != 0;
-			})) {
-				backpackProvider = provider;
-				break;
-			}
+	Npc* toolProvider = nullptr;
+	for (Npc* provider : shopProviders) {
+		if ((!backpackAcquisition || backpackProvider) && (missingToolItemId == 0 || toolProvider)) break;
+		const auto& offers = provider->getShopOffers();
+		if (backpackAcquisition && !backpackProvider && std::any_of(offers.begin(), offers.end(), [](const ShopInfo& offer) {
+			return offer.itemId == ITEM_BACKPACK && offer.buyPrice != 0;
+		})) {
+			backpackProvider = provider;
+		}
+		if (missingToolItemId != 0 && !toolProvider && std::any_of(offers.begin(), offers.end(), [missingToolItemId](const ShopInfo& offer) {
+			return offer.itemId == missingToolItemId && offer.buyPrice != 0;
+		})) {
+			toolProvider = provider;
 		}
 	}
 	const bool providersTruncated = shopProviders.size() > maximumEquipmentCatalogProviders;
@@ -389,8 +401,9 @@ std::optional<PlayerBotController::EquipmentOfferEvaluation> PlayerBotController
 		for (size_t index = 0; index < maximumEquipmentCatalogProviders - nearbyProviders; ++index) {
 			selected.push_back(shopProviders[nearbyProviders + (offset + index) % tailSize]);
 		}
-		if (backpackProvider && std::find(selected.begin(), selected.end(), backpackProvider) == selected.end()) {
-			selected.back() = backpackProvider;
+		Npc* priorityProvider = toolProvider ? toolProvider : backpackProvider;
+		if (priorityProvider && std::find(selected.begin(), selected.end(), priorityProvider) == selected.end()) {
+			selected.back() = priorityProvider;
 		}
 		equipmentProviderScanOffset = (offset + maximumEquipmentCatalogProviders - nearbyProviders) % tailSize;
 		shopProviders = std::move(selected);
@@ -405,7 +418,9 @@ std::optional<PlayerBotController::EquipmentOfferEvaluation> PlayerBotController
 		ProviderCatalog provider{npc, {}};
 		for (const ShopInfo& offer : npc->getShopOffers()) {
 			const PlayerBotEquipmentItemSnapshot item = PlayerBotEquipmentAdapter::item(offer.itemId);
-			if ((backpackAcquisition && offer.itemId == ITEM_BACKPACK) || item.head || item.armorSlot || item.legs || item.feet || item.left || item.right) {
+			const bool toolOffer = offer.itemId == missingToolItemId;
+			if ((backpackAcquisition && offer.itemId == ITEM_BACKPACK) || toolOffer ||
+			    item.head || item.armorSlot || item.legs || item.feet || item.left || item.right) {
 				provider.offers.push_back(&offer);
 			}
 		}
@@ -432,6 +447,13 @@ std::optional<PlayerBotController::EquipmentOfferEvaluation> PlayerBotController
 	if (!allCatalogOffers.empty()) {
 		const size_t offset = equipmentOfferScanOffset % allCatalogOffers.size();
 		std::rotate(allCatalogOffers.begin(), allCatalogOffers.begin() + offset, allCatalogOffers.end());
+		// The bounded catalog must retain providers for a missing travel tool;
+		// otherwise unrelated upgrades can permanently starve its purchase.
+		if (missingToolItemId != 0) {
+			std::stable_partition(allCatalogOffers.begin(), allCatalogOffers.end(), [missingToolItemId](const CatalogOffer& candidate) {
+				return candidate.offer->itemId == missingToolItemId;
+			});
+		}
 		if (backpackAcquisition) {
 			std::stable_partition(allCatalogOffers.begin(), allCatalogOffers.end(), [](const CatalogOffer& candidate) {
 				return candidate.offer->itemId == ITEM_BACKPACK;
@@ -454,7 +476,8 @@ std::optional<PlayerBotController::EquipmentOfferEvaluation> PlayerBotController
 			++catalogOffers;
 			EquipmentOfferEvaluation evaluation;
 			const bool backpackOffer = backpackAcquisition && offer.itemId == ITEM_BACKPACK;
-			const bool carried = !backpackOffer && carriedCatalogItems.find(offer.itemId) != carriedCatalogItems.end();
+			const bool toolOffer = offer.itemId == missingToolItemId;
+			const bool carried = !backpackOffer && !toolOffer && carriedCatalogItems.find(offer.itemId) != carriedCatalogItems.end();
 			if (auto item = evaluatedItems.find(offer.itemId); item != evaluatedItems.end()) {
 				evaluation = item->second;
 			} else if (backpackOffer) {
@@ -469,6 +492,15 @@ std::optional<PlayerBotController::EquipmentOfferEvaluation> PlayerBotController
 					Item::items[offer.itemId].weight);
 				evaluation.backpackAcquisition = true;
 				evaluation.bagUpgrade = bagUpgrade;
+				evaluation.rule = PlayerBotEquipmentDecisionRule::ReadinessRepair;
+				evaluatedItems.emplace(offer.itemId, evaluation);
+			} else if (toolOffer) {
+				evaluation.itemId = offer.itemId;
+				evaluation.profile = currentProfile;
+				evaluation.hunts = currentHunts;
+				evaluation.currentReady = currentReady;
+				evaluation.candidateReady = currentReady;
+				evaluation.toolAcquisition = true;
 				evaluation.rule = PlayerBotEquipmentDecisionRule::ReadinessRepair;
 				evaluatedItems.emplace(offer.itemId, evaluation);
 			} else {
@@ -573,9 +605,11 @@ void PlayerBotController::beginEquipmentPurchase(Player& player, const Position&
 	       << ",\"price\":" << purchase.price << ",\"travel_steps\":" << purchase.travelSteps
 	       << ",\"acquisition\":" << jsonString(purchase.carried ? "carried" : "purchase")
 	       << ",\"backpack_acquisition\":" << (purchase.backpackAcquisition ? "true" : "false")
+	       << ",\"tool_acquisition\":" << (purchase.toolAcquisition ? "true" : "false")
 	       << ",\"bag_upgrade\":" << (purchase.bagUpgrade ? "true" : "false");
 	emit("strategy_selection", position, fields.str());
-	say(player, purchase.carried ? "Equipping a carried equipment upgrade." :
+	say(player, purchase.carried ? "Equipping a carried equipment upgrade." : purchase.toolAcquisition ?
+	                                      "Going to replenish a required travel tool." :
 	                                      "Going to buy a justified equipment upgrade.");
 }
 
@@ -591,13 +625,16 @@ void PlayerBotController::finishEquipmentPurchase(Player* player, const Position
 	       << ",\"item_id\":" << purchase.itemId << ",\"price\":" << purchase.price
 	       << ",\"rule\":" << jsonString(PlayerBotEquipmentPolicy::decisionRuleName(purchase.rule))
 	       << ",\"backpack_acquisition\":" << (purchase.backpackAcquisition ? "true" : "false")
+	       << ",\"tool_acquisition\":" << (purchase.toolAcquisition ? "true" : "false")
 	       << ",\"bag_upgrade\":" << (purchase.bagUpgrade ? "true" : "false")
 	       << ",\"result\":" << jsonString(result) << ",\"reason\":" << jsonString(reason);
 	emit("strategy_objective_result", position, fields.str());
 	emit("goal_result", position,
 	     "\"decision_id\":" + std::to_string(progressionRuntime.decisionId()) +
-	         ",\"goal\":\"buy_equipment\",\"result\":" + jsonString(result) +
-	         ",\"reason\":" + jsonString(reason));
+	         ",\"goal\":\"buy_equipment\",\"npc_id\":" + std::to_string(purchase.npcId) +
+	         ",\"item_id\":" + std::to_string(purchase.itemId) +
+	         ",\"tool_acquisition\":" + (purchase.toolAcquisition ? "true" : "false") +
+	         ",\"result\":" + jsonString(result) + ",\"reason\":" + jsonString(reason));
 	const bool succeeded = std::strcmp(result, "success") == 0;
 	if (player) {
 		if (succeeded) {
@@ -612,7 +649,8 @@ void PlayerBotController::finishEquipmentPurchase(Player* player, const Position
 	const bool unresolvedPreservation = purchase.bagUpgrade && !succeeded && std::strncmp(reason, "old_bag_", 8) == 0;
 	const bool terminalFailure = unresolvedPreservation || std::strcmp(reason, "transaction_delta_mismatch") == 0;
 	progressionRuntime.completeEquipmentPurchase(succeeded,
-	    succeeded ? equipmentPurchaseSuccessCooldown : equipmentPurchaseFailureCooldown);
+	    succeeded ? (purchase.backpackAcquisition || purchase.toolAcquisition ? std::chrono::steady_clock::duration::zero() :
+	                 equipmentPurchaseSuccessCooldown) : equipmentPurchaseFailureCooldown);
 	if (player && purchase.bagUpgrade && !unresolvedPreservation) {
 		clearBackpackUpgradePersistence(*player, true);
 	} else if (!purchase.bagUpgrade) {
@@ -654,6 +692,7 @@ void PlayerBotController::processEquipmentPurchase(Player* player, const Positio
 	Npc* shopOwner = player->getShopOwner(onBuy, onSell);
 	PlayerBotEquipmentPurchaseObservation observation;
 	observation.actionAvailable = player->canDoAction();
+	observation.itemCount = inventoryPolicy.inventoryItemCount(*player, purchase.itemId);
 	if (purchase.backpackAcquisition) {
 		Item* backItem = player->getInventoryItem(CONST_SLOT_BACKPACK);
 		observation.backpackReceiptSafe = backItem == nullptr;
@@ -755,7 +794,8 @@ void PlayerBotController::processEquipmentPurchase(Player* player, const Positio
 	           equipmentStage == PlayerBotEquipmentPurchaseStage::VerifyBackpackRetrieved) {
 		Item* purchased = g_game.findItemOfType(player, purchase.itemId, true);
 		Item* equipped = player->getInventoryItem(purchase.slot);
-		observation.equipmentVerified = equipped && equipped->getID() == purchase.itemId;
+		observation.equipmentVerified = purchase.toolAcquisition ? observation.itemCount == 1 :
+			equipped && equipped->getID() == purchase.itemId;
 		observation.equipmentAvailable = purchased;
 		Container* sourceContainer = purchased ? dynamic_cast<Container*>(purchased->getParent()) : nullptr;
 		if (sourceContainer && player->getContainerID(sourceContainer) < 0) {
@@ -787,7 +827,6 @@ void PlayerBotController::processEquipmentPurchase(Player* player, const Positio
 			if (itemId != 0) observation.displacedCounts[itemId] = inventoryPolicy.inventoryItemCount(*player, itemId);
 		}
 	}
-	observation.itemCount = inventoryPolicy.inventoryItemCount(*player, purchase.itemId);
 	observation.money = player->getMoney();
 	observation.bankBalance = player->getBankBalance();
 	const PlayerBotProgressionOutcome result = progressionRuntime.advanceEquipmentPurchase(observation, maximumProgressionAttempts);
@@ -808,8 +847,10 @@ void PlayerBotController::processEquipmentPurchase(Player* player, const Positio
 		}
 
 		if (purchase.bagUpgrade) resetNavigation();
-		emit("action_result", position, "\"action\":\"buy_equipment\",\"result\":\"success\",\"item_id\":" +
-			std::to_string(purchase.itemId) + ",\"price\":" + std::to_string(purchase.price) + ",\"carried_before\":" +
+		emit("action_result", position, "\"action\":\"buy_equipment\",\"result\":\"success\",\"npc_id\":" +
+			std::to_string(purchase.npcId) + ",\"item_id\":" + std::to_string(purchase.itemId) + ",\"price\":" +
+			std::to_string(purchase.price) + ",\"tool_acquisition\":" + (purchase.toolAcquisition ? "true" : "false") +
+			",\"carried_before\":" +
 			std::to_string(result.transaction.money) + ",\"carried_after\":" + std::to_string(player->getMoney()) + ",\"bank_before\":" +
 			std::to_string(result.transaction.balance) + ",\"bank_after\":" + std::to_string(player->getBankBalance()));
 	}
@@ -826,8 +867,10 @@ void PlayerBotController::processEquipmentPurchase(Player* player, const Positio
 			const EquipmentLoadout loadout = PlayerBotEquipmentAdapter::loadout(*player);
 			const EquipmentHuntSummary hunts = equipmentHuntSummary(*player, equipmentPolicy.combatProfile(playerFacts, loadout));
 			const uint16_t potionItemId = recoveryPotionItemId(player->getVocationId());
-			emit("action_result", position, "\"action\":\"equip_equipment\",\"result\":\"success\",\"item_id\":" + std::to_string(purchase.itemId) +
-				",\"slot\":" + std::to_string(purchase.slot) + ",\"combat_ready\":" +
+			emit("action_result", position, "\"action\":" + jsonString(purchase.toolAcquisition ? "acquire_tool" : "equip_equipment") +
+				",\"result\":\"success\",\"npc_id\":" + std::to_string(purchase.npcId) + ",\"item_id\":" +
+				std::to_string(purchase.itemId) + ",\"slot\":" + std::to_string(purchase.slot) + ",\"tool_acquisition\":" +
+				(purchase.toolAcquisition ? "true" : "false") + ",\"combat_ready\":" +
 				(equipmentPolicy.loadoutReady(playerFacts, loadout,
 				    {player->getInventoryItem(CONST_SLOT_BACKPACK) && player->getInventoryItem(CONST_SLOT_BACKPACK)->getContainer(),
 				     inventoryPolicy.inventoryItemCount(*player, potionItemId) > huntPotionReturnThreshold,

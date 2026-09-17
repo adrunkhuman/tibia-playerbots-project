@@ -181,6 +181,12 @@ playerbot::PlayerBotFixtureEngineCommand playerbot::PlayerBotFixtureDriver::equi
 
 playerbot::PlayerBotFixtureStorageObservation playerbot::PlayerBotFixtureDriver::equipmentPurchaseCompletion(Player& player) const
 {
+	if (policy.toolReplenishmentFixture) {
+		const Cylinder& inventory = player;
+		if (inventory.getItemTypeCount(ropeItemId) != 1 || inventory.getItemTypeCount(2554) != 1) return {};
+		player.addStorageValue(gameplayFixtureReadyStorage, -1);
+		return {true, false};
+	}
 	if (!policy.equipmentPurchaseFixture) return {};
 	player.addStorageValue(gameplayFixtureReadyStorage, -1);
 	return {true, false};

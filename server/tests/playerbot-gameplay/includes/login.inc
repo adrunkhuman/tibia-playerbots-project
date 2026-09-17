@@ -52,7 +52,7 @@ function F.login.onLogin(player)
         mode == "equipment_buy" or mode == "equipment_buy_resume" or mode == "equipment_buy_space" or
         mode == "equipment_buy_provider_moved" or
         mode == "equipment_buy_provider_unreachable" or
-        mode == "equipment_buy_rejected" or mode == "mainland_reward" or mode == "magic_training_haste" or
+        mode == "equipment_buy_rejected" or mode == "equipment_tools" or mode == "equipment_tools_nested" or mode == "mainland_reward" or mode == "magic_training_haste" or
         mode == "magic_training_great_light" or mode == "magic_training_light" or mode == "magic_training_refresh" or
         mode == "magic_training_reserve" or mode == "magic_training_failed" or mode == "magic_training_service" or
         mode == "magic_training_progression" or mode == "magic_training_hunt" or mode == "magic_training_pz" or
@@ -62,7 +62,7 @@ function F.login.onLogin(player)
     if mode == "equipment_shadow" or mode == "equipment_shadow_unaffordable" or mode == "equipment_shadow_no_upgrade" or
         mode == "equipment_buy" or mode == "equipment_buy_resume" or mode == "equipment_buy_space" or
         mode == "equipment_buy_provider_moved" or mode == "equipment_buy_provider_unreachable" or
-        mode == "equipment_buy_rejected" then
+        mode == "equipment_buy_rejected" or mode == "equipment_tools" or mode == "equipment_tools_nested" then
         if mode ~= "equipment_buy_provider_moved" then
             local thais = Town(F.thaisTownId)
             assert(thais and player:setTown(thais) and player:teleportTo(thais:getTemplePosition()),
@@ -70,6 +70,29 @@ function F.login.onLogin(player)
         end
         assert(player:getLevel() == 8 and player:getVocation():getId() == 4,
             "equipment shadow fixture did not load the level-8 mainland Knight")
+        if mode == "equipment_tools" or mode == "equipment_tools_nested" then
+            local nested = mode == "equipment_tools_nested"
+            F.removeAll(player, F.ropeItemId)
+            F.removeAll(player, F.shovelItemId)
+            F.removeAll(player, ITEM_GOLD_COIN)
+            local backpack = player:getSlotItem(CONST_SLOT_BACKPACK)
+            assert(backpack and backpack:getId() == ITEM_BACKPACK and backpack:getSize() + 2 <= backpack:getCapacity(),
+                "tool fixture requires two free standard-backpack slots")
+            if nested then
+                local toolBag = backpack:addItem(ITEM_BAG, 1)
+                assert(toolBag and toolBag:addItem(F.ropeItemId, 1), "tool fixture could not place the rope in a nested bag")
+            end
+            assert(player:setCapacity(100000) and backpack:addItem(ITEM_GOLD_COIN, 100),
+                "tool fixture could not fund the normal shop purchases")
+            assert(player:setBankBalance(1000), "tool fixture could not preserve the survival budget")
+            F.removeAll(player, F.potionItemId)
+            assert(player:addItem(F.potionItemId, 10), "tool fixture could not normalize healing supplies")
+            F.suppressNearbyMonsters(player:getId())
+            addEvent(F.verifyToolReplenishment, 500, player:getId(), 480, nested)
+            assert(player:setStorageValue(F.fixtureReadyStorage, 1), "tool fixture could not signal readiness")
+            print("PLAYERBOT_GAMEPLAY_TEST EQUIPMENT_TOOLS" .. (nested and "_NESTED" or "") .. "_START")
+            return true
+        end
         local currentLeft = player:getSlotItem(CONST_SLOT_LEFT)
         local currentRight = player:getSlotItem(CONST_SLOT_RIGHT)
         if mode == "equipment_buy" and ((currentLeft and currentLeft:getId() == F.equipmentPurchaseItemId) or

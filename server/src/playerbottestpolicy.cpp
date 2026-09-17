@@ -47,6 +47,8 @@ const playerbot::PlayerBotTestPolicy& playerbot::playerBotTestPolicyFromEnvironm
 			 std::strcmp(gameplayMode, "equipment_buy_provider_moved") == 0 ||
 			 std::strcmp(gameplayMode, "equipment_buy_provider_unreachable") == 0 ||
 			 std::strcmp(gameplayMode, "equipment_buy_rejected") == 0 ||
+			 std::strcmp(gameplayMode, "equipment_tools") == 0 ||
+			 std::strcmp(gameplayMode, "equipment_tools_nested") == 0 ||
 			 std::strcmp(gameplayMode, "slotted_loot_seller") == 0 ||
 			 std::strcmp(gameplayMode, "slotted_loot_no_seller") == 0 ||
 			 std::strcmp(gameplayMode, "sell_loot") == 0 ||
@@ -135,6 +137,8 @@ const playerbot::PlayerBotTestPolicy& playerbot::playerBotTestPolicyFromEnvironm
 			                  std::strcmp(gameplayMode, "equipment_shadow_unaffordable") != 0 &&
 			                  std::strcmp(gameplayMode, "equipment_shadow_no_upgrade") != 0),
 			gameplayMode && std::strncmp(gameplayMode, "equipment_buy", 13) == 0,
+			gameplayMode && (std::strcmp(gameplayMode, "equipment_tools") == 0 ||
+			                 std::strcmp(gameplayMode, "equipment_tools_nested") == 0),
 			gameplayMode && std::strcmp(gameplayMode, "equipment_buy_rejected") == 0,
 			gameplayMode && std::strcmp(gameplayMode, "equipment_buy_space") == 0,
 			gameplayMode && std::strcmp(gameplayMode, "equipment_buy_provider_unreachable") == 0,
@@ -145,7 +149,9 @@ const playerbot::PlayerBotTestPolicy& playerbot::playerBotTestPolicyFromEnvironm
 			                 std::strcmp(gameplayMode, "spell_training_shortlist") == 0 ||
 			                 std::strcmp(gameplayMode, "spell_training_low_supplies") == 0 ||
 			                 std::strcmp(gameplayMode, "spell_training_low_supplies_unaffordable") == 0 ||
-			                 std::strncmp(gameplayMode, "equipment_buy", 13) == 0),
+			                 std::strncmp(gameplayMode, "equipment_buy", 13) == 0 ||
+			                 std::strcmp(gameplayMode, "equipment_tools") == 0 ||
+			                 std::strcmp(gameplayMode, "equipment_tools_nested") == 0),
 			spellCalibrationFixture,
 			magicTrainingFixture,
 			gameplayMode && std::strcmp(gameplayMode, "magic_training_failed") == 0,

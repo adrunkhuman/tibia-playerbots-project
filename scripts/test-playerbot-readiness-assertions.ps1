@@ -78,4 +78,30 @@ foreach ($item in @(2384, 2699)) {
 }
 Test-LowWealthFixture (@(New-LowWealthFixture) + @{ event = 'terminal' }) $true
 Test-LowWealthFixture (New-LowWealthFixture) $true $false
-Write-Host 'Food-capacity and low-wealth assertion regressions passed.'
+function New-ToolReplenishmentFixture([bool]$Nested = $false) {
+    $itemIds = if ($Nested) { @(2554) } else { @(2120, 2554) }
+    $events = @()
+    foreach ($itemId in $itemIds) {
+        $events += @{ event = 'goal_selection'; to_goal = 'buy_equipment'; npc_id = 1; item_id = $itemId; tool_acquisition = $true }
+        $events += @{ event = 'action_result'; action = 'buy_equipment'; result = 'success'; npc_id = 1; item_id = $itemId; price = 50; tool_acquisition = $true; carried_before = 100; carried_after = 50; bank_before = 1000; bank_after = 1000 }
+        $events += @{ event = 'action_result'; action = 'acquire_tool'; result = 'success'; npc_id = 1; item_id = $itemId; tool_acquisition = $true }
+        $events += @{ event = 'goal_result'; goal = 'buy_equipment'; result = 'success'; npc_id = 1; item_id = $itemId; tool_acquisition = $true; reason = 'tool_acquired' }
+    }
+    return $events
+}
+function Test-ToolReplenishmentFixture([array]$Events, [bool]$Nested, [bool]$Reject) {
+    $logs = ($Events | ForEach-Object {
+        $_.component = 'playerbot'; $_.bot = 'Bot One'
+        $_ | ConvertTo-Json -Compress
+    }) -join "`n"
+    try { Assert-EquipmentToolReplenishmentEvents -Logs $logs -Nested:$Nested }
+    catch { if ($Reject) { return }; throw }
+    if ($Reject) { throw 'Invalid tool-replenishment fixture unexpectedly passed.' }
+}
+Test-ToolReplenishmentFixture (New-ToolReplenishmentFixture) $false $false
+Test-ToolReplenishmentFixture (New-ToolReplenishmentFixture $true) $true $false
+$events = @(New-ToolReplenishmentFixture); Test-ToolReplenishmentFixture ($events | Select-Object -Skip 1) $false $true
+$events = @(New-ToolReplenishmentFixture $true); $events[0].item_id = 2120
+Test-ToolReplenishmentFixture $events $true $true
+
+Write-Host 'Food-capacity, low-wealth, and tool-replenishment assertion regressions passed.'

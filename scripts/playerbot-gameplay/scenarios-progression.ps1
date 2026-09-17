@@ -366,6 +366,31 @@
 			}
 			Assert-EquipmentPurchaseEvents -Logs $rejectedLogs -Rejected
 		}
+		Invoke-Scenario -Name "equipment_tool_replenishment" -DefaultTimeoutSeconds 300 -Body {
+			Invoke-Compose down --volumes --remove-orphans
+			$env:PLAYERBOT_GAMEPLAY_MODE = "equipment_tools"
+			$env:PLAYERBOT_HUNT_DURATION_SECONDS = "900"
+			Invoke-Compose up --detach
+			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST EQUIPMENT_TOOLS_PASS' | Out-Null
+			$toolLogs = Wait-ForPlayerbotEvent {
+				$_.event -eq "goal_result" -and $_.goal -eq "buy_equipment" -and $_.result -eq "success" -and
+				$_.reason -eq "tool_acquired" -and @($script:serverPlayerbotEvents | Where-Object {
+					$_.event -eq "goal_result" -and $_.goal -eq "buy_equipment" -and $_.result -eq "success" -and $_.reason -eq "tool_acquired"
+				}).Count -eq 2
+			}
+			Assert-EquipmentToolReplenishmentEvents -Logs $toolLogs
+		}
+		Invoke-Scenario -Name "equipment_tool_nested_inventory" -DefaultTimeoutSeconds 300 -Body {
+			Invoke-Compose down --volumes --remove-orphans
+			$env:PLAYERBOT_GAMEPLAY_MODE = "equipment_tools_nested"
+			$env:PLAYERBOT_HUNT_DURATION_SECONDS = "900"
+			Invoke-Compose up --detach
+			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST EQUIPMENT_TOOLS_NESTED_PASS' | Out-Null
+			$nestedToolLogs = Wait-ForPlayerbotEvent {
+				$_.event -eq "goal_result" -and $_.goal -eq "buy_equipment" -and $_.result -eq "success" -and $_.reason -eq "tool_acquired"
+			}
+			Assert-EquipmentToolReplenishmentEvents -Logs $nestedToolLogs -Nested
+		}
 	}
 
 	if ($AdaptiveChallenge) {

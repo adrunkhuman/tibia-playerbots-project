@@ -265,5 +265,6 @@ const char* PlayerBotEquipmentPolicy::decisionRuleName(PlayerBotEquipmentDecisio
 bool PlayerBotEquipmentPolicy::prefers(const PlayerBotEquipmentOfferEvaluation& candidate,
 	const PlayerBotEquipmentOfferEvaluation& current)
 {
+	if (candidate.toolAcquisition != current.toolAcquisition) return candidate.toolAcquisition;
 	return candidate.rule > current.rule || (candidate.rule == current.rule && (candidate.carried != current.carried ? candidate.carried : candidate.price < current.price || (candidate.price == current.price && (candidate.travelSteps < current.travelSteps || (candidate.travelSteps == current.travelSteps && (candidate.itemId < current.itemId || (candidate.itemId == current.itemId && candidate.npcId < current.npcId)))))));
 }

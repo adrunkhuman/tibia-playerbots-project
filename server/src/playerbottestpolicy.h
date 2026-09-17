@@ -48,6 +48,7 @@ namespace playerbot {
 		bool suppressSlottedLootSeller;
 		bool equipmentPurchasesEnabled;
 		bool equipmentPurchaseFixture;
+		bool toolReplenishmentFixture;
 		bool forceEquipmentPurchaseRejected;
 		bool pauseAfterEquipmentStorageRejection;
 		bool forceNpcApproachRouteFailures;
