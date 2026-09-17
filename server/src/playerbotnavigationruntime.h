@@ -37,6 +37,26 @@ struct PlayerBotNavigationRoutePlan {
 	std::deque<PlayerBotNavigationStep> steps;
 };
 
+// Only a complete, unexposed same-floor walk can extend known return coverage.
+// Added danger needs a new return-risk estimate. Portals, NPC travel, item use,
+// doors, and partial approaches may be one-way even within one hunt region.
+inline bool playerBotNavigationIsReversibleLocalWalk(
+    const Position& source, const Position& destination, const PlayerBotNavigationRoutePlan& plan)
+{
+	if (plan.metrics.result != PlayerBotNavigationResult::Reached || source.z != destination.z ||
+	    plan.metrics.dangerCost != 0 || plan.metrics.maximumHealthLossPerSecond != 0 ||
+	    (source != destination && plan.steps.empty()) || plan.metrics.fare != 0 ||
+	    plan.metrics.steps != plan.steps.size()) return false;
+	Position cursor = source;
+	for (const PlayerBotNavigationStep& step : plan.steps) {
+		if (step.action != PlayerBotNavigationAction::Move || step.topologyPortal ||
+		    step.target != step.expectedPosition || step.target == cursor ||
+		    !Position::areInRange<1, 1, 0>(cursor, step.target)) return false;
+		cursor = step.expectedPosition;
+	}
+	return cursor == destination;
+}
+
 struct PlayerBotNavigationRuntimeTiming {
 	std::chrono::steady_clock::time_point now;
 	std::chrono::steady_clock::duration stepTimeout;

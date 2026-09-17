@@ -161,6 +161,17 @@ struct PlayerBotHuntPatrolOutcome {
 	std::optional<PlayerBotHuntRuntimeCooldownCommand> cooldown;
 };
 
+inline PlayerBotNavigationRuntimeOutcome playerBotHuntRejectedPatrolPreflight(
+    const PlayerBotNavigationPlanMetrics& plan, bool routeUnsafe)
+{
+	PlayerBotNavigationRuntimeOutcome outcome;
+	outcome.plan = plan;
+	outcome.plan.attempted = true;
+	outcome.routeUnavailable = true;
+	outcome.routeUnsafe = routeUnsafe;
+	return outcome;
+}
+
 class PlayerBotHuntRuntime
 {
 	public:

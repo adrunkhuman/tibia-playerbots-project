@@ -488,6 +488,25 @@ void modeledPatrolFailure()
 	const auto skipped = fallback.observePatrolNavigation(failure, now, 3, 3);
 	assert(skipped.command == PlayerBotHuntPatrolCommand::SkipWaypoint && !skipped.cooldown);
 	assert(fallback.patrolTarget().destination == points[1]);
+
+	// A rejected NPC-fare preflight is a route attempt. Three deterministic
+	// failures exhaust a modeled patrol instead of retrying until the deadline.
+	modeled.viability.reachableSpawns = 4;
+	PlayerBotHuntRuntime fareFailures(points);
+	fareFailures.selectPlanningRegion(modeled, player, now);
+	PlayerBotNavigationPlanMetrics rejectedFarePlan;
+	rejectedFarePlan.result = PlayerBotNavigationResult::Reached;
+	rejectedFarePlan.fare = 50;
+	const PlayerBotNavigationRuntimeOutcome rejectedFare =
+	    playerBotHuntRejectedPatrolPreflight(rejectedFarePlan, false);
+	assert(rejectedFare.plan.attempted && rejectedFare.routeUnavailable && !rejectedFare.routeUnsafe);
+	assert(fareFailures.observePatrolNavigation(rejectedFare, now, 3, 3).command ==
+	       PlayerBotHuntPatrolCommand::Continue);
+	assert(fareFailures.observePatrolNavigation(rejectedFare, now, 3, 3).command ==
+	       PlayerBotHuntPatrolCommand::Continue);
+	const auto exhaustedFare = fareFailures.observePatrolNavigation(rejectedFare, now, 3, 3);
+	assert(exhaustedFare.command == PlayerBotHuntPatrolCommand::RegionExhausted);
+	assert(exhaustedFare.routeFailures == 3);
 }
 
 void navigationFailureAccounting()
@@ -985,7 +1004,7 @@ void remoteHuntTravelGuards()
 	assert(!playerBotNpcTravelApproachComplete(false, false, false));
 	assert(!playerBotNpcTravelApproachComplete(false, true, false));
 
-	// Free routes need no cash reserve; paid routes still preserve recovery funds.
+	// Free routes need no cash reserve; planned paid routes account for all fares.
 	assert(playerBotHuntTravelAffordable(0, 100, 0, 0, 0));
 	assert(playerBotHuntTravelAffordable(50, 100, 0, 0, 0));
 	assert(!playerBotHuntTravelAffordable(50, 100, 1, 0, 0));
@@ -993,19 +1012,107 @@ void remoteHuntTravelGuards()
 	assert(!playerBotHuntTravelAffordable(499, 100, 100, 200, 100));
 	assert(!playerBotHuntTravelAffordable(500, 100, 250, 200));
 	assert(playerBotHuntTravelAffordable(550, 100, 250, 200));
-	assert(playerBotHuntTravelPaymentAffordable(0, 100, 0, 200));
-	assert(!playerBotHuntTravelPaymentAffordable(500, 100, 250, 200));
-	assert(playerBotHuntTravelPaymentAffordable(550, 100, 250, 200));
-	// Exit validation reserves only the later supplier fare; counting the exit
-	// fare again as future money would reject this exactly funded route.
-	assert(playerBotHuntTravelPaymentAffordable(400, 100, 200, 100));
-	assert(!playerBotHuntTravelPaymentAffordable(400, 100, 200, 300));
+
+	using BudgetPhase = PlayerBotHuntTravelBudgetPhase;
+	// Returning to a depot spends only the actual fare. A future restock budget
+	// must not strand 198 gold behind a 50-gold Svargrond fare.
+	assert(playerBotHuntTravelPaymentAffordable(198, 820, 50, 500, BudgetPhase::ReturnToDepot));
+	assert(!playerBotHuntTravelPaymentAffordable(49, 820, 50, 0, BudgetPhase::ReturnToDepot));
+	// Outbound travel preserves the selected return fare, including when the
+	// current outbound leg itself is free. Restock affordability is separate.
+	assert(playerBotHuntTravelPaymentAffordable(100, 820, 50, 50, BudgetPhase::Outbound));
+	assert(!playerBotHuntTravelPaymentAffordable(99, 820, 50, 50, BudgetPhase::Outbound));
+	assert(playerBotHuntTravelPaymentAffordable(50, 820, 0, 50, BudgetPhase::Outbound));
+	assert(!playerBotHuntTravelPaymentAffordable(49, 820, 0, 50, BudgetPhase::Outbound));
+	// A return revalidation can raise the reserve after the outbound plan was saved.
+	assert(playerBotHuntTravelPaymentAffordable(150, 820, 50, 50, BudgetPhase::Outbound));
+	assert(!playerBotHuntTravelPaymentAffordable(150, 820, 50, 110, BudgetPhase::Outbound));
+	assert(playerBotHuntTravelPaymentAffordable(50, 820, 50, 0, BudgetPhase::None));
+	assert(std::string(playerBotHuntTravelBudgetPhaseName(BudgetPhase::ReturnToDepot)) == "return_to_depot");
+	assert(std::string(playerBotHuntTravelFareRejectionReason(BudgetPhase::Outbound)) ==
+	       "fare_breaks_return_reserve");
+	assert(std::string(playerBotHuntTravelFareRejectionReason(BudgetPhase::ReturnToDepot)) ==
+	       "fare_unaffordable");
 	const uint64_t recoveryBeforeRestock = playerBotRecoverySpendingReserve(2, 10, 45, 100);
 	const uint64_t recoveryAfterRestock = playerBotRecoverySpendingReserve(10, 10, 45, 100);
 	assert(recoveryBeforeRestock == 460 && recoveryAfterRestock == 100);
-	assert(!playerBotHuntTravelPaymentAffordable(200, recoveryBeforeRestock, 50, 0));
-	assert(playerBotHuntTravelPaymentAffordable(200, recoveryAfterRestock, 50, 0));
+	assert(!playerBotHuntTravelPaymentAffordable(
+	    200, recoveryBeforeRestock, 50, 0, BudgetPhase::Supply));
+	assert(playerBotHuntTravelPaymentAffordable(
+	    200, recoveryAfterRestock, 50, 0, BudgetPhase::Supply));
+
+	const Position coveredPosition(32090, 31263, 7);
+	const Position nextPosition(32091, 31263, 7);
+	const Position depotPosition(32080, 31250, 7);
+	PlayerBotHuntReturnCoverage coverage;
+	PlayerBotHuntReturnCoverageContext coverageContext{
+	    11, 22, 17, coveredPosition, depotPosition, 50, true, true, false};
+	coverage.validate(42, 7, coverageContext);
+	assert(coverage.covers(42, 7, coverageContext));
+	assert(!coverage.covers(43, 7, coverageContext));
+	assert(!coverage.covers(42, 8, coverageContext));
+	auto uncoveredPosition = coverageContext;
+	uncoveredPosition.coveredPosition = nextPosition;
+	assert(!coverage.covers(42, 7, uncoveredPosition));
+	auto changedCoverage = coverageContext;
+	++changedCoverage.topologyGeneration;
+	assert(!coverage.covers(42, 7, changedCoverage));
+	coverage.validate(42, 7, changedCoverage);
+	assert(coverage.covers(42, 7, changedCoverage));
+	++changedCoverage.npcGeneration;
+	assert(!coverage.covers(42, 7, changedCoverage));
+	coverage.invalidate(); // A route failure always forces one fresh return validation.
+	assert(!coverage.valid());
+
+	PlayerBotNavigationRoutePlan localWalk;
+	localWalk.metrics.result = PlayerBotNavigationResult::Reached;
+	localWalk.metrics.steps = 1;
+	PlayerBotNavigationStep localStep;
+	localStep.action = PlayerBotNavigationAction::Move;
+	localStep.direction = DIRECTION_EAST;
+	localStep.target = localStep.expectedPosition = nextPosition;
+	localWalk.steps.push_back(localStep);
+	assert(playerBotNavigationIsReversibleLocalWalk(coveredPosition, nextPosition, localWalk));
+	coverage.validate(42, 7, coverageContext);
+	if (playerBotNavigationIsReversibleLocalWalk(coveredPosition, nextPosition, localWalk)) {
+		coverage.validate(42, 7, uncoveredPosition);
+	}
+	assert(coverage.covers(42, 7, uncoveredPosition));
+
+	PlayerBotNavigationRoutePlan exposedWalk = localWalk;
+	exposedWalk.metrics.dangerCost = 1;
+	assert(!playerBotNavigationIsReversibleLocalWalk(coveredPosition, nextPosition, exposedWalk));
+	exposedWalk.metrics.dangerCost = 0;
+	exposedWalk.metrics.maximumHealthLossPerSecond = 0.001;
+	assert(!playerBotNavigationIsReversibleLocalWalk(coveredPosition, nextPosition, exposedWalk));
+	PlayerBotNavigationRoutePlan portalWalk = localWalk;
+	portalWalk.steps.front().topologyPortal = true;
+	coverage.validate(42, 7, coverageContext);
+	assert(!playerBotNavigationIsReversibleLocalWalk(coveredPosition, nextPosition, portalWalk));
+	assert(!coverage.covers(42, 7, uncoveredPosition));
+	PlayerBotNavigationRoutePlan npcTravel = localWalk;
+	npcTravel.steps.front().action = PlayerBotNavigationAction::NpcTravel;
+	assert(!playerBotNavigationIsReversibleLocalWalk(coveredPosition, nextPosition, npcTravel));
+	PlayerBotNavigationRoutePlan floorChange = localWalk;
+	floorChange.steps.front().expectedPosition.z = 8;
+	assert(!playerBotNavigationIsReversibleLocalWalk(coveredPosition, Position(32091, 31263, 8), floorChange));
+	PlayerBotNavigationRoutePlan partialExactMetrics = localWalk;
+	assert(!playerBotNavigationIsReversibleLocalWalk(
+	    coveredPosition, Position(32092, 31263, 7), partialExactMetrics));
+	PlayerBotNavigationRoutePlan discontinuousWalk = localWalk;
+	discontinuousWalk.metrics.steps = 2;
+	PlayerBotNavigationStep jumpedStep = localStep;
+	jumpedStep.target = jumpedStep.expectedPosition = Position(32093, 31263, 7);
+	discontinuousWalk.steps.push_back(jumpedStep);
+	assert(!playerBotNavigationIsReversibleLocalWalk(
+	    coveredPosition, Position(32093, 31263, 7), discontinuousWalk));
+	PlayerBotNavigationRoutePlan incrementalNpcApproach = localWalk;
+	incrementalNpcApproach.metrics.steps = 2; // The uninstalled next step is a free NPC transition.
+	assert(!playerBotNavigationIsReversibleLocalWalk(
+	    coveredPosition, nextPosition, incrementalNpcApproach));
 	assert(playerBotDepotRouteSafetyAccepted(true, false, false, true));
+	// Return-payment policy does not imply selected-hunt route protection:
+	// startup/service returns retain the established risky-depot fallback.
 	assert(playerBotDepotRouteSafetyAccepted(false, true, false, false));
 	assert(!playerBotDepotRouteSafetyAccepted(false, true, false, true));
 	assert(!playerBotDepotRouteSafetyAccepted(false, true, true, false));

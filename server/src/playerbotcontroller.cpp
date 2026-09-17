@@ -262,6 +262,7 @@ void PlayerBotController::start(const Position& position, bool recovered, uint32
 		startHunt(g_game.getPlayerByID(playerId), position, "focused_fixture");
 	} else if (fixtureDriver.depotScenario()) {
 		progressionRuntime.enterService();
+		huntTravelBudgetPhase = HuntTravelBudgetPhase::ReturnToDepot;
 		turnRouter.setCyclePhase(CyclePhase::ReturnToDepot);
 	} else {
 		beginService(controlledPlayer, position, "startup");
@@ -567,12 +568,14 @@ bool PlayerBotController::executeNavigationStep(Player* player, const PlayerBotN
 		             Position::getDistanceY(npc->getPosition(), player->getPosition())) > 3) return false;
 		if (!huntTravelFareAffordable(*player, step.price, huntTravelBudgetPhase)) {
 			telemetry.emit("npc_travel", player->getPosition(),
-			     "\"result\":\"refused\",\"reason\":\"fare_breaks_hunt_reserve\",\"npc_id\":" +
-			         std::to_string(step.npcId) + ",\"npc_name\":" + jsonString(npc->getName()) +
-			         ",\"fare\":" + std::to_string(step.price) + ",\"future_fare_reserve\":" +
-			         std::to_string(huntTravelFutureFareReserve(huntTravelBudgetPhase)) +
-			         ",\"recovery_funds_reserve\":" + std::to_string(recoverySpendingReserve(
-			             *player, potionStockTarget(*player, huntRecoveryPotionReserve))));
+			     "\"result\":\"refused\",\"reason\":" +
+			         jsonString(playerBotHuntTravelFareRejectionReason(huntTravelBudgetPhase)) +
+			         ",\"budget_phase\":" + jsonString(playerBotHuntTravelBudgetPhaseName(huntTravelBudgetPhase)) +
+			         ",\"npc_id\":" + std::to_string(step.npcId) + ",\"npc_name\":" + jsonString(npc->getName()) +
+			         ",\"fare\":" + std::to_string(step.price) + ",\"return_fare_reserve\":" +
+			         std::to_string(huntTravelReturnFareReserve(huntTravelBudgetPhase)) +
+			         ",\"recovery_funds_reserve\":" +
+			         std::to_string(huntTravelRecoveryFundsReserve(*player, huntTravelBudgetPhase)));
 			return false;
 		}
 		npc->receiveSpeech(player, TALKTYPE_PRIVATE_PN, "hi");
@@ -1199,6 +1202,7 @@ std::optional<PlayerBotNavigationRoutePlan> PlayerBotController::planNpcTravelRo
 		}
 	}
 	PlayerBotNavigationRoutePlan route;
+	route.metrics.attempted = true;
 	route.metrics.result = PlayerBotNavigationResult::Reached;
 	route.metrics.expandedNodes = graphExpandedNodes;
 	route.metrics.steps = selectedRouteSteps;
@@ -1224,24 +1228,33 @@ std::optional<PlayerBotNavigationRoutePlan> PlayerBotController::planNpcTravelRo
 	return route;
 }
 
-uint64_t PlayerBotController::huntTravelFutureFareReserve(HuntTravelBudgetPhase phase) const
+uint64_t PlayerBotController::huntTravelReturnFareReserve(HuntTravelBudgetPhase phase) const
 {
-	if (phase == HuntTravelBudgetPhase::Outbound) {
-		return huntExitFareReserve > UINT64_MAX - huntSupplyFareReserve ? UINT64_MAX :
-		       huntExitFareReserve + huntSupplyFareReserve;
-	}
-	return phase == HuntTravelBudgetPhase::Exit ? huntSupplyFareReserve : 0;
+	return playerBotHuntTravelReturnFareReserve(phase, huntExitFareReserve);
+}
+
+uint64_t PlayerBotController::huntTravelRecoveryFundsReserve(
+	const Player& player, HuntTravelBudgetPhase phase) const
+{
+	if (phase != HuntTravelBudgetPhase::Supply) return 0;
+	return recoverySpendingReserve(player, potionStockTarget(player, huntRecoveryPotionReserve));
 }
 
 bool PlayerBotController::huntTravelFareAffordable(
 	const Player& player, uint64_t fare, HuntTravelBudgetPhase phase) const
 {
-	if (phase == HuntTravelBudgetPhase::None || fare == 0) return true;
-	const uint64_t recoveryReserve = recoverySpendingReserve(
-	    player, potionStockTarget(player, huntRecoveryPotionReserve));
 	return playerBotHuntTravelPaymentAffordable(player.getMoney() + player.getBankBalance(),
-	                                            recoveryReserve, fare,
-	                                            huntTravelFutureFareReserve(phase));
+	                                            huntTravelRecoveryFundsReserve(player, phase),
+	                                            fare, huntExitFareReserve, phase);
+}
+
+PlayerBotHuntReturnCoverageContext PlayerBotController::huntReturnCoverageContext(
+	Player& player, const Position& coveredPosition) const
+{
+	return {PlayerBotTopology::instance().generation(), g_game.getNpcGeneration(), player.getLevel(),
+	        coveredPosition, huntReturnDestination, huntExitFareReserve,
+	        g_game.findItemOfType(&player, playerbot::ropeItemId, true) != nullptr,
+	        g_game.findItemOfType(&player, shovelToolItemId, true) != nullptr, player.isPremium()};
 }
 
 PlayerBotNavigationRoutePlan PlayerBotController::planHuntTravelRoute(
@@ -1422,13 +1435,16 @@ bool PlayerBotController::processNavigation(Player* player, const Position& curr
 		navigationRuntime.reset();
 		if (navigationOutcome) *navigationOutcome = outcome;
 		telemetry.emit("navigation_progress", currentPosition,
-		     "\"result\":\"skipped\",\"reason\":\"route_fare_breaks_hunt_reserve\",\"destination\":{\"x\":" +
-		         std::to_string(destination.x) + ",\"y\":" + std::to_string(destination.y) +
-		         ",\"z\":" + std::to_string(static_cast<uint16_t>(destination.z)) +
-		         "},\"fare\":" + std::to_string(outcome.plan.fare) +
-		         ",\"future_fare_reserve\":" + std::to_string(huntTravelFutureFareReserve(huntTravelBudgetPhase)) +
-		         ",\"recovery_funds_reserve\":" + std::to_string(recoverySpendingReserve(
-		             *player, potionStockTarget(*player, huntRecoveryPotionReserve))));
+		     "\"result\":\"skipped\",\"reason\":" +
+		         jsonString(playerBotHuntTravelFareRejectionReason(huntTravelBudgetPhase)) +
+		         ",\"budget_phase\":" + jsonString(playerBotHuntTravelBudgetPhaseName(huntTravelBudgetPhase)) +
+		         ",\"destination\":{\"x\":" + std::to_string(destination.x) + ",\"y\":" +
+		         std::to_string(destination.y) + ",\"z\":" +
+		         std::to_string(static_cast<uint16_t>(destination.z)) + "},\"fare\":" +
+		         std::to_string(outcome.plan.fare) + ",\"return_fare_reserve\":" +
+		         std::to_string(huntTravelReturnFareReserve(huntTravelBudgetPhase)) +
+		         ",\"recovery_funds_reserve\":" +
+		         std::to_string(huntTravelRecoveryFundsReserve(*player, huntTravelBudgetPhase)));
 		schedule(blockedRouteRetryInterval);
 		return false;
 	}

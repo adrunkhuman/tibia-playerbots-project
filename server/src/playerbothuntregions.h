@@ -21,6 +21,7 @@
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <set>
 #include <vector>
@@ -362,11 +363,111 @@ inline bool playerBotHuntTravelAffordable(uint64_t funds, uint64_t recoveryReser
 	return totalFare <= funds && recoveryReserve <= funds - totalFare;
 }
 
-inline bool playerBotHuntTravelPaymentAffordable(uint64_t funds, uint64_t recoveryReserve,
-                                                 uint64_t fare, uint64_t futureFareReserve)
+enum class PlayerBotHuntTravelBudgetPhase : uint8_t {
+	None,
+	Outbound,
+	ReturnToDepot,
+	Supply,
+};
+
+inline uint64_t playerBotHuntTravelRecoveryReserve(PlayerBotHuntTravelBudgetPhase phase,
+                                                   uint64_t recoveryReserve)
 {
-	return fare == 0 || playerBotHuntTravelAffordable(funds, recoveryReserve, fare, futureFareReserve);
+	return phase == PlayerBotHuntTravelBudgetPhase::Supply ? recoveryReserve : 0;
 }
+
+inline uint64_t playerBotHuntTravelReturnFareReserve(PlayerBotHuntTravelBudgetPhase phase,
+                                                     uint64_t returnFare)
+{
+	return phase == PlayerBotHuntTravelBudgetPhase::Outbound ? returnFare : 0;
+}
+
+inline bool playerBotHuntTravelPaymentAffordable(uint64_t funds, uint64_t recoveryReserve,
+                                                 uint64_t fare, uint64_t returnFare,
+                                                 PlayerBotHuntTravelBudgetPhase phase)
+{
+	if (phase == PlayerBotHuntTravelBudgetPhase::None ||
+	    phase == PlayerBotHuntTravelBudgetPhase::ReturnToDepot) {
+		return fare <= funds;
+	}
+	return playerBotHuntTravelAffordable(funds,
+	    playerBotHuntTravelRecoveryReserve(phase, recoveryReserve), fare,
+	    playerBotHuntTravelReturnFareReserve(phase, returnFare));
+}
+
+inline const char* playerBotHuntTravelBudgetPhaseName(PlayerBotHuntTravelBudgetPhase phase)
+{
+	switch (phase) {
+		case PlayerBotHuntTravelBudgetPhase::Outbound: return "outbound";
+		case PlayerBotHuntTravelBudgetPhase::ReturnToDepot: return "return_to_depot";
+		case PlayerBotHuntTravelBudgetPhase::Supply: return "supply";
+		default: return "none";
+	}
+}
+
+inline const char* playerBotHuntTravelFareRejectionReason(PlayerBotHuntTravelBudgetPhase phase)
+{
+	switch (phase) {
+		case PlayerBotHuntTravelBudgetPhase::Outbound: return "fare_breaks_return_reserve";
+		case PlayerBotHuntTravelBudgetPhase::Supply: return "fare_breaks_restock_reserve";
+		default: return "fare_unaffordable";
+	}
+}
+
+struct PlayerBotHuntReturnCoverageContext {
+	uint64_t topologyGeneration = 0;
+	uint64_t npcGeneration = 0;
+	uint32_t level = 0;
+	Position coveredPosition;
+	Position depotDestination;
+	uint64_t fare = 0;
+	bool canUseRope = false;
+	bool canUseShovel = false;
+	bool premium = false;
+
+	bool operator==(const PlayerBotHuntReturnCoverageContext& other) const
+	{
+		return topologyGeneration == other.topologyGeneration && npcGeneration == other.npcGeneration &&
+		       level == other.level && coveredPosition == other.coveredPosition &&
+		       depotDestination == other.depotDestination && fare == other.fare &&
+		       canUseRope == other.canUseRope && canUseShovel == other.canUseShovel && premium == other.premium;
+	}
+};
+
+// Region selection validates a safe route from one patrol position to a depot.
+// Coverage can move to another position only across a complete reversible local
+// walking plan; geometric region membership alone is not connectivity evidence.
+class PlayerBotHuntReturnCoverage
+{
+	public:
+		void validate(uint64_t variantId, uint64_t atlasRevision,
+		              const PlayerBotHuntReturnCoverageContext& context)
+		{
+			evidence = Evidence{variantId, atlasRevision, context, true};
+		}
+
+		bool covers(uint64_t variantId, uint64_t atlasRevision,
+		            const PlayerBotHuntReturnCoverageContext& context) const
+		{
+			return evidence && evidence->routeValid && evidence->variantId == variantId &&
+			       evidence->atlasRevision == atlasRevision && evidence->context == context;
+		}
+
+		void invalidate()
+		{
+			if (evidence) evidence->routeValid = false;
+		}
+		bool valid() const { return evidence && evidence->routeValid; }
+
+	private:
+		struct Evidence {
+			uint64_t variantId = 0;
+			uint64_t atlasRevision = 0;
+			PlayerBotHuntReturnCoverageContext context;
+			bool routeValid = false;
+		};
+		std::optional<Evidence> evidence;
+};
 
 inline bool playerBotHuntNeedsSupplyRoute(double expectedPotions, uint32_t availablePotions,
                                           uint32_t routeReserve)

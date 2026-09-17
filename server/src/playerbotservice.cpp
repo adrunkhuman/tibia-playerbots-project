@@ -474,11 +474,16 @@ void PlayerBotController::setCyclePhase(CyclePhase phase, const Position& positi
 	if (turnRouter.cyclePhase() == phase) {
 		return;
 	}
+	if (phase == CyclePhase::ReturnToDepot) {
+		huntTravelBudgetPhase = HuntTravelBudgetPhase::ReturnToDepot;
+	}
 	if (phase == CyclePhase::Hunt) {
 		huntTravelBudgetPhase = HuntTravelBudgetPhase::None;
 		huntExitFareReserve = 0;
-		huntSupplyFareReserve = 0;
 		huntRecoveryPotionReserve = 0;
+		huntReturnCoverageVariantId = 0;
+		huntExitRouteProtected = false;
+		huntReturnCoverage.invalidate();
 	}
 	const char* previous = cyclePhaseName();
 	if (turnRouter.cyclePhase() == CyclePhase::Hunt && phase != CyclePhase::Hunt) {
@@ -499,9 +504,7 @@ void PlayerBotController::setCyclePhase(CyclePhase phase, const Position& positi
 
 void PlayerBotController::beginReturn(Player* player, const Position& position, const char* reason)
 {
-	if (huntTravelBudgetPhase != HuntTravelBudgetPhase::None) {
-		huntTravelBudgetPhase = HuntTravelBudgetPhase::Exit;
-	}
+	huntTravelBudgetPhase = HuntTravelBudgetPhase::ReturnToDepot;
 	pendingHuntCompletionReason.clear();
 	const auto traversalTarget = huntCoordinator.traversalTarget();
 	const uint32_t previousTarget = traversalTarget ? traversalTarget->id : 0;
@@ -1253,9 +1256,8 @@ bool PlayerBotController::discoverDepot(Player& player, const Position& currentP
 		const bool executable = valid && fareAccepted && (candidate.approachPosition == currentPosition ||
 			(routePlan.metrics.result == PlayerBotNavigationResult::Reached && !routePlan.steps.empty()));
 		const bool liquidationSource = sellLootPlan && candidate.depotId == sellLootPlan->sourceDepotId;
-		const bool protectedHuntExit = huntTravelBudgetPhase == HuntTravelBudgetPhase::Exit;
 		const bool reached = executable && playerBotDepotRouteSafetyAccepted(
-		    routeSafe, command.snapshot.validatingRiskFallback, liquidationSource, protectedHuntExit);
+		    routeSafe, command.snapshot.validatingRiskFallback, liquidationSource, huntExitRouteProtected);
 		telemetry.recordPathfinding(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - startedAt), executable);
 		observation.routeResult = reached ? PlayerBotDepotRouteResult::Reached :
 		                          executable ? PlayerBotDepotRouteResult::Unsafe : PlayerBotDepotRouteResult::Unreachable;
@@ -1524,8 +1526,9 @@ void PlayerBotController::processDeposit(Player* player, const Position& current
 	PlayerBotDepotObservation observation;
 	if (command.snapshot.hasSelectedDepot) {
 		observation.atApproach = fixtureDepot.synthetic || Position::areInRange<1, 1, 0>(currentPosition, command.snapshot.selected.lockerPosition);
-		if (observation.atApproach && huntTravelBudgetPhase == HuntTravelBudgetPhase::Exit) {
+		if (observation.atApproach && huntTravelBudgetPhase == HuntTravelBudgetPhase::ReturnToDepot) {
 			huntTravelBudgetPhase = HuntTravelBudgetPhase::Supply;
+			huntExitRouteProtected = false;
 		}
 		observation.lockerOpen = fixtureDepot.synthetic || player->getContainerByID(depotLockerContainerId) != nullptr;
 		observation.chestOpen = fixtureDepot.synthetic || player->getContainerByID(depotChestContainerId) != nullptr;
