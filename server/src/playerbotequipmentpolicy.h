@@ -119,6 +119,7 @@ struct PlayerBotEquipmentOfferEvaluation {
 	bool candidateReady = false;
 	bool carried = false;
 	bool backpackAcquisition = false;
+	bool toolAcquisition = false;
 	bool bagUpgrade = false;
 	bool simulated = false;
 	std::string rejection;

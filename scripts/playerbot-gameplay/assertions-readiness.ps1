@@ -215,6 +215,39 @@ function Assert-EquipmentPurchaseEvents {
 	}
 }
 
+function Assert-EquipmentToolReplenishmentEvents {
+	param([string]$Logs, [switch]$Nested)
+
+	$events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
+	$expectedIds = if ($Nested) { @(2554) } else { @(2120, 2554) }
+	$expectedCount = $expectedIds.Count
+	$selections = @($events | Where-Object { $_.event -eq "goal_selection" -and $_.to_goal -eq "buy_equipment" })
+	$purchases = @($events | Where-Object { $_.event -eq "action_result" -and $_.action -eq "buy_equipment" -and $_.result -eq "success" })
+	$receipts = @($events | Where-Object { $_.event -eq "action_result" -and $_.action -eq "acquire_tool" -and $_.result -eq "success" })
+	$results = @($events | Where-Object { $_.event -eq "goal_result" -and $_.goal -eq "buy_equipment" -and $_.result -eq "success" })
+	$terminal = @($events | Where-Object { $_.event -eq "terminal" })
+	$groups = @($selections, $purchases, $receipts, $results)
+	$groupValid = $true
+	foreach ($group in $groups) {
+		$ids = @($group | ForEach-Object { $_.item_id } | Sort-Object -Unique)
+		$groupValid = $groupValid -and $group.Count -eq $expectedCount -and $ids.Count -eq $expectedCount -and
+			@($ids | Where-Object { $_ -notin $expectedIds }).Count -eq 0 -and
+			@($group | Where-Object { -not $_.tool_acquisition -or $_.npc_id -le 0 }).Count -eq 0
+	}
+	$selectedProviders = @{}
+	foreach ($selection in $selections) { $selectedProviders["$($selection.item_id)"] = $selection.npc_id }
+	$providerMatches = @($purchases + $receipts + $results | Where-Object {
+		$selectedProviders["$($_.item_id)"] -ne $_.npc_id
+	}).Count -eq 0
+	$receiptReasonsValid = @($results | Where-Object { $_.reason -ne "tool_acquired" }).Count -eq 0
+	$purchaseReceiptsValid = @($purchases | Where-Object {
+		$_.price -le 0 -or ($_.carried_before + $_.bank_before - $_.carried_after - $_.bank_after) -ne $_.price
+	}).Count -eq 0
+	if (-not $groupValid -or -not $providerMatches -or -not $receiptReasonsValid -or -not $purchaseReceiptsValid -or $terminal.Count -ne 0) {
+		throw "Tool replenishment did not complete exactly the expected discovered-shop purchases and receipts. selections=$($selections.Count), purchases=$($purchases.Count), receipts=$($receipts.Count), results=$($results.Count), terminal=$($terminal.Count)."
+	}
+}
+
 function Assert-GoalArbitrationInterruptEvents {
     param([string]$Logs)
 

@@ -54,7 +54,7 @@ namespace playerbot {
 			PlayerBotFixtureStorageObservation goalLoop(bool engineSelectGoal) const;
 			PlayerBotFixtureStorageObservation progressionGoalLoop(bool engineSelectGoal) const;
 			bool startWithGoalSelection() const { return policy.progressionEnabled; }
-			bool mapRewardsEnabled() const { return !policy.equipmentPurchaseFixture; }
+			bool mapRewardsEnabled() const { return !policy.equipmentPurchaseFixture && !policy.toolReplenishmentFixture; }
 			PlayerBotFixtureHuntObservation huntObservation() const;
 			bool startInHunt() const { return policy.startInHunt; }
 			bool remoteHuntScenario() const { return policy.remoteHuntFixture; }

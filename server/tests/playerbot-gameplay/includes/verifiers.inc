@@ -77,6 +77,20 @@ function F.verifyEquipmentPurchase(playerId, rejected, resumed, attempts)
     print("PLAYERBOT_GAMEPLAY_TEST EQUIPMENT_BUY" .. (rejected and "_REJECTED" or resumed and "_RESUME" or "") .. "_PASS")
 end
 
+function F.verifyToolReplenishment(playerId, attempts, nested)
+    local player = Player(playerId)
+    assert(player and not player:isRemoved(), "Bot One disappeared during tool replenishment")
+    local complete = player:getItemCount(F.ropeItemId) == 1 and player:getItemCount(F.shovelItemId) == 1
+    if not complete and attempts > 0 then
+        addEvent(F.verifyToolReplenishment, 500, playerId, attempts - 1, nested)
+        return
+    end
+    assert(complete, "tool replenishment did not acquire exactly one rope and shovel")
+    print("PLAYERBOT_GAMEPLAY_TEST EQUIPMENT_TOOLS" .. (nested and "_NESTED" or "") .. "_PASS")
+    -- The completed fixture pauses the controller, so no later telemetry flushes this marker.
+    io.flush()
+end
+
 function F.verifyEquipmentPurchaseSpace(playerId)
     local player = Player(playerId)
     assert(player and not player:isRemoved(), "Bot One disappeared during equipment storage fixture")

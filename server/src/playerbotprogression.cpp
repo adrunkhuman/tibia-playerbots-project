@@ -1040,6 +1040,7 @@ bool PlayerBotController::selectTopLevelGoal(Player& player, const Position& pos
 		pickupCoolingDown, pickupFound, pickupUtility,
 		spellTrainingCoolingDown, spellTrainingFound,
 		equipmentPurchaseCoolingDown, fixtureDriver.observeEquipmentOffer(true).available, equipmentFound,
+		equipmentFound && equipment->toolAcquisition,
 		equipmentFound ? PlayerBotEquipmentPolicy::decisionRuleName(equipment->rule) : "",
 		magicTrainingCoolingDown, magicTrainingReason ? magicTrainingReason : "",
 		sellLootCoolingDown, sellLootPlan.has_value(), sellLootPlan ? static_cast<int32_t>(std::clamp<int64_t>(
@@ -1085,8 +1086,9 @@ bool PlayerBotController::selectTopLevelGoal(Player& player, const Position& pos
 		       << ",\"price\":" << spellTraining.price;
 	} else if (selected.goal == TopLevelGoal::BuyEquipment) {
 		fields << ",\"npc_id\":" << equipment->npcId << ",\"item_id\":" << equipment->itemId
-		       << ",\"price\":" << equipment->price << ",\"rule\":"
-	       << jsonString(PlayerBotEquipmentPolicy::decisionRuleName(equipment->rule));
+		       << ",\"price\":" << equipment->price << ",\"tool_acquisition\":"
+		       << (equipment->toolAcquisition ? "true" : "false") << ",\"rule\":"
+		       << jsonString(PlayerBotEquipmentPolicy::decisionRuleName(equipment->rule));
 	} else if (selected.goal == TopLevelGoal::SellLoot && sellLootPlan) {
 		fields << ",\"npc_id\":" << sellLootPlan->providerId << ",\"source_depot_id\":" << sellLootPlan->sourceDepotId
 		       << ",\"manifest_batches\":" << sellLootPlan->batches.size();

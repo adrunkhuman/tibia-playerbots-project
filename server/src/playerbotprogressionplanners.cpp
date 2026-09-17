@@ -1,14 +1,20 @@
 /** Pure candidate selection for playerbot progression. */
-#include "otpch.h"
+#include <algorithm>
+#include <cmath>
+#include <cstdlib>
+#include <limits>
+#include <ostream>
+#include <set>
+#include <tuple>
 
-#include "creature.h"
 #include "playerbotprogressionplanners.h"
 #include "playerbotsupplypolicy.h"
 
-#include <algorithm>
-#include <limits>
-#include <set>
-#include <tuple>
+namespace {
+	// TFS inventory-slot values; keep this pure planner independent of Creature.
+	constexpr slots_t equipmentRightSlot = static_cast<slots_t>(5);
+	constexpr slots_t equipmentLeftSlot = static_cast<slots_t>(6);
+}
 
 bool PlayerBotDeparturePlanner::hasCompleted(const PlayerBotDeparturePlannerSnapshot& snapshot) const
 {
@@ -79,7 +85,7 @@ PlayerBotEquipmentProviderDecision PlayerBotEquipmentProviderPlanner::select(con
 		uint32_t displacedSlots = 0;
 		std::set<slots_t> countedSlots;
 		for (const auto& displaced : {std::pair<slots_t, uint16_t>{evaluation.slot, evaluation.replacedItemId},
-		                              {CONST_SLOT_LEFT, evaluation.displacedLeftItemId}, {CONST_SLOT_RIGHT, evaluation.displacedRightItemId}}) {
+		                              {equipmentLeftSlot, evaluation.displacedLeftItemId}, {equipmentRightSlot, evaluation.displacedRightItemId}}) {
 			if (displaced.second != 0 && countedSlots.insert(displaced.first).second) ++displacedSlots;
 		}
 		const uint32_t requiredSlots = displacedSlots + (evaluation.carried ? 0 : 1);
@@ -119,7 +125,7 @@ PlayerBotRewardInspection PlayerBotRewardPlanner::inspect(const PlayerBotRewardI
 	inspection.nonStackableRootSignatures = snapshot.nonStackableRootSignatures;
 	inspection.stackableRootCounts = snapshot.stackableRootCounts;
 	for (const PlayerBotRewardItemObservation& item : snapshot.items) {
-		PlayerBotRewardItemInspection inspected{item.itemId, item.count, item.depth, item.rootOrdinal, item.path};
+		PlayerBotRewardItemInspection inspected{item.itemId, item.count, item.depth, item.rootOrdinal, item.path, {}};
 		++inspection.itemCount;
 		if (item.container) {
 			inspected.classes.emplace_back("container");
@@ -238,7 +244,7 @@ std::optional<PlayerBotRewardPlan> PlayerBotRewardPlanner::plan(uint16_t uniqueI
 	std::set<slots_t> displacedSlots;
 	if (inspection.bestEquipment) {
 		for (const auto& displaced : {std::pair<slots_t, uint16_t>{candidate.slot, candidate.replacedItemId},
-		                              {CONST_SLOT_LEFT, candidate.displacedLeftItemId}, {CONST_SLOT_RIGHT, candidate.displacedRightItemId}}) {
+		                              {equipmentLeftSlot, candidate.displacedLeftItemId}, {equipmentRightSlot, candidate.displacedRightItemId}}) {
 			if (displaced.second != 0) displacedSlots.insert(displaced.first);
 		}
 	}

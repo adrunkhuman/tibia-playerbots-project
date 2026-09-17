@@ -9,6 +9,7 @@
 #include "playerboteconomy.h"
 #include "playerbotequipmentpolicy.h"
 #include "playerbotgoalplanner.h"
+#include "playerbotprogressionplanners.h"
 #include "playerbotcombatruntime.h"
 #include "playerbotcombattarget.h"
 #include "playerbotnavigationruntime.h"
@@ -1352,6 +1353,86 @@ void capacityPressureHuntFloor()
 	assert(runtime.capacityPressureElapsed(started + minimumHunt, grace, minimumHunt));
 }
 
+void toolReplenishmentPlannerGuards()
+{
+	PlayerBotEquipmentProviderPlanner planner;
+	PlayerBotEquipmentProviderPlannerSnapshot snapshot;
+	snapshot.enabled = true;
+	snapshot.reserve = 100;
+	snapshot.totalMoney = 150;
+	snapshot.reserveAvailable = true;
+	snapshot.freeCapacity = 100;
+	snapshot.maximumRouteDangerCost = 100;
+	snapshot.maximumRouteDanger = 100;
+
+	PlayerBotEquipmentProviderOfferSnapshot carried;
+	carried.evaluation.itemId = 2376;
+	carried.evaluation.carried = true;
+	carried.evaluation.rule = PlayerBotEquipmentDecisionRule::ReadinessRepair;
+	carried.backpackAvailable = true;
+
+	PlayerBotEquipmentProviderOfferSnapshot tool;
+	tool.evaluation.itemId = 2120;
+	tool.evaluation.price = 50;
+	tool.evaluation.toolAcquisition = true;
+	tool.evaluation.rule = PlayerBotEquipmentDecisionRule::ReadinessRepair;
+	tool.itemWeight = 100;
+	tool.freeBackpackSlots = 1;
+	tool.backpackAvailable = true;
+	tool.purchaseAvailable = true;
+	tool.route.reachable = true;
+
+	auto select = [&planner, &snapshot, &carried, &tool]() {
+		snapshot.offers = {carried, tool};
+		return planner.select(snapshot);
+	};
+	auto rejection = [](const PlayerBotEquipmentProviderDecision& decision) {
+		auto result = std::find_if(decision.rejections.begin(), decision.rejections.end(), [](const auto& value) {
+			return value.offerIndex == 1;
+		});
+		assert(result != decision.rejections.end());
+		return result->reason;
+	};
+
+	// A tool wins only after it passes all ordinary purchase guards.
+	auto decision = select();
+	assert(decision.selected && decision.selected->itemId == tool.evaluation.itemId);
+	snapshot.totalMoney = 149;
+	decision = select();
+	assert(decision.selected && decision.selected->itemId == carried.evaluation.itemId);
+	assert(rejection(decision) == "unaffordable_after_reserves");
+
+	snapshot.totalMoney = 150;
+	tool.freeBackpackSlots = 0;
+	decision = select();
+	assert(decision.selected && decision.selected->itemId == carried.evaluation.itemId);
+	assert(rejection(decision) == "insufficient_displaced_item_space");
+
+	tool.freeBackpackSlots = 1;
+	snapshot.freeCapacity = 99;
+	decision = select();
+	assert(decision.selected && decision.selected->itemId == carried.evaluation.itemId);
+	assert(rejection(decision) == "insufficient_capacity");
+
+	snapshot.freeCapacity = 100;
+	tool.backpackAvailable = false;
+	decision = select();
+	assert(decision.selected && decision.selected->itemId == carried.evaluation.itemId);
+	assert(rejection(decision) == "insufficient_displaced_item_space");
+
+	PlayerBotGoalPlanner goalPlanner;
+	PlayerBotGoalPlannerSnapshot goal;
+	goal.spellPlanAvailable = true;
+	goal.equipmentEnabled = goal.equipmentPlanAvailable = true;
+	goal.equipmentToolAcquisition = true;
+	auto goals = goalPlanner.candidates(goal);
+	auto goalCandidate = [&goals](PlayerBotGoalArbiter::TopLevelGoal type) -> const PlayerBotGoalArbiter::GoalCandidate& {
+		return *std::find_if(goals.begin(), goals.end(), [type](const auto& candidate) { return candidate.goal == type; });
+	};
+	assert(goalCandidate(PlayerBotGoalArbiter::TopLevelGoal::BuyEquipment).utility >
+	       goalCandidate(PlayerBotGoalArbiter::TopLevelGoal::LearnSpell).utility);
+}
+
 void oracleRecovery()
 {
 	using Goal = PlayerBotGoalArbiter::TopLevelGoal;
@@ -1495,6 +1576,7 @@ int main()
 {
 	backpackAcquisition();
 	carriedShieldUpgrade();
+	toolReplenishmentPlannerGuards();
 	loggingContracts();
 	huntEconomy();
 	patrolOpportunity();

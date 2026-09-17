@@ -12,6 +12,7 @@ namespace {
 	constexpr int32_t serviceGoalBaseUtility = 400;
 	constexpr int32_t spellTrainingGoalUtility = 550;
 	constexpr int32_t equipmentPurchaseGoalUtility = 500;
+	constexpr int32_t toolReplenishmentGoalUtility = 600;
 	constexpr int32_t magicTrainingGoalUtility = 350;
 	constexpr int32_t huntGoalUtility = 300;
 	constexpr int32_t oracleDepartureUtility = 950;
@@ -64,7 +65,8 @@ std::vector<PlayerBotGoalArbiter::GoalCandidate> PlayerBotGoalPlanner::candidate
 		snapshot.spellCoolingDown ? "cooldown" : snapshot.spellPlanAvailable ? "eligible_reachable_spell" : "no_eligible_spell"};
 	const auto equipment = PlayerBotGoalArbiter::GoalCandidate{Goal::BuyEquipment,
 		!snapshot.equipmentCoolingDown && snapshot.equipmentEnabled && snapshot.equipmentPlanAvailable,
-		snapshot.equipmentCoolingDown || !snapshot.equipmentEnabled || !snapshot.equipmentPlanAvailable ? 0 : equipmentPurchaseGoalUtility,
+		snapshot.equipmentCoolingDown || !snapshot.equipmentEnabled || !snapshot.equipmentPlanAvailable ? 0 :
+			snapshot.equipmentToolAcquisition ? toolReplenishmentGoalUtility : equipmentPurchaseGoalUtility,
 		snapshot.equipmentCoolingDown ? "cooldown" : !snapshot.equipmentEnabled ? "shadow_only" :
 		snapshot.equipmentPlanAvailable ? snapshot.equipmentReason : "no_justified_offer"};
 	const auto magic = PlayerBotGoalArbiter::GoalCandidate{Goal::MagicTraining,

@@ -18,6 +18,16 @@ PlayerBotEquipmentOfferEvaluation bagPlan()
 	return plan;
 }
 
+PlayerBotEquipmentOfferEvaluation toolPlan(uint16_t itemId)
+{
+	PlayerBotEquipmentOfferEvaluation plan;
+	plan.itemId = itemId;
+	plan.price = 50;
+	plan.toolAcquisition = true;
+	plan.rule = PlayerBotEquipmentDecisionRule::ReadinessRepair;
+	return plan;
+}
+
 void reachPurchase(PlayerBotProgressionRuntime& runtime)
 {
 	PlayerBotEquipmentPurchaseObservation observation;
@@ -54,6 +64,81 @@ void reachPurchase(PlayerBotProgressionRuntime& runtime)
 	observation.navigationReached = true;
 	result = runtime.advanceEquipmentPurchase(observation, 3);
 	assert(result.command.type == PlayerBotProgressionCommandType::None);
+}
+
+void successfulToolPurchaseIsReceiptVerified()
+{
+	PlayerBotProgressionRuntime runtime;
+	runtime.beginEquipmentPurchase(toolPlan(2120));
+	PlayerBotEquipmentPurchaseObservation observation;
+	observation.navigationReached = true;
+	runtime.advanceEquipmentPurchase(observation, 3);
+	observation.shopReady = true;
+	observation.fundingAvailable = true;
+	observation.money = 100;
+	auto result = runtime.advanceEquipmentPurchase(observation, 3);
+	assert(result.command.type == PlayerBotProgressionCommandType::Shop);
+	assert(std::strcmp(result.reason, "purchase_equipment") == 0);
+	observation.itemCount = 1;
+	observation.money = 50;
+	observation.equipmentVerified = true;
+	result = runtime.advanceEquipmentPurchase(observation, 3);
+	assert(result.type == PlayerBotProgressionOutcomeType::Pending);
+	result = runtime.advanceEquipmentPurchase(observation, 3);
+	assert(result.type == PlayerBotProgressionOutcomeType::Succeeded);
+	assert(std::strcmp(result.reason, "tool_acquired") == 0);
+}
+
+void alreadyOwnedToolIsNotPurchased()
+{
+	PlayerBotProgressionRuntime runtime;
+	runtime.beginEquipmentPurchase(toolPlan(2554));
+	PlayerBotEquipmentPurchaseObservation observation;
+	observation.navigationReached = true;
+	runtime.advanceEquipmentPurchase(observation, 3);
+	observation.itemCount = 1;
+	auto result = runtime.advanceEquipmentPurchase(observation, 3);
+	assert(result.type == PlayerBotProgressionOutcomeType::Succeeded);
+	assert(result.command.type == PlayerBotProgressionCommandType::Finish);
+	assert(std::strcmp(result.reason, "tool_already_acquired") == 0);
+}
+
+void duplicateToolReceiptFails()
+{
+	PlayerBotProgressionRuntime runtime;
+	runtime.beginEquipmentPurchase(toolPlan(2120));
+	PlayerBotEquipmentPurchaseObservation observation;
+	observation.navigationReached = true;
+	runtime.advanceEquipmentPurchase(observation, 3);
+	observation.shopReady = true;
+	observation.fundingAvailable = true;
+	observation.money = 100;
+	runtime.advanceEquipmentPurchase(observation, 3);
+	observation.itemCount = 2;
+	observation.money = 0;
+	auto result = runtime.advanceEquipmentPurchase(observation, 3);
+	assert(result.type == PlayerBotProgressionOutcomeType::Failed);
+	assert(std::strcmp(result.reason, "transaction_delta_mismatch") == 0);
+}
+
+void rejectedToolReceiptIsBounded()
+{
+	PlayerBotProgressionRuntime runtime;
+	runtime.beginEquipmentPurchase(toolPlan(2120));
+	PlayerBotEquipmentPurchaseObservation observation;
+	observation.navigationReached = true;
+	runtime.advanceEquipmentPurchase(observation, 3);
+	observation.shopReady = true;
+	observation.fundingAvailable = true;
+	observation.money = 100;
+	runtime.advanceEquipmentPurchase(observation, 3);
+	for (int attempt = 0; attempt < 2; ++attempt) {
+		auto result = runtime.advanceEquipmentPurchase(observation, 3);
+		assert(result.type == PlayerBotProgressionOutcomeType::Retry);
+	}
+	auto result = runtime.advanceEquipmentPurchase(observation, 3);
+	assert(result.type == PlayerBotProgressionOutcomeType::Failed);
+	assert(std::strcmp(result.reason, "transaction_rejected") == 0);
 }
 
 void bankFundingIsRequiredBeforeStaging()
@@ -319,6 +404,10 @@ void rejectedReceiptIsBoundedAndRestored()
 
 int main()
 {
+	successfulToolPurchaseIsReceiptVerified();
+	alreadyOwnedToolIsNotPurchased();
+	duplicateToolReceiptFails();
+	rejectedToolReceiptIsBounded();
 	bankFundingIsRequiredBeforeStaging();
 	successfulFullBagUpgrade();
 	prePurchaseFailureRestoresBag(true, false, "reserve_changed");

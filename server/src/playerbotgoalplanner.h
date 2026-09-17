@@ -32,6 +32,7 @@ struct PlayerBotGoalPlannerSnapshot {
 	bool equipmentCoolingDown = false;
 	bool equipmentEnabled = false;
 	bool equipmentPlanAvailable = false;
+	bool equipmentToolAcquisition = false;
 	std::string equipmentReason;
 
 	bool magicCoolingDown = false;
