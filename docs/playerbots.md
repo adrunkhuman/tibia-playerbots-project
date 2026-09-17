@@ -31,6 +31,8 @@ Focused scenarios often use fixed destinations, controlled monsters, teleports, 
 
 Navigation is hierarchical: [`PlayerBotTopology`](../server/src/playerbottopology.cpp) indexes the loaded map into connected local regions and transition edges. The [controller](../server/src/playerbotcontroller.cpp) selects a global route, refines its next segment into tile-level actions, and considers eligible NPC travel connections. Whole-map routing describes its scope, not a guarantee that every destination is reachable.
 
+Hunt departure validates a return route and protects its fare. Patrols reuse return-route evidence across complete, same-floor walking paths with no modeled danger; added danger, transitions, route failures, or changed route inputs require revalidation. Rejected patrol plans enter bounded recovery rather than retrying indefinitely. Depot-bound travel needs enough money for the trip, not for a later potion restock; route safety rules still apply. Supplier travel after reaching the depot retains the restock reserve.
+
 ## Knowledge and game boundaries
 
 Bots may use static facts a player could learn and remember: map geography, known spawn areas, quest locations, and loaded NPC services. They must not read hidden live state to bypass game mechanics. In particular, a bot identifies corpses through normal container and ownership metadata, opens them normally, and only then inspects contents.

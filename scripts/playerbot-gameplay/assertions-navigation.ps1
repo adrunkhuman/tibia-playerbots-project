@@ -341,9 +341,11 @@ function Assert-InaccessibleCorpseEvents {
 		throw "Inaccessible corpse work was not bounded. loot=$($terminalResult.Count), passage_combat=$($passageCombat.Count), terminal=$($controllerTerminal.Count)."
 	}
 	$loot = $terminalResult[0]
-	if ($loot.target_id -le 0 -or $loot.elapsed_ms -lt 18000 -or $loot.elapsed_ms -gt 22000 -or
-		$loot.navigation_failures -gt 6 -or $loot.navigation_suspensions -gt 1) {
-		throw "Inaccessible corpse work was not bounded: invalid independent 20-second loot deadline."
+	# The current controller gives one 2-second retry after three failures, then
+	# ends this fixture at the six-failure bound before the 20-second deadline.
+	if ($loot.target_id -le 0 -or $loot.elapsed_ms -le 0 -or $loot.elapsed_ms -ge 20000 -or
+		$loot.navigation_failures -ne 6 -or $loot.navigation_suspensions -ne 1) {
+		throw "Inaccessible corpse work was not bounded by the six-failure recovery contract."
 	}
 }
 
@@ -351,19 +353,46 @@ function Assert-CorpseDetourEvents {
 	param([string]$Logs)
 
 	$events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
-	$detours = @($events | Where-Object {
-		$_.event -eq "navigation_progress" -and $_.reason -eq "hostile_detour" -and
-		$_.blocker_id -gt 0
+	$corpseRoute = @($events | Where-Object {
+		$_.event -eq "action_result" -and $_.action -eq "plan" -and $_.result -eq "success" -and
+		$_.danger_aware -eq $true -and $_.steps -gt 0 -and $null -ne $_.destination
 	})
 	$loot = @($events | Where-Object {
-		$_.event -eq "action_result" -and $_.action -eq "loot" -and $_.result -eq "success"
+		$_.event -eq "action_result" -and $_.action -eq "loot" -and $_.result -eq "success" -and $_.item_id -eq 2148
 	})
 	$defensiveCombat = @($events | Where-Object {
 		$_.event -eq "action_result" -and $_.action -eq "defensive_combat" -and $_.result -eq "started"
 	})
+	$controllerTerminal = @($events | Where-Object {
+		$_.event -in @("terminal", "death") -or
+		($_.event -eq "lifecycle" -and $_.status -in @("dead", "removed", "recovery_abandoned"))
+	})
+	$fixtureDisplaced = $Logs -match 'PLAYERBOT_GAMEPLAY_TEST CORPSE_INACCESSIBLE_DISPLACED'
+	if (-not $fixtureDisplaced -or $corpseRoute.Count -lt 1 -or $loot.Count -lt 1 -or
+		$defensiveCombat.Count -ne 0 -or $controllerTerminal.Count -ne 0) {
+		throw "The displaced corpse was not reached through a safe route. fixture_displaced=$fixtureDisplaced, route=$($corpseRoute.Count), loot=$($loot.Count), defensive=$($defensiveCombat.Count), terminal=$($controllerTerminal.Count)."
+	}
+}
+
+function Assert-DepotRiskRouteEvents {
+	param([string]$Logs)
+
+	$events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
+	$contract = @($events | Where-Object {
+		$_.event -eq "depot_risk_fallback_contract" -and $_.safe_precedence -eq $true -and
+		$_.retained_across_turns -eq $true -and $_.ranked_fallback -eq $true -and
+		$_.requested_revalidation -eq $true -and $_.failed_revalidation_rejected -eq $true
+	})
+	$safeRoute = @($events | Where-Object {
+		$_.event -eq "action_result" -and $_.action -eq "depot_discover" -and $_.result -eq "success" -and
+		$_.risk_fallback -eq $false -and $_.unsafe_routes -gt 0 -and $_.route_steps -gt 0 -and
+		$null -ne $_.danger_cost -and $_.danger_cost -le 500 -and
+		$null -ne $_.maximum_health_loss_per_second -and $_.maximum_health_loss_per_second -le 0.08
+	})
 	$terminal = @($events | Where-Object { $_.event -eq "terminal" })
-	if ($detours.Count -lt 1 -or $loot.Count -lt 1 -or $defensiveCombat.Count -ne 0 -or $terminal.Count -ne 0) {
-		throw "The corpse blocker was not bypassed. detours=$($detours.Count), loot=$($loot.Count), defensive=$($defensiveCombat.Count), terminal=$($terminal.Count)."
+	if ($Logs -notmatch 'PLAYERBOT_GAMEPLAY_TEST DEPOT_RISK_FALLBACK_PASS' -or $contract.Count -ne 1 -or
+		$safeRoute.Count -lt 1 -or $terminal.Count -ne 0) {
+		throw "The depot risk route did not reject unsafe candidates and cross the ramp safely. contract=$($contract.Count), safe_route=$($safeRoute.Count), terminal=$($terminal.Count)."
 	}
 }
 

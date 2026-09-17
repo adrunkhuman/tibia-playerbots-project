@@ -159,7 +159,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 	private:
 		using CyclePhase = PlayerBotCyclePhase;
 		using ScenarioStage = PlayerBotScenarioStage;
-		enum class HuntTravelBudgetPhase : uint8_t { None, Outbound, Exit, Supply };
+		using HuntTravelBudgetPhase = PlayerBotHuntTravelBudgetPhase;
 
 		using TopLevelGoal = PlayerBotGoalArbiter::TopLevelGoal;
 		using GoalCandidate = PlayerBotGoalArbiter::GoalCandidate;
@@ -411,9 +411,12 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		                                                 bool estimateOnly = true) const;
 		std::vector<Position> huntDepotExitCandidates(Player& player, const Position& source) const;
 		std::vector<Position> huntSupplyExitCandidates(Player& player, const Position& source) const;
-		uint64_t huntTravelFutureFareReserve(HuntTravelBudgetPhase phase) const;
+		uint64_t huntTravelReturnFareReserve(HuntTravelBudgetPhase phase) const;
+		uint64_t huntTravelRecoveryFundsReserve(const Player& player, HuntTravelBudgetPhase phase) const;
 		bool huntTravelFareAffordable(const Player& player, uint64_t fare,
 		                              HuntTravelBudgetPhase phase) const;
+		PlayerBotHuntReturnCoverageContext huntReturnCoverageContext(
+		    Player& player, const Position& coveredPosition) const;
 
 		uint32_t navigationDecisionDelay(const Player& player) const;
 
@@ -570,10 +573,12 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		std::map<std::string, uint32_t> huntRouteFailureCounts;
 		HuntTravelBudgetPhase huntTravelBudgetPhase = HuntTravelBudgetPhase::None;
 		uint64_t huntExitFareReserve = 0;
-		uint64_t huntSupplyFareReserve = 0;
 		uint32_t huntRecoveryPotionReserve = 0;
 		Position huntReturnDestination;
 		uint32_t huntReturnRouteDangerCost = 0;
+		uint64_t huntReturnCoverageVariantId = 0;
+		bool huntExitRouteProtected = false;
+		PlayerBotHuntReturnCoverage huntReturnCoverage;
 		std::optional<Position> huntPatrolValidationDestination;
 		std::optional<Position> huntPatrolValidationOrigin;
 		std::optional<PlayerBotNavigationRoutePlan> huntPatrolOutboundPlan;

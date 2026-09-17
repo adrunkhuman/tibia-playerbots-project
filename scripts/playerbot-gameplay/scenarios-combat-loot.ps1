@@ -17,7 +17,7 @@
 			}
 			Assert-CorpseDetourEvents -Logs $corpseLogs
 		}
-		# Allow server startup in addition to the asserted 70-second loot bound.
+		# Allow server startup in addition to the bounded six-failure recovery.
 		Invoke-Scenario -Name "corpse_inaccessible" -DefaultTimeoutSeconds 90 -Body {
 			Invoke-Compose down --volumes --remove-orphans
 			$env:PLAYERBOT_GAMEPLAY_MODE = "corpse_inaccessible"
