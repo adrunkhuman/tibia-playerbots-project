@@ -95,22 +95,22 @@ if ($DangerRetreatLogPath) {
 function New-InaccessibleCorpseFixture {
     return @(
         @{ event = "action_result"; action = "loot"; result = "failed"; reason = "corpse_inaccessible";
-            target_id = 41; navigation_failures = 6; navigation_suspensions = 1; elapsed_ms = 20056 }
+            target_id = 41; navigation_failures = 6; navigation_suspensions = 1; elapsed_ms = 5100 }
     )
 }
 Assert-InaccessibleCorpseEvents -Logs (ConvertTo-FixtureLogs (New-InaccessibleCorpseFixture))
-foreach ($case in @("early_deadline", "late_deadline", "combat_timeout", "too_many_failures", "duplicate_loot", "terminal")) {
+foreach ($case in @("timeout_deadline", "combat_timeout", "wrong_failure_bound", "wrong_suspension_bound", "duplicate_loot", "terminal")) {
     $events = @(New-InaccessibleCorpseFixture)
     switch ($case) {
-        "early_deadline" { $events[0].elapsed_ms = 17999 }
-        "late_deadline" { $events[0].elapsed_ms = 22001 }
+        "timeout_deadline" { $events[0].elapsed_ms = 20000 }
         "combat_timeout" {
             $events = @(
                 @{ event = "action_result"; action = "defensive_combat"; result = "failed";
                     reason = "combat_timeout"; target_id = 42 }
             ) + $events
         }
-        "too_many_failures" { $events[0].navigation_failures = 7 }
+        "wrong_failure_bound" { $events[0].navigation_failures = 5 }
+        "wrong_suspension_bound" { $events[0].navigation_suspensions = 0 }
         "duplicate_loot" { $events += $events[0] }
         "terminal" { $events += @{ event = "terminal"; reason = "controlled_player_dead" } }
     }
@@ -121,6 +121,55 @@ foreach ($case in @("early_deadline", "late_deadline", "combat_timeout", "too_ma
 
 if ($InaccessibleCorpseLogPath) {
     Assert-InaccessibleCorpseEvents -Logs (Get-Content -Raw -LiteralPath $InaccessibleCorpseLogPath)
+}
+
+function New-CorpseDetourFixture {
+    return @(
+        @{ event = "action_result"; action = "plan"; result = "success"; danger_aware = $true; steps = 3;
+            destination = @{ x = 32105; y = 32194; z = 8 } }
+        @{ event = "action_result"; action = "loot"; result = "success"; item_id = 2148; count = 1 }
+    )
+}
+$detourLogs = "PLAYERBOT_GAMEPLAY_TEST CORPSE_INACCESSIBLE_DISPLACED`n" +
+    (ConvertTo-FixtureLogs (New-CorpseDetourFixture))
+# The current controller does not emit the removed hostile_detour telemetry.
+Assert-CorpseDetourEvents -Logs $detourLogs
+foreach ($case in @("missing_displacement", "no_route", "defensive_combat", "terminal")) {
+    $events = @(New-CorpseDetourFixture)
+    $logs = $detourLogs
+    switch ($case) {
+        "missing_displacement" { $logs = ConvertTo-FixtureLogs $events }
+        "no_route" { $events = @($events | Where-Object action -ne "plan"); $logs = "PLAYERBOT_GAMEPLAY_TEST CORPSE_INACCESSIBLE_DISPLACED`n" + (ConvertTo-FixtureLogs $events) }
+        "defensive_combat" { $events += @{ event = "action_result"; action = "defensive_combat"; result = "started" }; $logs = "PLAYERBOT_GAMEPLAY_TEST CORPSE_INACCESSIBLE_DISPLACED`n" + (ConvertTo-FixtureLogs $events) }
+        "terminal" { $events += @{ event = "terminal"; reason = "controlled_player_dead" }; $logs = "PLAYERBOT_GAMEPLAY_TEST CORPSE_INACCESSIBLE_DISPLACED`n" + (ConvertTo-FixtureLogs $events) }
+    }
+    Assert-Rejected "Corpse detour $case" {
+        Assert-CorpseDetourEvents -Logs $logs
+    } "The displaced corpse was not reached through a safe route"
+}
+
+function New-DepotRiskRouteFixture {
+    return @(
+        @{ event = "depot_risk_fallback_contract"; safe_precedence = $true; retained_across_turns = $true;
+            ranked_fallback = $true; requested_revalidation = $true; failed_revalidation_rejected = $true }
+        @{ event = "action_result"; action = "depot_discover"; result = "success"; risk_fallback = $false;
+            unsafe_routes = 34; route_steps = 577; danger_cost = 323; maximum_health_loss_per_second = 0.0137222 }
+    )
+}
+$depotRiskLogs = "PLAYERBOT_GAMEPLAY_TEST DEPOT_RISK_FALLBACK_PASS`n" +
+    (ConvertTo-FixtureLogs (New-DepotRiskRouteFixture))
+Assert-DepotRiskRouteEvents -Logs $depotRiskLogs
+foreach ($case in @("fallback_selected", "no_unsafe_rejections", "unsafe_safe_route", "terminal")) {
+    $events = @(New-DepotRiskRouteFixture)
+    switch ($case) {
+        "fallback_selected" { $events[1].risk_fallback = $true }
+        "no_unsafe_rejections" { $events[1].unsafe_routes = 0 }
+        "unsafe_safe_route" { $events[1].danger_cost = 501 }
+        "terminal" { $events += @{ event = "terminal"; reason = "depot_unavailable" } }
+    }
+    Assert-Rejected "Depot risk route $case" {
+        Assert-DepotRiskRouteEvents -Logs ("PLAYERBOT_GAMEPLAY_TEST DEPOT_RISK_FALLBACK_PASS`n" + (ConvertTo-FixtureLogs $events))
+    } "The depot risk route did not reject unsafe candidates"
 }
 
 function New-MainlandFixture {
