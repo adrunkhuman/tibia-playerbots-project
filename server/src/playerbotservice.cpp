@@ -487,7 +487,7 @@ void PlayerBotController::setCyclePhase(CyclePhase phase, const Position& positi
 	}
 	const char* previous = cyclePhaseName();
 	if (turnRouter.cyclePhase() == CyclePhase::Hunt && phase != CyclePhase::Hunt) {
-		huntCoordinator.cancelPlanning();
+		cancelHuntPlanning(reason, position);
 	}
 	if (phase == CyclePhase::Hunt || phase == CyclePhase::DepositLoot) {
 		huntCoordinator.finishDangerRetreat();

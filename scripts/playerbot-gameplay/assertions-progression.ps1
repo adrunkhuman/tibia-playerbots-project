@@ -358,6 +358,17 @@ function Assert-HuntRegionPlanningEvents {
     $selections = @($events | Where-Object { $_.event -eq "hunt_region_selection" -and $_.result -eq "selected" })
     $selection = if ($selections.Count -gt 0) { $selections[$selections.Count - 1] } else { $null }
     $candidates = @($events | Where-Object { $_.event -eq "hunt_region_candidate" })
+	$scoredCandidateRecords = @($candidates | Where-Object { $_.candidate_phase -eq 'scored' })
+	$routeValidationRecords = @($candidates | Where-Object { $_.candidate_phase -eq 'route_validation' })
+	$snapshotAttributionValid = $completedScoring.Count -ge 1 -and @($completedScoring | Where-Object {
+		$completion = $_
+		$records = @($scoredCandidateRecords | Where-Object {
+			$_.planning_pass -eq $completion.planning_pass -and $_.scoring_revision -eq $completion.scoring_revision
+		})
+		$uniqueRecords = @($records | ForEach-Object { "$($_.planning_pass):$($_.scoring_revision):$($_.region_id)" } |
+			Select-Object -Unique)
+		$records.Count -eq $completion.candidate_count -and $uniqueRecords.Count -eq $records.Count
+	}).Count -eq $completedScoring.Count
     $outsideLocalFixture = @($candidates | Where-Object {
 		[Math]::Max([Math]::Abs($_.center.x - 32360), [Math]::Abs($_.center.y - 31782)) -gt 32
 	})
@@ -365,8 +376,16 @@ function Assert-HuntRegionPlanningEvents {
 		$_.event -eq "hunt_region_scan" -and $_.phase -eq "selected" -and $_.decision_latency_us -gt 0
     })
 	$selectedScan = if ($completed.Count -gt 0) { $completed[$completed.Count - 1] } else { $null }
-	$routeValidations = @($candidates | Where-Object { $_.route_validated })
+	$routeValidations = $routeValidationRecords
     $selectedCandidate = if ($selection) { @($routeValidations | Where-Object { $_.region_id -eq $selection.region_id }) } else { @() }
+	$terminalAttributionValid = $cancelled.Count -eq 1 -and $staleRevision.Count -eq 1 -and $selection -and
+		$cancelled[0].planning_pass -gt 0 -and $cancelled[0].scoring_revision -ge 0 -and
+		$staleRevision[0].planning_pass -gt 0 -and $staleRevision[0].scoring_revision -ge 0 -and
+		$selection.planning_pass -eq $selectedScan.planning_pass -and
+		$selection.scoring_revision -eq $selectedScan.scoring_revision -and
+		@($routeValidations | Where-Object {
+			$_.planning_pass -ne $selection.planning_pass -or $_.scoring_revision -ne $selection.scoring_revision
+		}).Count -eq 0
 	$reachableCandidates = @($routeValidations | Where-Object { $_.suitable -and $_.reachable })
 	$validatedVariantCount = @($reachableCandidates | Select-Object -ExpandProperty atlas_variant_id -Unique).Count
 	$finiteRouteQueue = $selectedScan -and $selectedScan.route_candidate_policy -eq 'all_cheap_viable_ranked' -and
@@ -396,7 +415,9 @@ function Assert-HuntRegionPlanningEvents {
 		$reserveFormulaValid = $reserve.return_threshold -eq $expectedThreshold
 	}
 	if (-not $buildLifecycleValid -or -not $cacheReuseValid -or $transportYields.Count -lt 1 -or $scoringYields.Count -lt 1 -or
-		$cancelled.Count -ne 1 -or $staleRevision.Count -ne 1 -or $topologyScans.Count -lt 1 -or $routeValidations.Count -lt 1 -or -not $selection -or $selectedCandidate.Count -ne 1 -or
+		$cancelled.Count -ne 1 -or $staleRevision.Count -ne 1 -or -not $snapshotAttributionValid -or
+		-not $terminalAttributionValid -or $topologyScans.Count -lt 1 -or $routeValidations.Count -lt 1 -or
+		-not $selection -or $selectedCandidate.Count -ne 1 -or
 		$bestScore -eq $null -or [Math]::Abs($selectedCandidate[0].score - $bestScore) -gt 0.01 -or
 		-not $finiteRouteQueue -or $selection.selection_rule -ne $selectionRule -or
 		-not $selectedCandidate[0].route_validated -or
@@ -406,7 +427,7 @@ function Assert-HuntRegionPlanningEvents {
 		-not $selectedCandidate[0].reachable -or $selectedCandidate[0].route_danger_cost -lt 0 -or
 		$outsideLocalFixture.Count -lt 1 -or $completedTopology.Count -lt 1 -or
 		-not $reserveFormulaValid) {
-		throw "Hunt planning telemetry was incomplete. started_build=$($startedBuild.Count), started_hit=$($startedHit.Count), completed_scoring=$($completedScoring.Count), build_lifecycle=$buildLifecycleValid, cache_reuse=$cacheReuseValid, transport_yields=$($transportYields.Count), scoring_yields=$($scoringYields.Count), cancelled=$($cancelled.Count), stale=$($staleRevision.Count), topology_scans=$($topologyScans.Count), route_candidates=$($selectedScan.route_candidate_count), validated_variants=$validatedVariantCount, route_validations=$($routeValidations.Count), selection=$($selection.Count), outside=$($outsideLocalFixture.Count), completed=$($completedTopology.Count)."
+		throw "Hunt planning telemetry was incomplete. started_build=$($startedBuild.Count), started_hit=$($startedHit.Count), completed_scoring=$($completedScoring.Count), snapshot_attribution=$snapshotAttributionValid, terminal_attribution=$terminalAttributionValid, build_lifecycle=$buildLifecycleValid, cache_reuse=$cacheReuseValid, transport_yields=$($transportYields.Count), scoring_yields=$($scoringYields.Count), cancelled=$($cancelled.Count), stale=$($staleRevision.Count), topology_scans=$($topologyScans.Count), route_candidates=$($selectedScan.route_candidate_count), validated_variants=$validatedVariantCount, route_validations=$($routeValidations.Count), selection=$($selection.Count), outside=$($outsideLocalFixture.Count), completed=$($completedTopology.Count)."
 	}
 }
 

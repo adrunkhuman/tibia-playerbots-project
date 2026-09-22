@@ -67,26 +67,27 @@ Test-Evidence ($rejected + $spell[3]) $checkRejected $true
 # The complete scored-candidate stream can be much larger than the route queue.
 # Only candidates marked route_validated consume the selected scan's route budget.
 $huntPlanning = @(
-    @{ event = 'hunt_region_scan'; phase = 'planning_started'; cache = 'hit'; selection_strategy = 'atlas_topology_selection'
+    @{ event = 'hunt_region_scan'; phase = 'planning_started'; planning_pass = 1; scoring_revision = 10; cache = 'hit'; selection_strategy = 'atlas_topology_selection'
        snapshot_time_us = 0; clustering_time_us = 0; candidate_count = 90; scored_candidate_count = 0
        route_candidate_count = 0; transport_offer_count = 12; transport_arrival_count = 1 }
-    @{ event = 'hunt_region_scan'; phase = 'cancelled' }
-    @{ event = 'hunt_region_scan'; phase = 'planning_started'; cache = 'hit'; selection_strategy = 'atlas_topology_selection'
+    @{ event = 'hunt_region_scan'; phase = 'cancelled'; planning_pass = 1; scoring_revision = 10 }
+    @{ event = 'hunt_region_scan'; phase = 'planning_started'; planning_pass = 2; scoring_revision = 10; cache = 'hit'; selection_strategy = 'atlas_topology_selection'
        snapshot_time_us = 0; clustering_time_us = 0; candidate_count = 90; scored_candidate_count = 0
        route_candidate_count = 0; transport_offer_count = 12; transport_arrival_count = 1 }
-    @{ event = 'hunt_region_scan'; phase = 'stale_revision' }
-    @{ event = 'hunt_region_scan'; phase = 'planning_started'; cache = 'build'; selection_strategy = 'atlas_topology_selection'
+    @{ event = 'hunt_region_scan'; phase = 'stale_revision'; planning_pass = 2; scoring_revision = 10 }
+    @{ event = 'hunt_region_scan'; phase = 'planning_started'; planning_pass = 3; scoring_revision = 11; cache = 'build'; selection_strategy = 'atlas_topology_selection'
        snapshot_time_us = 2; clustering_time_us = 3; candidate_count = 90; scored_candidate_count = 0
        route_candidate_count = 0; transport_offer_count = 12; transport_arrival_count = 1 }
-    @{ event = 'hunt_region_scan'; phase = 'transport_yield'; cache = 'build'; selection_strategy = 'atlas_topology_selection' }
-    @{ event = 'hunt_region_scan'; phase = 'scoring_yield'; cache = 'build'; selection_strategy = 'atlas_topology_selection' }
-    @{ event = 'hunt_region_scan'; phase = 'scored'; cache = 'build'; selection_strategy = 'atlas_topology_selection'
+    @{ event = 'hunt_region_scan'; phase = 'transport_yield'; planning_pass = 3; scoring_revision = 11; cache = 'build'; selection_strategy = 'atlas_topology_selection' }
+    @{ event = 'hunt_region_scan'; phase = 'scoring_yield'; planning_pass = 3; scoring_revision = 11; cache = 'build'; selection_strategy = 'atlas_topology_selection' }
+    @{ event = 'hunt_region_scan'; phase = 'scored'; planning_pass = 3; scoring_revision = 11; cache = 'build'; selection_strategy = 'atlas_topology_selection'
        snapshot_time_us = 2; clustering_time_us = 3; candidate_count = 90; scored_candidate_count = 90
        suitable_candidate_count = 10; route_candidate_count = 10 }
 )
 for ($index = 1; $index -le 80; $index++) {
     $huntPlanning += @{
-        event = 'hunt_region_candidate'; region_id = 100 + $index; atlas_variant_id = 100 + $index
+        event = 'hunt_region_candidate'; planning_pass = 3; scoring_revision = 11; candidate_phase = 'scored'
+        region_id = 100 + $index; atlas_variant_id = 100 + $index
         suitable = $false; reachable = $true; route_validated = $false; supply_budget_fits = $true
         supply_expected_potions = 1; score = $index; topology_reachable = $true
         topology_travel_steps = 10; route_danger_cost = 0; center = @{ x = 32500 + $index; y = 31800; z = 7 }
@@ -94,18 +95,28 @@ for ($index = 1; $index -le 80; $index++) {
 }
 for ($index = 1; $index -le 10; $index++) {
     $huntPlanning += @{
-        event = 'hunt_region_candidate'; region_id = $index; atlas_variant_id = $index
+        event = 'hunt_region_candidate'; planning_pass = 3; scoring_revision = 11; candidate_phase = 'scored'
+        region_id = $index; atlas_variant_id = $index
+        suitable = $true; reachable = $true; route_validated = $false; supply_budget_fits = $true
+        supply_expected_potions = 1; score = 101 - $index; topology_reachable = $true
+        topology_travel_steps = 10; route_danger_cost = 0; center = @{ x = 32400 + $index; y = 31800; z = 7 }
+    }
+}
+for ($index = 1; $index -le 10; $index++) {
+    $huntPlanning += @{
+        event = 'hunt_region_candidate'; planning_pass = 3; scoring_revision = 11; candidate_phase = 'route_validation'
+        region_id = $index; atlas_variant_id = $index
         suitable = $true; reachable = $true; route_validated = $true; supply_budget_fits = $true
         supply_expected_potions = 1; score = 101 - $index; topology_reachable = $true
         topology_travel_steps = 10; route_danger_cost = 0; center = @{ x = 32400 + $index; y = 31800; z = 7 }
     }
 }
 $huntPlanning += @(
-    @{ event = 'hunt_region_selection'; result = 'selected'; region_id = 1; selection_rule = 'supply_budget_then_xp' }
+    @{ event = 'hunt_region_selection'; result = 'selected'; planning_pass = 3; scoring_revision = 11; region_id = 1; selection_rule = 'supply_budget_then_xp' }
     @{ event = 'hunt_supply_reserve'; source = 'selected_return_route'; route_danger_cost = 100
        maximum_health = 200; health_loss_cost = 1000; minimum_potion_healing = 125
        return_threshold = 1; restock_target = 10 }
-    @{ event = 'hunt_region_scan'; phase = 'selected'; cache = 'build'; selection_strategy = 'atlas_topology_selection'
+    @{ event = 'hunt_region_scan'; phase = 'selected'; planning_pass = 3; scoring_revision = 11; cache = 'build'; selection_strategy = 'atlas_topology_selection'
        topology_time_us = 1; decision_latency_us = 1; candidate_count = 90; route_candidate_count = 10
        route_candidate_policy = 'all_cheap_viable_ranked'; transport_offer_count = 12; transport_arrival_count = 3 }
 )
@@ -117,10 +128,12 @@ $huntPlanning[$huntPlanning.Count - 1].route_candidate_count = 8
 Test-Evidence $huntPlanning $checkHuntPlanning $true
 $huntPlanning[$huntPlanning.Count - 1] = $originalSelectedScan
 
-$unvalidatedCandidate = @($huntPlanning | Where-Object { $_.event -eq 'hunt_region_candidate' -and -not $_.route_validated })[0]
-$unvalidatedCandidate.route_validated = $true
+$unvalidatedCandidate = @($huntPlanning | Where-Object {
+    $_.event -eq 'hunt_region_candidate' -and $_.candidate_phase -eq 'scored' -and -not $_.route_validated
+})[0]
+$unvalidatedCandidate.candidate_phase = 'route_validation'
 Test-Evidence $huntPlanning $checkHuntPlanning $true
-$unvalidatedCandidate.route_validated = $false
+$unvalidatedCandidate.candidate_phase = 'scored'
 
 $completedScore = @($huntPlanning | Where-Object { $_.event -eq 'hunt_region_scan' -and $_.phase -eq 'scored' })[0]
 $completedScore.scored_candidate_count = 89
@@ -132,5 +145,13 @@ $cacheHitStart = @($huntPlanning | Where-Object {
 $cacheHitStart.snapshot_time_us = 1
 Test-Evidence $huntPlanning $checkHuntPlanning $true
 $cacheHitStart.snapshot_time_us = 0
+
+# A second unchanged scored record is a replay, not a route-validation update.
+$replayedCandidate = @($huntPlanning | Where-Object {
+    $_.event -eq 'hunt_region_candidate' -and $_.candidate_phase -eq 'scored'
+})[0].Clone()
+$huntPlanning += $replayedCandidate
+Test-Evidence $huntPlanning $checkHuntPlanning $true
+$huntPlanning = @($huntPlanning[0..($huntPlanning.Count - 2)])
 
 Write-Host 'Supply, Exura, and hunt-planning telemetry assertion contracts passed.'

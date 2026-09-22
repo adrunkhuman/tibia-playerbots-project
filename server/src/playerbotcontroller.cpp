@@ -392,12 +392,22 @@ void PlayerBotController::emitFixtureEvents(const std::vector<playerbot::PlayerB
 	for (const auto& event : events) emit(event.name, position, event.fields);
 }
 
+void PlayerBotController::cancelHuntPlanning(const char* reason, const Position& position)
+{
+	const PlayerBotHuntRuntimeOutcome outcome = huntCoordinator.cancelPlanning();
+	if (telemetry.terminalLogged() || outcome.planningPass == 0) return;
+	telemetry.emit("hunt_region_scan", position, "\"phase\":\"cancelled\",\"reason\":" +
+	    jsonString(reason) + ",\"planning_pass\":" + std::to_string(outcome.planningPass) +
+	    ",\"scoring_revision\":" + std::to_string(outcome.scoringRevision));
+}
+
 void PlayerBotController::stop(const char* reason, const Position& position)
 {
 	if (telemetry.terminalLogged()) {
 		return;
 	}
 
+	cancelHuntPlanning(reason, position);
 	const bool wasRunning = turnRouter.running();
 	const char* previous = turnRouter.stateName();
 	turnRouter.stop();
@@ -406,7 +416,6 @@ void PlayerBotController::stop(const char* reason, const Position& position)
 		scheduledTurnEvent = 0;
 		++scheduledTurnGeneration;
 	}
-	huntCoordinator.cancelPlanning();
 	resetNavigation();
 	if (wasRunning) {
 		telemetry.emit("state_transition", position, std::string("\"from\":") + jsonString(previous) +
