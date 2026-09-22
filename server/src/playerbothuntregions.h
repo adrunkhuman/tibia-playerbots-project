@@ -17,6 +17,7 @@
 #include "position.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <map>
@@ -74,24 +75,35 @@ struct PlayerBotHuntPlanningProfile {
 	bool lightHealingLegal = false;
 	bool cashPressure = false;
 	bool supplyRecovery = false;
+	std::array<uint16_t, playerBotSupplyEquipmentSlotCount> equipmentItemIds{};
 	std::vector<PlayerBotHuntTransportArrival> transportArrivals;
 	PlayerBotSupplyProfile supply;
 };
 
-inline uint64_t playerBotSupplyCapability(const PlayerBotHuntPlanningProfile& profile)
+inline PlayerBotSupplyCapabilitySnapshot playerBotSupplyCapability(const PlayerBotHuntPlanningProfile& profile)
 {
-	uint64_t key = 14695981039346656037ULL;
-	for (uint64_t value : {uint64_t(profile.combat.level), uint64_t(profile.combat.maximumHealth),
-	     uint64_t(profile.combat.armor), uint64_t(profile.combat.defense), uint64_t(profile.combat.attack),
-	     uint64_t(profile.combat.attackSkill), uint64_t(profile.combat.attackFactor * 1000),
-	     uint64_t(profile.magicLevel), uint64_t(profile.supply.maximumMana), uint64_t(profile.supply.spellLegal),
-	     uint64_t(profile.supply.spellHealing), uint64_t(profile.supply.spellMana),
-	     uint64_t(profile.supply.potionHealing), uint64_t(profile.supply.healthGain), uint64_t(profile.supply.manaGain),
-	     uint64_t(profile.supply.spellInterval * 1000), uint64_t(profile.supply.healthInterval * 1000),
-	     uint64_t(profile.supply.manaInterval * 1000), uint64_t(profile.supply.regenerationSeconds > 0)}) {
-		key = (key ^ value) * 1099511628211ULL;
-	}
-	return key;
+	PlayerBotSupplyCapabilitySnapshot capability;
+	capability.level = profile.combat.level;
+	capability.maximumHealth = profile.combat.maximumHealth;
+	capability.armor = profile.combat.armor;
+	capability.defense = profile.combat.defense;
+	capability.attack = profile.combat.attack;
+	capability.attackSkill = profile.combat.attackSkill;
+	capability.attackFactorMilli = static_cast<int32_t>(profile.combat.attackFactor * 1000);
+	capability.magicLevel = profile.magicLevel;
+	capability.maximumMana = profile.supply.maximumMana;
+	capability.spellLegal = profile.supply.spellLegal;
+	capability.spellHealing = profile.supply.spellHealing;
+	capability.spellMana = profile.supply.spellMana;
+	capability.spellIntervalMilliseconds = static_cast<uint32_t>(profile.supply.spellInterval * 1000);
+	capability.potionHealing = profile.supply.potionHealing;
+	capability.foodActive = profile.supply.regenerationSeconds > 0;
+	capability.foodHealthGain = profile.supply.healthGain;
+	capability.foodHealthIntervalMilliseconds = static_cast<uint32_t>(profile.supply.healthInterval * 1000);
+	capability.foodManaGain = profile.supply.manaGain;
+	capability.foodManaIntervalMilliseconds = static_cast<uint32_t>(profile.supply.manaInterval * 1000);
+	capability.equipmentItemIds = profile.equipmentItemIds;
+	return capability;
 }
 
 struct PlayerBotHuntMonsterProfile {
@@ -159,7 +171,7 @@ struct PlayerBotHuntRegion {
 	PlayerBotSupplyProfile supplyProfile;
 	PlayerBotSupplyBudget supplyBudget;
 	PlayerBotSupplyCalibration supplyCalibration;
-	uint64_t supplyCapability = 0;
+	PlayerBotSupplyCapabilitySnapshot supplyCapability;
 	double expectedDamagePerSecond = 0;
 	double combatFraction = 0;
 	uint32_t returnRouteDangerCost = 0;
@@ -226,7 +238,7 @@ struct PlayerBotHuntRegion {
 			supplyBudget.fits = supplyBudget.expectedPotions == 0 &&
 			    recoveryRouteHealthLoss <= currentHealth - maximumHealth * 0.8;
 		}
-		if (supplyCalibration.samples != 0 && supplyCalibration.capability == supplyCapability) {
+		if (playerBotSupplyCalibrationForCapability(supplyCalibration, supplyCapability)) {
 			supplyBudget.expectedPotions = std::ceil(supplyCalibration.potionsPerCombatSecond *
 			    availableHuntSeconds * std::clamp(combatFraction, 0.0, 1.0));
 			supplyBudget.fits = (supplyRecovery && supplyBudget.expectedPotions == 0 &&

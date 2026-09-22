@@ -852,57 +852,208 @@ void adaptiveChallenge()
 
 void supplyCalibration()
 {
+	auto capability = [](uint32_t level = 10) {
+		PlayerBotHuntPlanningProfile profile;
+		profile.combat.level = level;
+		profile.combat.maximumHealth = 100 + static_cast<int32_t>(level - 10) * 5;
+		profile.combat.armor = 10;
+		profile.combat.defense = 20 + static_cast<int32_t>(level - 10);
+		profile.combat.attack = 15;
+		profile.combat.attackSkill = 30 + static_cast<int32_t>(level - 10);
+		profile.magicLevel = level - 10;
+		profile.supply.maximumMana = 100 + (level - 10) * 5;
+		profile.supply.potionHealing = 125;
+		profile.equipmentItemIds[5] = 2383;
+		return playerBotSupplyCapability(profile);
+	};
+	auto regionFor = [&](uint64_t variant, PlayerBotSupplyCapabilitySnapshot snapshot) {
+		PlayerBotHuntRegion region;
+		region.atlasVariantId = variant;
+		region.atlasRevision = 2;
+		region.supplyCapability = snapshot;
+		region.supplyRecovery = true;
+		region.currentHealth = region.maximumHealth = 100;
+		region.supplyProfile.potionHealing = 125;
+		region.supplyProfile.maximumMana = region.supplyProfile.mana = 100;
+		region.combatFraction = 0.5;
+		region.availableHuntSeconds = 120;
+		region.supplyBudget.expectedPotions = 1;
+		return region;
+	};
 	PlayerBotHuntPolicy policy;
-	PlayerBotHuntRegion region;
-	region.atlasVariantId = 1;
-	region.atlasRevision = 2;
-	region.supplyCapability = 3;
-	region.supplyRecovery = true;
-	region.currentHealth = region.maximumHealth = 100;
-	region.supplyProfile.potionHealing = 125;
-	region.supplyProfile.maximumMana = region.supplyProfile.mana = 100;
-	region.combatFraction = 0.5;
-	region.availableHuntSeconds = 120;
-	region.supplyBudget.expectedPotions = 1;
-	auto observe = [&](uint32_t potions, int32_t health, uint32_t mana, bool interrupted = false) {
+	PlayerBotHuntRegion region = regionFor(1, capability());
+	auto observe = [&](uint32_t potions, int32_t health, uint32_t mana, bool interrupted = false,
+	                   std::optional<PlayerBotSupplyCapabilitySnapshot> after = std::nullopt) {
 		policy.resetCombatEvidence();
 		policy.observeCombat({true, 60, health, 100, mana, 100, 1});
 		for (unsigned i = 0; i < 3; ++i) policy.observeKill();
 		for (unsigned i = 0; i < potions; ++i) policy.observeRecovery(true);
-		return policy.observeSupplies(region, 120, health, 100, mana, 0, interrupted);
+		return policy.observeSupplies(region, after.value_or(region.supplyCapability), 120,
+		                              health, 100, mana, 0, interrupted);
 	};
-	assert(observe(0, 90, 100).samples == 0); // Health loss is unpaid demand.
-	assert(observe(0, 100, 80).samples == 0); // Spending the mana pool is not sustain.
-	assert(observe(0, 100, 100, true).samples == 0);
-	assert(observe(0, 100, 100).potionsPerCombatSecond > 0);
+	assert(!observe(0, 90, 100).accepted); // Health loss is unpaid demand.
+	assert(!observe(0, 100, 80).accepted); // Spending the mana pool is not sustain.
+	assert(!observe(0, 100, 100, true).accepted);
+	const auto firstSafe = observe(0, 100, 100);
+	assert(firstSafe.calibration.potionsPerCombatSecond > 0);
+	assert(firstSafe.estimateDirection == PlayerBotSupplyEstimateDirection::Downward);
 	observe(0, 100, 100);
-	region.supplyCalibration = observe(0, 100, 100);
+	region.supplyCalibration = observe(0, 100, 100).calibration;
+	assert(region.supplyCalibration.samples == 3);
 	assert(region.supplyCalibration.potionsPerCombatSecond == 0);
 	region.reconcileSupplies(1);
 	assert(region.supplyBudget.fits && region.supplyBudget.expectedPotions == 0);
-	region.supplyCalibration = observe(2, 100, 100);
+	region.supplyCalibration = observe(2, 100, 100).calibration;
 	region.reconcileSupplies(1);
 	assert(region.supplyBudget.expectedPotions == 2 && !region.supplyBudget.fits);
 	region.reconcileTravel(240, 0, 1);
 	assert(region.supplyBudget.expectedPotions == 4);
 	const auto unsafe = observe(0, 50, 100);
-	assert(unsafe.potionsPerCombatSecond >= region.supplyCalibration.potionsPerCombatSecond);
-	region.supplyCapability = 4;
-	assert(observe(0, 100, 100, true).samples == 0);
+	assert(unsafe.accepted && std::string(unsafe.reason) == "unsafe_demand_held");
+	assert(unsafe.estimateDirection == PlayerBotSupplyEstimateDirection::Unchanged);
+	assert(unsafe.calibration.potionsPerCombatSecond >= region.supplyCalibration.potionsPerCombatSecond);
+
+	PlayerBotHuntPolicy highRemainderPolicy;
+	PlayerBotHuntRegion highRemainder = regionFor(9, capability());
+	highRemainder.supplyBudget.expectedPotions = 10;
+	PlayerBotSupplyObservation highRemainderObservation;
+	for (unsigned sample = 0; sample < 3; ++sample) {
+		highRemainderPolicy.resetCombatEvidence();
+		highRemainderPolicy.observeCombat({true, 60, 100, 100, 100, 100, 1});
+		for (unsigned kill = 0; kill < 3; ++kill) highRemainderPolicy.observeKill();
+		highRemainderObservation = highRemainderPolicy.observeSupplies(
+		    highRemainder, highRemainder.supplyCapability, 120, 100, 100, 100, 0, false);
+	}
+	assert(highRemainderObservation.calibration.samples == 3);
+	assert(highRemainderObservation.calibration.potionsPerCombatSecond > 0);
 	region.atlasRevision = 3;
-	assert(observe(0, 100, 100, true).samples == 0);
+	assert(!observe(0, 100, 100, true).accepted);
+	assert(observe(0, 100, 100, true).calibration.samples == 0);
+
+	// Routine progression carries history forward, then anchors cheaper evidence
+	// to the improved capability so it cannot be reused by a weaker character.
+	PlayerBotHuntPolicy progression;
+	PlayerBotHuntRegion progressing = regionFor(2, capability(10));
+	auto observeProgression = [&](const PlayerBotSupplyCapabilitySnapshot& after) {
+		progression.resetCombatEvidence();
+		progression.observeCombat({true, 60, 100, 100, 100, 100, 1});
+		for (unsigned i = 0; i < 3; ++i) progression.observeKill();
+		return progression.observeSupplies(progressing, after, 120, 100, 100, 100, 0, false);
+	};
+	const auto leveled = observeProgression(capability(11));
+	assert(leveled.accepted && leveled.direction == PlayerBotSupplyCapabilityDirection::Improved);
+	assert((leveled.changedFields & PlayerBotSupplyCapabilityLevel) != 0);
+	progressing.supplyCapability = capability(11);
+	const auto leveledAgain = observeProgression(capability(12));
+	assert(leveledAgain.accepted && leveledAgain.calibration.samples == 2);
+	assert(playerBotSupplyCalibrationForCapability(leveledAgain.calibration, capability(13)));
+	assert(!playerBotSupplyCalibrationForCapability(leveledAgain.calibration, capability(11)));
+
+	PlayerBotHuntPolicy materialPolicy;
+	PlayerBotHuntRegion materialRegion = regionFor(3, capability());
+	materialPolicy.observeCombat({true, 60, 100, 100, 100, 100, 1});
+	for (unsigned i = 0; i < 3; ++i) materialPolicy.observeKill();
+	auto changedEquipment = materialRegion.supplyCapability;
+	changedEquipment.equipmentItemIds[5] = 2395;
+	const auto material = materialPolicy.observeSupplies(
+	    materialRegion, changedEquipment, 120, 100, 100, 100, 0, false);
+	assert(!material.accepted && std::string(material.reason) == "material_capability_change");
+	assert((material.changedFields & PlayerBotSupplyCapabilityEquipment) != 0);
+
+	// Food-backed health or spell recovery is a capability context, not proof
+	// that potion demand is lower after that context disappears.
+	PlayerBotHuntPolicy foodPolicy;
+	PlayerBotHuntRegion foodRegion = regionFor(4, capability());
+	foodRegion.supplyCapability.foodActive = true;
+	foodRegion.supplyCapability.foodHealthGain = 1;
+	foodRegion.supplyCapability.foodHealthIntervalMilliseconds = 6000;
+	auto noFood = foodRegion.supplyCapability;
+	noFood.foodActive = false;
+	noFood.foodHealthGain = 0;
+	noFood.foodHealthIntervalMilliseconds = 0;
+	foodPolicy.observeCombat({true, 60, 100, 100, 100, 100, 1});
+	foodPolicy.observeDamage(1);
+	for (unsigned i = 0; i < 3; ++i) foodPolicy.observeKill();
+	const auto foodBacked = foodPolicy.observeSupplies(foodRegion, noFood, 120, 100, 100, 100, 0, false);
+	assert(!foodBacked.accepted && std::string(foodBacked.reason) == "recovery_context_changed");
+
+	PlayerBotHuntPolicy manaFoodPolicy;
+	PlayerBotHuntRegion manaFoodRegion = regionFor(5, capability());
+	manaFoodRegion.supplyCapability.foodActive = true;
+	manaFoodRegion.supplyCapability.foodManaGain = 2;
+	manaFoodRegion.supplyCapability.foodManaIntervalMilliseconds = 6000;
+	noFood = manaFoodRegion.supplyCapability;
+	noFood.foodActive = false;
+	noFood.foodManaGain = 0;
+	noFood.foodManaIntervalMilliseconds = 0;
+	manaFoodPolicy.observeCombat({true, 60, 100, 100, 100, 100, 1});
+	manaFoodPolicy.observeRecovery(false);
+	for (unsigned i = 0; i < 3; ++i) manaFoodPolicy.observeKill();
+	assert(std::string(manaFoodPolicy.observeSupplies(
+	    manaFoodRegion, noFood, 120, 100, 100, 100, 0, false).reason) == "recovery_context_changed");
+
+	PlayerBotHuntPolicy independentFoodPolicy;
+	PlayerBotHuntRegion independentFood = regionFor(6, capability());
+	independentFood.supplyCapability.foodActive = true;
+	independentFood.supplyCapability.foodHealthGain = 1;
+	independentFood.supplyCapability.foodHealthIntervalMilliseconds = 6000;
+	independentFood.supplyProfile.regenerationSeconds = 120;
+	independentFood.supplyProfile.healthGain = 1;
+	independentFood.supplyProfile.healthInterval = 6;
+	independentFood.expectedDamagePerSecond = 2;
+	noFood = independentFood.supplyCapability;
+	noFood.foodActive = false;
+	noFood.foodHealthGain = 0;
+	noFood.foodHealthIntervalMilliseconds = 0;
+	independentFoodPolicy.observeCombat({true, 60, 100, 100, 100, 100, 1});
+	for (unsigned i = 0; i < 3; ++i) independentFoodPolicy.observeKill();
+	const auto independent = independentFoodPolicy.observeSupplies(
+	    independentFood, noFood, 120, 100, 100, 100, 0, false);
+	assert(independent.accepted && std::string(independent.reason) == "recovery_independent_evidence");
+	assert(independent.estimateDirection == PlayerBotSupplyEstimateDirection::Downward);
+
+	PlayerBotHuntPolicy unsafeFoodPolicy;
+	PlayerBotHuntRegion unsafeFood = regionFor(10, capability());
+	unsafeFood.supplyCapability.foodActive = true;
+	unsafeFood.supplyCapability.foodHealthGain = 1;
+	unsafeFood.supplyCapability.foodHealthIntervalMilliseconds = 6000;
+	unsafeFood.supplyProfile.regenerationSeconds = 120;
+	unsafeFood.supplyProfile.healthGain = 1;
+	unsafeFood.supplyProfile.healthInterval = 6;
+	unsafeFood.expectedDamagePerSecond = 2;
+	noFood = unsafeFood.supplyCapability;
+	noFood.foodActive = false;
+	noFood.foodHealthGain = 0;
+	noFood.foodHealthIntervalMilliseconds = 0;
+	unsafeFoodPolicy.observeCombat({true, 60, 50, 100, 100, 100, 1});
+	const auto unsafeExpiry = unsafeFoodPolicy.observeSupplies(
+	    unsafeFood, noFood, 120, 50, 100, 100, 0, false);
+	assert(unsafeExpiry.accepted && std::string(unsafeExpiry.reason) == "unsafe_upward_correction");
+	assert(unsafeExpiry.estimateDirection == PlayerBotSupplyEstimateDirection::Upward);
+	assert(unsafeExpiry.calibration.potionsPerCombatSecond >= 2.0 / 60.0);
+
+	PlayerBotHuntPolicy insufficientPolicy;
+	PlayerBotHuntRegion insufficientRegion = regionFor(7, capability());
+	insufficientPolicy.observeCombat({true, 59, 100, 100, 100, 100, 1});
+	for (unsigned i = 0; i < 3; ++i) insufficientPolicy.observeKill();
+	const auto insufficient = insufficientPolicy.observeSupplies(
+	    insufficientRegion, insufficientRegion.supplyCapability, 120, 100, 100, 100, 0, false);
+	assert(!insufficient.accepted && std::string(insufficient.reason) == "insufficient_combat_evidence");
+	assert(insufficient.calibration.samples == 0);
 
 	PlayerBotHuntRuntime runtime({});
 	PlayerBotHuntRuntimePlayerObservation player;
+	region = regionFor(8, capability());
 	player.health = player.maximumHealth = player.mana = 100;
-	player.supplyCapability = region.supplyCapability;
+	player.supplyCapability = capability(11);
 	const auto start = std::chrono::steady_clock::time_point{};
 	runtime.selectPlanningRegion(region, player, start);
 	runtime.sampleCombat({true, start + std::chrono::seconds(1), 100, 100, 100, 100, 1});
 	runtime.sampleCombat({true, start + std::chrono::seconds(61), 100, 100, 100, 100, 1});
 	for (unsigned i = 0; i < 3; ++i) runtime.observeKill();
 	const auto completed = runtime.complete(player, start + std::chrono::seconds(120), 2400);
-	assert(completed && completed->region.supplyCalibration.samples == 1);
+	assert(completed && completed->supplyObservation.accepted);
+	assert(completed->region.supplyCalibration.samples == 1);
 	assert(runtime.regionPerformance().at(region.atlasVariantId).supply.samples == 1);
 	assert(!runtime.complete(player, start + std::chrono::seconds(121), 2400));
 

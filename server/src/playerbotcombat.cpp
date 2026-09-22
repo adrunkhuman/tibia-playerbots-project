@@ -26,6 +26,39 @@ extern Spells* g_spells;
 namespace {
 	constexpr uint64_t maximumTargetApproachExpandedNodes = 10000;
 
+	std::string supplyCapabilityChangedFields(uint64_t fields)
+	{
+		std::ostringstream result;
+		result << '[';
+		bool first = true;
+		auto append = [&](uint64_t field, const char* name) {
+			if ((fields & field) == 0) return;
+			if (!first) result << ',';
+			first = false;
+			result << jsonString(name);
+		};
+		append(PlayerBotSupplyCapabilityLevel, "level");
+		append(PlayerBotSupplyCapabilityMaximumHealth, "maximum_health");
+		append(PlayerBotSupplyCapabilityArmor, "armor");
+		append(PlayerBotSupplyCapabilityDefense, "defense");
+		append(PlayerBotSupplyCapabilityAttack, "attack");
+		append(PlayerBotSupplyCapabilityAttackSkill, "attack_skill");
+		append(PlayerBotSupplyCapabilityAttackFactor, "attack_factor");
+		append(PlayerBotSupplyCapabilityMagicLevel, "magic_level");
+		append(PlayerBotSupplyCapabilityMaximumMana, "maximum_mana");
+		append(PlayerBotSupplyCapabilitySpellLegal, "spell_legal");
+		append(PlayerBotSupplyCapabilitySpellHealing, "spell_healing");
+		append(PlayerBotSupplyCapabilitySpellMana, "spell_mana");
+		append(PlayerBotSupplyCapabilitySpellInterval, "spell_interval");
+		append(PlayerBotSupplyCapabilityPotionHealing, "potion_healing");
+		append(PlayerBotSupplyCapabilityFoodState, "food_state");
+		append(PlayerBotSupplyCapabilityFoodHealth, "food_health_recovery");
+		append(PlayerBotSupplyCapabilityFoodMana, "food_mana_recovery");
+		append(PlayerBotSupplyCapabilityEquipment, "equipment_identity");
+		result << ']';
+		return result.str();
+	}
+
 	double projectedHuntStaminaMultiplier(const Player& player, double availableHuntSeconds)
 	{
 		const uint16_t staminaMinutes = player.getStaminaMinutes();
@@ -910,6 +943,15 @@ void PlayerBotController::finishHuntRegion(const Player& player, const Position&
 	       << ",\"updated_observed_correction\":" << completion->performance.updatedCorrection
 	       << ",\"performance_observed\":" << (completion->performance.observed ? "true" : "false")
 	       << ",\"performance_evidence_reason\":" << jsonString(completion->performance.evidenceReason)
+	       << ",\"supply_observation_accepted\":" << (completion->supplyObservation.accepted ? "true" : "false")
+	       << ",\"supply_observation_reason\":" << jsonString(completion->supplyObservation.reason)
+	       << ",\"supply_capability_changed_fields\":"
+	       << supplyCapabilityChangedFields(completion->supplyObservation.changedFields)
+	       << ",\"supply_capability_direction\":"
+	       << jsonString(playerBotSupplyCapabilityDirectionName(completion->supplyObservation.direction))
+	       << ",\"supply_estimate_update_direction\":"
+	       << jsonString(playerBotSupplyEstimateDirectionName(completion->supplyObservation.estimateDirection))
+	       << ",\"supply_observation_samples\":" << completion->supplyObservation.calibration.samples
 	       << ",\"supply_calibration_samples\":" << completion->region.supplyCalibration.samples
 	       << ",\"supply_potions_per_combat_minute\":" << completion->region.supplyCalibration.potionsPerCombatSecond * 60
 	       << ",\"kills\":" << combat.kills << ",\"damage_taken\":" << combat.damageTaken

@@ -46,3 +46,21 @@ function F.inaccessibleCorpseDeath.onDeath(creature, corpse)
 end
 
 F.inaccessibleCorpseDeath:register()
+
+F.supplyRecoveryCorpseDeath = CreatureEvent("PlayerbotSupplyRecoveryCorpseDeath")
+
+function F.supplyRecoveryCorpseDeath.onDeath(creature, corpse)
+    if os.getenv("PLAYERBOT_GAMEPLAY_MODE") ~= "supply_recovery" or creature:getName():lower() ~= "spider" then
+        return true
+    end
+    assert(corpse, "supply recovery fixture lost the spider corpse")
+    for _, item in ipairs(corpse:getItems() or {}) do
+        if item:getId() == ITEM_GOLD_COIN then
+            return true
+        end
+    end
+    assert(corpse:addItem(ITEM_GOLD_COIN, 1), "supply recovery fixture could not ensure combat income")
+    return true
+end
+
+F.supplyRecoveryCorpseDeath:register()

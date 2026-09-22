@@ -5,9 +5,12 @@
 #define FS_PLAYERBOTSUPPLYPOLICY_H
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <optional>
 
 // Spawn-rate damage already includes every attacker's isolated fight. Only
 // concurrent exposure is additional; both totals must describe the same crowd.
@@ -34,10 +37,232 @@ struct PlayerBotSupplyProfile {
 	double manaInterval = 0;
 };
 
+inline constexpr std::size_t playerBotSupplyEquipmentSlotCount = 11;
+
+enum PlayerBotSupplyCapabilityField : uint64_t {
+	PlayerBotSupplyCapabilityLevel = 1ULL << 0,
+	PlayerBotSupplyCapabilityMaximumHealth = 1ULL << 1,
+	PlayerBotSupplyCapabilityArmor = 1ULL << 2,
+	PlayerBotSupplyCapabilityDefense = 1ULL << 3,
+	PlayerBotSupplyCapabilityAttack = 1ULL << 4,
+	PlayerBotSupplyCapabilityAttackSkill = 1ULL << 5,
+	PlayerBotSupplyCapabilityAttackFactor = 1ULL << 6,
+	PlayerBotSupplyCapabilityMagicLevel = 1ULL << 7,
+	PlayerBotSupplyCapabilityMaximumMana = 1ULL << 8,
+	PlayerBotSupplyCapabilitySpellLegal = 1ULL << 9,
+	PlayerBotSupplyCapabilitySpellHealing = 1ULL << 10,
+	PlayerBotSupplyCapabilitySpellMana = 1ULL << 11,
+	PlayerBotSupplyCapabilitySpellInterval = 1ULL << 12,
+	PlayerBotSupplyCapabilityPotionHealing = 1ULL << 13,
+	PlayerBotSupplyCapabilityFoodState = 1ULL << 14,
+	PlayerBotSupplyCapabilityFoodHealth = 1ULL << 15,
+	PlayerBotSupplyCapabilityFoodMana = 1ULL << 16,
+	PlayerBotSupplyCapabilityEquipment = 1ULL << 17,
+};
+
+struct PlayerBotSupplyCapabilitySnapshot {
+	uint32_t level = 0;
+	int32_t maximumHealth = 0;
+	int32_t armor = 0;
+	int32_t defense = 0;
+	int32_t attack = 0;
+	int32_t attackSkill = 0;
+	int32_t attackFactorMilli = 1000;
+	uint32_t magicLevel = 0;
+	uint32_t maximumMana = 0;
+	bool spellLegal = false;
+	uint32_t spellHealing = 0;
+	uint32_t spellMana = 0;
+	uint32_t spellIntervalMilliseconds = 0;
+	uint32_t potionHealing = 0;
+	bool foodActive = false;
+	uint32_t foodHealthGain = 0;
+	uint32_t foodHealthIntervalMilliseconds = 0;
+	uint32_t foodManaGain = 0;
+	uint32_t foodManaIntervalMilliseconds = 0;
+	// Type IDs for combat-bearing slots. Backpack and slot zero stay empty.
+	std::array<uint16_t, playerBotSupplyEquipmentSlotCount> equipmentItemIds{};
+
+	bool operator==(const PlayerBotSupplyCapabilitySnapshot& other) const
+	{
+		return level == other.level && maximumHealth == other.maximumHealth && armor == other.armor &&
+		       defense == other.defense && attack == other.attack && attackSkill == other.attackSkill &&
+		       attackFactorMilli == other.attackFactorMilli && magicLevel == other.magicLevel &&
+		       maximumMana == other.maximumMana && spellLegal == other.spellLegal &&
+		       spellHealing == other.spellHealing && spellMana == other.spellMana &&
+		       spellIntervalMilliseconds == other.spellIntervalMilliseconds &&
+		       potionHealing == other.potionHealing && foodActive == other.foodActive &&
+		       foodHealthGain == other.foodHealthGain &&
+		       foodHealthIntervalMilliseconds == other.foodHealthIntervalMilliseconds &&
+		       foodManaGain == other.foodManaGain &&
+		       foodManaIntervalMilliseconds == other.foodManaIntervalMilliseconds &&
+		       equipmentItemIds == other.equipmentItemIds;
+	}
+	bool operator!=(const PlayerBotSupplyCapabilitySnapshot& other) const { return !(*this == other); }
+};
+
+enum class PlayerBotSupplyCapabilityDirection : uint8_t {
+	Unchanged,
+	Improved,
+	Regressed,
+	Mixed,
+};
+
+inline const char* playerBotSupplyCapabilityDirectionName(PlayerBotSupplyCapabilityDirection direction)
+{
+	switch (direction) {
+		case PlayerBotSupplyCapabilityDirection::Improved: return "improved";
+		case PlayerBotSupplyCapabilityDirection::Regressed: return "regressed";
+		case PlayerBotSupplyCapabilityDirection::Mixed: return "mixed";
+		default: return "unchanged";
+	}
+}
+
+struct PlayerBotSupplyCapabilityComparison {
+	uint64_t changedFields = 0;
+	PlayerBotSupplyCapabilityDirection direction = PlayerBotSupplyCapabilityDirection::Unchanged;
+	bool compatible = true;
+	bool materialChange = false;
+	bool recoveryContextChanged = false;
+};
+
+inline PlayerBotSupplyCapabilityComparison playerBotCompareSupplyCapabilities(
+    const PlayerBotSupplyCapabilitySnapshot& before, const PlayerBotSupplyCapabilitySnapshot& after)
+{
+	PlayerBotSupplyCapabilityComparison result;
+	bool improved = false;
+	bool regressed = false;
+	auto monotonic = [&](auto left, auto right, uint64_t field, bool lowerIsBetter = false) {
+		if (left == right) return;
+		result.changedFields |= field;
+		const bool better = lowerIsBetter ? right < left : right > left;
+		improved = improved || better;
+		regressed = regressed || !better;
+	};
+	auto material = [&](const auto& left, const auto& right, uint64_t field) {
+		if (left == right) return;
+		result.changedFields |= field;
+		result.materialChange = true;
+		improved = regressed = true;
+	};
+
+	monotonic(before.level, after.level, PlayerBotSupplyCapabilityLevel);
+	monotonic(before.maximumHealth, after.maximumHealth, PlayerBotSupplyCapabilityMaximumHealth);
+	material(before.armor, after.armor, PlayerBotSupplyCapabilityArmor);
+	monotonic(before.defense, after.defense, PlayerBotSupplyCapabilityDefense);
+	material(before.attack, after.attack, PlayerBotSupplyCapabilityAttack);
+	monotonic(before.attackSkill, after.attackSkill, PlayerBotSupplyCapabilityAttackSkill);
+	material(before.attackFactorMilli, after.attackFactorMilli, PlayerBotSupplyCapabilityAttackFactor);
+	monotonic(before.magicLevel, after.magicLevel, PlayerBotSupplyCapabilityMagicLevel);
+	monotonic(before.maximumMana, after.maximumMana, PlayerBotSupplyCapabilityMaximumMana);
+	monotonic(before.spellLegal, after.spellLegal, PlayerBotSupplyCapabilitySpellLegal);
+	if (before.spellHealing != after.spellHealing) result.changedFields |= PlayerBotSupplyCapabilitySpellHealing;
+	if (before.spellMana != after.spellMana) result.changedFields |= PlayerBotSupplyCapabilitySpellMana;
+	if (before.spellIntervalMilliseconds != after.spellIntervalMilliseconds)
+		result.changedFields |= PlayerBotSupplyCapabilitySpellInterval;
+	if (before.spellLegal && after.spellLegal) {
+		monotonic(before.spellHealing, after.spellHealing, PlayerBotSupplyCapabilitySpellHealing);
+		monotonic(before.spellMana, after.spellMana, PlayerBotSupplyCapabilitySpellMana, true);
+		monotonic(before.spellIntervalMilliseconds, after.spellIntervalMilliseconds,
+		          PlayerBotSupplyCapabilitySpellInterval, true);
+	}
+	material(before.potionHealing, after.potionHealing, PlayerBotSupplyCapabilityPotionHealing);
+	material(before.equipmentItemIds, after.equipmentItemIds, PlayerBotSupplyCapabilityEquipment);
+
+	if (before.foodActive != after.foodActive) {
+		result.changedFields |= PlayerBotSupplyCapabilityFoodState;
+		if (before.foodHealthGain != after.foodHealthGain ||
+		    before.foodHealthIntervalMilliseconds != after.foodHealthIntervalMilliseconds) {
+			result.changedFields |= PlayerBotSupplyCapabilityFoodHealth;
+		}
+		if (before.foodManaGain != after.foodManaGain ||
+		    before.foodManaIntervalMilliseconds != after.foodManaIntervalMilliseconds) {
+			result.changedFields |= PlayerBotSupplyCapabilityFoodMana;
+		}
+		result.recoveryContextChanged = true;
+		improved = improved || after.foodActive;
+		regressed = regressed || !after.foodActive;
+	} else if (before.foodActive &&
+	           (before.foodHealthGain != after.foodHealthGain ||
+	            before.foodHealthIntervalMilliseconds != after.foodHealthIntervalMilliseconds ||
+	            before.foodManaGain != after.foodManaGain ||
+	            before.foodManaIntervalMilliseconds != after.foodManaIntervalMilliseconds)) {
+		if (before.foodHealthGain != after.foodHealthGain ||
+		    before.foodHealthIntervalMilliseconds != after.foodHealthIntervalMilliseconds) {
+			result.changedFields |= PlayerBotSupplyCapabilityFoodHealth;
+		}
+		if (before.foodManaGain != after.foodManaGain ||
+		    before.foodManaIntervalMilliseconds != after.foodManaIntervalMilliseconds) {
+			result.changedFields |= PlayerBotSupplyCapabilityFoodMana;
+		}
+		result.recoveryContextChanged = true;
+		improved = regressed = true;
+	}
+
+	result.direction = improved && regressed ? PlayerBotSupplyCapabilityDirection::Mixed :
+	                   improved ? PlayerBotSupplyCapabilityDirection::Improved :
+	                   regressed ? PlayerBotSupplyCapabilityDirection::Regressed :
+	                               PlayerBotSupplyCapabilityDirection::Unchanged;
+	result.compatible = !result.materialChange && !regressed;
+	return result;
+}
+
+inline uint64_t playerBotSupplyCapabilityHash(const PlayerBotSupplyCapabilitySnapshot& capability)
+{
+	uint64_t key = 14695981039346656037ULL;
+	auto append = [&key](uint64_t value) { key = (key ^ value) * 1099511628211ULL; };
+	for (uint64_t value : {uint64_t(capability.level), uint64_t(capability.maximumHealth),
+	     uint64_t(capability.armor), uint64_t(capability.defense), uint64_t(capability.attack),
+	     uint64_t(capability.attackSkill), uint64_t(capability.attackFactorMilli),
+	     uint64_t(capability.magicLevel), uint64_t(capability.maximumMana), uint64_t(capability.spellLegal),
+	     uint64_t(capability.spellHealing), uint64_t(capability.spellMana),
+	     uint64_t(capability.spellIntervalMilliseconds), uint64_t(capability.potionHealing),
+	     uint64_t(capability.foodActive), uint64_t(capability.foodHealthGain),
+	     uint64_t(capability.foodHealthIntervalMilliseconds), uint64_t(capability.foodManaGain),
+	     uint64_t(capability.foodManaIntervalMilliseconds)}) append(value);
+	for (uint16_t itemId : capability.equipmentItemIds) append(itemId);
+	return key;
+}
+
 struct PlayerBotSupplyCalibration {
-	uint64_t capability = 0;
+	PlayerBotSupplyCapabilitySnapshot capability;
+	uint64_t capabilityHash = 0;
 	double potionsPerCombatSecond = 0;
 	uint32_t samples = 0;
+};
+
+inline std::optional<PlayerBotSupplyCalibration> playerBotSupplyCalibrationForCapability(
+    const PlayerBotSupplyCalibration& calibration, const PlayerBotSupplyCapabilitySnapshot& capability)
+{
+	if (calibration.samples == 0 ||
+	    !playerBotCompareSupplyCapabilities(calibration.capability, capability).compatible) return std::nullopt;
+	return calibration;
+}
+
+enum class PlayerBotSupplyEstimateDirection : uint8_t {
+	None,
+	Upward,
+	Downward,
+	Unchanged,
+};
+
+inline const char* playerBotSupplyEstimateDirectionName(PlayerBotSupplyEstimateDirection direction)
+{
+	switch (direction) {
+		case PlayerBotSupplyEstimateDirection::Upward: return "upward";
+		case PlayerBotSupplyEstimateDirection::Downward: return "downward";
+		case PlayerBotSupplyEstimateDirection::Unchanged: return "unchanged";
+		default: return "none";
+	}
+}
+
+struct PlayerBotSupplyObservation {
+	PlayerBotSupplyCalibration calibration;
+	uint64_t changedFields = 0;
+	PlayerBotSupplyCapabilityDirection direction = PlayerBotSupplyCapabilityDirection::Unchanged;
+	PlayerBotSupplyEstimateDirection estimateDirection = PlayerBotSupplyEstimateDirection::None;
+	const char* reason = "insufficient_evidence";
+	bool accepted = false;
 };
 
 struct PlayerBotSupplyBudget {

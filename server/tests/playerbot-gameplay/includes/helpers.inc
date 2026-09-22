@@ -101,6 +101,24 @@ function F.installSeededHuntLoadout(player, mode)
         " head=2480 armor=2464 right=2530 left=2395 legs=2468 feet=2643 sword=20 shielding=20")
 end
 
+F.supplyRecoveryRegisteredMonsters = {}
+
+function F.armSupplyRecoveryIncome(player)
+    local position = player:getPosition()
+    local center = F.supplyRecoveryHuntCenter
+    if position.z ~= center.z or math.abs(position.x - center.x) > 30 or math.abs(position.y - center.y) > 30 then
+        return
+    end
+    for _, creature in ipairs(Game.getSpectators(position, true, false, 30, 30, 30, 30)) do
+        if creature:isMonster() and creature:getName():lower() == "spider" and
+            not F.supplyRecoveryRegisteredMonsters[creature:getId()] then
+            assert(creature:registerEvent("PlayerbotSupplyRecoveryCorpseDeath"),
+                "supply recovery fixture could not arm spider income")
+            F.supplyRecoveryRegisteredMonsters[creature:getId()] = true
+        end
+    end
+end
+
 function F.removeNearbyMonsters(player)
     for _, creature in ipairs(Game.getSpectators(player:getPosition(), true, false, 10, 10, 10, 10)) do
         if creature:isMonster() then

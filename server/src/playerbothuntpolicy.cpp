@@ -192,39 +192,135 @@ PlayerBotHuntChallengeUpdate PlayerBotHuntPolicy::updateChallengeFrontier(const 
 	return update;
 }
 
-PlayerBotSupplyCalibration PlayerBotHuntPolicy::observeSupplies(const PlayerBotHuntRegion& region,
-    uint64_t durationSeconds, int32_t health, int32_t maximumHealth, uint32_t mana, uint32_t potions,
-    bool interrupted)
+PlayerBotSupplyObservation PlayerBotHuntPolicy::observeSupplies(const PlayerBotHuntRegion& region,
+    const PlayerBotSupplyCapabilitySnapshot& capabilityAfter, uint64_t durationSeconds,
+    int32_t health, int32_t maximumHealth, uint32_t mana, uint32_t potions, bool interrupted)
 {
 	const auto combat = combatSummary();
 	auto& history = performance[region.atlasVariantId];
 	if (history.atlasRevision != region.atlasRevision) history = {};
 	history.atlasRevision = region.atlasRevision;
 	auto& learned = history.supply;
-	if (learned.capability != region.supplyCapability) learned = {region.supplyCapability, 0, 0};
-	if (combat.activeSeconds <= 0) return learned;
+	PlayerBotSupplyObservation update;
+	if (const auto applicable = playerBotSupplyCalibrationForCapability(learned, capabilityAfter)) {
+		update.calibration = *applicable;
+	}
+	const PlayerBotSupplyCapabilityComparison capabilityChange =
+	    playerBotCompareSupplyCapabilities(region.supplyCapability, capabilityAfter);
+	update.changedFields = capabilityChange.changedFields;
+	update.direction = capabilityChange.direction;
+
+	auto withoutFood = [](PlayerBotSupplyCapabilitySnapshot capability) {
+		capability.foodActive = false;
+		capability.foodHealthGain = 0;
+		capability.foodHealthIntervalMilliseconds = 0;
+		capability.foodManaGain = 0;
+		capability.foodManaIntervalMilliseconds = 0;
+		return capability;
+	};
+	const PlayerBotSupplyCapabilityComparison nonFoodChange = playerBotCompareSupplyCapabilities(
+	    withoutFood(region.supplyCapability), withoutFood(capabilityAfter));
+	const bool foodContextBoundary = capabilityChange.recoveryContextChanged &&
+	    !capabilityChange.materialChange && nonFoodChange.compatible;
+	if (capabilityChange.materialChange) {
+		update.reason = "material_capability_change";
+		return update;
+	}
+	if (combat.activeSeconds <= 0) {
+		update.reason = "insufficient_active_combat";
+		return update;
+	}
+
+	const auto compatibleHistory = playerBotSupplyCalibrationForCapability(learned, region.supplyCapability);
 	const double exposure = region.availableHuntSeconds * std::clamp(region.combatFraction, 0.0, 1.0);
-	const double prior = learned.samples != 0 ? learned.potionsPerCombatSecond :
+	const double prior = compatibleHistory ? compatibleHistory->potionsPerCombatSecond :
 	    exposure > 0 ? region.supplyBudget.expectedPotions / exposure : 0;
 	const double observed = combat.potionRecoveries / combat.activeSeconds;
 	const bool depleted = region.supplyProfile.potions > 0 && potions == 0;
 	const bool unsafe = combat.dangerObserved || combat.deathObserved || depleted || combat.p10HealthPercent < 70;
-	// Short/failed outings may raise demand, but cannot teach that healing was free.
+	const bool enoughEvidence = !interrupted && durationSeconds >= 120 &&
+	    combat.activeSeconds >= 60 && combat.kills >= 3;
+	const bool resourcesStable = combat.p10HealthPercent >= 80 && combat.p10ManaPercent >= 50 &&
+	    health >= region.currentHealth - maximumHealth / 20 &&
+	    mana + region.supplyProfile.maximumMana / 20 >= region.supplyProfile.mana;
+	const bool recoveryIndependent = foodContextBoundary && enoughEvidence && resourcesStable &&
+	    combat.damageTaken == 0 && combat.spellRecoveries == 0;
+
+	PlayerBotSupplyProfile supplyWithoutFood = region.supplyProfile;
+	supplyWithoutFood.regenerationSeconds = 0;
+	supplyWithoutFood.healthGain = 0;
+	supplyWithoutFood.healthInterval = 0;
+	supplyWithoutFood.manaGain = 0;
+	supplyWithoutFood.manaInterval = 0;
+	const PlayerBotSupplyBudget budgetWithoutFood = playerBotSupplyBudget(supplyWithoutFood,
+	    region.expectedDamagePerSecond, region.combatFraction, region.availableHuntSeconds,
+	    region.estimatedTravelSeconds);
+	const double endStaticRequired = exposure > 0 && !capabilityAfter.foodActive ?
+	    budgetWithoutFood.expectedPotions / exposure : prior;
+	auto estimateDirection = [](double before, double after) {
+		return after > before ? PlayerBotSupplyEstimateDirection::Upward :
+		       after < before ? PlayerBotSupplyEstimateDirection::Downward :
+		                        PlayerBotSupplyEstimateDirection::Unchanged;
+	};
+	PlayerBotSupplyCalibration candidate;
+	candidate.capability = capabilityAfter;
+	candidate.capabilityHash = playerBotSupplyCapabilityHash(capabilityAfter);
+	candidate.potionsPerCombatSecond = prior;
+	candidate.samples = compatibleHistory ? compatibleHistory->samples : 0;
+
+	// Upward evidence may cross a food-context boundary when every non-food
+	// capability remains compatible. Preserve both the prior and the static
+	// no-food requirement so an unsafe outing can never make demand cheaper.
 	if (unsafe || observed > prior) {
-		learned.potionsPerCombatSecond = std::max(prior, observed);
-		if (unsafe) learned.potionsPerCombatSecond = std::max(learned.potionsPerCombatSecond, 1.0 / 60.0);
-		++learned.samples;
-	} else if (!interrupted && durationSeconds >= 120 && combat.activeSeconds >= 60 && combat.kills >= 3 &&
-	           combat.p10HealthPercent >= 80 && combat.p10ManaPercent >= 50 &&
-	           health >= region.currentHealth - maximumHealth / 20 &&
-	           mana + region.supplyProfile.maximumMana / 20 >= region.supplyProfile.mana) {
-		learned.potionsPerCombatSecond = prior * 0.8 + observed * 0.2;
-		++learned.samples;
-		// Repeated stable, zero-use combat can establish a genuinely potion-free hunt.
-		if (observed == 0 && learned.samples >= 3 && learned.potionsPerCombatSecond * exposure < 1)
-			learned.potionsPerCombatSecond = 0;
+		if (!capabilityChange.compatible && !foodContextBoundary) {
+			update.reason = "capability_regression";
+			return update;
+		}
+		candidate.potionsPerCombatSecond = std::max({prior, endStaticRequired, observed});
+		if (unsafe) candidate.potionsPerCombatSecond = std::max(candidate.potionsPerCombatSecond, 1.0 / 60.0);
+		++candidate.samples;
+		learned = candidate;
+		update.calibration = learned;
+		update.accepted = true;
+		update.estimateDirection = estimateDirection(prior, candidate.potionsPerCombatSecond);
+		update.reason = unsafe ?
+		    (update.estimateDirection == PlayerBotSupplyEstimateDirection::Upward ?
+		         "unsafe_upward_correction" : "unsafe_demand_held") :
+		    "higher_observed_demand";
+		return update;
 	}
-	return learned;
+	if (!capabilityChange.compatible && !recoveryIndependent) {
+		update.reason = capabilityChange.recoveryContextChanged ? "recovery_context_changed" :
+		                                                          "capability_regression";
+		return update;
+	}
+	if (interrupted) {
+		update.reason = "interrupted_outing";
+		return update;
+	}
+	if (!enoughEvidence) {
+		update.reason = "insufficient_combat_evidence";
+		return update;
+	}
+	if (!resourcesStable) {
+		update.reason = "resource_guard_failed";
+		return update;
+	}
+
+	candidate.potionsPerCombatSecond = prior * 0.8 + observed * 0.2;
+	++candidate.samples;
+	// Zero is established only after repeated samples leave less than one
+	// projected potion over this outing's combat exposure.
+	if (observed == 0 && candidate.samples >= 3 && candidate.potionsPerCombatSecond * exposure < 1)
+		candidate.potionsPerCombatSecond = 0;
+	learned = candidate;
+	update.calibration = learned;
+	update.accepted = true;
+	update.estimateDirection = estimateDirection(prior, candidate.potionsPerCombatSecond);
+	update.reason = recoveryIndependent ? "recovery_independent_evidence" :
+	                capabilityChange.recoveryContextChanged ? "improved_recovery_context" :
+	                                                          "safe_combat_evidence";
+	return update;
 }
 
 PlayerBotHuntPerformanceUpdate PlayerBotHuntPolicy::observePerformance(uint64_t variantId, uint64_t atlasRevision,

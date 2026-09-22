@@ -6,6 +6,7 @@ F.depotTilePosition = Position(32105, 32196, 8)
 F.thaisTownId = 2
 F.carlinTownId = 4
 F.carlinTemplePosition = Position(32360, 31782, 7)
+F.supplyRecoveryHuntCenter = Position(32437, 31627, 8)
 F.carlinServiceRouteStart = Position(32383, 31800, 7)
 F.mutablePortalRouteStart = Position(32190, 31781, 7)
 F.carlinServiceApproach = Position(32338, 31791, 7)

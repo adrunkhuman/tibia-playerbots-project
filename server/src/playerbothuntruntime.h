@@ -47,7 +47,7 @@ struct PlayerBotHuntRuntimePlayerObservation {
 	uint32_t potions = 0;
 	uint32_t mana = 0;
 	uint64_t funds = 0;
-	uint64_t supplyCapability = 0;
+	PlayerBotSupplyCapabilitySnapshot supplyCapability;
 	bool supplyInterrupted = false;
 };
 
@@ -142,6 +142,7 @@ struct PlayerBotHuntRuntimeCompletion {
 	PlayerBotHuntRegion region;
 	PlayerBotHuntCombatSummary combat;
 	PlayerBotHuntPerformanceUpdate performance;
+	PlayerBotSupplyObservation supplyObservation;
 	PlayerBotHuntChallengeUpdate challenge;
 	uint64_t durationSeconds = 0;
 	uint64_t experienceGained = 0;

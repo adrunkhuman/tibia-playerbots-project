@@ -576,9 +576,11 @@ namespace {
 		region.supplyProfile = planningProfile.supply;
 		region.supplyCapability = playerBotSupplyCapability(planningProfile);
 		if (const auto found = performance.find(region.atlasVariantId);
-		    found != performance.end() && found->second.atlasRevision == region.atlasRevision &&
-		    found->second.supply.capability == region.supplyCapability) {
-			region.supplyCalibration = found->second.supply;
+		    found != performance.end() && found->second.atlasRevision == region.atlasRevision) {
+			if (const auto calibration = playerBotSupplyCalibrationForCapability(
+			        found->second.supply, region.supplyCapability)) {
+				region.supplyCalibration = *calibration;
+			}
 		}
 		region.destination = *std::min_element(region.patrolPoints.begin(), region.patrolPoints.end(),
 			[&player](const Position& left, const Position& right) {
@@ -769,6 +771,12 @@ PlayerBotHuntPlanningProfile PlayerBotHuntRegionAdapter::planningProfile(const P
 	profile.supply.potions = profile.potionCount;
 	profile.supply.potionHealing = profile.potionMinimumHealing;
 	profile.supply.mana = profile.mana;
+	for (uint8_t slot = CONST_SLOT_FIRST; slot <= CONST_SLOT_LAST; ++slot) {
+		if (slot == CONST_SLOT_BACKPACK) continue;
+		if (const Item* item = player.getInventoryItem(static_cast<slots_t>(slot))) {
+			profile.equipmentItemIds[slot] = item->getID();
+		}
+	}
 	profile.supply.maximumMana = player.getMaxMana();
 	if (Condition* food = player.getCondition(CONDITION_REGENERATION, CONDITIONID_DEFAULT)) {
 		profile.supply.regenerationSeconds = food->getTicks() == -1 ?

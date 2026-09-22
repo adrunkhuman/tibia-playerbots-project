@@ -384,10 +384,10 @@ std::optional<PlayerBotHuntRuntimeCompletion> PlayerBotHuntRuntime::complete(con
 	     activeRegion->projectedExperience, activeRegion->observedCorrection,
 	     activeRegion->supplyRecovery ? std::min<uint32_t>(configuredDurationSeconds, 120) : configuredDurationSeconds,
 	     result.combat.dangerObserved, result.combat.deathObserved});
-	if (player.supplyCapability == activeRegion->supplyCapability) {
-		result.region.supplyCalibration = policy.observeSupplies(*activeRegion, result.durationSeconds,
-		    player.health, player.maximumHealth, player.mana, player.potions, player.supplyInterrupted);
-	}
+	result.supplyObservation = policy.observeSupplies(*activeRegion, player.supplyCapability,
+	    result.durationSeconds, player.health, player.maximumHealth, player.mana, player.potions,
+	    player.supplyInterrupted);
+	result.region.supplyCalibration = result.supplyObservation.calibration;
 	result.challenge = policy.updateChallengeFrontier({result.durationSeconds, player.maximumHealth});
 	activeRegion.reset();
 	capacityPressureStarted = {};
