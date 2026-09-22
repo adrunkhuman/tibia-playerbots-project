@@ -169,6 +169,13 @@ WHERE players.name = 'Bot One' AND accounts.name = 'bot-one' AND players.deletio
     }
 }
 
+function Require-NewServerGeneration {
+    $script:minimumServerOnlineEvents = @($script:serverPlayerbotEvents | Where-Object {
+        $_.event -eq "lifecycle" -and $_.status -eq "online"
+    }).Count + 1
+    $script:serverLogSinceUtc = [DateTime]::UtcNow
+}
+
 function Invoke-Compose {
     param([Parameter(ValueFromRemainingArguments)][string[]]$Arguments)
 
@@ -187,16 +194,13 @@ function Invoke-Compose {
         return
     }
     if (($Arguments -join ' ') -eq "up --detach server") {
-        $script:minimumServerOnlineEvents = @($script:serverPlayerbotEvents | Where-Object {
-            $_.event -eq "lifecycle" -and $_.status -eq "online"
-        }).Count + 1
-        $script:serverLogSinceUtc = [DateTime]::UtcNow
+        Require-NewServerGeneration
         Invoke-RawCompose up --no-deps --detach server
         Start-ServerLogFollower
         return
     }
     if ($Arguments.Count -gt 0 -and $Arguments[0] -eq "up" -and $Arguments -contains "server") {
-        $script:serverLogSinceUtc = [DateTime]::UtcNow
+        Require-NewServerGeneration
         Invoke-RawCompose @Arguments
         Start-ServerLogFollower
         return
@@ -280,6 +284,8 @@ function Wait-ForLatestServerGenerationLog {
     param([string]$Pattern)
 
     while ([DateTime]::UtcNow -lt $currentScenarioDeadline) {
+        # A restart keeps prior output for combined-generation assertions. The
+        # online-event minimum prevents an old pass marker from satisfying this wait.
         $logs = Get-LatestServerGenerationLogs -Logs (Get-ServerLogs)
         if ($logs -match $Pattern) {
             return $logs

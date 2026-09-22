@@ -274,4 +274,17 @@ assert(not verifyWealth(56, 1, 2384, 0))
 assert(not verifyWealth(56, 0, 2382, 0))
 assert(not verifyWealth(56, 0, nil, 0))
 assert(not verifyWealth(56, 0, 2384, 1))
-print("PASS fixture isolation: " .. count .. " modes, rapier setup/restart, economic login/verification, magic reserves/service/restart, other-player guard, failed writes")
+local function verifyCarlin(potions, money, bank)
+    Player = function() return {
+        isRemoved = function() return false end,
+        getItemCount = function(_, id) assert(id == F.healthPotionItemId); return potions end,
+        getMoney = function() return money end,
+        getBankBalance = function() return bank end,
+    } end
+    return pcall(F.verifyCarlinLocalService, 3, 0)
+end
+assert(verifyCarlin(20, 100, 0))
+assert(not verifyCarlin(19, 100, 0))
+assert(not verifyCarlin(20, 99, 0))
+assert(not verifyCarlin(20, 100, 1))
+print("PASS fixture isolation: " .. count .. " modes, rapier setup/restart, economic login/verification, Carlin 20-potion service receipt, magic reserves/service/restart, other-player guard, failed writes")

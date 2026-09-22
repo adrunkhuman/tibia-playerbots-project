@@ -115,6 +115,46 @@ try {
         (Get-Content (Join-Path $fallbackDirectory 'playerbot-events.jsonl') -Raw) -notmatch '"server_run_id":"fallback"') {
         throw 'Streamed logs were not used when complete log retrieval failed.'
     }
+
+    $script:startedFollowers = 0
+    function Invoke-RawCompose {
+        param([Parameter(ValueFromRemainingArguments)][string[]]$Arguments)
+        $script:lastRawComposeArguments = @($Arguments)
+    }
+    function Start-ServerLogFollower { $script:startedFollowers++ }
+
+    foreach ($startArguments in @(
+        @('up', '--no-deps', '--detach', '--force-recreate', 'server'),
+        @('up', '--detach', '--no-deps', 'server')
+    )) {
+        Reset-ServerLogCollection
+        Add-ServerLogLine 'The Forgotten Server - Version old'
+        Add-ServerLogLine '{"component":"playerbot","server_run_id":"old","sequence":1,"bot":"Bot One","event":"lifecycle","status":"online"}'
+        Add-ServerLogLine 'PLAYERBOT_GAMEPLAY_TEST DEPOT_PASS'
+        $minimumServerOnlineEvents = 0
+        $serverLogSinceUtc = $null
+
+        Invoke-Compose @startArguments
+        if ($minimumServerOnlineEvents -ne 2 -or -not $serverLogSinceUtc -or $startedFollowers -lt 1 -or
+            (@($lastRawComposeArguments) -join ' ') -cne ($startArguments -join ' ')) {
+            throw "Generic server start did not require a new online event: $($startArguments -join ' ')."
+        }
+        if (Get-LatestServerGenerationLogs -Logs (Get-ServerLogs)) {
+            throw "Old pass marker satisfied a delayed generic start: $($startArguments -join ' ')."
+        }
+
+        Add-ServerLogLine 'The Forgotten Server - Version new'
+        Add-ServerLogLine 'new startup output'
+        if (Get-LatestServerGenerationLogs -Logs (Get-ServerLogs)) {
+            throw "Old pass marker satisfied a generic start before its online event: $($startArguments -join ' ')."
+        }
+        Add-ServerLogLine '{"component":"playerbot","server_run_id":"new","sequence":1,"bot":"Bot One","event":"lifecycle","status":"online"}'
+        $newGeneration = Get-LatestServerGenerationLogs -Logs (Get-ServerLogs)
+        if ($newGeneration -notmatch '^The Forgotten Server - Version new' -or
+            $newGeneration -match 'PLAYERBOT_GAMEPLAY_TEST DEPOT_PASS') {
+            throw "Generic server start did not isolate the new log generation: $($startArguments -join ' ')."
+        }
+    }
 }
 finally {
     Remove-Item -Recurse -Force $FailureArtifactsPath -ErrorAction SilentlyContinue

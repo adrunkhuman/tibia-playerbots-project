@@ -32,6 +32,8 @@ Assert-Generation 'CRLF' ("$old`n$new" -replace "`n", "`r`n") $new 2
 Assert-Generation 'minimum online count not reached' "$old`n$new" '' 3
 Assert-Generation 'recovery online is not a process boundary' "$new`n$online" "$new`n$online" 2
 Assert-Generation 'partial newest startup despite earlier online count' "$old`n$online`n$newBoundary`n$hunt" '' 2
+$oldPass = "$old`nPLAYERBOT_GAMEPLAY_TEST DEPOT_PASS"
+Assert-Generation 'delayed restart cannot reuse old pass marker' "$oldPass`n$newBoundary`n$hunt" '' 2
 Assert-Generation 'newest boundary only' "$old`n$newBoundary" '' 1
 Assert-Generation 'no online' "$newBoundary`n$hunt" ''
 Assert-Generation 'missing boundary' "$hunt`n$online" '' 1
