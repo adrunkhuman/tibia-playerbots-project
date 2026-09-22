@@ -31,6 +31,12 @@ namespace playerbot {
 		Rejected,
 	};
 
+	enum class NavigationPreflightFixture : uint8_t {
+		None,
+		Fare,
+		Risk,
+	};
+
 	struct PlayerBotTestPolicy {
 		bool progressionEnabled;
 		bool continuousGoalSelection;
@@ -63,6 +69,8 @@ namespace playerbot {
 		bool depotRiskFallbackFixture;
 		bool remoteHuntFixture;
 		bool mainlandLoopFixture;
+		bool localRouteRecoveryFixture;
+		NavigationPreflightFixture navigationPreflightFixture;
 	};
 
 	inline uint32_t playerBotFixtureHuntPlanningDuration(bool mainlandLoopFixture,

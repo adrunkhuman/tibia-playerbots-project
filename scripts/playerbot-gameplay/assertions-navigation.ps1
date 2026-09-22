@@ -132,6 +132,52 @@ function Assert-NavigationRecoveryEvents {
 	}
 }
 
+function Assert-NavigationPreflightRejectionEvents {
+	param([string]$Logs, [string]$Reason)
+
+	$events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
+	$rejections = @($events | Where-Object {
+		$_.event -eq "navigation_progress" -and $_.result -eq "skipped" -and $_.reason -eq $Reason
+	})
+	$counts = @($rejections | ForEach-Object { [int]$_.fixed_target_route_failures })
+	$expected = @(1..20)
+	$terminal = @($events | Where-Object {
+		$_.event -eq "terminal" -and $_.reason -eq "navigation_route_unavailable"
+	})
+	$plans = @($events | Where-Object {
+		$_.event -eq "action_result" -and $_.action -eq "plan" -and $_.result -eq "success"
+	})
+	$terminalSequence = if ($terminal.Count -eq 1) { [long]$terminal[0].sequence } else { [long]::MaxValue }
+	$postTerminal = @($events | Where-Object { [long]$_.sequence -gt $terminalSequence })
+	if ($rejections.Count -ne 20 -or ($counts -join ",") -ne ($expected -join ",") -or
+		$terminal.Count -ne 1 -or $postTerminal.Count -ne 0 -or $plans.Count -ne 0) {
+		throw "Navigation $Reason preflight rejection was not bounded. rejections=$($rejections.Count), counts=$($counts -join ','), terminal=$($terminal.Count), post_terminal=$($postTerminal.Count), executed_plans=$($plans.Count)."
+	}
+}
+
+function Assert-SvargrondLocalRouteRecoveryEvents {
+	param([string]$Logs)
+
+	$events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
+	$recovered = @($events | Where-Object {
+		$_.event -eq "local_route_recovery" -and $_.result -eq "reached" -and
+		$_.position.x -eq 32232 -and $_.position.y -eq 31076 -and $_.position.z -eq 6
+	})
+	$paidFallback = @($events | Where-Object {
+		$_.event -eq "navigation_progress" -and $_.reason -eq "fare_breaks_restock_reserve"
+	})
+	$paidPlans = @($events | Where-Object {
+		$_.event -eq "action_result" -and $_.action -eq "plan" -and $_.result -eq "success" -and
+		$_.destination.x -eq 32232 -and $_.destination.y -eq 31076 -and $_.destination.z -eq 6 -and $_.fare -gt 0
+	})
+	$npcTravel = @($events | Where-Object { $_.event -eq "npc_travel" -and $_.result -eq "success" })
+	$terminal = @($events | Where-Object { $_.event -eq "terminal" })
+	if ($recovered.Count -ne 1 -or $paidFallback.Count -ne 0 -or $paidPlans.Count -ne 0 -or
+		$npcTravel.Count -ne 0 -or $terminal.Count -ne 0) {
+		throw "Svargrond local route recovery failed. reached=$($recovered.Count), paidFallback=$($paidFallback.Count), paidPlans=$($paidPlans.Count), npcTravel=$($npcTravel.Count), terminal=$($terminal.Count)."
+	}
+}
+
 function Assert-CarlinServiceRouteEvents {
 	param([string]$Logs)
 

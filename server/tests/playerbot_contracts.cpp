@@ -512,6 +512,16 @@ void modeledPatrolFailure()
 
 void navigationFailureAccounting()
 {
+	// Only a completed local proof of unreachability can offer paid travel.
+	// An exhausted search is incomplete, even where a topology route exists.
+	assert(playerBotNavigationMayFallbackToNpcTravel(PlayerBotNavigationResult::Unreachable));
+	assert(!playerBotNavigationMayFallbackToNpcTravel(PlayerBotNavigationResult::NodeLimit));
+	PlayerBotNavigationGoal blockedGoal;
+	blockedGoal.type = PlayerBotNavigationGoalType::Exact;
+	blockedGoal.position = Position(100, 100, 7);
+	assert(playerBotNavigationExactGoalBlocked(blockedGoal, {Position(100, 100, 7)}));
+	assert(!playerBotNavigationExactGoalBlocked(blockedGoal, {Position(101, 100, 7)}));
+
 	PlayerBotFixedTargetFailureTracker failures;
 	assert(!failures.observePosition(false, 20));
 	for (int attempt = 0; attempt < 20; ++attempt) {
@@ -526,6 +536,15 @@ void navigationFailureAccounting()
 	failures.observePlan(false);
 	failures.observePosition(false, 200);
 	assert(failures.count() == 0); // a different fixed goal starts a new sequence
+
+	PlayerBotFixedTargetFailureTracker rejectedAcceptedPlans;
+	assert(!rejectedAcceptedPlans.observePosition(false, 20));
+	for (int attempt = 0; attempt < 20; ++attempt) {
+		rejectedAcceptedPlans.observePlan(true); // a route was initially accepted
+		rejectedAcceptedPlans.observeRejectedAcceptedPlan(); // fare/risk rejects it before execution
+		assert(rejectedAcceptedPlans.count() == static_cast<uint32_t>(attempt + 1));
+	}
+	assert(rejectedAcceptedPlans.exhausted());
 }
 
 void transitCombat()

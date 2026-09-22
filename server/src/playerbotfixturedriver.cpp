@@ -26,6 +26,8 @@ namespace {
 	constexpr Position fixtureDepotTilePosition(32105, 32196, 8);
 	constexpr Position carlinServiceApproach(32338, 31791, 7);
 	constexpr Position mutablePortalDestination(32181, 31794, 8);
+	constexpr Position svargrondRecoveryDestination(32232, 31076, 6);
+	constexpr Position svargrondRecoverySuppressedPosition(32250, 31136, 7);
 	constexpr std::array<Position, 4> fixtureHuntPatrol = {{
 		Position(32084, 32144, 5),
 		Position(32103, 32124, 8),
@@ -61,6 +63,16 @@ std::vector<Position> playerbot::PlayerBotFixtureDriver::huntPatrol() const
 	if (policy.carlinServiceRouteFixture) return {carlinServiceApproach};
 	if (policy.mutablePortalRouteFixture) return {mutablePortalDestination};
 	return {fixtureHuntPatrol.begin(), fixtureHuntPatrol.end()};
+}
+
+playerbot::PlayerBotFixtureLocalRouteRecovery playerbot::PlayerBotFixtureDriver::localRouteRecovery() const
+{
+	return {policy.localRouteRecoveryFixture, svargrondRecoveryDestination, svargrondRecoverySuppressedPosition};
+}
+
+Position playerbot::PlayerBotFixtureDriver::navigationPreflightGoal() const
+{
+	return fixtureHuntPatrol.front();
 }
 
 playerbot::PlayerBotFixtureProviderObservation playerbot::PlayerBotFixtureDriver::observeProvider(

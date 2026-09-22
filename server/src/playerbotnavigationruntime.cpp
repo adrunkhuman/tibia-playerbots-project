@@ -98,6 +98,20 @@ PlayerBotNavigationRuntimeOutcome PlayerBotNavigationRuntime::observePlan(Player
 	return outcome;
 }
 
+PlayerBotNavigationRuntimeOutcome PlayerBotNavigationRuntime::rejectAcceptedPlan()
+{
+	PlayerBotNavigationRuntimeOutcome outcome;
+	session.clearRoute();
+	fixedTargetFailures.observeRejectedAcceptedPlan();
+	outcome.routeUnavailable = true;
+	outcome.fixedTargetRouteFailures = fixedTargetFailures.count();
+	outcome.fixedTargetRouteExhausted = fixedTargetFailures.exhausted();
+	outcome.command = outcome.fixedTargetRouteExhausted ? PlayerBotNavigationRuntimeCommand::Fail :
+		PlayerBotNavigationRuntimeCommand::Retry;
+	outcome.stepFailureCount = session.stepFailureCount();
+	return outcome;
+}
+
 PlayerBotNavigationRuntimeOutcome PlayerBotNavigationRuntime::observeStep(const PlayerBotNavigationStepObservation& observation)
 {
 	PlayerBotNavigationRuntimeOutcome outcome;

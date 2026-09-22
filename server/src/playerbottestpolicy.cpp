@@ -58,6 +58,10 @@ const playerbot::PlayerBotTestPolicy& playerbot::playerBotTestPolicyFromEnvironm
 		const bool huntAreaArrivalFixture = gameplayMode && std::strcmp(gameplayMode, "hunt_area_arrival") == 0;
 		const bool remoteHuntFixture = gameplayMode && std::strcmp(gameplayMode, "remote_hunt") == 0;
 		const bool depotRiskFallbackFixture = gameplayMode && std::strcmp(gameplayMode, "depot_risk_fallback") == 0;
+		const NavigationPreflightFixture navigationPreflightFixture = !gameplayMode ? NavigationPreflightFixture::None :
+			std::strcmp(gameplayMode, "navigation_fare_rejection") == 0 ? NavigationPreflightFixture::Fare :
+			std::strcmp(gameplayMode, "navigation_risk_rejection") == 0 ? NavigationPreflightFixture::Risk :
+			NavigationPreflightFixture::None;
 		const bool startInHunt = gameplayMode &&
 			(std::strcmp(gameplayMode, "navigation") == 0 || std::strcmp(gameplayMode, "navigation_recovery") == 0 ||
 			 std::strcmp(gameplayMode, "carlin_service_route") == 0 ||
@@ -160,6 +164,8 @@ const playerbot::PlayerBotTestPolicy& playerbot::playerBotTestPolicyFromEnvironm
 			depotRiskFallbackFixture,
 			remoteHuntFixture,
 			gameplayMode && std::strcmp(gameplayMode, "mainland") == 0,
+			gameplayMode && std::strcmp(gameplayMode, "svargrond_local_route_recovery") == 0,
+			navigationPreflightFixture,
 		};
 	}();
 	return policy;

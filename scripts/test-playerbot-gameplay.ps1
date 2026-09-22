@@ -84,7 +84,7 @@ $scenarioCatalog = @(
 	"equipment_offer_shadow_no_upgrade", "equipment_purchase", "equipment_purchase_resume", "equipment_purchase_provider_moved", "equipment_purchase_provider_unreachable", "equipment_purchase_space",
 	"equipment_purchase_rejected", "equipment_tool_replenishment", "equipment_tool_nested_inventory", "adaptive_challenge", "mainland_equipment_reward", "oracle_departure",
 		"oracle_level_eight_interrupt", "oracle_level_eight_recovery",
-		"navigation", "navigation_recovery", "carlin_service_route", "mutable_portal_route", "patrol_recovery", "target_approach", "target_approach_unreachable", "target_attacker_priority",
+		"navigation", "navigation_recovery", "svargrond_local_route_recovery", "navigation_fare_rejection", "navigation_risk_rejection", "carlin_service_route", "mutable_portal_route", "patrol_recovery", "target_approach", "target_approach_unreachable", "target_attacker_priority",
 	"spell_training", "spell_training_shortlist", "spell_training_low_supplies", "spell_training_low_supplies_unaffordable", "spell_use", "spell_calibration", "magic_training_haste", "magic_training_great_light",
 	"magic_training_light", "magic_training_refresh", "magic_training_reserve", "magic_training_exact_full",
 	"magic_training_pz", "magic_training_absent", "magic_training_expired", "magic_training_failed",
@@ -98,8 +98,8 @@ foreach ($scenarioName in $scenarioCatalog) {
 		throw "Duplicate gameplay scenario name: $scenarioName"
 	}
 }
-if ($scenarioCatalog.Count -ne 94) {
-	throw "The gameplay scenario catalog must contain 94 scenarios; found $($scenarioCatalog.Count)."
+if ($scenarioCatalog.Count -ne 97) {
+	throw "The gameplay scenario catalog must contain 97 scenarios; found $($scenarioCatalog.Count)."
 }
 $requestedScenarioNames = @($Scenario | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
 $exactScenarioSelection = $requestedScenarioNames.Count -gt 0

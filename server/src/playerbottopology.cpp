@@ -475,7 +475,10 @@ std::optional<PlayerBotTopologyRoute> PlayerBotTopology::route(
 		const uint32_t current = currentEntry.node;
 		if (current == destinationNode) break;
 		for (const Edge& edge : edges[current]) {
-			if (blockedPositions.find(edge.portal.target) != blockedPositions.end() ||
+			// The local navigator must first reach this approach before executing the portal.
+			// Returning a blocked approach creates an impossible local subgoal.
+			if (blockedPositions.find(edge.portal.approach) != blockedPositions.end() ||
+			    blockedPositions.find(edge.portal.target) != blockedPositions.end() ||
 			    blockedPositions.find(edge.portal.destination) != blockedPositions.end()) continue;
 			if ((edge.portal.action == PlayerBotTopologyPortalAction::UseRope && !canUseRope) ||
 			    (edge.portal.action == PlayerBotTopologyPortalAction::UseShovel && !canUseShovel) ||
