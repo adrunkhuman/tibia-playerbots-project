@@ -549,7 +549,7 @@ void Door::setHouse(House* house)
 	}
 }
 
-bool Door::canUse(const Player* player)
+bool Door::canUse(const Player* player) const
 {
 	if (!house) {
 		return true;

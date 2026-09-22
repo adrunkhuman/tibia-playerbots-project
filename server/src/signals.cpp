@@ -81,61 +81,12 @@ void sigusr1Handler()
 
 void sighupHandler()
 {
-	//Dispatcher thread
-	std::cout << "SIGHUP received, reloading config files..." << std::endl;
-
-	g_actions->reload();
-	std::cout << "Reloaded actions." << std::endl;
-
-	g_config.reload();
-	std::cout << "Reloaded config." << std::endl;
-
-	g_creatureEvents->reload();
-	std::cout << "Reloaded creature scripts." << std::endl;
-
-	g_moveEvents->reload();
-	std::cout << "Reloaded movements." << std::endl;
-
-	Npcs::reload();
-	std::cout << "Reloaded npcs." << std::endl;
-
-	g_game.raids.reload();
-	g_game.raids.startup();
-	std::cout << "Reloaded raids." << std::endl;
-
-	g_monsters.reload();
-	PlayerBotHuntRegionPlanner::invalidateCache();
-	std::cout << "Reloaded monsters." << std::endl;
-
-	g_spells->reload();
-	std::cout << "Reloaded spells." << std::endl;
-
-	g_talkActions->reload();
-	std::cout << "Reloaded talk actions." << std::endl;
-
-	Item::items.reload();
-	std::cout << "Reloaded items." << std::endl;
-
-	g_weapons->reload();
-	g_weapons->loadDefaults();
-	std::cout << "Reloaded weapons." << std::endl;
-
-	g_game.quests.reload();
-	std::cout << "Reloaded quests." << std::endl;
-
-	g_globalEvents->reload();
-	std::cout << "Reloaded globalevents." << std::endl;
-
-	g_events->load();
-	std::cout << "Reloaded events." << std::endl;
-
-	g_chat->load();
-	std::cout << "Reloaded chatchannels." << std::endl;
-
-	g_luaEnvironment.loadFile("data/global.lua");
-	std::cout << "Reloaded global.lua." << std::endl;
-
+	// Dispatcher thread. RELOAD_TYPE_ALL reloads item metadata and global.lua
+	// before modern Lua actions, then rebuilds playerbot topology.
+	std::cout << "SIGHUP received, reloading config and data..." << std::endl;
+	g_game.reload(RELOAD_TYPE_ALL);
 	lua_gc(g_luaEnvironment.getLuaState(), LUA_GCCOLLECT, 0);
+	std::cout << "Reloaded config and data." << std::endl;
 }
 
 void sigintHandler()

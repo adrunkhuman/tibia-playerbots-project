@@ -51,6 +51,7 @@ struct PlayerBotTopologyPortal {
 	Direction direction = DIRECTION_NONE;
 	PlayerBotTopologyPortalAction action = PlayerBotTopologyPortalAction::Move;
 	uint16_t itemId = 0;
+	uint16_t expectedItemId = 0;
 	uint32_t minimumLevel = 0;
 };
 
@@ -106,6 +107,7 @@ class PlayerBotTopology
 		static PlayerBotTopology& instance();
 
 		void build(const Map& map);
+		void invalidate();
 		std::optional<uint32_t> walkComponent(const Position& position) const;
 		bool sameWalkComponent(const Position& left, const Position& right) const;
 		bool sameWalkNode(const Position& left, const Position& right) const;

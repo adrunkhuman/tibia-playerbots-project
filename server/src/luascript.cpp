@@ -26,6 +26,7 @@
 #include "chat.h"
 #include "player.h"
 #include "game.h"
+#include "playerbottopology.h"
 #include "protocolstatus.h"
 #include "spells.h"
 #include "iologindata.h"
@@ -2970,6 +2971,7 @@ void LuaScriptInterface::registerFunctions()
 	registerMethod("Action", "id", LuaScriptInterface::luaActionItemId);
 	registerMethod("Action", "aid", LuaScriptInterface::luaActionActionId);
 	registerMethod("Action", "uid", LuaScriptInterface::luaActionUniqueId);
+	registerMethod("Action", "passage", LuaScriptInterface::luaActionPassage);
 	registerMethod("Action", "allowFarUse", LuaScriptInterface::luaActionAllowFarUse);
 	registerMethod("Action", "blockWalls", LuaScriptInterface::luaActionBlockWalls);
 	registerMethod("Action", "checkFloor", LuaScriptInterface::luaActionCheckFloor);
@@ -4628,8 +4630,12 @@ int LuaScriptInterface::luaGameReload(lua_State* L)
 	// Game.reload(reloadType)
 	ReloadTypes_t reloadType = getNumber<ReloadTypes_t>(L, 1);
 	if (reloadType == RELOAD_TYPE_GLOBAL) {
-		pushBoolean(L, g_luaEnvironment.loadFile("data/global.lua") == 0);
-		pushBoolean(L, g_scripts->loadScripts("scripts/lib", true, true));
+		const bool globalLoaded = g_luaEnvironment.loadFile("data/global.lua") == 0;
+		const bool librariesLoaded = g_scripts->loadScripts("scripts/lib", true, true);
+		const bool scriptsReloaded = globalLoaded && librariesLoaded && g_game.reload(RELOAD_TYPE_SCRIPTS);
+		if (!globalLoaded || !librariesLoaded) PlayerBotTopology::instance().invalidate();
+		pushBoolean(L, globalLoaded);
+		pushBoolean(L, librariesLoaded && scriptsReloaded);
 		lua_gc(g_luaEnvironment.getLuaState(), LUA_GCCOLLECT, 0);
 		return 2;
 	}
@@ -15497,6 +15503,33 @@ int LuaScriptInterface::luaActionUniqueId(lua_State* L)
 	} else {
 		lua_pushnil(L);
 	}
+	return 1;
+}
+
+int LuaScriptInterface::luaActionPassage(lua_State* L)
+{
+	// action:passage(closedItemId, openItemId, access[, levelActionIdOffset])
+	Action* action = getUserdata<Action>(L, 1);
+	if (!action) {
+		lua_pushnil(L);
+		return 1;
+	}
+
+	const std::string accessName = getString(L, 4);
+	ActionPassageAccess access;
+	if (accessName == "ordinary") {
+		access = ActionPassageAccess::Ordinary;
+	} else if (accessName == "level") {
+		access = ActionPassageAccess::Level;
+	} else if (accessName == "house") {
+		access = ActionPassageAccess::House;
+	} else {
+		pushBoolean(L, false);
+		return 1;
+	}
+
+	pushBoolean(L, action->addPassage(getNumber<uint16_t>(L, 2), getNumber<uint16_t>(L, 3), access,
+	                                  getNumber<uint32_t>(L, 5, 0)));
 	return 1;
 }
 

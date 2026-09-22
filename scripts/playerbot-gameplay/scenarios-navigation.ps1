@@ -14,6 +14,16 @@
 		}
 	}
 
+	if ($FullNavigation -or $selectedScenarios.Contains("door_passages")) {
+		Invoke-Scenario -Name "door_passages" -DefaultTimeoutSeconds 60 -Body {
+			Invoke-Compose down --volumes --remove-orphans
+			$env:PLAYERBOT_GAMEPLAY_MODE = "door_passages"
+			Invoke-Compose up --detach
+			$doorLogs = Wait-ForPlayerbotEvent -Predicate { $_.event -eq "door_passages_contract" }
+			Assert-DoorPassageEvents -Logs $doorLogs
+		}
+	}
+
 	if ($FullNavigation -or $selectedScenarios.Contains("transit_return")) {
 		Invoke-Scenario -Name "transit_return" -DefaultTimeoutSeconds 60 -Body {
 			Invoke-Compose down --volumes --remove-orphans
@@ -26,6 +36,7 @@
 			Assert-TransitReturnEvents -Logs $transitLogs
 		}
 	}
+
 
 	if ($FullNavigation -or $selectedScenarios.Contains("carlin_service_route") -or $selectedScenarios.Contains("mutable_portal_route")) {
 		Invoke-Scenario -Name "navigation" -DefaultTimeoutSeconds 240 -Body {

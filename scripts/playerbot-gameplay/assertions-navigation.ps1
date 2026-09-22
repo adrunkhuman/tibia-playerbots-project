@@ -155,6 +155,22 @@ function Assert-NavigationPreflightRejectionEvents {
 	}
 }
 
+function Assert-DoorPassageEvents {
+	param([string]$Logs)
+
+	$events = @(ConvertFrom-PlayerbotLogs -Logs $Logs | Where-Object { $_.event -eq "door_passages_contract" })
+	if ($events.Count -ne 1) {
+		throw "Door passage fixture emitted $($events.Count) contract events."
+	}
+	$event = $events[0]
+	foreach ($field in @("reloaded", "ordinary_descriptor", "window_rejected", "unregistered_aid_fallback",
+		"ordinary_aid_denied", "uid_precedence", "level_denied", "house_denied", "static_aid_denied", "navigator_used_door")) {
+		if ($event.$field -ne $true) {
+			throw "Door passage fixture failed $field."
+		}
+	}
+}
+
 function Assert-SvargrondLocalRouteRecoveryEvents {
 	param([string]$Logs)
 

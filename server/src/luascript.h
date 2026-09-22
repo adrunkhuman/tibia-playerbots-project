@@ -1429,6 +1429,7 @@ class LuaScriptInterface
 		static int luaActionItemId(lua_State* L);
 		static int luaActionActionId(lua_State* L);
 		static int luaActionUniqueId(lua_State* L);
+		static int luaActionPassage(lua_State* L);
 		static int luaActionAllowFarUse(lua_State* L);
 		static int luaActionBlockWalls(lua_State* L);
 		static int luaActionCheckFloor(lua_State* L);

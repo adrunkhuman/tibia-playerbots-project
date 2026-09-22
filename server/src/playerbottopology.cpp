@@ -65,19 +65,14 @@ namespace {
 		const TileItemVector* items = tile.getItemList();
 		if (!items) return nullptr;
 		const auto door = std::find_if(items->begin(), items->end(), [](const Item* item) {
-			if (!item) return false;
-			const ItemType& type = Item::items[item->getID()];
-			return playerBotIsTraversableDoor(*item) &&
-			       type.description != "It is locked.";
+			return item && playerBotIsTraversableDoor(*item);
 		});
 		return door == items->end() ? nullptr : *door;
 	}
 
 	uint32_t doorMinimumLevel(const Item& door)
 	{
-		const ItemType& type = Item::items[door.getID()];
-		return type.levelDoor == 0 || door.getActionId() < type.levelDoor ? 0 :
-		       door.getActionId() - type.levelDoor;
+		return playerBotPassageMinimumLevel(door).value_or(std::numeric_limits<uint32_t>::max());
 	}
 
 	bool isStaticWalkTile(const Tile& tile)
@@ -93,7 +88,7 @@ PlayerBotTopology& PlayerBotTopology::instance()
 	return topology;
 }
 
-void PlayerBotTopology::build(const Map& map)
+void PlayerBotTopology::invalidate()
 {
 	++topologyGeneration;
 	walkNodes.clear();
@@ -103,6 +98,11 @@ void PlayerBotTopology::build(const Map& map)
 	reachabilityCache.clear();
 	topologyPortals.clear();
 	components = 0;
+}
+
+void PlayerBotTopology::build(const Map& map)
+{
+	invalidate();
 	size_t walkableTiles = 0;
 	map.forEachTile([&walkableTiles](const Tile& tile) {
 		if (isStaticWalkTile(tile)) ++walkableTiles;
@@ -195,7 +195,7 @@ void PlayerBotTopology::build(const Map& map)
 		if (std::none_of(outgoing.begin(), outgoing.end(), [to, &portal](const Edge& edge) {
 			return edge.destinationNode == to && edge.portal.target == portal.target &&
 			       edge.portal.destination == portal.destination && edge.portal.action == portal.action &&
-			       edge.portal.itemId == portal.itemId;
+			       edge.portal.itemId == portal.itemId && edge.portal.expectedItemId == portal.expectedItemId;
 		})) {
 			outgoing.push_back({to, portal});
 			topologyPortals.push_back(portal);
@@ -220,6 +220,7 @@ void PlayerBotTopology::build(const Map& map)
 			if (targetDoor) {
 				portal.action = PlayerBotTopologyPortalAction::UseDoor;
 				portal.itemId = targetDoor->getID();
+				portal.expectedItemId = *playerBotPassageOpenItemId(*targetDoor);
 				portal.minimumLevel = doorMinimumLevel(*targetDoor);
 			}
 			addEdge(from, entry->second, portal);

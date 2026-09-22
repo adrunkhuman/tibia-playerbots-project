@@ -377,7 +377,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 
 		void processService(Player* player, const Position& currentPosition);
 
-		Item* findNavigationItem(const PlayerBotNavigationStep& step) const;
+		Item* findNavigationItem(const PlayerBotNavigationStep& step, uint16_t itemId = 0) const;
 		PlayerBotNavigationStep resolveTopologyPortal(Player& player, const PlayerBotNavigationStep& portal,
 		                                                const std::set<Position>& blockedPositions) const;
 

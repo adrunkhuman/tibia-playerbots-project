@@ -133,6 +133,23 @@ function door.onUse(player, item, fromPosition, target, toPosition, isHotkey)
 	return false
 end
 
+local function registerPassages(closed, open, access)
+	assert(#closed == #open, "door passage tables have different lengths")
+	for index, closedId in ipairs(closed) do
+		assert(door:passage(closedId, open[index], access),
+			"invalid door passage " .. closedId .. " -> " .. open[index])
+	end
+end
+
+-- These tables also drive onUse. Only declared closed/open pairs are passages.
+registerPassages(closedDoors, openDoors, "ordinary")
+registerPassages(closedExtraDoors, openExtraDoors, "ordinary")
+for _, closedId in ipairs(closedLevelDoors) do
+	assert(door:passage(closedId, closedId + 1, "level", actionIds.levelDoor),
+		"invalid level door passage " .. closedId)
+end
+registerPassages(closedHouseDoors, openHouseDoors, "house")
+
 local doorTables = {keys, openDoors, closedDoors, lockedDoors, openExtraDoors, closedExtraDoors, openHouseDoors, closedHouseDoors, closedQuestDoors, closedLevelDoors}
 for _, doors in pairs(doorTables) do
 	for _, doorId in pairs(doors) do

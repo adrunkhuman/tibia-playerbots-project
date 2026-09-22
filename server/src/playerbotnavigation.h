@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <deque>
 #include <functional>
+#include <optional>
 #include <ostream>
 #include <set>
 #include <string>
@@ -42,6 +43,9 @@ inline uint32_t playerBotNavigationDistance(const Position& from, const Position
 }
 
 bool playerBotIsTraversableDoor(const Item& item);
+std::optional<uint16_t> playerBotPassageOpenItemId(const Item& item);
+std::optional<uint32_t> playerBotPassageMinimumLevel(const Item& item);
+bool playerBotCanTraverseDoor(const Player& player, const Item& item);
 
 struct PlayerBotWalkTransition {
 	Position target;
@@ -138,6 +142,7 @@ struct PlayerBotNavigationStep {
 	Position target;
 	Position expectedPosition;
 	uint16_t itemId = 0;
+	uint16_t expectedItemId = 0;
 	uint32_t npcId = 0;
 	uint32_t price = 0;
 	uint32_t minimumLevel = 0;

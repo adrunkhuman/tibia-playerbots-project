@@ -24,6 +24,7 @@
 #include "configmanager.h"
 #include "container.h"
 #include "game.h"
+#include "item.h"
 #include "pugicast.h"
 #include "spells.h"
 #include <fmt/format.h>
@@ -290,6 +291,21 @@ ReturnValue Actions::canUseFar(const Creature* creature, const Position& toPos, 
 	return RETURNVALUE_NOERROR;
 }
 
+std::optional<ActionPassageDescriptor> Actions::getPassageDescriptor(const Item* item)
+{
+	Action* action = getAction(item);
+	if (!action) return std::nullopt;
+	const ActionPassageDescriptor* passage = action->getPassage(item->getID());
+	if (!passage) return std::nullopt;
+
+	const ItemType& closedType = Item::items[passage->closedItemId];
+	const ItemType& openType = Item::items[passage->openItemId];
+	if (passage->closedItemId != item->getID() || closedType.id != passage->closedItemId ||
+	    !closedType.isDoor() || !closedType.blockSolid || openType.id != passage->openItemId ||
+	    openType.blockSolid) return std::nullopt;
+	return *passage;
+}
+
 Action* Actions::getAction(const Item* item)
 {
 	if (item->hasAttribute(ITEM_ATTRIBUTE_UNIQUEID)) {
@@ -486,6 +502,26 @@ bool Actions::useItemEx(Player* player, const Position& fromPos, const Position&
 
 Action::Action(LuaScriptInterface* interface) :
 	Event(interface), function(nullptr), allowFarUse(false), checkFloor(true), checkLineOfSight(true) {}
+
+bool Action::addPassage(uint16_t closedItemId, uint16_t openItemId, ActionPassageAccess access,
+                        uint32_t levelActionIdOffset)
+{
+	const ItemType& closedType = Item::items[closedItemId];
+	const ItemType& openType = Item::items[openItemId];
+	if (closedItemId == 0 || openItemId == 0 || closedItemId == openItemId ||
+	    closedType.id != closedItemId || !closedType.isDoor() || !closedType.blockSolid ||
+	    openType.id != openItemId || openType.blockSolid ||
+	    (access == ActionPassageAccess::Level) != (levelActionIdOffset != 0)) return false;
+
+	return passages.emplace(closedItemId,
+	                        ActionPassageDescriptor{closedItemId, openItemId, access, levelActionIdOffset}).second;
+}
+
+const ActionPassageDescriptor* Action::getPassage(uint16_t itemId) const
+{
+	const auto entry = passages.find(itemId);
+	return entry == passages.end() ? nullptr : &entry->second;
+}
 
 bool Action::configureEvent(const pugi::xml_node& node)
 {
