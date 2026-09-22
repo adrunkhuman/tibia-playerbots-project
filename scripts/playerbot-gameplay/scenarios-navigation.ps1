@@ -1,3 +1,19 @@
+	foreach ($preflightCase in @(
+		@{ Name = "navigation_fare_rejection"; Marker = "NAVIGATION_FARE_REJECTION"; Reason = "fare_breaks_restock_reserve" },
+		@{ Name = "navigation_risk_rejection"; Marker = "NAVIGATION_RISK_REJECTION"; Reason = "route_danger_above_tolerance" }
+	)) {
+		if (-not $FullNavigation -and -not $selectedScenarios.Contains($preflightCase.Name)) { continue }
+		Invoke-Scenario -Name $preflightCase.Name -DefaultTimeoutSeconds 60 -Body {
+			Invoke-Compose down --volumes --remove-orphans
+			$env:PLAYERBOT_GAMEPLAY_MODE = $preflightCase.Name
+			Invoke-Compose up --detach
+			Wait-ForLog -Pattern ("PLAYERBOT_GAMEPLAY_TEST " + $preflightCase.Marker + "_START") | Out-Null
+			Wait-ForLog -Pattern '"event":"terminal".*"reason":"navigation_route_unavailable"' | Out-Null
+			Start-Sleep -Seconds 2
+			Assert-NavigationPreflightRejectionEvents -Logs (Get-ServerLogs) -Reason $preflightCase.Reason
+		}
+	}
+
 	if ($FullNavigation -or $selectedScenarios.Contains("transit_return")) {
 		Invoke-Scenario -Name "transit_return" -DefaultTimeoutSeconds 60 -Body {
 			Invoke-Compose down --volumes --remove-orphans
@@ -28,6 +44,15 @@
 			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST NAVIGATION_RECOVERY_START' | Out-Null
 			$recoveryLogs = Wait-ForPlayerbotEventCount -Action "hunt_waypoint" -Count 1
 			Assert-NavigationRecoveryEvents -Logs $recoveryLogs
+		}
+		Invoke-Scenario -Name "svargrond_local_route_recovery" -DefaultTimeoutSeconds 60 -Body {
+			Invoke-Compose down --volumes --remove-orphans
+			$env:PLAYERBOT_GAMEPLAY_MODE = "svargrond_local_route_recovery"
+			$env:PLAYERBOT_HUNT_DURATION_SECONDS = "900"
+			Invoke-Compose up --detach
+			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST SVARGROND_LOCAL_ROUTE_RECOVERY_START' | Out-Null
+			$routeLogs = Wait-ForLog -Pattern '"event":"local_route_recovery",".*"result":"reached"'
+			Assert-SvargrondLocalRouteRecoveryEvents -Logs $routeLogs
 		}
 		Invoke-Scenario -Name "carlin_service_route" -DefaultTimeoutSeconds 60 -Body {
 			Invoke-Compose down --volumes --remove-orphans

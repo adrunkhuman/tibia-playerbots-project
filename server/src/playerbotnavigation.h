@@ -121,6 +121,17 @@ enum class PlayerBotNavigationResult : uint8_t {
 	NodeLimit,
 };
 
+inline bool playerBotNavigationMayFallbackToNpcTravel(PlayerBotNavigationResult result)
+{
+	return result == PlayerBotNavigationResult::Unreachable;
+}
+
+inline bool playerBotNavigationExactGoalBlocked(const PlayerBotNavigationGoal& goal,
+                                                 const std::set<Position>& blockedPositions)
+{
+	return goal.type == PlayerBotNavigationGoalType::Exact && blockedPositions.find(goal.position) != blockedPositions.end();
+}
+
 struct PlayerBotNavigationStep {
 	PlayerBotNavigationAction action = PlayerBotNavigationAction::Move;
 	Direction direction = DIRECTION_NONE;

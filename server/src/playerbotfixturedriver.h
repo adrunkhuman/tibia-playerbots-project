@@ -19,6 +19,11 @@ namespace playerbot {
 		bool forceFailure = false;
 		uint64_t maximumExpandedNodes = 0;
 	};
+	struct PlayerBotFixtureLocalRouteRecovery {
+		bool enabled = false;
+		Position destination;
+		Position suppressedPosition;
+	};
 	struct PlayerBotFixtureEngineCommand {
 		bool dispatch = true;
 		uint8_t count = 0;
@@ -58,6 +63,9 @@ namespace playerbot {
 			PlayerBotFixtureHuntObservation huntObservation() const;
 			bool startInHunt() const { return policy.startInHunt; }
 			bool remoteHuntScenario() const { return policy.remoteHuntFixture; }
+			PlayerBotFixtureLocalRouteRecovery localRouteRecovery() const;
+			NavigationPreflightFixture navigationPreflightFixture() const { return policy.navigationPreflightFixture; }
+			Position navigationPreflightGoal() const;
 			uint32_t huntPlanningDuration(uint32_t configuredDurationSeconds) const
 			{
 				return playerBotFixtureHuntPlanningDuration(policy.mainlandLoopFixture, configuredDurationSeconds);

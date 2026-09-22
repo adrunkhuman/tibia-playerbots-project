@@ -875,7 +875,9 @@ PlayerBotNavigationRoutePlan PlayerBotController::planNavigationRoute(Player& pl
 		step.topologyPortal = true;
 		routePlan.steps.push_back(step);
 	}
-	if (routePlan.metrics.result != PlayerBotNavigationResult::Reached && travelEligible && topologyRoute) {
+	// A node budget only says this local search was incomplete. It is not evidence
+	// that paying for NPC travel is the right recovery for a transient block.
+	if (playerBotNavigationMayFallbackToNpcTravel(routePlan.metrics.result) && travelEligible && topologyRoute) {
 		if (auto travelRoute = planNpcTravelRoute(player, destination, blockedPositions, maximumExpandedNodes)) {
 			travelRoute->metrics.elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
 				std::chrono::steady_clock::now() - startedAt);
@@ -1412,13 +1414,25 @@ bool PlayerBotController::processNavigation(Player* player, const Position& curr
 	if (outcome.routeRequest) {
 		const uint64_t routeNodeBudget = std::min(outcome.routeRequest->maximumExpandedNodes, maximumExpandedNodes);
 		const PlayerBotFixtureRoutePlan fixturePlan = fixtureDriver.navigationPlan(routeNodeBudget, npcApproach);
+		const PlayerBotFixtureLocalRouteRecovery localRecovery = fixtureDriver.localRouteRecovery();
+		const NavigationPreflightFixture preflightFixture = fixtureDriver.navigationPreflightFixture();
+		std::set<Position> blockedPositions = outcome.routeRequest->blockedPositions;
+		if (localRecovery.enabled) blockedPositions.insert(localRecovery.suppressedPosition);
 		PlayerBotNavigationRoutePlan routePlan;
 		if (fixturePlan.forceFailure) {
 			routePlan.metrics.attempted = true;
 			routePlan.metrics.result = PlayerBotNavigationResult::Unreachable;
 			routePlan.metrics.expandedNodes = outcome.routeRequest->maximumExpandedNodes;
+		} else if (preflightFixture != NavigationPreflightFixture::None) {
+			routePlan.metrics.attempted = true;
+			routePlan.metrics.result = PlayerBotNavigationResult::Reached;
+			routePlan.metrics.steps = 1;
+			routePlan.metrics.fare = preflightFixture == NavigationPreflightFixture::Fare ? 1 : 0;
+			routePlan.metrics.dangerCost = preflightFixture == NavigationPreflightFixture::Risk ? 1001 : 0;
+			routePlan.metrics.maximumHealthLossPerSecond = preflightFixture == NavigationPreflightFixture::Risk ? 1 : 0;
+			routePlan.steps.push_back({PlayerBotNavigationAction::Move, DIRECTION_NONE, currentPosition, currentPosition});
 		} else {
-			routePlan = planNavigationRoute(*player, outcome.routeRequest->goal, outcome.routeRequest->blockedPositions,
+			routePlan = planNavigationRoute(*player, outcome.routeRequest->goal, blockedPositions,
 			                                std::min(fixturePlan.maximumExpandedNodes, routeNodeBudget), sameFloorOnly);
 		}
 		const PlayerBotPendingMovementResult movementResult = outcome.movementResult;
@@ -1431,8 +1445,11 @@ bool PlayerBotController::processNavigation(Player* player, const Position& curr
 	}
 	if (outcome.plan.attempted && !outcome.routeUnavailable &&
 	    !huntTravelFareAffordable(*player, outcome.plan.fare, huntTravelBudgetPhase)) {
+		const PlayerBotNavigationRuntimeOutcome rejection = navigationRuntime.rejectAcceptedPlan();
 		outcome.routeUnavailable = true;
-		navigationRuntime.reset();
+		outcome.fixedTargetRouteFailures = rejection.fixedTargetRouteFailures;
+		outcome.fixedTargetRouteExhausted = rejection.fixedTargetRouteExhausted;
+		outcome.command = rejection.command;
 		if (navigationOutcome) *navigationOutcome = outcome;
 		telemetry.emit("navigation_progress", currentPosition,
 		     "\"result\":\"skipped\",\"reason\":" +
@@ -1444,7 +1461,9 @@ bool PlayerBotController::processNavigation(Player* player, const Position& curr
 		         std::to_string(outcome.plan.fare) + ",\"return_fare_reserve\":" +
 		         std::to_string(huntTravelReturnFareReserve(huntTravelBudgetPhase)) +
 		         ",\"recovery_funds_reserve\":" +
-		         std::to_string(huntTravelRecoveryFundsReserve(*player, huntTravelBudgetPhase)));
+		         std::to_string(huntTravelRecoveryFundsReserve(*player, huntTravelBudgetPhase)) +
+		         ",\"fixed_target_route_failures\":" + std::to_string(outcome.fixedTargetRouteFailures));
+		if (handleFixedTargetRouteExhausted(player, currentPosition, outcome, now, true)) return false;
 		schedule(blockedRouteRetryInterval);
 		return false;
 	}
@@ -1453,8 +1472,11 @@ bool PlayerBotController::processNavigation(Player* player, const Position& curr
 		                                    outcome.plan.maximumHealthLossPerSecond)) {
 			huntCoordinator.clearTransitMovementFallback();
 			outcome.routeUnsafe = true;
+			const PlayerBotNavigationRuntimeOutcome rejection = navigationRuntime.rejectAcceptedPlan();
 			outcome.routeUnavailable = true;
-			navigationRuntime.reset();
+			outcome.fixedTargetRouteFailures = rejection.fixedTargetRouteFailures;
+			outcome.fixedTargetRouteExhausted = rejection.fixedTargetRouteExhausted;
+			outcome.command = rejection.command;
 			if (navigationOutcome) *navigationOutcome = outcome;
 			telemetry.emit("navigation_progress", currentPosition,
 			     "\"result\":\"skipped\",\"reason\":\"route_danger_above_tolerance\",\"destination\":{\"x\":" +
@@ -1462,7 +1484,9 @@ bool PlayerBotController::processNavigation(Player* player, const Position& curr
 			         ",\"z\":" + std::to_string(static_cast<uint16_t>(destination.z)) +
 			         "},\"danger_cost\":" + std::to_string(outcome.plan.dangerCost) +
 			         ",\"maximum_health_loss_per_second\":" +
-			         std::to_string(outcome.plan.maximumHealthLossPerSecond));
+			         std::to_string(outcome.plan.maximumHealthLossPerSecond) +
+			         ",\"fixed_target_route_failures\":" + std::to_string(outcome.fixedTargetRouteFailures));
+			if (handleFixedTargetRouteExhausted(player, currentPosition, outcome, now, true)) return false;
 			schedule(navigationDecisionDelay(*player));
 			return false;
 		}
@@ -1547,6 +1571,7 @@ bool PlayerBotController::processNavigation(Player* player, const Position& curr
 		       << ",\"expanded_nodes\":" << outcome.plan.expandedNodes
 		       << ",\"danger_aware\":" << (outcome.plan.dangerAware ? "true" : "false")
 		       << ",\"movement_cost\":" << outcome.plan.movementCost
+		       << ",\"fare\":" << outcome.plan.fare
 		       << ",\"danger_cost\":" << outcome.plan.dangerCost
 		       << ",\"maximum_health_loss_per_second\":" << outcome.plan.maximumHealthLossPerSecond
 		       << ",\"same_floor\":" << (sameFloorOnly ? "true" : "false")
@@ -1626,6 +1651,27 @@ void PlayerBotController::navigate()
 
 	const Position currentPosition = player->getPosition();
 	lastPosition = currentPosition;
+	const PlayerBotFixtureLocalRouteRecovery localRecovery = fixtureDriver.localRouteRecovery();
+	if (localRecovery.enabled) {
+		PlayerBotNavigationRuntimeOutcome outcome;
+		if (processNavigation(player, currentPosition, localRecovery.destination, &outcome)) {
+			emit("local_route_recovery", currentPosition,
+			     "\"result\":\"reached\",\"suppressed_position\":{\"x\":" +
+			         std::to_string(localRecovery.suppressedPosition.x) + ",\"y\":" +
+			         std::to_string(localRecovery.suppressedPosition.y) + ",\"z\":" +
+			         std::to_string(static_cast<uint16_t>(localRecovery.suppressedPosition.z)) + "}");
+		}
+		return;
+	}
+	const NavigationPreflightFixture preflightFixture = fixtureDriver.navigationPreflightFixture();
+	if (preflightFixture != NavigationPreflightFixture::None) {
+		huntTravelBudgetPhase = HuntTravelBudgetPhase::Supply;
+		const PlayerBotNavigationRiskProfile risk;
+		processNavigation(player, currentPosition, fixtureDriver.navigationPreflightGoal(), nullptr,
+		                  playerBotNavigationMaximumExpandedNodes, false,
+		                  preflightFixture == NavigationPreflightFixture::Risk ? &risk : nullptr);
+		return;
+	}
 	if (const PlayerBotFixtureInitialization initialization = fixtureDriver.delayedInitializationStatus(*player);
 	    initialization != PlayerBotFixtureInitialization::NotPending) {
 		if (initialization == PlayerBotFixtureInitialization::Cancelled) {

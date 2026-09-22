@@ -57,7 +57,9 @@ function F.login.onLogin(player)
         mode == "magic_training_reserve" or mode == "magic_training_failed" or mode == "magic_training_service" or
         mode == "magic_training_progression" or mode == "magic_training_hunt" or mode == "magic_training_pz" or
         mode == "magic_training_exact_full" or mode == "magic_training_restart" or mode == "magic_training_absent" or
-        mode == "magic_training_expired" or mode == "magic_training_post_hunt" or mode == "magic_training_post_hunt_no_overflow",
+        mode == "magic_training_expired" or mode == "magic_training_post_hunt" or mode == "magic_training_post_hunt_no_overflow" or
+        mode == "svargrond_local_route_recovery" or mode == "navigation_fare_rejection" or
+        mode == "navigation_risk_rejection",
         "unknown PLAYERBOT_GAMEPLAY_MODE: " .. mode)
     if mode == "equipment_shadow" or mode == "equipment_shadow_unaffordable" or mode == "equipment_shadow_no_upgrade" or
         mode == "equipment_buy" or mode == "equipment_buy_resume" or mode == "equipment_buy_space" or
@@ -836,6 +838,25 @@ function F.login.onLogin(player)
             mode == "progression_nested_resume" and "PLAYERBOT_GAMEPLAY_TEST PICKUP_PROGRESSION_NESTED_RESUME_START" or
             progressionRestart and "PLAYERBOT_GAMEPLAY_TEST PICKUP_PROGRESSION_RESTART_START" or "PLAYERBOT_GAMEPLAY_TEST PICKUP_PROGRESSION_START"
         print(startMarker)
+        return true
+    end
+    if mode == "navigation_fare_rejection" or mode == "navigation_risk_rejection" then
+        if mode == "navigation_fare_rejection" then
+            assert(player:removeMoney(player:getMoney()) and player:setBankBalance(0),
+                "navigation fare-rejection fixture could not remove funds")
+        end
+        F.suppressNearbyMonsters(player:getId())
+        print("PLAYERBOT_GAMEPLAY_TEST " .. string.upper(mode) .. "_START")
+        return true
+    end
+    if mode == "svargrond_local_route_recovery" then
+        assert(player:setVocation(4), "Svargrond recovery fixture could not select Knight")
+        local requiredExperience = Game.getExperienceForLevel(17) - player:getExperience()
+        if requiredExperience > 0 then player:addExperience(requiredExperience) end
+        assert(player:getLevel() == 17 and player:teleportTo(Position(32251, 31136, 7)),
+            "Svargrond recovery fixture could not reach the incident position")
+        F.suppressNearbyMonsters(player:getId())
+        print("PLAYERBOT_GAMEPLAY_TEST SVARGROND_LOCAL_ROUTE_RECOVERY_START")
         return true
     end
     assert(player:teleportTo(F.depotPosition), "fake depot position could not be restored")

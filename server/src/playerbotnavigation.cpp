@@ -360,6 +360,9 @@ PlayerBotNavigationResult PlayerBotNavigator::planFrom(Player& player, const Pos
 	if (goal.reached(start)) {
 		return PlayerBotNavigationResult::Reached;
 	}
+	if (playerBotNavigationExactGoalBlocked(goal, blockedPositions)) {
+		return PlayerBotNavigationResult::Unreachable;
+	}
 
 	std::priority_queue<QueueNode, std::vector<QueueNode>, std::greater<QueueNode>> open;
 	std::unordered_map<uint64_t, uint32_t> costs;

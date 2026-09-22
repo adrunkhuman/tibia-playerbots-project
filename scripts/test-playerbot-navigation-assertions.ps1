@@ -268,4 +268,33 @@ foreach ($case in @("missing_sale", "wrong_item", "no_money_gain", "unverified_d
     } $expectedMessage
 }
 
+$svargrondReached = @{ event = "local_route_recovery"; result = "reached";
+    position = @{ x = 32232; y = 31076; z = 6 } }
+Assert-SvargrondLocalRouteRecoveryEvents -Logs (ConvertTo-FixtureLogs @($svargrondReached))
+foreach ($paidEvent in @(
+    @{ event = "npc_travel"; result = "success" },
+    @{ event = "action_result"; action = "plan"; result = "success"; fare = 290;
+       destination = @{ x = 32232; y = 31076; z = 6 } }
+)) {
+    Assert-Rejected "Paid route cannot prove local recovery" {
+        Assert-SvargrondLocalRouteRecoveryEvents -Logs (ConvertTo-FixtureLogs @($paidEvent, $svargrondReached))
+    } "Svargrond local route recovery failed."
+}
+foreach ($reason in @("fare_breaks_restock_reserve", "route_danger_above_tolerance")) {
+    $rejections = @(1..20 | ForEach-Object {
+        @{ event = "navigation_progress"; result = "skipped"; reason = $reason;
+           fixed_target_route_failures = $_; sequence = $_ }
+    })
+    $terminal = @{ event = "terminal"; reason = "navigation_route_unavailable"; sequence = 21 }
+    Assert-NavigationPreflightRejectionEvents -Logs (ConvertTo-FixtureLogs ($rejections + @($terminal))) -Reason $reason
+    Assert-Rejected "Post-terminal navigation event" {
+        Assert-NavigationPreflightRejectionEvents -Reason $reason -Logs (ConvertTo-FixtureLogs (
+            $rejections + @($terminal, @{ event = "summary"; sequence = 22 })))
+    } "Navigation $reason preflight rejection was not bounded."
+    $rejections[-1].fixed_target_route_failures = 1
+    Assert-Rejected "Rejection cleared failure memory" {
+        Assert-NavigationPreflightRejectionEvents -Reason $reason -Logs (ConvertTo-FixtureLogs ($rejections + @($terminal)))
+    } "Navigation $reason preflight rejection was not bounded."
+}
+
 "Playerbot navigation assertion regression PASS"

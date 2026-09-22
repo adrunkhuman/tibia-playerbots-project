@@ -88,16 +88,30 @@ function Assert-CarlinLocalServiceEvents {
     $events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
     $purchases = @($events | Where-Object {
         $_.event -eq "action_result" -and $_.action -eq "buy_potions" -and $_.result -eq "success" -and
-        $_.item_id -eq 7618 -and $_.count -eq 9 -and $_.position.x -ge 32340 -and $_.position.x -le 32346 -and
+        $_.item_id -eq 7618 -and $_.count -eq 19 -and $_.bank_before -eq 955 -and $_.bank_after -eq 100 -and
+        $_.position.x -ge 32340 -and $_.position.x -le 32346 -and
         $_.position.y -ge 31825 -and $_.position.y -le 31831 -and $_.position.z -eq 7
 	})
-	$rachelReplies = @($events | Where-Object { $_.event -eq "npc_reply" -and $_.npc_name -eq "Rachel" })
-	$evaReplies = @($events | Where-Object { $_.event -eq "npc_reply" -and $_.npc_name -eq "Eva" })
+	$potionActions = @($events | Where-Object { $_.event -eq "action_result" -and $_.action -eq "buy_potions" })
+	$rachelReplies = @($events | Where-Object {
+		$_.event -eq "npc_reply" -and $_.npc_name -eq "Rachel" -and
+		$_.position.x -ge 32340 -and $_.position.x -le 32346 -and
+		$_.position.y -ge 31825 -and $_.position.y -le 31831 -and $_.position.z -eq 7
+	})
+	$evaReplies = @($events | Where-Object {
+		$_.event -eq "npc_reply" -and $_.npc_name -eq "Eva" -and
+		$_.position.x -ge 32323 -and $_.position.x -le 32329 -and
+		$_.position.y -ge 31777 -and $_.position.y -le 31783 -and $_.position.z -eq 7
+	})
 	$withdrawals = @($events | Where-Object {
 		$_.event -eq "action_result" -and $_.action -eq "bank_withdraw" -and $_.result -eq "success" -and
 		$_.count -eq 100 -and $_.bank_before -eq 100 -and $_.bank_after -eq 0 -and
 		$_.position.x -ge 32323 -and $_.position.x -le 32329 -and
 		$_.position.y -ge 31777 -and $_.position.y -le 31783 -and $_.position.z -eq 7
+	})
+	$withdrawalActions = @($events | Where-Object { $_.event -eq "action_result" -and $_.action -eq "bank_withdraw" })
+	$failedServiceActions = @($events | Where-Object {
+		$_.event -eq "action_result" -and $_.action -in @("buy_potions", "bank_withdraw") -and $_.result -ne "success"
 	})
 	$remoteAttempts = @($events | Where-Object {
 		($_.event -eq "npc_reply" -and $_.npc_name -eq "Xodet") -or
@@ -107,9 +121,9 @@ function Assert-CarlinLocalServiceEvents {
 	})
 	$terminals = @($events | Where-Object { $_.event -eq "terminal" })
 	$sales = @($events | Where-Object { $_.event -eq "action_result" -and $_.action -eq "sell" })
-	if ($purchases.Count -ne 1 -or $rachelReplies.Count -lt 1 -or $evaReplies.Count -lt 1 -or
-		$withdrawals.Count -ne 1 -or $sales.Count -ne 0 -or $remoteAttempts.Count -ne 0 -or $terminals.Count -ne 0) {
-		throw "Carlin service was not completed locally without selling at Rachel and Eva. purchases=$($purchases.Count), rachel=$($rachelReplies.Count), eva=$($evaReplies.Count), withdrawals=$($withdrawals.Count), sales=$($sales.Count), remote=$($remoteAttempts.Count), terminal=$($terminals.Count)."
+	if ($purchases.Count -ne 1 -or $potionActions.Count -ne 1 -or $rachelReplies.Count -lt 1 -or $evaReplies.Count -lt 1 -or
+		$withdrawals.Count -ne 1 -or $withdrawalActions.Count -ne 1 -or $failedServiceActions.Count -ne 0 -or $sales.Count -ne 0 -or $remoteAttempts.Count -ne 0 -or $terminals.Count -ne 0) {
+		throw "Carlin service was not completed locally with the 20-potion stock and exact local receipts. purchases=$($purchases.Count)/$($potionActions.Count), rachel=$($rachelReplies.Count), eva=$($evaReplies.Count), withdrawals=$($withdrawals.Count)/$($withdrawalActions.Count), failed=$($failedServiceActions.Count), sales=$($sales.Count), remote=$($remoteAttempts.Count), terminal=$($terminals.Count)."
 	}
 }
 

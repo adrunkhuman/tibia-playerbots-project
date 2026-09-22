@@ -122,6 +122,11 @@ class PlayerBotFixedTargetFailureTracker
 			++failures;
 			blockedPlanPendingFailure = true;
 		}
+		void observeRejectedAcceptedPlan()
+		{
+			++failures;
+			blockedPlanPendingFailure = false;
+		}
 		void reset()
 		{
 			goalSet = false;
@@ -200,6 +205,7 @@ class PlayerBotNavigationRuntime
 	public:
 		PlayerBotNavigationRuntimeOutcome process(const PlayerBotNavigationRuntimeInput& input);
 		PlayerBotNavigationRuntimeOutcome observePlan(PlayerBotNavigationPlanObservation observation);
+		PlayerBotNavigationRuntimeOutcome rejectAcceptedPlan();
 		PlayerBotNavigationRuntimeOutcome observeStep(const PlayerBotNavigationStepObservation& observation);
 		PlayerBotNavigationRuntimeOutcome observeWorldChange(const PlayerBotNavigationWorldChangeObservation& observation);
 

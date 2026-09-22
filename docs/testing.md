@@ -38,6 +38,7 @@ Run the assertion scripts relevant to the change:
 
 ```powershell
 pwsh -File scripts/test-playerbot-navigation-assertions.ps1
+pwsh -File scripts/test-playerbot-cycle-assertions.ps1
 pwsh -File scripts/test-playerbot-readiness-assertions.ps1
 pwsh -File scripts/test-playerbot-log-parsing.ps1
 pwsh -File scripts/test-playerbot-runtime.ps1
