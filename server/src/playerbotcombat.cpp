@@ -822,15 +822,34 @@ void PlayerBotController::emitHuntRegionCandidate(const PlayerBotHuntRegion& reg
 	       << ",\"projected_experience\":" << region.projectedExperience
 	       << ",\"optimistic_projected_experience\":" << region.optimisticProjectedExperience
 	       << ",\"route_validated\":" << (region.routeValidated ? "true" : "false")
-	       << ",\"supply_estimate_source\":" << jsonString(region.supplyCalibration.samples != 0 ?
-	           "observed_combat_consumption" : "static_duration_budget")
+	       << ",\"supply_estimate_source\":" << jsonString(region.supplyEstimateSource)
+	       << ",\"supply_estimate_reason\":" << jsonString(region.supplyEstimateReason)
+	       << ",\"supply_shared_contributing_areas\":" << region.sharedSupplyEstimate.contributingAreas
+	       << ",\"supply_shared_downward_contributing_areas\":"
+	       << region.sharedSupplyEstimate.downwardContributingAreas
+	       << ",\"supply_shared_weight\":" << region.sharedSupplyEstimate.weight
+	       << ",\"supply_shared_observed_potions_per_combat_minute\":"
+	       << region.sharedSupplyEstimate.observedPotionsPerCombatSecond * 60
+	       << ",\"supply_shared_upward_floor_per_combat_minute\":"
+	       << region.sharedSupplyEstimate.upwardPotionsPerCombatSecond * 60
+	       << ",\"supply_shared_confidence_basis\":\"qualified_source_area_count_bounded_weight\""
+	       << ",\"supply_shared_minimum_safe_samples\":" << playerBotSharedSupplyMinimumSafeSamples
+	       << ",\"supply_shared_minimum_crowd_seconds\":" << playerBotSharedSupplyMinimumCrowdSeconds
+	       << ",\"supply_shared_minimum_crowd_ratio\":" << playerBotSharedSupplyMinimumCrowdRatio
+	       << ",\"supply_target_modeled_attacker_overlap\":"
+	       << static_cast<uint16_t>(region.modeledMaximumAttackerOverlap)
+	       << ",\"supply_shared_minimum_attacker_coverage\":"
+	       << static_cast<uint16_t>(region.sharedSupplyEstimate.minimumObservedAttackerCoverage)
+	       << ",\"supply_shared_minimum_attacker_coverage_seconds\":"
+	       << region.sharedSupplyEstimate.minimumObservedAttackerCoverageSeconds
 	       << ",\"supply_budget_fits\":" << (region.supplyBudget.fits ? "true" : "false")
 	       << ",\"supply_expected_damage\":" << region.supplyBudget.expectedDamage
 	       << ",\"supply_regeneration_healing\":" << region.supplyBudget.regenerationHealing
 	       << ",\"supply_spell_healing\":" << region.supplyBudget.spellHealing
 	       << ",\"supply_expected_potions\":" << region.supplyBudget.expectedPotions
 	       << ",\"supply_calibration_samples\":" << region.supplyCalibration.samples
-	       << ",\"supply_potions_per_combat_minute\":" << region.supplyCalibration.potionsPerCombatSecond * 60
+	       << ",\"supply_potions_per_combat_minute\":"
+	       << region.supplyAppliedPotionsPerCombatSecond * 60
 	       << ",\"supply_reserved_potions\":" << region.supplyBudget.reservedPotions
 	       << ",\"supply_routine_potions\":" << region.supplyBudget.routinePotions
 	       << ",\"threat_ratio\":" << region.threatRatio
@@ -943,6 +962,31 @@ void PlayerBotController::finishHuntRegion(const Player& player, const Position&
 	       << ",\"updated_observed_correction\":" << completion->performance.updatedCorrection
 	       << ",\"performance_observed\":" << (completion->performance.observed ? "true" : "false")
 	       << ",\"performance_evidence_reason\":" << jsonString(completion->performance.evidenceReason)
+	       << ",\"supply_estimate_source\":" << jsonString(completion->region.supplyEstimateSource)
+	       << ",\"supply_estimate_reason\":" << jsonString(completion->region.supplyEstimateReason)
+	       << ",\"supply_shared_contributing_areas\":"
+	       << completion->region.sharedSupplyEstimate.contributingAreas
+	       << ",\"supply_shared_downward_contributing_areas\":"
+	       << completion->region.sharedSupplyEstimate.downwardContributingAreas
+	       << ",\"supply_shared_weight\":" << completion->region.sharedSupplyEstimate.weight
+	       << ",\"supply_shared_observed_potions_per_combat_minute\":"
+	       << completion->region.sharedSupplyEstimate.observedPotionsPerCombatSecond * 60
+	       << ",\"supply_shared_upward_floor_per_combat_minute\":"
+	       << completion->region.sharedSupplyEstimate.upwardPotionsPerCombatSecond * 60
+	       << ",\"supply_shared_confidence_basis\":\"qualified_source_area_count_bounded_weight\""
+	       << ",\"supply_shared_minimum_safe_samples\":" << playerBotSharedSupplyMinimumSafeSamples
+	       << ",\"supply_shared_minimum_crowd_seconds\":" << playerBotSharedSupplyMinimumCrowdSeconds
+	       << ",\"supply_shared_minimum_crowd_ratio\":" << playerBotSharedSupplyMinimumCrowdRatio
+	       << ",\"supply_target_modeled_attacker_overlap\":"
+	       << static_cast<uint16_t>(completion->region.modeledMaximumAttackerOverlap)
+	       << ",\"supply_shared_minimum_attacker_coverage\":"
+	       << static_cast<uint16_t>(completion->region.sharedSupplyEstimate.minimumObservedAttackerCoverage)
+	       << ",\"supply_shared_minimum_attacker_coverage_seconds\":"
+	       << completion->region.sharedSupplyEstimate.minimumObservedAttackerCoverageSeconds
+	       << ",\"supply_observed_attacker_coverage\":"
+	       << static_cast<uint16_t>(completion->supplyObservation.observedAttackerCoverage)
+	       << ",\"supply_observed_attacker_coverage_seconds\":"
+	       << completion->supplyObservation.observedAttackerCoverageSeconds
 	       << ",\"supply_observation_accepted\":" << (completion->supplyObservation.accepted ? "true" : "false")
 	       << ",\"supply_observation_reason\":" << jsonString(completion->supplyObservation.reason)
 	       << ",\"supply_capability_changed_fields\":"
@@ -953,7 +997,10 @@ void PlayerBotController::finishHuntRegion(const Player& player, const Position&
 	       << jsonString(playerBotSupplyEstimateDirectionName(completion->supplyObservation.estimateDirection))
 	       << ",\"supply_observation_samples\":" << completion->supplyObservation.calibration.samples
 	       << ",\"supply_calibration_samples\":" << completion->region.supplyCalibration.samples
-	       << ",\"supply_potions_per_combat_minute\":" << completion->region.supplyCalibration.potionsPerCombatSecond * 60
+	       << ",\"supply_potions_per_combat_minute\":"
+	       << completion->region.supplyAppliedPotionsPerCombatSecond * 60
+	       << ",\"supply_observation_updated_potions_per_combat_minute\":"
+	       << completion->supplyObservation.calibration.potionsPerCombatSecond * 60
 	       << ",\"kills\":" << combat.kills << ",\"damage_taken\":" << combat.damageTaken
 	       << ",\"active_combat_seconds\":" << combat.activeSeconds
 	       << ",\"active_combat_uptime\":" << (completion->durationSeconds == 0 ? 0 : combat.activeSeconds / completion->durationSeconds)

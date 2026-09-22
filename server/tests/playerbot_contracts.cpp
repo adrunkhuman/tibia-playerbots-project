@@ -1094,6 +1094,233 @@ void supplyCalibration()
 	assert(!recovery.supplyBudget.fits);
 }
 
+void sharedSupplyCalibration()
+{
+	auto capability = [] {
+		PlayerBotHuntPlanningProfile profile;
+		profile.combat.level = 20;
+		profile.combat.maximumHealth = 200;
+		profile.combat.armor = 20;
+		profile.combat.defense = 30;
+		profile.combat.attack = 20;
+		profile.combat.attackSkill = 50;
+		profile.supply.maximumMana = 100;
+		profile.supply.potionHealing = 125;
+		profile.equipmentItemIds[5] = 2383;
+		return playerBotSupplyCapability(profile);
+	}();
+	auto region = [&](uint64_t variant, const char* species) {
+		PlayerBotHuntRegion value;
+		value.atlasVariantId = variant;
+		value.atlasSiteId = 1000 + variant;
+		value.atlasRevision = 7;
+		value.supplyCapability = capability;
+		value.currentHealth = value.maximumHealth = 200;
+		value.supplyProfile.maximumMana = value.supplyProfile.mana = 100;
+		value.supplyProfile.potionHealing = 125;
+		value.supplyProfile.potions = 20;
+		value.availableHuntSeconds = 120;
+		value.combatFraction = 0.5;
+		value.supplyBudget.expectedPotions = 4;
+		value.modeledMaximumAttackerOverlap = 1;
+		PlayerBotHuntMonsterProfile monster;
+		monster.name = species;
+		value.monsters.push_back(monster);
+		return value;
+	};
+	auto safeOuting = [&](PlayerBotHuntPolicy& policy, const PlayerBotHuntRegion& value,
+	                      uint32_t attackers) {
+		policy.resetCombatEvidence();
+		policy.observeCombat({true, 60, 200, 200, 100, 100, attackers});
+		for (unsigned kill = 0; kill < 3; ++kill) policy.observeKill();
+		return policy.observeSupplies(value, capability, 120, 200, 200, 100, 20, false);
+	};
+
+	PlayerBotHuntPolicy sourcePolicy;
+	PlayerBotHuntRegion source = region(1, "Troll");
+	for (unsigned outing = 0; outing < 2; ++outing) {
+		sourcePolicy.resetCombatEvidence();
+		// A zero-duration peak does not qualify three-attacker transfer.
+		sourcePolicy.observeCombat({true, 0, 200, 200, 100, 100, 3});
+		sourcePolicy.observeCombat({true, 60, 200, 200, 100, 100, 1});
+		for (unsigned kill = 0; kill < 3; ++kill) sourcePolicy.observeKill();
+		const auto observed = sourcePolicy.observeSupplies(
+		    source, capability, 120, 200, 200, 100, 20, false);
+		assert(observed.accepted);
+	}
+	auto performance = sourcePolicy.regionPerformance();
+	const auto& sourceEvidence = performance.at(1);
+	assert(sourceEvidence.supplySafeSamples == 2);
+	assert(sourceEvidence.supplyAttackerCoverage == 1);
+	assert(sourceEvidence.supplyAttackerCoverageSeconds == 60);
+
+	PlayerBotHuntRegion target = region(2, "Troll");
+	target.expectedDamagePerSecond = 5;
+	target.sharedSupplyEstimate = playerBotSharedSupplyEstimateForRegion(target, performance);
+	assert(target.sharedSupplyEstimate.available);
+	assert(target.sharedSupplyEstimate.contributingAreas == 1);
+	assert(std::abs(target.sharedSupplyEstimate.weight - 1.0 / 3.0) < 1e-12);
+	PlayerBotHuntRegion staticTarget = target;
+	staticTarget.sharedSupplyEstimate = {};
+	staticTarget.reconcileSupplies(1);
+	target.reconcileSupplies(1);
+	assert(std::string(target.supplyEstimateSource) == "shared");
+	assert(target.supplyAppliedPotionsPerCombatSecond < staticTarget.supplyAppliedPotionsPerCombatSecond);
+
+	// Repeated outings in one area improve that area's evidence but remain one vote.
+	performance.at(1).supplySafeSamples = 20;
+	performance.at(1).supply.samples = 20;
+	assert(playerBotSharedSupplyEstimateForRegion(target, performance).contributingAreas == 1);
+	// Overlapping atlas variants from one physical site remain one conservative
+	// area vote. A genuinely separate site adds one independent vote.
+	auto overlappingPerformance = performance;
+	auto overlappingVariant = performance.at(1);
+	overlappingVariant.supply.potionsPerCombatSecond *= 1.5;
+	overlappingPerformance.emplace(11, overlappingVariant);
+	assert(overlappingPerformance.at(1).supply.potionsPerCombatSecond !=
+	       overlappingPerformance.at(11).supply.potionsPerCombatSecond);
+	const auto overlappingEstimate = playerBotSharedSupplyEstimateForRegion(target, overlappingPerformance);
+	assert(overlappingEstimate.contributingAreas == 1);
+	assert(overlappingEstimate.downwardContributingAreas == 1);
+	assert(overlappingEstimate.weight == 1.0 / 3.0);
+	assert(overlappingEstimate.observedPotionsPerCombatSecond ==
+	       overlappingVariant.supply.potionsPerCombatSecond);
+	auto separateSitesPerformance = overlappingPerformance;
+	auto separateSite = performance.at(1);
+	separateSite.supplyAtlasSiteId = 2000;
+	separateSitesPerformance.emplace(12, separateSite);
+	const auto separateSitesEstimate = playerBotSharedSupplyEstimateForRegion(target, separateSitesPerformance);
+	assert(separateSitesEstimate.contributingAreas == 2);
+	assert(separateSitesEstimate.downwardContributingAreas == 2);
+	assert(separateSitesEstimate.weight == 0.5);
+
+	PlayerBotHuntRegion mixed = target;
+	PlayerBotHuntMonsterProfile wolf;
+	wolf.name = "Wolf";
+	mixed.monsters.push_back(wolf);
+	const auto mixedEstimate = playerBotSharedSupplyEstimateForRegion(mixed, performance);
+	assert(!mixedEstimate.available && std::string(mixedEstimate.reason) == "composition_not_single_species");
+	PlayerBotHuntRegion different = region(3, "Rotworm");
+	assert(!playerBotSharedSupplyEstimateForRegion(different, performance).available);
+	PlayerBotHuntRegion crowded = target;
+	crowded.modeledMaximumAttackerOverlap = 2;
+	const auto crowdedEstimate = playerBotSharedSupplyEstimateForRegion(crowded, performance);
+	assert(!crowdedEstimate.available &&
+	       std::string(crowdedEstimate.reason) == "shared_crowd_coverage_insufficient");
+
+	// Every safe sample that lowers the rate also constrains that rate's crowd
+	// coverage. Later low-crowd evidence cannot retain an earlier maximum.
+	PlayerBotHuntPolicy coupledPolicy;
+	PlayerBotHuntRegion coupledSource = region(12, "Troll");
+	assert(safeOuting(coupledPolicy, coupledSource, 2).accepted);
+	const auto coupledHigh = safeOuting(coupledPolicy, coupledSource, 2);
+	const double highCoverageRate = coupledHigh.calibration.potionsPerCombatSecond;
+	const auto coupledLow = safeOuting(coupledPolicy, coupledSource, 1);
+	assert(coupledLow.calibration.potionsPerCombatSecond < highCoverageRate);
+	const auto coupledPerformance = coupledPolicy.regionPerformance();
+	assert(coupledPerformance.at(12).supplySafeSamples == 3);
+	assert(coupledPerformance.at(12).supplyAttackerCoverage == 1);
+	PlayerBotHuntRegion coupledTarget = region(13, "Troll");
+	coupledTarget.modeledMaximumAttackerOverlap = 2;
+	assert(!playerBotSharedSupplyEstimateForRegion(coupledTarget, coupledPerformance).available);
+
+	// Danger clears pre-danger downward confidence. Its upward floor transfers
+	// without crowd qualification, while cheaper transfer needs two new safe
+	// samples whose minimum coverage reaches the target.
+	PlayerBotHuntPolicy dangerPolicy;
+	PlayerBotHuntRegion dangerSource = region(14, "Troll");
+	assert(safeOuting(dangerPolicy, dangerSource, 2).accepted);
+	assert(safeOuting(dangerPolicy, dangerSource, 2).accepted);
+	dangerPolicy.resetCombatEvidence();
+	dangerPolicy.observeCombat({true, 60, 50, 200, 100, 100, 0});
+	for (unsigned potion = 0; potion < 10; ++potion) dangerPolicy.observeRecovery(true);
+	const auto danger = dangerPolicy.observeSupplies(
+	    dangerSource, capability, 120, 50, 200, 100, 20, false);
+	assert(danger.accepted);
+	auto dangerPerformance = dangerPolicy.regionPerformance();
+	assert(dangerPerformance.at(14).supplySafeSamples == 0);
+	assert(dangerPerformance.at(14).supplyAttackerCoverage == 0);
+	assert(dangerPerformance.at(14).supplyUpwardEvidence);
+	PlayerBotHuntRegion dangerTarget = region(15, "Troll");
+	dangerTarget.modeledMaximumAttackerOverlap = 5;
+	auto dangerShared = playerBotSharedSupplyEstimateForRegion(dangerTarget, dangerPerformance);
+	assert(dangerShared.available && dangerShared.downwardContributingAreas == 0);
+	assert(dangerShared.upwardPotionsPerCombatSecond == danger.calibration.potionsPerCombatSecond);
+	assert(safeOuting(dangerPolicy, dangerSource, 5).accepted);
+	dangerPerformance = dangerPolicy.regionPerformance();
+	assert(dangerPerformance.at(14).supplySafeSamples == 1);
+	assert(playerBotSharedSupplyEstimateForRegion(dangerTarget, dangerPerformance).downwardContributingAreas == 0);
+	assert(safeOuting(dangerPolicy, dangerSource, 5).accepted);
+	dangerPerformance = dangerPolicy.regionPerformance();
+	dangerShared = playerBotSharedSupplyEstimateForRegion(dangerTarget, dangerPerformance);
+	assert(dangerShared.downwardContributingAreas == 1);
+	assert(dangerShared.minimumObservedAttackerCoverage == 5);
+
+	// The first local sample refines the already-applied shared prior.
+	PlayerBotHuntPolicy localPolicy;
+	localPolicy.observeCombat({true, 60, 200, 200, 100, 100, 1});
+	for (unsigned kill = 0; kill < 3; ++kill) localPolicy.observeKill();
+	const double sharedPrior = target.supplyAppliedPotionsPerCombatSecond;
+	const auto local = localPolicy.observeSupplies(target, capability, 120, 200, 200, 100, 20, false);
+	assert(local.accepted && local.calibration.samples == 1);
+	assert(std::abs(local.calibration.potionsPerCombatSecond - sharedPrior * 0.8) < 1e-12);
+	target.supplyCalibration = local.calibration;
+	target.reconcileSupplies(1);
+	assert(std::string(target.supplyEstimateSource) == "local");
+
+	// One unsafe compatible area contributes immediately and is an upward floor,
+	// not another value averaged away by cheaper safe areas.
+	PlayerBotHuntPolicy unsafePolicy;
+	PlayerBotHuntRegion unsafeSource = region(4, "Troll");
+	unsafePolicy.observeCombat({true, 60, 50, 200, 100, 100, 0});
+	for (unsigned potion = 0; potion < 10; ++potion) unsafePolicy.observeRecovery(true);
+	const auto unsafe = unsafePolicy.observeSupplies(
+	    unsafeSource, capability, 120, 50, 200, 100, 20, false);
+	assert(unsafe.accepted);
+	const auto unsafePerformance = unsafePolicy.regionPerformance();
+	assert(unsafePerformance.at(4).supplyUpwardEvidence);
+	assert(unsafePerformance.at(4).supplyAttackerCoverage == 0);
+	performance.emplace(4, unsafePerformance.at(4));
+	PlayerBotHuntRegion raised = region(5, "Troll");
+	raised.expectedDamagePerSecond = 5;
+	raised.sharedSupplyEstimate = playerBotSharedSupplyEstimateForRegion(raised, performance);
+	raised.reconcileSupplies(1);
+	assert(raised.sharedSupplyEstimate.contributingAreas == 2);
+	assert(raised.sharedSupplyEstimate.downwardContributingAreas == 1);
+	assert(raised.supplyAppliedPotionsPerCombatSecond >= unsafe.calibration.potionsPerCombatSecond);
+
+	PlayerBotHuntRegion stale = region(6, "Troll");
+	stale.atlasRevision = 8;
+	assert(!playerBotSharedSupplyEstimateForRegion(stale, performance).available);
+	PlayerBotHuntRegion incompatible = region(7, "Troll");
+	incompatible.supplyCapability.equipmentItemIds[5] = 2395;
+	assert(!playerBotSharedSupplyEstimateForRegion(incompatible, performance).available);
+
+	// Shared supply can change the supply tier only; ordinary safety and route
+	// eligibility remain authoritative in ranking.
+	PlayerBotHuntRegion safe = raised;
+	safe.atlasVariantId = 8;
+	safe.suitable = safe.reachable = true;
+	safe.score = 10;
+	PlayerBotHuntRegion lethal = raised;
+	lethal.atlasVariantId = 9;
+	lethal.suitable = false;
+	lethal.reachable = true;
+	lethal.predictedLethal = true;
+	lethal.score = 1000;
+	assert(selectRuntimeHunt({lethal, safe}).atlasVariantId == safe.atlasVariantId);
+	PlayerBotHuntRegion unreachable = raised;
+	unreachable.atlasVariantId = 10;
+	unreachable.suitable = true;
+	unreachable.reachable = false;
+	unreachable.score = 1000;
+	assert(selectRuntimeHunt({unreachable, safe}).atlasVariantId == safe.atlasVariantId);
+	PlayerBotHuntRegion reserveBound = raised;
+	reserveBound.supplyProfile.potions = reserveBound.supplyProfile.reserve = 1;
+	reserveBound.reconcileSupplies(1);
+	assert(!reserveBound.supplyBudget.fits);
+}
+
 void sharedHuntPerformanceCalibration()
 {
 	auto reliableSample = [](uint64_t experience) {
@@ -1867,6 +2094,7 @@ int main()
 	sharedHuntPerformanceCalibration();
 	supplyRecoveryMode();
 	supplyCalibration();
+	sharedSupplyCalibration();
 	navigationFixedObjective();
 	topologyComponentCompression();
 	fixtureHuntHorizons();

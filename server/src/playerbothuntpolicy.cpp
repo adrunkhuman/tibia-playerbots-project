@@ -8,6 +8,8 @@
 #include <algorithm>
 #include <cmath>
 #include <numeric>
+#include <tuple>
+#include <utility>
 
 namespace {
 	constexpr double minimumChallengeFrontier = 0.10;
@@ -27,6 +29,23 @@ namespace {
 	constexpr uint32_t minimumPerformanceKills = 3;
 	constexpr uint32_t minimumPerformanceOutingSeconds = 120;
 	constexpr auto dangerObservationWindow = std::chrono::minutes(2);
+
+	std::pair<uint8_t, double> qualifiedSupplyCrowdCoverage(const PlayerBotHuntCombatSummary& combat)
+	{
+		uint8_t coverage = 0;
+		double coverageSeconds = 0;
+		for (std::size_t attackers = 1; attackers < combat.attackerExposureSeconds.size(); ++attackers) {
+			double seconds = 0;
+			for (std::size_t bin = attackers; bin < combat.attackerExposureSeconds.size(); ++bin) {
+				seconds += combat.attackerExposureSeconds[bin];
+			}
+			if (seconds < playerBotSharedSupplyMinimumCrowdSeconds ||
+			    seconds < combat.activeSeconds * playerBotSharedSupplyMinimumCrowdRatio) break;
+			coverage = static_cast<uint8_t>(attackers);
+			coverageSeconds = seconds;
+		}
+		return {coverage, coverageSeconds};
+	}
 }
 
 const char* playerBotHuntChallengeResultName(PlayerBotHuntChallengeResult result)
@@ -67,6 +86,8 @@ void PlayerBotHuntPolicy::observeCombat(const PlayerBotHuntCombatSample& sample)
 	++evidence.healthPercentSamples[healthPercent];
 	++evidence.manaPercentSamples[manaPercent];
 	evidence.maximumAttackerOverlap = std::max(evidence.maximumAttackerOverlap, sample.attackers);
+	evidence.attackerExposureSeconds[std::min<std::size_t>(sample.attackers, evidence.attackerExposureSeconds.size() - 1)] +=
+	    std::max(0.0, sample.elapsedSeconds);
 }
 
 void PlayerBotHuntPolicy::sampleCombat(const PlayerBotHuntCombatSnapshot& snapshot)
@@ -122,6 +143,7 @@ PlayerBotHuntCombatSummary PlayerBotHuntPolicy::combatSummary() const
 	summary.potionRecoveries = evidence.potionRecoveries;
 	summary.spellRecoveries = evidence.spellRecoveries;
 	summary.maximumAttackerOverlap = evidence.maximumAttackerOverlap;
+	summary.attackerExposureSeconds = evidence.attackerExposureSeconds;
 	summary.minimumHealth = evidence.minimumHealth;
 	summary.minimumMana = evidence.minimumMana;
 	summary.dangerObserved = evidence.dangerObserved;
@@ -202,6 +224,8 @@ PlayerBotSupplyObservation PlayerBotHuntPolicy::observeSupplies(const PlayerBotH
 	history.atlasRevision = region.atlasRevision;
 	auto& learned = history.supply;
 	PlayerBotSupplyObservation update;
+	std::tie(update.observedAttackerCoverage, update.observedAttackerCoverageSeconds) =
+	    qualifiedSupplyCrowdCoverage(combat);
 	if (const auto applicable = playerBotSupplyCalibrationForCapability(learned, capabilityAfter)) {
 		update.calibration = *applicable;
 	}
@@ -234,6 +258,7 @@ PlayerBotSupplyObservation PlayerBotHuntPolicy::observeSupplies(const PlayerBotH
 	const auto compatibleHistory = playerBotSupplyCalibrationForCapability(learned, region.supplyCapability);
 	const double exposure = region.availableHuntSeconds * std::clamp(region.combatFraction, 0.0, 1.0);
 	const double prior = compatibleHistory ? compatibleHistory->potionsPerCombatSecond :
+	    region.sharedSupplyEstimate.available ? region.supplyAppliedPotionsPerCombatSecond :
 	    exposure > 0 ? region.supplyBudget.expectedPotions / exposure : 0;
 	const double observed = combat.potionRecoveries / combat.activeSeconds;
 	const bool depleted = region.supplyProfile.potions > 0 && potions == 0;
@@ -267,6 +292,46 @@ PlayerBotSupplyObservation PlayerBotHuntPolicy::observeSupplies(const PlayerBotH
 	candidate.capabilityHash = playerBotSupplyCapabilityHash(capabilityAfter);
 	candidate.potionsPerCombatSecond = prior;
 	candidate.samples = compatibleHistory ? compatibleHistory->samples : 0;
+	auto recordTransferEvidence = [&](bool safeEvidence, bool upwardEvidence) {
+		const std::string species = region.monsters.size() == 1 ? region.monsters.front().name : std::string();
+		const bool retain = compatibleHistory && !species.empty() && history.supplySpecies == species &&
+		    history.supplyAtlasSiteId == region.atlasSiteId;
+		if (!retain) {
+			history.supplySpecies.clear();
+			history.supplyAtlasSiteId = 0;
+			history.supplySafeSamples = 0;
+			history.supplyAttackerCoverage = 0;
+			history.supplyAttackerCoverageSeconds = 0;
+			history.supplyUpwardEvidence = false;
+		}
+		if (species.empty()) return;
+		history.supplySpecies = species;
+		history.supplyAtlasSiteId = region.atlasSiteId;
+		if (upwardEvidence) {
+			// Danger or higher demand starts a new downward-evidence window. The
+			// raised local rate remains, but pre-danger safe samples cannot make it
+			// immediately transferable as a cheaper shared estimate.
+			history.supplySafeSamples = 0;
+			history.supplyAttackerCoverage = 0;
+			history.supplyAttackerCoverageSeconds = 0;
+			history.supplyUpwardEvidence = true;
+			return;
+		}
+		if (!safeEvidence) return;
+		if (history.supplySafeSamples == 0) {
+			history.supplyAttackerCoverage = update.observedAttackerCoverage;
+			history.supplyAttackerCoverageSeconds = update.observedAttackerCoverageSeconds;
+		} else if (update.observedAttackerCoverage < history.supplyAttackerCoverage) {
+			history.supplyAttackerCoverage = update.observedAttackerCoverage;
+			history.supplyAttackerCoverageSeconds = update.observedAttackerCoverageSeconds;
+		} else {
+			// A higher-coverage sample also covers the retained lower bound. Its
+			// qualified seconds are a conservative lower bound for that overlap.
+			history.supplyAttackerCoverageSeconds = std::min(
+			    history.supplyAttackerCoverageSeconds, update.observedAttackerCoverageSeconds);
+		}
+		++history.supplySafeSamples;
+	};
 
 	// Upward evidence may cross a food-context boundary when every non-food
 	// capability remains compatible. Preserve both the prior and the static
@@ -280,6 +345,7 @@ PlayerBotSupplyObservation PlayerBotHuntPolicy::observeSupplies(const PlayerBotH
 		if (unsafe) candidate.potionsPerCombatSecond = std::max(candidate.potionsPerCombatSecond, 1.0 / 60.0);
 		++candidate.samples;
 		learned = candidate;
+		recordTransferEvidence(false, true);
 		update.calibration = learned;
 		update.accepted = true;
 		update.estimateDirection = estimateDirection(prior, candidate.potionsPerCombatSecond);
@@ -314,6 +380,7 @@ PlayerBotSupplyObservation PlayerBotHuntPolicy::observeSupplies(const PlayerBotH
 	if (observed == 0 && candidate.samples >= 3 && candidate.potionsPerCombatSecond * exposure < 1)
 		candidate.potionsPerCombatSecond = 0;
 	learned = candidate;
+	recordTransferEvidence(true, false);
 	update.calibration = learned;
 	update.accepted = true;
 	update.estimateDirection = estimateDirection(prior, candidate.potionsPerCombatSecond);

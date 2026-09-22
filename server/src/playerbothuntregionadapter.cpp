@@ -516,6 +516,8 @@ namespace {
 				return left.damagePerSecond > right.damagePerSecond;
 			});
 			const size_t attackers = std::min(maximumModeledAttackers, localAttackers.size());
+			region.modeledMaximumAttackerOverlap = std::max<uint8_t>(
+			    region.modeledMaximumAttackerOverlap, static_cast<uint8_t>(attackers));
 			double remainingDamagePerSecond = 0;
 			for (size_t index = 0; index < attackers; ++index) remainingDamagePerSecond += localAttackers[index].damagePerSecond;
 			double fightDamage = 0;
@@ -630,6 +632,7 @@ namespace {
 			(void)name;
 			region.monsters.push_back(std::move(monsterProfile));
 		}
+		region.sharedSupplyEstimate = playerBotSharedSupplyEstimateForRegion(region, performance);
 		const uint32_t geometricDistance = Position::getDistanceX(player.getPosition(), region.destination) +
 		                                   Position::getDistanceY(player.getPosition(), region.destination) +
 		                                   Position::getDistanceZ(player.getPosition(), region.destination) * 20;

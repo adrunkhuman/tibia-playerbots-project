@@ -20,6 +20,7 @@ struct PlayerBotHuntCombatEvidence {
 	uint32_t potionRecoveries = 0;
 	uint32_t spellRecoveries = 0;
 	uint32_t maximumAttackerOverlap = 0;
+	std::array<double, 6> attackerExposureSeconds{};
 	int32_t minimumHealth = std::numeric_limits<int32_t>::max();
 	uint32_t minimumMana = std::numeric_limits<uint32_t>::max();
 	bool dangerObserved = false;

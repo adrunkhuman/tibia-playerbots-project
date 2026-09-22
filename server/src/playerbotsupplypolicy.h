@@ -261,6 +261,8 @@ struct PlayerBotSupplyObservation {
 	uint64_t changedFields = 0;
 	PlayerBotSupplyCapabilityDirection direction = PlayerBotSupplyCapabilityDirection::Unchanged;
 	PlayerBotSupplyEstimateDirection estimateDirection = PlayerBotSupplyEstimateDirection::None;
+	uint8_t observedAttackerCoverage = 0;
+	double observedAttackerCoverageSeconds = 0;
 	const char* reason = "insufficient_evidence";
 	bool accepted = false;
 };

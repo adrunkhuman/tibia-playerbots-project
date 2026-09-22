@@ -122,6 +122,19 @@ struct PlayerBotHuntCorridorDanger {
 	double dangerRatio = 0;
 };
 
+struct PlayerBotSharedSupplyEstimate {
+	double observedPotionsPerCombatSecond = 0;
+	double upwardPotionsPerCombatSecond = 0;
+	double weight = 0;
+	uint32_t contributingAreas = 0;
+	uint32_t downwardContributingAreas = 0;
+	uint8_t targetAttackerOverlap = 0;
+	uint8_t minimumObservedAttackerCoverage = 0;
+	double minimumObservedAttackerCoverageSeconds = 0;
+	const char* reason = "no_shared_evidence";
+	bool available = false;
+};
+
 struct PlayerBotHuntRegion {
 	uint32_t id = 0;
 	uint64_t atlasSiteId = 0;
@@ -171,9 +184,14 @@ struct PlayerBotHuntRegion {
 	PlayerBotSupplyProfile supplyProfile;
 	PlayerBotSupplyBudget supplyBudget;
 	PlayerBotSupplyCalibration supplyCalibration;
+	PlayerBotSharedSupplyEstimate sharedSupplyEstimate;
 	PlayerBotSupplyCapabilitySnapshot supplyCapability;
+	const char* supplyEstimateSource = "static";
+	const char* supplyEstimateReason = "static_duration_budget";
+	double supplyAppliedPotionsPerCombatSecond = 0;
 	double expectedDamagePerSecond = 0;
 	double combatFraction = 0;
+	uint8_t modeledMaximumAttackerOverlap = 0;
 	uint32_t returnRouteDangerCost = 0;
 	double recoveryRouteHealthLoss = 0;
 	uint64_t outboundFare = 0;
@@ -238,9 +256,27 @@ struct PlayerBotHuntRegion {
 			supplyBudget.fits = supplyBudget.expectedPotions == 0 &&
 			    recoveryRouteHealthLoss <= currentHealth - maximumHealth * 0.8;
 		}
+		const double exposure = availableHuntSeconds * std::clamp(combatFraction, 0.0, 1.0);
+		supplyEstimateSource = "static";
+		supplyEstimateReason = sharedSupplyEstimate.reason;
+		supplyAppliedPotionsPerCombatSecond = exposure > 0 ? supplyBudget.expectedPotions / exposure : 0;
+		bool observedEstimate = false;
 		if (playerBotSupplyCalibrationForCapability(supplyCalibration, supplyCapability)) {
-			supplyBudget.expectedPotions = std::ceil(supplyCalibration.potionsPerCombatSecond *
-			    availableHuntSeconds * std::clamp(combatFraction, 0.0, 1.0));
+			observedEstimate = true;
+			supplyEstimateSource = "local";
+			supplyEstimateReason = "local_variant_evidence";
+			supplyAppliedPotionsPerCombatSecond = supplyCalibration.potionsPerCombatSecond;
+		} else if (sharedSupplyEstimate.available) {
+			observedEstimate = true;
+			supplyEstimateSource = "shared";
+			supplyEstimateReason = sharedSupplyEstimate.reason;
+			const double sharedRate = supplyAppliedPotionsPerCombatSecond * (1 - sharedSupplyEstimate.weight) +
+			    sharedSupplyEstimate.observedPotionsPerCombatSecond * sharedSupplyEstimate.weight;
+			supplyAppliedPotionsPerCombatSecond = std::max(
+			    sharedRate, sharedSupplyEstimate.upwardPotionsPerCombatSecond);
+		}
+		if (observedEstimate) {
+			supplyBudget.expectedPotions = std::ceil(supplyAppliedPotionsPerCombatSecond * exposure);
 			supplyBudget.fits = (supplyRecovery && supplyBudget.expectedPotions == 0 &&
 			    recoveryRouteHealthLoss <= currentHealth - maximumHealth * 0.8) ||
 			    ((supplyProfile.potions > reserve || reserve == 0) &&
@@ -248,6 +284,10 @@ struct PlayerBotHuntRegion {
 		}
 	}
 };
+
+inline constexpr uint32_t playerBotSharedSupplyMinimumSafeSamples = 2;
+inline constexpr double playerBotSharedSupplyMinimumCrowdSeconds = 30;
+inline constexpr double playerBotSharedSupplyMinimumCrowdRatio = 0.25;
 
 struct PlayerBotHuntRegionPerformance {
 	double observedExperiencePerMinute = 0;
@@ -257,7 +297,116 @@ struct PlayerBotHuntRegionPerformance {
 	uint64_t atlasRevision = 0;
 	bool reliable = false;
 	PlayerBotSupplyCalibration supply;
+	std::string supplySpecies{};
+	uint64_t supplyAtlasSiteId = 0;
+	uint32_t supplySafeSamples = 0;
+	uint8_t supplyAttackerCoverage = 0;
+	double supplyAttackerCoverageSeconds = 0;
+	bool supplyUpwardEvidence = false;
 };
+
+inline PlayerBotSharedSupplyEstimate playerBotSharedSupplyEstimateForRegion(
+    const PlayerBotHuntRegion& target,
+    const std::map<uint64_t, PlayerBotHuntRegionPerformance>& performance)
+{
+	PlayerBotSharedSupplyEstimate result;
+	result.targetAttackerOverlap = target.modeledMaximumAttackerOverlap;
+	if (target.monsters.size() != 1) {
+		result.reason = "composition_not_single_species";
+		return result;
+	}
+	if (target.modeledMaximumAttackerOverlap == 0) {
+		result.reason = "target_crowd_unmodeled";
+		return result;
+	}
+	bool matchingSpecies = false;
+	bool matchingRevision = false;
+	bool compatibleCapability = false;
+	bool qualifyingEvidence = false;
+	bool downwardCrowdRejected = false;
+	struct SiteEvidence {
+		double downwardRate = 0;
+		double upwardRate = 0;
+		uint8_t minimumCoverage = std::numeric_limits<uint8_t>::max();
+		double minimumCoverageSeconds = std::numeric_limits<double>::max();
+		bool downward = false;
+		bool upward = false;
+	};
+	std::map<uint64_t, SiteEvidence> evidenceBySite;
+	for (const auto& [variantId, observed] : performance) {
+		if (variantId == target.atlasVariantId || observed.supplySpecies != target.monsters.front().name) continue;
+		matchingSpecies = true;
+		if (observed.atlasRevision != target.atlasRevision) continue;
+		matchingRevision = true;
+		if (!playerBotSupplyCalibrationForCapability(observed.supply, target.supplyCapability)) continue;
+		compatibleCapability = true;
+		const bool safeEvidence =
+		    observed.supplySafeSamples >= playerBotSharedSupplyMinimumSafeSamples;
+		if (!safeEvidence && !observed.supplyUpwardEvidence) continue;
+		qualifyingEvidence = true;
+		if (!std::isfinite(observed.supply.potionsPerCombatSecond) ||
+		    observed.supply.potionsPerCombatSecond < 0) continue;
+		const bool downwardEligible = safeEvidence &&
+		    observed.supplyAttackerCoverage >= target.modeledMaximumAttackerOverlap;
+		if (safeEvidence && !downwardEligible) downwardCrowdRejected = true;
+		if (!downwardEligible && !observed.supplyUpwardEvidence) continue;
+		SiteEvidence& site = evidenceBySite[observed.supplyAtlasSiteId];
+		if (downwardEligible) {
+			// Overlapping pocket/neighborhood variants describe one physical site.
+			// Keep one conservative site vote rather than treating those variants
+			// as independent confidence.
+			site.downward = true;
+			site.downwardRate = std::max(site.downwardRate, observed.supply.potionsPerCombatSecond);
+			site.minimumCoverage = std::min(site.minimumCoverage, observed.supplyAttackerCoverage);
+			site.minimumCoverageSeconds = std::min(
+			    site.minimumCoverageSeconds, observed.supplyAttackerCoverageSeconds);
+		}
+		if (observed.supplyUpwardEvidence) {
+			site.upward = true;
+			site.upwardRate = std::max(site.upwardRate, observed.supply.potionsPerCombatSecond);
+		}
+	}
+	double totalRate = 0;
+	uint8_t minimumCoverage = std::numeric_limits<uint8_t>::max();
+	double minimumCoverageSeconds = std::numeric_limits<double>::max();
+	for (const auto& [siteId, site] : evidenceBySite) {
+		(void)siteId;
+		if (!site.downward && !site.upward) continue;
+		++result.contributingAreas;
+		if (site.downward) {
+			totalRate += site.downwardRate;
+			minimumCoverage = std::min(minimumCoverage, site.minimumCoverage);
+			minimumCoverageSeconds = std::min(minimumCoverageSeconds, site.minimumCoverageSeconds);
+			++result.downwardContributingAreas;
+		}
+		if (site.upward) {
+			result.upwardPotionsPerCombatSecond = std::max(
+			    result.upwardPotionsPerCombatSecond, site.upwardRate);
+		}
+	}
+	if (result.contributingAreas == 0) {
+		result.reason = !matchingSpecies ? "no_matching_species_evidence" :
+		                !matchingRevision ? "shared_revision_mismatch" :
+		                !compatibleCapability ? "shared_capability_incompatible" :
+		                !qualifyingEvidence ? "shared_evidence_insufficient" :
+		                downwardCrowdRejected ? "shared_crowd_coverage_insufficient" :
+		                                          "shared_evidence_invalid";
+		return result;
+	}
+	result.available = true;
+	if (result.downwardContributingAreas != 0) {
+		result.observedPotionsPerCombatSecond = totalRate / result.downwardContributingAreas;
+		result.weight = std::min(0.5, result.downwardContributingAreas /
+		    static_cast<double>(result.downwardContributingAreas + 2));
+	}
+	if (result.downwardContributingAreas != 0) {
+		result.minimumObservedAttackerCoverage = minimumCoverage;
+		result.minimumObservedAttackerCoverageSeconds = minimumCoverageSeconds;
+	}
+	result.reason = result.downwardContributingAreas != 0 ?
+	    "shared_single_species_evidence" : "shared_single_species_upward_evidence";
+	return result;
+}
 
 struct PlayerBotHuntSharedCorrection {
 	double correction = 1;
