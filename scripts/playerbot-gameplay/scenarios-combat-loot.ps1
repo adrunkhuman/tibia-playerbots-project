@@ -90,4 +90,19 @@
 			$valueLogs = Wait-ForLog -Pattern '"action":"loot".*"result":"success".*"item_id":2152'
 			Assert-ValueLootEvents -Logs $valueLogs
 		}
+		foreach ($cargoCase in @(
+			@{ Name = "cargo_currency"; Pattern = '"action":"loot".*"result":"success".*"item_id":2148'; Assertion = "currency" },
+			@{ Name = "cargo_partial"; Pattern = '"action":"loot".*"result":"skipped".*"reason":"no_capacity"'; Assertion = "partial" },
+			@{ Name = "cargo_nested"; Pattern = '"action":"loot".*"result":"success".*"destination_container_item_id":1987'; Assertion = "nested" },
+			@{ Name = "cargo_protected"; Pattern = '"action":"loot".*"result":"skipped".*"reason":"no_slot"'; Assertion = "protected" }
+		)) {
+			Invoke-Scenario -Name $cargoCase.Name -DefaultTimeoutSeconds 90 -Body {
+				Invoke-Compose down --volumes --remove-orphans
+				$env:PLAYERBOT_GAMEPLAY_MODE = $cargoCase.Name
+				$env:PLAYERBOT_HUNT_DURATION_SECONDS = "900"
+				Invoke-Compose up --detach
+				$cargoLogs = Wait-ForLog -Pattern $cargoCase.Pattern
+				Assert-CargoLootEvents -Logs $cargoLogs -Case $cargoCase.Assertion
+			}
+		}
 	}

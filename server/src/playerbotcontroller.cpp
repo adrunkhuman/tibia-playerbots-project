@@ -162,8 +162,6 @@ PlayerBotController::PlayerBotController(const Player& player, std::string contr
 		{maxCorpseSearchAttempts, maximumCorpseNavigationFailures, corpseNavigationSuspendThreshold,
 		 std::chrono::milliseconds(corpseNavigationRetryInterval), corpseLootTimeout, preferredFoodCount},
 		fixtureDriver.huntPatrol(),
-		huntCapacityPressureGrace,
-		huntCapacityPressureMinimum,
 	}, sharedHuntRegionCooldowns)
 {}
 

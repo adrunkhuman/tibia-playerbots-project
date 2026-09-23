@@ -2035,22 +2035,6 @@ void projection()
 	assert(region.score == 0);
 }
 
-void capacityPressureHuntFloor()
-{
-	PlayerBotHuntRuntime runtime({});
-	const auto started = std::chrono::steady_clock::now();
-	runtime.selectPlanningRegion({}, {}, started);
-	runtime.beginCycle(started, 2400);
-	runtime.observeCapacityPressure(started);
-	const auto grace = std::chrono::minutes(5);
-	const auto minimumHunt = std::chrono::minutes(30);
-	assert(!runtime.capacityPressureElapsed(started + grace - std::chrono::milliseconds(1), grace));
-	assert(runtime.capacityPressureElapsed(started + grace, grace));
-	assert(!runtime.capacityPressureElapsed(started + grace, grace, minimumHunt));
-	assert(!runtime.capacityPressureElapsed(started + minimumHunt - std::chrono::milliseconds(1), grace, minimumHunt));
-	assert(runtime.capacityPressureElapsed(started + minimumHunt, grace, minimumHunt));
-}
-
 void toolReplenishmentPlannerGuards()
 {
 	PlayerBotEquipmentProviderPlanner planner;
@@ -2301,7 +2285,6 @@ int main()
 	supplyBudget();
 	recoverySpellPriority();
 	projection();
-	capacityPressureHuntFloor();
 	oracleRecovery();
 	std::cout << "playerbot contracts passed\n";
 }

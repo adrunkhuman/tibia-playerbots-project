@@ -22,16 +22,12 @@ struct PlayerBotHuntCoordinatorConfig {
 	PlayerBotCombatRuntimeConfig combat;
 	PlayerBotLootWorkflowConfig loot;
 	std::vector<Position> fallbackPatrol;
-	std::chrono::steady_clock::duration capacityPressureGrace = std::chrono::minutes(5);
-	std::chrono::steady_clock::duration capacityPressureMinimumHunt = std::chrono::minutes(30);
 };
 
 struct PlayerBotHuntTurnObservation {
 	bool regionSelectionRequired = false;
 	bool planningActive = false;
 	bool lootNavigationSuspended = false;
-	bool capacityPressureActive = false;
-	bool capacityPressureElapsed = false;
 	bool cycleFinished = false;
 };
 
@@ -69,6 +65,8 @@ class PlayerBotHuntCoordinator
 		PlayerBotLootNavigationTransition resumeLootNavigation(const Position& currentPosition,
 		                                                      std::chrono::steady_clock::time_point now);
 		bool hasPendingLootMove() const;
+		void cancelPendingLootMove();
+		void cancelPendingDiscardMove();
 		bool lootNavigationSuspended() const;
 		bool lootTimedOut(std::chrono::steady_clock::time_point now) const;
 		uint32_t lootTargetId() const;
@@ -134,7 +132,6 @@ class PlayerBotHuntCoordinator
 		bool huntActive() const;
 		bool insideHuntArea(const Position& position, uint32_t westRange, uint32_t eastRange,
 		                    uint32_t northRange, uint32_t southRange) const;
-		void observeCapacityPressure(std::chrono::steady_clock::time_point now);
 		PlayerBotHuntTurnObservation observeTurn(bool inHuntPhase, bool selectRegion,
 		                                               std::chrono::steady_clock::time_point now) const;
 		bool matchesHuntMonster(const std::string& name) const;
@@ -170,8 +167,6 @@ class PlayerBotHuntCoordinator
 		PlayerBotLootWorkflow lootWorkflow;
 		PlayerBotHuntRuntime huntRuntime;
 		std::map<uint64_t, std::chrono::steady_clock::time_point>& huntRegionCooldowns;
-		std::chrono::steady_clock::duration capacityPressureGrace;
-		std::chrono::steady_clock::duration capacityPressureMinimumHunt;
 };
 
 #endif

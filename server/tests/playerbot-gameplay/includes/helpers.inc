@@ -20,6 +20,21 @@ function F.removeAll(player, itemId)
     end
 end
 
+function F.clearBackpack(backpack)
+    for _, item in ipairs(backpack:getItems() or {}) do
+        assert(item:remove(), "cargo fixture could not clear backpack item " .. item:getId())
+    end
+end
+
+function F.seedProtectedCargo(backpack, freeSlots, nestedBag)
+    assert(backpack:addItem(F.potionItemId, 10), "cargo fixture could not add protected potions")
+    assert(backpack:addItem(F.shovelItemId, 1), "cargo fixture could not add the protected shovel")
+    if nestedBag then assert(backpack:addItem(ITEM_BAG, 1), "cargo fixture could not add the nested bag") end
+    while backpack:getSize() < backpack:getCapacity() - freeSlots do
+        assert(backpack:addItem(F.ropeItemId, 1), "cargo fixture could not fill protected slots")
+    end
+end
+
 function F.selectHealthPotion(player)
     F.potionItemId = player:getVocation():getId() == 0 and F.smallHealthPotionItemId or F.healthPotionItemId
 end
@@ -136,7 +151,7 @@ function F.suppressNearbyMonsters(playerId)
         if creature:isMonster() and creature:getName() ~= F.emptyMonsterName and creature:getName() ~= F.lootMonsterName and
             creature:getName() ~= F.nonlootableMonsterName and creature:getName() ~= F.containerDeathItemMonsterName and
             creature:getName() ~= F.valueMonsterName and creature:getName() ~= "Playerbot Food Cap Corpse" and
-            creature:getName() ~= F.spellTargetMonsterName and creature:getName() ~= F.corpseBlockerMonsterName and
+            creature:getName() ~= F.cargoCoinStackMonsterName and creature:getName() ~= F.spellTargetMonsterName and creature:getName() ~= F.corpseBlockerMonsterName and
             creature:getName() ~= F.defensiveMonsterName then
             creature:remove()
         end

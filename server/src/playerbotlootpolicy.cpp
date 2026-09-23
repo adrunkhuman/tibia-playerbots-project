@@ -8,9 +8,9 @@
  * (at your option) any later version.
  */
 
-#include "otpch.h"
-
 #include "playerbotlootpolicy.h"
+
+#include <algorithm>
 
 PlayerBotLootSelection PlayerBotLootPolicy::select(const std::vector<PlayerBotLootItemSnapshot>& items,
 	const PlayerBotLootInventorySnapshot& inventory, const std::set<uint16_t>& unavailableItems) const
@@ -50,46 +50,118 @@ PlayerBotLootSelection PlayerBotLootPolicy::select(const std::vector<PlayerBotLo
 	return selection;
 }
 
+namespace {
+	std::vector<PlayerBotLootDestinationSnapshot> destinationsFor(const PlayerBotLootItemSnapshot& incoming,
+		const PlayerBotLootInventorySnapshot& inventory)
+	{
+		std::vector<PlayerBotLootDestinationSnapshot> destinations;
+		if (incoming.stackable) {
+			for (const PlayerBotLootCargoSnapshot& cargo : inventory.cargo) {
+				if (!cargo.stackable || cargo.itemId != incoming.itemId || cargo.sourceCount >= 100 || cargo.containerId < 0) continue;
+				auto container = std::find_if(inventory.containers.begin(), inventory.containers.end(), [&cargo](const auto& candidate) {
+					return candidate.container == cargo.source && candidate.containerId == cargo.containerId;
+				});
+				if (container == inventory.containers.end() || !container->contentsComplete) continue;
+				destinations.push_back({cargo.source, cargo.item, container->itemId, container->clientId,
+				                        cargo.itemId, cargo.clientId, cargo.index, cargo.sourceCount,
+				                        static_cast<uint8_t>(100 - cargo.sourceCount), cargo.containerId, true});
+			}
+		}
+		for (const PlayerBotLootContainerSnapshot& container : inventory.containers) {
+			if (!container.contentsComplete || container.containerId < 0 || container.size >= container.capacity) continue;
+			destinations.push_back({container.container, nullptr, container.itemId, container.clientId, 0, 0,
+			                        container.size, 0, static_cast<uint8_t>(incoming.stackable ? 100 : 1),
+			                        container.containerId, false});
+		}
+		return destinations;
+	}
+
+	uint8_t capacityCount(const PlayerBotLootItemSnapshot& incoming, uint64_t capacity)
+	{
+		if (incoming.unitWeight == 0) return incoming.count;
+		return static_cast<uint8_t>(std::min<uint64_t>(incoming.count, capacity / incoming.unitWeight));
+	}
+
+	bool lowerDensity(const PlayerBotLootItemSnapshot& incoming, const PlayerBotLootCargoSnapshot& cargo)
+	{
+		return cargo.unitWeight != 0 &&
+		       static_cast<uint64_t>(incoming.unitValue) * cargo.unitWeight >
+		       static_cast<uint64_t>(cargo.unitValue) * incoming.unitWeight;
+	}
+}
+
+PlayerBotLootPlacement PlayerBotLootPolicy::placementFor(const PlayerBotLootItemSnapshot& incoming,
+	const PlayerBotLootInventorySnapshot& inventory) const
+{
+	PlayerBotLootPlacement placement;
+	const auto destinations = destinationsFor(incoming, inventory);
+	if (destinations.empty()) return placement;
+	placement.destination = destinations.front();
+	placement.count = std::min<uint8_t>({incoming.count, placement.destination.availableCount,
+	                                    capacityCount(incoming, inventory.freeCapacity)});
+	placement.result = placement.count == 0 ? PlayerBotLootPlacementResult::NoCapacity :
+	                                        PlayerBotLootPlacementResult::Placed;
+	return placement;
+}
+
 PlayerBotLootReplacement PlayerBotLootPolicy::replacementFor(const PlayerBotLootItemSnapshot& incoming,
 	const PlayerBotLootInventorySnapshot& inventory) const
 {
 	PlayerBotLootReplacement replacement;
-	const uint32_t incomingWeight = incoming.unitWeight * incoming.count;
-	uint32_t requiredWeight = incomingWeight > inventory.freeCapacity ? incomingWeight - inventory.freeCapacity : 0;
+	if (incoming.count == 0 || incoming.unitWeight == 0) return replacement;
+	const auto destinations = destinationsFor(incoming, inventory);
+	const bool needsSlot = destinations.empty();
 	std::vector<PlayerBotLootCargoSnapshot> candidates;
 	for (const PlayerBotLootCargoSnapshot& cargo : inventory.cargo) {
-		if (cargo.replaceable) candidates.push_back(cargo);
+		if (cargo.replaceable && cargo.count != 0 && cargo.itemId != incoming.itemId && cargo.containerId >= 0) {
+			candidates.push_back(cargo);
+		}
 	}
 	std::sort(candidates.begin(), candidates.end(), [](const auto& left, const auto& right) {
 		const uint64_t leftDensity = static_cast<uint64_t>(left.unitValue) * right.unitWeight;
 		const uint64_t rightDensity = static_cast<uint64_t>(right.unitValue) * left.unitWeight;
 		return leftDensity == rightDensity ? left.itemId < right.itemId : leftDensity < rightDensity;
 	});
-	uint64_t totalDiscardedValue = 0;
-	bool lowerDensity = true;
 	for (const PlayerBotLootCargoSnapshot& candidate : candidates) {
-		if (candidate.unitWeight == 0) continue;
-		const uint32_t count = std::min<uint32_t>(candidate.count,
-			(requiredWeight + candidate.unitWeight - 1) / candidate.unitWeight);
-		if (count == 0) continue;
-		if (replacement.count == 0) {
-			replacement.cargo = candidate;
-			replacement.count = static_cast<uint8_t>(count);
+		if (!lowerDensity(incoming, candidate)) continue;
+		PlayerBotLootDestinationSnapshot destination;
+		uint32_t discardedCount = 0;
+		uint8_t incomingCount = 0;
+		if (needsSlot) {
+			if (!candidate.wholeStackReplaceable) continue;
+			const auto container = std::find_if(inventory.containers.begin(), inventory.containers.end(), [&candidate](const auto& observed) {
+				return observed.container == candidate.source && observed.containerId == candidate.containerId;
+			});
+			if (container == inventory.containers.end() || !container->contentsComplete) continue;
+			discardedCount = candidate.count;
+			incomingCount = std::min<uint8_t>(incoming.count, capacityCount(incoming,
+				static_cast<uint64_t>(inventory.freeCapacity) + static_cast<uint64_t>(discardedCount) * candidate.unitWeight));
+			if (incomingCount == 0) continue;
+			destination = {container->container, nullptr, container->itemId, container->clientId, 0, 0,
+			               static_cast<uint8_t>(container->size - 1), 0,
+			               static_cast<uint8_t>(incoming.stackable ? 100 : 1), container->containerId, false};
+		} else {
+			destination = destinations.front();
+			const uint8_t destinationLimit = std::min<uint8_t>(incoming.count, destination.availableCount);
+			incomingCount = std::min<uint8_t>(destinationLimit, capacityCount(incoming,
+				static_cast<uint64_t>(inventory.freeCapacity) + static_cast<uint64_t>(candidate.count) * candidate.unitWeight));
+			if (incomingCount == 0) continue;
+			const uint64_t requiredWeight = static_cast<uint64_t>(incomingCount) * incoming.unitWeight > inventory.freeCapacity ?
+				static_cast<uint64_t>(incomingCount) * incoming.unitWeight - inventory.freeCapacity : 0;
+			discardedCount = static_cast<uint32_t>((requiredWeight + candidate.unitWeight - 1) / candidate.unitWeight);
+			if (discardedCount == 0 || discardedCount > candidate.count) continue;
 		}
-		totalDiscardedValue += static_cast<uint64_t>(count) * candidate.unitValue;
-		lowerDensity = lowerDensity &&
-			static_cast<uint64_t>(incoming.unitValue) * candidate.unitWeight >
-			static_cast<uint64_t>(candidate.unitValue) * incoming.unitWeight;
-		const uint32_t releasedWeight = count * candidate.unitWeight;
-		if (releasedWeight >= requiredWeight) {
-			requiredWeight = 0;
-			break;
-		}
-		requiredWeight -= releasedWeight;
+		const uint64_t discardedValue = static_cast<uint64_t>(discardedCount) * candidate.unitValue;
+		if (!incoming.currency && static_cast<uint64_t>(incoming.unitValue) * incomingCount <= discardedValue) continue;
+		replacement.incoming = incoming;
+		replacement.cargo = candidate;
+		replacement.destination = destination;
+		replacement.count = static_cast<uint8_t>(discardedCount);
+		replacement.incomingCount = incomingCount;
+		replacement.discardedValue = discardedValue;
+		replacement.slotReplacement = needsSlot;
+		replacement.viable = true;
+		return replacement;
 	}
-	replacement.discardedValue = totalDiscardedValue;
-	replacement.viable = incomingWeight != 0 && incomingWeight > inventory.freeCapacity && replacement.count != 0 &&
-	                    requiredWeight == 0 && lowerDensity &&
-	                    (incoming.currency || static_cast<uint64_t>(incoming.unitValue) * incoming.count > totalDiscardedValue);
 	return replacement;
 }

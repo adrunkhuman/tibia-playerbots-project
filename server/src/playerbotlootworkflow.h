@@ -2,6 +2,8 @@
 #ifndef FS_PLAYERBOTLOOTWORKFLOW_H
 #define FS_PLAYERBOTLOOTWORKFLOW_H
 
+#include <map>
+
 #include "playerbotlootpolicy.h"
 #include "playerbotlootsession.h"
 
@@ -13,6 +15,7 @@ enum class PlayerBotLootCommandType : uint8_t {
 	OpenCargo,
 	MoveItem,
 	DiscardCargo,
+	RecoverCargo,
 	Finish,
 	Fail,
 	Wait,
@@ -30,6 +33,8 @@ enum class PlayerBotLootOutcome : uint8_t {
 	FoodPreferenceSatisfied,
 	NoEligibleLoot,
 	NoCapacity,
+	NoSlot,
+	CargoRecoveryImpossible,
 };
 
 struct PlayerBotLootCorpseSnapshot {
@@ -37,6 +42,16 @@ struct PlayerBotLootCorpseSnapshot {
 	uint16_t clientId = 0;
 	uint32_t ownerId = 0;
 	Position position;
+};
+
+struct PlayerBotLootObservedInventoryItem {
+	const void* container = nullptr;
+	const void* item = nullptr;
+	uint16_t itemId = 0;
+	uint16_t clientId = 0;
+	uint8_t count = 0;
+	uint8_t index = 0;
+	int8_t containerId = -1;
 };
 
 struct PlayerBotLootWorkflowSnapshot {
@@ -48,6 +63,9 @@ struct PlayerBotLootWorkflowSnapshot {
 	bool backpackContainerOpen = false;
 	bool canDoAction = false;
 	PlayerBotLootInventorySnapshot inventory;
+	std::map<uint16_t, uint32_t> groundItemCounts;
+	std::vector<PlayerBotLootGroundItemState> groundItems;
+	std::vector<PlayerBotLootObservedInventoryItem> inventoryItems;
 	// Populated only when corpseContainerOpen is true for the observed corpse.
 	std::vector<PlayerBotLootItemSnapshot> corpseItems;
 };
@@ -55,9 +73,12 @@ struct PlayerBotLootWorkflowSnapshot {
 struct PlayerBotLootCommand {
 	PlayerBotLootCommandType type = PlayerBotLootCommandType::None;
 	PlayerBotLootOutcome outcome = PlayerBotLootOutcome::None;
-	Position destination;
-	PlayerBotLootItemSnapshot item;
-	PlayerBotLootCargoSnapshot cargo;
+	Position destination{};
+	PlayerBotLootItemSnapshot item{};
+	PlayerBotLootCargoSnapshot cargo{};
+	PlayerBotLootDestinationSnapshot itemDestination{};
+	PlayerBotLootContainerAccessSnapshot containerAccess{};
+	PlayerBotLootGroundItemState groundItem{};
 	uint8_t count = 0;
 };
 
@@ -65,6 +86,7 @@ struct PlayerBotLootDecision {
 	PlayerBotLootCommand command;
 	std::optional<PlayerBotLootMoveVerification> lootVerification;
 	std::optional<PlayerBotLootDiscardVerification> discardVerification;
+	std::optional<PlayerBotLootRecoveryVerification> recoveryVerification;
 };
 
 struct PlayerBotLootWorkflowConfig {
@@ -91,6 +113,19 @@ class PlayerBotLootWorkflow
 		                                                   std::chrono::steady_clock::time_point now);
 
 		bool hasPendingLootMove() const { return session.hasPendingLootMove(); }
+		void cancelPendingLootMove()
+		{
+			if (replacementPlan && discardedGroundItem) replacementNeedsRecovery = true;
+			session.cancelLootMove();
+		}
+		void cancelPendingDiscardMove()
+		{
+			session.cancelDiscardMove();
+			replacementPlan.reset();
+			discardedGroundItem.reset();
+			replacementNeedsRecovery = false;
+		}
+		void cancelPendingRecoveryMove() { session.cancelRecoveryMove(); }
 		bool navigationSuspended() const { return session.navigationSuspended(); }
 		bool timedOut(std::chrono::steady_clock::time_point now) const { return session.timedOut(now, config.timeout); }
 		uint32_t targetId() const { return session.targetId(); }
@@ -109,6 +144,9 @@ class PlayerBotLootWorkflow
 		PlayerBotLootWorkflowConfig config;
 		PlayerBotLootPolicy policy;
 		PlayerBotLootSession session;
+		std::optional<PlayerBotLootReplacement> replacementPlan;
+		std::optional<PlayerBotLootGroundItemState> discardedGroundItem;
+		bool replacementNeedsRecovery = false;
 };
 
 #endif

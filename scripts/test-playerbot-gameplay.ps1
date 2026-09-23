@@ -12,6 +12,10 @@ fixtures, and removes the scenario stack unless -KeepStack is set.
 Runs seller, no-eligible-seller depot fallback, and interrupted-deposit restart
 fixtures for policy-approved loot carried in an invalid equipment slot.
 
+.PARAMETER ValueLoot
+Runs value replacement, currency-versus-spear, partial-capacity, nested-destination,
+and protected full-slot cargo fixtures.
+
 .PARAMETER Scenario
 Runs only the named scenarios. Names must match the gameplay scenario catalog.
 
@@ -90,7 +94,8 @@ $scenarioCatalog = @(
 	"magic_training_pz", "magic_training_absent", "magic_training_expired", "magic_training_failed",
 	"magic_training_service", "magic_training_progression", "magic_training_post_hunt",
 	"magic_training_post_hunt_no_overflow", "magic_training_restart", "magic_training_hunt",
-	"corpse", "corpse_detour", "corpse_inaccessible", "death", "healing", "healing_resupply", "value"
+	"corpse", "corpse_detour", "corpse_inaccessible", "death", "healing", "healing_resupply", "value",
+	"cargo_currency", "cargo_partial", "cargo_nested", "cargo_protected"
 )
 $scenarioCatalogSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
 foreach ($scenarioName in $scenarioCatalog) {
@@ -98,8 +103,8 @@ foreach ($scenarioName in $scenarioCatalog) {
 		throw "Duplicate gameplay scenario name: $scenarioName"
 	}
 }
-if ($scenarioCatalog.Count -ne 98) {
-	throw "The gameplay scenario catalog must contain 98 scenarios; found $($scenarioCatalog.Count)."
+if ($scenarioCatalog.Count -ne 102) {
+	throw "The gameplay scenario catalog must contain 102 scenarios; found $($scenarioCatalog.Count)."
 }
 $requestedScenarioNames = @($Scenario | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
 $exactScenarioSelection = $requestedScenarioNames.Count -gt 0

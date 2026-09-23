@@ -295,10 +295,14 @@ function F.spawnCorpseMonster(playerId, monsterName)
         if tile and tile:isWalkable() then
             local monster = Game.createMonster(monsterName, position, true, true)
             assert(monster, "corpse test monster could not be created: " .. monsterName)
-            if monsterName == F.lootMonsterName then
-                -- This case tests proactive corpse looting, not defensive combat.
+            if monsterName == F.emptyMonsterName or monsterName == F.lootMonsterName or monsterName == F.cargoCoinStackMonsterName then
+                -- These cases test proactive corpse looting, not defensive combat.
                 monster:setTarget(nil)
                 monster:setIdle(true)
+            end
+            if monsterName == F.cargoCoinStackMonsterName then
+                assert(monster:registerEvent("PlayerbotCargoCorpseDeath"),
+                    "partial cargo monster could not register its death event")
             end
             print("PLAYERBOT_GAMEPLAY_TEST SPAWNED " .. monsterName)
             return

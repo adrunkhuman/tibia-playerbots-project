@@ -940,7 +940,7 @@ void PlayerBotController::finishHuntRegion(const Player& player, const Position&
 	Player& mutablePlayer = const_cast<Player&>(player);
 	auto observation = huntPlayerObservation(mutablePlayer);
 	observation.supplyCapability = playerBotSupplyCapability(huntPlanningFacts(mutablePlayer, huntCombatProfile(mutablePlayer)));
-	observation.supplyInterrupted = std::strcmp(reason, "hunt_deadline") != 0 && std::strcmp(reason, "capacity") != 0;
+	observation.supplyInterrupted = std::strcmp(reason, "hunt_deadline") != 0;
 	const auto completion = huntCoordinator.finishHunt(observation, std::chrono::steady_clock::now(),
 		static_cast<uint32_t>(std::max<int32_t>(1, g_config.getNumber(ConfigManager::PLAYERBOT_HUNT_DURATION_SECONDS))));
 	if (!completion) return;
@@ -1598,7 +1598,6 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 	PlayerBotTurnObservation turn;
 	turn.progressionActive = progressionRuntime.session().active() != PlayerBotProgressionProcedure::None;
 	turn.magicTrainingActive = progressionRuntime.activeGoal() == TopLevelGoal::MagicTraining;
-	bool capacityPressureElapsed = false;
 	if (!turn.progressionActive && !turn.magicTrainingActive) {
 		const bool inHuntPhase = turnRouter.cyclePhase() == CyclePhase::Hunt;
 		const PlayerBotHuntTurnObservation hunt = huntCoordinator.observeTurn(
@@ -1606,7 +1605,6 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 		turn.huntRegionSelectionRequired = hunt.regionSelectionRequired;
 		turn.huntPlanningActive = hunt.planningActive;
 		turn.lootNavigationSuspended = hunt.lootNavigationSuspended;
-		capacityPressureElapsed = hunt.capacityPressureElapsed;
 		turn.huntCycleFinished = hunt.cycleFinished;
 	}
 	const PlayerBotTurnCommand turnCommand = turnRouter.route(turn);
@@ -1655,8 +1653,7 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 		return;
 	}
 	if (turnCommand == PlayerBotTurnCommand::FinishHunt) {
-		const char* reason = capacityPressureElapsed ? "capacity" : "hunt_deadline";
-		finishHuntAndReturn(player, currentPosition, reason);
+		finishHuntAndReturn(player, currentPosition, "hunt_deadline");
 		return;
 	}
 

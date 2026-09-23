@@ -51,29 +51,33 @@ namespace {
 		       inventoryPolicy.itemUnitValue(item.getID()) != 0 && item.getBaseWeight() != 0;
 	}
 
-	uint8_t backpackDestinationIndex(const Container& backpack, const Item& item)
+	constexpr size_t maximumLootContainers = 14;
+	constexpr size_t maximumLootCargoItems = 256;
+	constexpr size_t maximumLootContainerAccess = 32;
+
+	uint8_t availableLootContainerId(Player& player)
 	{
-		if (item.isStackable()) {
-			const ItemDeque& items = backpack.getItemList();
-			for (size_t index = 0; index < items.size(); ++index) {
-				if (items[index]->getID() == item.getID() && items[index]->getItemCount() < 100) return static_cast<uint8_t>(index);
-			}
+		for (uint8_t id = rewardContainerIdBase; id <= maximumContainerId; ++id) {
+			if (!player.getContainerByID(id)) return id;
 		}
-		return static_cast<uint8_t>(backpack.size());
+		return UINT8_MAX;
 	}
 }
 
-void PlayerBotController::logLootSuccess(uint16_t itemId, uint32_t count, uint32_t inventoryCount, const Position& position)
+void PlayerBotController::logLootSuccess(const PlayerBotLootMoveVerification& verification, const Position& position)
 {
-	const uint64_t coinGold = Item::items[itemId].worth * count;
+	const PlayerBotLootMove& move = verification.move;
+	const uint64_t coinGold = Item::items[move.itemId].worth * verification.movedCount;
 	huntCoordinator.observeCoinAcquisition(coinGold);
 	std::ostringstream fields;
-	fields << "\"action\":\"loot\",\"result\":\"success\",\"item_id\":" << itemId
-	       << ",\"count\":" << count << ",\"inventory_count\":" << inventoryCount
-	       << ",\"unit_value\":" << inventoryPolicy.itemUnitValue(itemId)
-	       << ",\"total_value\":" << static_cast<uint64_t>(inventoryPolicy.itemUnitValue(itemId)) * count
+	fields << "\"action\":\"loot\",\"result\":\"success\",\"item_id\":" << move.itemId
+	       << ",\"count\":" << verification.movedCount << ",\"inventory_count\":" << verification.inventoryCount
+	       << ",\"unit_value\":" << inventoryPolicy.itemUnitValue(move.itemId)
+	       << ",\"total_value\":" << static_cast<uint64_t>(inventoryPolicy.itemUnitValue(move.itemId)) * verification.movedCount
 	       << ",\"coin_gold_acquired\":" << coinGold
-	       << ",\"unit_weight\":" << Item::items[itemId].weight;
+	       << ",\"unit_weight\":" << Item::items[move.itemId].weight
+	       << ",\"destination_container_item_id\":" << move.destinationContainerItemId
+	       << ",\"destination_container_id\":" << static_cast<int32_t>(move.destinationContainerId);
 	emit("action_result", position, fields.str());
 }
 
@@ -165,6 +169,19 @@ void PlayerBotController::lootCorpse(Player* player, const Position& currentPosi
 	snapshot.canDoAction = player->canDoAction();
 	snapshot.inventory.freeCapacity = player->getFreeCapacity();
 	snapshot.inventory.heldFood = inventoryPolicy.foodInventory(*player).count;
+	if (Tile* tile = g_game.map.getTile(currentPosition)) {
+		if (TileItemVector* items = tile->getItemList()) {
+			for (const Item* item : *items) {
+				snapshot.groundItemCounts[item->getID()] += item->getItemCount();
+				const int32_t index = tile->getThingIndex(item);
+				if (index >= 0 && index <= UINT8_MAX) {
+					snapshot.groundItems.push_back({item, item->getID(), item->getClientID(),
+					                                static_cast<uint8_t>(item->getItemCount()),
+					                                static_cast<uint8_t>(index), currentPosition});
+				}
+			}
+		}
+	}
 	if (discovery) {
 		snapshot.discoveredCorpse = {{discovery->corpse->getID(), discovery->corpse->getClientID(),
 		                             discovery->corpse->getCorpseOwner(), discovery->position}};
@@ -180,7 +197,8 @@ void PlayerBotController::lootCorpse(Player* player, const Position& currentPosi
 				                                item->getBaseWeight(), inventoryPolicy.itemUnitValue(item->getID()),
 				                                inventoryCount,
 				                                PlayerBotInventoryPolicy::isFoodItem(item->getID()),
-				                                PlayerBotInventoryPolicy::isCurrencyItem(item->getID())});
+				                                PlayerBotInventoryPolicy::isCurrencyItem(item->getID()),
+				                                discovery->corpse, item, item->isStackable()});
 			}
 		}
 	}
@@ -188,25 +206,59 @@ void PlayerBotController::lootCorpse(Player* player, const Position& currentPosi
 	Container* backpack = backpackItem ? backpackItem->getContainer() : nullptr;
 	snapshot.backpackAvailable = backpack != nullptr;
 	snapshot.backpackContainerOpen = backpack && player->getContainerByID(backpackContainerId) == backpack;
-	if (backpack) {
-		uint32_t replaceableFood = snapshot.inventory.heldFood > preferredFoodCount ?
-			snapshot.inventory.heldFood - preferredFoodCount : 0;
-		std::function<void(Container&)> collectCargo = [&](Container& source) {
-			const ItemDeque& items = source.getItemList();
+	if (backpack && snapshot.backpackContainerOpen) {
+		std::set<const Container*> directlyObservedContainers;
+		for (uint8_t containerId = backpackContainerId; containerId <= maximumContainerId; ++containerId) {
+			Container* container = player->getContainerByID(containerId);
+			if (!container || !directlyObservedContainers.insert(container).second) continue;
+			const ItemDeque& items = container->getItemList();
 			for (size_t index = 0; index < items.size() && index <= UINT8_MAX; ++index) {
 				Item* item = items[index];
-				uint8_t replaceableCount = static_cast<uint8_t>(item->getItemCount());
+				snapshot.inventoryItems.push_back({container, item, item->getID(), item->getClientID(),
+				                                   static_cast<uint8_t>(item->getItemCount()),
+				                                   static_cast<uint8_t>(index), static_cast<int8_t>(containerId)});
+			}
+		}
+		uint32_t replaceableFood = snapshot.inventory.heldFood > preferredFoodCount ?
+			snapshot.inventory.heldFood - preferredFoodCount : 0;
+		std::set<const Container*> observedContainers;
+		std::function<void(Container&)> collectCargo = [&](Container& source) {
+			if (snapshot.inventory.containers.size() >= maximumLootContainers || !observedContainers.insert(&source).second ||
+			    source.size() > UINT8_MAX) return;
+			const int8_t sourceId = player->getContainerID(&source);
+			if (sourceId < 0) return;
+			const size_t containerSnapshotIndex = snapshot.inventory.containers.size();
+			snapshot.inventory.containers.push_back({&source, source.getID(), source.getClientID(),
+				static_cast<uint8_t>(source.size()),
+				static_cast<uint8_t>(std::min<uint32_t>(source.capacity(), UINT8_MAX)), sourceId, true});
+			const ItemDeque& items = source.getItemList();
+			for (size_t index = 0; index < items.size(); ++index) {
+				if (snapshot.inventory.cargo.size() >= maximumLootCargoItems) {
+					snapshot.inventory.containers[containerSnapshotIndex].contentsComplete = false;
+					return;
+				}
+				Item* item = items[index];
+				const uint8_t itemCount = static_cast<uint8_t>(item->getItemCount());
+				uint8_t replaceableCount = itemCount;
 				bool replaceable = isReplaceableCargo(inventoryPolicy, *item);
 				if (PlayerBotInventoryPolicy::isFoodItem(item->getID())) {
-					replaceableCount = static_cast<uint8_t>(std::min<uint32_t>(item->getItemCount(), replaceableFood));
+					replaceableCount = static_cast<uint8_t>(std::min<uint32_t>(itemCount, replaceableFood));
 					replaceableFood -= replaceableCount;
 					replaceable = replaceableCount != 0 && item->getBaseWeight() != 0;
 				}
 				snapshot.inventory.itemCounts[item->getID()] = inventoryPolicy.inventoryItemCount(*player, item->getID());
 				snapshot.inventory.cargo.push_back({&source, item->getID(), item->getClientID(), replaceableCount,
 				                                  static_cast<uint8_t>(index), item->getBaseWeight(), inventoryPolicy.itemUnitValue(item->getID()),
-				                                  replaceable, player->getContainerID(&source)});
-				if (Container* nested = item->getContainer()) collectCargo(*nested);
+				                                  replaceable, sourceId, item, item->isStackable(),
+				                                  replaceableCount == itemCount, itemCount});
+				if (Container* nested = item->getContainer()) {
+					const int8_t nestedId = player->getContainerID(nested);
+					if (nestedId >= 0) collectCargo(*nested);
+					else if (snapshot.inventory.containerAccess.size() < maximumLootContainerAccess) {
+						snapshot.inventory.containerAccess.push_back({nested, &source, item, item->getID(), item->getClientID(),
+						                                              static_cast<uint8_t>(index), sourceId});
+					}
+				}
 			}
 		};
 		collectCargo(*backpack);
@@ -214,8 +266,7 @@ void PlayerBotController::lootCorpse(Player* player, const Position& currentPosi
 
 	const PlayerBotLootDecision decision = huntCoordinator.advanceLoot(snapshot);
 	if (decision.lootVerification) {
-		if (decision.lootVerification->moved) logLootSuccess(decision.lootVerification->move.itemId,
-			decision.lootVerification->movedCount, decision.lootVerification->inventoryCount, currentPosition);
+		if (decision.lootVerification->moved) logLootSuccess(*decision.lootVerification, currentPosition);
 		else logActionFailure("loot", "item_move_failed", currentPosition);
 	}
 	if (decision.discardVerification) {
@@ -228,6 +279,15 @@ void PlayerBotController::lootCorpse(Player* player, const Position& currentPosi
 			       << ",\"incoming_unit_value\":" << inventoryPolicy.itemUnitValue(decision.discardVerification->move.incomingItemId);
 			emit("action_result", currentPosition, fields.str());
 		} else logActionFailure("loot_replace", "discard_not_verified", currentPosition);
+	}
+	if (decision.recoveryVerification) {
+		std::ostringstream fields;
+		fields << "\"action\":\"loot_replace_recovery\",\"result\":"
+		       << jsonString(decision.recoveryVerification->recovered ? "success" : "failed")
+		       << ",\"reason\":" << jsonString(decision.recoveryVerification->recovered ? "cargo_recovered" : "recovery_move_not_verified")
+		       << ",\"item_id\":" << decision.recoveryVerification->move.itemId
+		       << ",\"count\":" << decision.recoveryVerification->recoveredCount;
+		emit("action_result", currentPosition, fields.str());
 	}
 
 	const PlayerBotLootCommand& command = decision.command;
@@ -248,14 +308,28 @@ void PlayerBotController::lootCorpse(Player* player, const Position& currentPosi
 		return;
 	}
 
-	if (command.outcome == PlayerBotLootOutcome::NoCapacity) {
-		const uint64_t incomingWeight = static_cast<uint64_t>(command.item.unitWeight) * command.item.availableCount;
-		if (incomingWeight > inventoryPolicy.huntFreeCapacity(*player)) huntCoordinator.observeCapacityPressure(now);
+	if (command.outcome == PlayerBotLootOutcome::CargoRecoveryImpossible && !decision.recoveryVerification) {
+		emit("action_result", currentPosition,
+		     "\"action\":\"loot_replace_recovery\",\"result\":\"failed\",\"reason\":\"cargo_recovery_impossible\",\"item_id\":" +
+		         std::to_string(command.cargo.itemId) + ",\"count\":" + std::to_string(command.count));
+	}
+	if (command.outcome == PlayerBotLootOutcome::NoCapacity || command.outcome == PlayerBotLootOutcome::NoSlot) {
+		uint32_t freeSlots = 0;
+		uint32_t mergeRoom = 0;
+		for (const auto& container : snapshot.inventory.containers) freeSlots += container.capacity - container.size;
+		for (const auto& cargo : snapshot.inventory.cargo) {
+			if (cargo.stackable && cargo.itemId == command.item.itemId && cargo.sourceCount < 100) {
+				mergeRoom += 100 - cargo.sourceCount;
+			}
+		}
 		std::ostringstream fields;
-		fields << "\"action\":\"loot\",\"result\":\"skipped\",\"reason\":\"no_capacity\""
+		fields << "\"action\":\"loot\",\"result\":\"skipped\",\"reason\":"
+		       << jsonString(command.outcome == PlayerBotLootOutcome::NoSlot ? "no_slot" : "no_capacity")
 		       << ",\"item_id\":" << command.item.itemId << ",\"count\":" << static_cast<uint32_t>(command.item.availableCount)
 		       << ",\"unit_value\":" << command.item.unitValue << ",\"weight\":" << command.item.unitWeight * command.item.availableCount
-		       << ",\"free_capacity\":" << player->getFreeCapacity();
+		       << ",\"free_capacity\":" << player->getFreeCapacity()
+		       << ",\"free_slots\":" << freeSlots << ",\"merge_room\":" << mergeRoom
+		       << ",\"open_inventory_containers\":" << snapshot.inventory.containers.size();
 		emit("action_result", currentPosition, fields.str());
 	}
 	schedule(navigationInterval);
@@ -305,28 +379,121 @@ void PlayerBotController::lootCorpse(Player* player, const Position& currentPosi
 		return;
 	}
 	if (command.type == PlayerBotLootCommandType::OpenCargo) {
-		Container* source = const_cast<Container*>(static_cast<const Container*>(command.cargo.source));
-		if (source) openContainer(*player, *source, rewardContainerIdBase, currentPosition);
+		const auto& access = command.containerAccess;
+		Container* container = const_cast<Container*>(static_cast<const Container*>(access.container));
+		Container* parent = const_cast<Container*>(static_cast<const Container*>(access.parent));
+		const uint8_t containerId = availableLootContainerId(*player);
+		if (!container || !parent || containerId == UINT8_MAX || access.parentContainerId < 0 ||
+		    player->getContainerByID(static_cast<uint8_t>(access.parentContainerId)) != parent ||
+		    access.index >= parent->getItemList().size() || parent->getItemList()[access.index] != access.item ||
+		    static_cast<const Item*>(access.item) != static_cast<Item*>(container) || container->getID() != access.itemId || container->getClientID() != access.clientId) return;
+		telemetry.recordActionAttempt();
+		g_game.playerUseItem(playerId,
+		                   Position(0xFFFF, 0x40 | static_cast<uint8_t>(access.parentContainerId), access.index),
+		                   access.index, containerId, container->getClientID());
 		return;
 	}
-	if (command.type == PlayerBotLootCommandType::MoveItem && discovery && backpack) {
-		const ItemDeque& items = discovery->corpse->getItemList();
-		if (command.item.index < items.size()) {
-			Item* item = items[command.item.index];
-			telemetry.recordActionAttempt();
-			g_game.playerMoveItem(player, Position(0xFFFF, 0x40 | corpseContainerId, command.item.index), item->getClientID(), command.item.index,
-			                   Position(0xFFFF, 0x40 | backpackContainerId, backpackDestinationIndex(*backpack, *item)), command.count, item, backpack);
+	auto rejectStaleLootMove = [&](bool discard) {
+		if (discard) huntCoordinator.cancelPendingDiscardMove();
+		else huntCoordinator.cancelPendingLootMove();
+		emit("action_result", currentPosition,
+		     std::string("\"action\":\"") + (discard ? "loot_replace" : "loot") +
+		     "\",\"result\":\"skipped\",\"reason\":\"stale_move_plan\",\"item_id\":" +
+		     std::to_string(discard ? command.cargo.itemId : command.item.itemId));
+	};
+	if (command.type == PlayerBotLootCommandType::MoveItem) {
+		Container* source = const_cast<Container*>(static_cast<const Container*>(command.item.source));
+		Container* destination = const_cast<Container*>(static_cast<const Container*>(command.itemDestination.container));
+		if (!discovery || discovery->corpse != source || !destination || command.itemDestination.containerId < 0 ||
+		    player->getContainerByID(static_cast<uint8_t>(command.itemDestination.containerId)) != destination ||
+		    destination->getID() != command.itemDestination.containerItemId ||
+		    destination->getClientID() != command.itemDestination.containerClientId ||
+		    command.item.index >= source->getItemList().size()) {
+			rejectStaleLootMove(false);
+			return;
 		}
+		Item* item = source->getItemList()[command.item.index];
+		bool destinationValid = destination->size() == command.itemDestination.index &&
+		                        destination->size() < destination->capacity();
+		if (command.itemDestination.merge) {
+			destinationValid = command.itemDestination.index < destination->getItemList().size() &&
+			                   destination->getItemList()[command.itemDestination.index] == command.itemDestination.item &&
+			                   command.itemDestination.itemId == item->getID() &&
+			                   command.itemDestination.count == static_cast<const Item*>(command.itemDestination.item)->getItemCount();
+		}
+		if (item != command.item.item || item->getID() != command.item.itemId || item->getClientID() != command.item.clientId ||
+		    item->getItemCount() != command.item.availableCount || command.count == 0 ||
+		    command.count > command.itemDestination.availableCount || !destinationValid ||
+		    destination->queryAdd(command.itemDestination.index, *item, command.count, 0, player) != RETURNVALUE_NOERROR) {
+			rejectStaleLootMove(false);
+			return;
+		}
+		telemetry.recordActionAttempt();
+		g_game.playerMoveItem(player, Position(0xFFFF, 0x40 | corpseContainerId, command.item.index), item->getClientID(), command.item.index,
+		                   Position(0xFFFF, 0x40 | static_cast<uint8_t>(command.itemDestination.containerId), command.itemDestination.index),
+		                   command.count, item, destination);
+		return;
+	}
+	if (command.type == PlayerBotLootCommandType::RecoverCargo) {
+		Tile* source = g_game.map.getTile(command.groundItem.position);
+		Item* item = const_cast<Item*>(static_cast<const Item*>(command.groundItem.item));
+		Container* destination = const_cast<Container*>(static_cast<const Container*>(command.itemDestination.container));
+		if (!source || !item || !destination || currentPosition != command.groundItem.position ||
+		    source->getThingIndex(item) != command.groundItem.index || item->getID() != command.groundItem.itemId ||
+		    item->getClientID() != command.groundItem.clientId || item->getItemCount() != command.groundItem.count ||
+		    command.itemDestination.containerId < 0 ||
+		    player->getContainerByID(static_cast<uint8_t>(command.itemDestination.containerId)) != destination ||
+		    destination->getID() != command.itemDestination.containerItemId ||
+		    destination->getClientID() != command.itemDestination.containerClientId) return;
+		bool destinationValid = destination->size() == command.itemDestination.index &&
+		                        destination->size() < destination->capacity();
+		if (command.itemDestination.merge) {
+			destinationValid = command.itemDestination.index < destination->getItemList().size() &&
+			                   destination->getItemList()[command.itemDestination.index] == command.itemDestination.item &&
+			                   command.itemDestination.itemId == item->getID() &&
+			                   command.itemDestination.count == static_cast<const Item*>(command.itemDestination.item)->getItemCount();
+		}
+		uint32_t maximumMoveCount = 0;
+		destination->queryMaxCount(command.itemDestination.index, *item, command.count, maximumMoveCount, 0);
+		if (!destinationValid || command.count == 0 || command.count > command.itemDestination.availableCount ||
+		    maximumMoveCount < command.count ||
+		    destination->queryAdd(command.itemDestination.index, *item, command.count, 0, player) != RETURNVALUE_NOERROR) return;
+		telemetry.recordActionAttempt();
+		g_game.playerMoveItem(player, command.groundItem.position, item->getClientID(), command.groundItem.index,
+		                   Position(0xFFFF, 0x40 | static_cast<uint8_t>(command.itemDestination.containerId),
+		                            command.itemDestination.index),
+		                   command.count, item, destination);
 		return;
 	}
 	if (command.type == PlayerBotLootCommandType::DiscardCargo) {
 		Container* source = const_cast<Container*>(static_cast<const Container*>(command.cargo.source));
 		Tile* destination = g_game.map.getTile(currentPosition);
-		if (source && destination && command.cargo.index < source->getItemList().size()) {
-			Item* item = source->getItemList()[command.cargo.index];
-			telemetry.recordActionAttempt();
-			g_game.playerMoveItem(player, Position(0xFFFF, 0x40 | static_cast<uint8_t>(command.cargo.containerId), command.cargo.index),
-			                   item->getClientID(), command.cargo.index, currentPosition, command.count, item, destination);
+		if (!source || !destination || command.cargo.containerId < 0 ||
+		    player->getContainerByID(static_cast<uint8_t>(command.cargo.containerId)) != source ||
+		    command.cargo.index >= source->getItemList().size()) {
+			rejectStaleLootMove(true);
+			return;
 		}
+		Item* item = source->getItemList()[command.cargo.index];
+		if (item != command.cargo.item || item->getID() != command.cargo.itemId ||
+		    item->getClientID() != command.cargo.clientId || item->getItemCount() != command.cargo.sourceCount ||
+		    command.count == 0 || command.count > command.cargo.count) {
+			rejectStaleLootMove(true);
+			return;
+		}
+		if (item->isStackable()) {
+			if (TileItemVector* groundItems = destination->getItemList()) {
+				for (const Item* groundItem : *groundItems) {
+					if (groundItem->getID() == item->getID() && groundItem->getClientID() == item->getClientID() &&
+					    groundItem->getItemCount() < 100 && command.count > 100 - groundItem->getItemCount()) {
+						rejectStaleLootMove(true);
+						return;
+					}
+				}
+			}
+		}
+		telemetry.recordActionAttempt();
+		g_game.playerMoveItem(player, Position(0xFFFF, 0x40 | static_cast<uint8_t>(command.cargo.containerId), command.cargo.index),
+		                   item->getClientID(), command.cargo.index, currentPosition, command.count, item, destination);
 	}
 }

@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <optional>
 #include <set>
+#include <vector>
 
 #include "playerbottargetingsession.h"
 
@@ -26,6 +27,13 @@ struct PlayerBotLootMove {
 	uint8_t requestedCount = 0;
 	uint32_t inventoryCount = 0;
 	uint8_t sourceIndex = 0;
+	const void* source = nullptr;
+	const void* sourceItem = nullptr;
+	uint8_t sourceCount = 0;
+	const void* destination = nullptr;
+	uint32_t destinationCount = 0;
+	uint16_t destinationContainerItemId = 0;
+	int8_t destinationContainerId = -1;
 };
 
 struct PlayerBotLootMoveVerification {
@@ -35,18 +43,52 @@ struct PlayerBotLootMoveVerification {
 	bool moved = false;
 };
 
+struct PlayerBotLootGroundItemState {
+	const void* item = nullptr;
+	uint16_t itemId = 0;
+	uint16_t clientId = 0;
+	uint8_t count = 0;
+	uint8_t index = 0;
+	Position position{};
+};
+
 struct PlayerBotLootDiscardMove {
 	uint16_t itemId = 0;
 	uint8_t requestedCount = 0;
 	uint32_t inventoryCount = 0;
 	uint32_t value = 0;
 	uint16_t incomingItemId = 0;
+	const void* source = nullptr;
+	const void* sourceItem = nullptr;
+	uint8_t sourceCount = 0;
+	Position destination{};
+	uint32_t destinationCount = 0;
+	std::vector<PlayerBotLootGroundItemState> destinationItems;
 };
 
 struct PlayerBotLootDiscardVerification {
 	PlayerBotLootDiscardMove move;
+	PlayerBotLootGroundItemState groundItem;
 	uint32_t inventoryCount = 0;
 	bool discarded = false;
+};
+
+struct PlayerBotLootRecoveryMove {
+	uint16_t itemId = 0;
+	uint16_t clientId = 0;
+	uint8_t requestedCount = 0;
+	const void* sourceItem = nullptr;
+	uint8_t sourceIndex = 0;
+	uint8_t sourceCount = 0;
+	Position sourcePosition{};
+	const void* destination = nullptr;
+	uint32_t destinationCount = 0;
+};
+
+struct PlayerBotLootRecoveryVerification {
+	PlayerBotLootRecoveryMove move;
+	uint32_t recoveredCount = 0;
+	bool recovered = false;
 };
 
 class PlayerBotLootSession
@@ -80,8 +122,13 @@ class PlayerBotLootSession
 		bool hasPendingDiscardMove() const { return pendingDiscard.has_value(); }
 		const std::optional<PlayerBotLootDiscardMove>& pendingDiscardMove() const { return pendingDiscard; }
 
+		bool hasPendingRecoveryMove() const { return pendingRecovery.has_value(); }
+		const std::optional<PlayerBotLootRecoveryMove>& pendingRecoveryMove() const { return pendingRecovery; }
+
 		bool lootItemUnavailable(uint16_t itemId) const;
 		const std::set<uint16_t>& unavailableLootItems() const { return unavailableItems; }
+		bool containerAccessAttempted(const void* container) const;
+		void markContainerAccessAttempted(const void* container);
 
 	private:
 		friend class PlayerBotLootWorkflow;
@@ -101,9 +148,19 @@ class PlayerBotLootSession
 		                                                          uint32_t suspendThreshold,
 		                                                          std::chrono::milliseconds retryInterval);
 		void beginLootMove(PlayerBotLootMove move);
-		std::optional<PlayerBotLootMoveVerification> verifyLootMove(uint32_t inventoryCount);
+		std::optional<PlayerBotLootMoveVerification> verifyLootMove(uint8_t sourceCount,
+		                                                            uint32_t destinationCount,
+		                                                            uint32_t inventoryCount);
+		void cancelLootMove();
 		void beginDiscardMove(PlayerBotLootDiscardMove move);
-		std::optional<PlayerBotLootDiscardVerification> verifyDiscardMove(uint32_t inventoryCount);
+		std::optional<PlayerBotLootDiscardVerification> verifyDiscardMove(uint8_t sourceCount,
+		                                                                  const std::vector<PlayerBotLootGroundItemState>& destinationItems,
+		                                                                  uint32_t inventoryCount);
+		void cancelDiscardMove();
+		void beginRecoveryMove(PlayerBotLootRecoveryMove move);
+		std::optional<PlayerBotLootRecoveryVerification> verifyRecoveryMove(uint8_t sourceCount,
+		                                                                    uint32_t destinationCount);
+		void cancelRecoveryMove();
 		void suppressLootItem(uint16_t itemId);
 
 		uint32_t target = 0;
@@ -122,7 +179,9 @@ class PlayerBotLootSession
 		std::chrono::steady_clock::time_point retryAt;
 		std::optional<PlayerBotLootMove> pendingLoot;
 		std::optional<PlayerBotLootDiscardMove> pendingDiscard;
+		std::optional<PlayerBotLootRecoveryMove> pendingRecovery;
 		std::set<uint16_t> unavailableItems;
+		std::set<const void*> attemptedContainerAccess;
 		bool observed = false;
 		bool corpseOpen = false;
 		bool backpackOpen = false;

@@ -9,9 +9,7 @@
 PlayerBotHuntCoordinator::PlayerBotHuntCoordinator(
 	PlayerBotHuntCoordinatorConfig config, std::map<uint64_t, std::chrono::steady_clock::time_point>& sharedCooldowns) :
 	combatRuntime(std::move(config.combat)), lootWorkflow(std::move(config.loot)),
-	huntRuntime(std::move(config.fallbackPatrol)), huntRegionCooldowns(sharedCooldowns),
-	capacityPressureGrace(config.capacityPressureGrace),
-	capacityPressureMinimumHunt(config.capacityPressureMinimumHunt)
+	huntRuntime(std::move(config.fallbackPatrol)), huntRegionCooldowns(sharedCooldowns)
 {}
 
 std::optional<PlayerBotCombatDecision> PlayerBotHuntCoordinator::selectTraversalAttack(
@@ -68,6 +66,8 @@ PlayerBotLootNavigationTransition PlayerBotHuntCoordinator::observeLootNavigatio
 PlayerBotLootNavigationTransition PlayerBotHuntCoordinator::resumeLootNavigation(const Position& currentPosition,
 	std::chrono::steady_clock::time_point now) { return lootWorkflow.resumeNavigation(currentPosition, now); }
 bool PlayerBotHuntCoordinator::hasPendingLootMove() const { return lootWorkflow.hasPendingLootMove(); }
+void PlayerBotHuntCoordinator::cancelPendingLootMove() { lootWorkflow.cancelPendingLootMove(); }
+void PlayerBotHuntCoordinator::cancelPendingDiscardMove() { lootWorkflow.cancelPendingDiscardMove(); }
 bool PlayerBotHuntCoordinator::lootNavigationSuspended() const { return lootWorkflow.navigationSuspended(); }
 bool PlayerBotHuntCoordinator::lootTimedOut(std::chrono::steady_clock::time_point now) const { return lootWorkflow.timedOut(now); }
 uint32_t PlayerBotHuntCoordinator::lootTargetId() const { return lootWorkflow.targetId(); }
@@ -130,19 +130,12 @@ bool PlayerBotHuntCoordinator::insideHuntArea(const Position& position, uint32_t
 {
 	return huntRuntime.insideHuntArea(position, westRange, eastRange, northRange, southRange);
 }
-void PlayerBotHuntCoordinator::observeCapacityPressure(std::chrono::steady_clock::time_point now)
-{
-	huntRuntime.observeCapacityPressure(now);
-}
 PlayerBotHuntTurnObservation PlayerBotHuntCoordinator::observeTurn(bool inHuntPhase, bool selectRegion,
 	std::chrono::steady_clock::time_point now) const
 {
-	const bool pressureElapsed = inHuntPhase &&
-	    huntRuntime.capacityPressureElapsed(now, capacityPressureGrace, capacityPressureMinimumHunt);
 	return {inHuntPhase && selectRegion && !huntRuntime.active() && !huntRuntime.planningActive(),
 	        huntRuntime.planningActive(), lootWorkflow.navigationSuspended(),
-	        huntRuntime.capacityPressureActive(), pressureElapsed,
-	        inHuntPhase && (huntRuntime.deadlineReached(now) || pressureElapsed)};
+	        inHuntPhase && huntRuntime.deadlineReached(now)};
 }
 bool PlayerBotHuntCoordinator::matchesHuntMonster(const std::string& name) const { return huntRuntime.matchesMonster(name); }
 void PlayerBotHuntCoordinator::sampleHuntCombat(const PlayerBotHuntCombatSnapshot& snapshot) { huntRuntime.sampleCombat(snapshot); }

@@ -293,27 +293,7 @@ void PlayerBotHuntRuntime::beginCycle(std::chrono::steady_clock::time_point now,
 {
 	singleWaypointReached = false;
 	huntDeadline = now + std::chrono::seconds(durationSeconds);
-	capacityPressureStarted = {};
 	++cycles;
-}
-
-void PlayerBotHuntRuntime::observeCapacityPressure(std::chrono::steady_clock::time_point now)
-{
-	if (activeRegion && capacityPressureStarted == std::chrono::steady_clock::time_point{}) {
-		capacityPressureStarted = now;
-	}
-}
-
-bool PlayerBotHuntRuntime::capacityPressureElapsed(std::chrono::steady_clock::time_point now,
-	                                                std::chrono::steady_clock::duration grace,
-	                                                std::chrono::steady_clock::duration minimumHunt) const
-{
-	if (!activeRegion || capacityPressureStarted == std::chrono::steady_clock::time_point{}) return false;
-	if (minimumHunt > std::chrono::steady_clock::duration{} && huntStarted != std::chrono::steady_clock::time_point{} &&
-	    now - huntStarted < minimumHunt) {
-		return false;
-	}
-	return now - capacityPressureStarted >= grace;
 }
 
 bool PlayerBotHuntRuntime::matchesMonster(const std::string& name) const
@@ -437,7 +417,6 @@ std::optional<PlayerBotHuntRuntimeCompletion> PlayerBotHuntRuntime::complete(con
 	result.region.supplyCalibration = result.supplyObservation.calibration;
 	result.challenge = policy.updateChallengeFrontier({result.durationSeconds, player.maximumHealth});
 	activeRegion.reset();
-	capacityPressureStarted = {};
 	supplyBaseline.reset();
 	policy.resetCombatEvidence();
 	return result;

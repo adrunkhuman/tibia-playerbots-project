@@ -43,6 +43,7 @@ registerCorpseTestMonster("Playerbot Food Value Corpse", {
 registerCorpseTestMonster("Playerbot Food Cap Corpse", {
 	{id = 2666, chance = 100000, maxCount = 1},
 })
+registerCorpseTestMonster("Playerbot Cargo Coin Stack", {})
 registerCorpseTestMonster("Playerbot Spell Target", {}, nil, false, 1000)
 registerCorpseTestMonster("Playerbot Death Threat", {}, nil, true, 100000, {
     {name = "combat", type = COMBAT_PHYSICALDAMAGE, interval = 100, chance = 100,
