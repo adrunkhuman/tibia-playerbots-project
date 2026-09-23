@@ -90,7 +90,9 @@ class PlayerBotHuntCoordinator
 		{
 			return transitCombat.observe(transit, goal, phase);
 		}
-		void enterHuntArea() { transitCombat.finish(); }
+		void enterHuntArea(const PlayerBotHuntRuntimePlayerObservation& player,
+		                   const PlayerBotSupplyProfile& supplyProfile,
+		                   std::chrono::steady_clock::time_point now);
 		bool inTransit() const { return transitCombat.active(); }
 		void observeTransitMovementFailure(const Position& currentPosition,
 		                                  std::optional<Position> intendedStep = std::nullopt)
@@ -140,6 +142,7 @@ class PlayerBotHuntCoordinator
 		void observeHuntDamage(uint32_t damage);
 		void observeCoinAcquisition(uint64_t gold) { huntRuntime.observeCoinAcquisition(gold); }
 		void observeHuntRecovery(bool potion);
+		void observeHuntLevelRestoration(uint32_t health, uint32_t mana);
 		bool observeHuntDanger(int32_t maximumHealth, std::chrono::steady_clock::time_point now,
 		                      std::chrono::steady_clock::duration cooldown);
 		void observeHuntDeath(bool activeCombat, std::chrono::steady_clock::time_point now,

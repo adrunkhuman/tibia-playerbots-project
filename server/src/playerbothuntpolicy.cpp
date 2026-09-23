@@ -86,8 +86,11 @@ void PlayerBotHuntPolicy::observeCombat(const PlayerBotHuntCombatSample& sample)
 	++evidence.healthPercentSamples[healthPercent];
 	++evidence.manaPercentSamples[manaPercent];
 	evidence.maximumAttackerOverlap = std::max(evidence.maximumAttackerOverlap, sample.attackers);
+	const double elapsedSeconds = std::max(0.0, sample.elapsedSeconds);
 	evidence.attackerExposureSeconds[std::min<std::size_t>(sample.attackers, evidence.attackerExposureSeconds.size() - 1)] +=
-	    std::max(0.0, sample.elapsedSeconds);
+	    elapsedSeconds;
+	if (sample.foodActive) evidence.foodActiveSeconds += elapsedSeconds;
+	if (sample.foodAvailable) evidence.foodAvailableSeconds += elapsedSeconds;
 }
 
 void PlayerBotHuntPolicy::sampleCombat(const PlayerBotHuntCombatSnapshot& snapshot)
@@ -98,7 +101,8 @@ void PlayerBotHuntPolicy::sampleCombat(const PlayerBotHuntCombatSnapshot& snapsh
 	}
 	lastSample = snapshot.observedAt;
 	observeCombat({snapshot.active, elapsedSeconds, snapshot.health, snapshot.maximumHealth,
-	               snapshot.mana, snapshot.maximumMana, snapshot.attackers});
+	               snapshot.mana, snapshot.maximumMana, snapshot.attackers,
+	               snapshot.foodActive, snapshot.foodAvailable});
 }
 
 void PlayerBotHuntPolicy::observeKill()
@@ -118,6 +122,12 @@ void PlayerBotHuntPolicy::observeRecovery(bool potion)
 	} else {
 		++evidence.spellRecoveries;
 	}
+}
+
+void PlayerBotHuntPolicy::observeLevelRestoration(uint32_t health, uint32_t mana)
+{
+	evidence.levelHealthRestored += health;
+	evidence.levelManaRestored += mana;
 }
 
 void PlayerBotHuntPolicy::observeDeath()
@@ -144,6 +154,10 @@ PlayerBotHuntCombatSummary PlayerBotHuntPolicy::combatSummary() const
 	summary.spellRecoveries = evidence.spellRecoveries;
 	summary.maximumAttackerOverlap = evidence.maximumAttackerOverlap;
 	summary.attackerExposureSeconds = evidence.attackerExposureSeconds;
+	summary.foodActiveSeconds = evidence.foodActiveSeconds;
+	summary.foodAvailableSeconds = evidence.foodAvailableSeconds;
+	summary.levelHealthRestored = evidence.levelHealthRestored;
+	summary.levelManaRestored = evidence.levelManaRestored;
 	summary.minimumHealth = evidence.minimumHealth;
 	summary.minimumMana = evidence.minimumMana;
 	summary.dangerObserved = evidence.dangerObserved;
@@ -224,6 +238,27 @@ PlayerBotSupplyObservation PlayerBotHuntPolicy::observeSupplies(const PlayerBotH
 	history.atlasRevision = region.atlasRevision;
 	auto& learned = history.supply;
 	PlayerBotSupplyObservation update;
+	update.durationSeconds = durationSeconds;
+	update.arrivalBaselineObserved = true;
+	update.startingHealth = region.currentHealth;
+	update.startingMaximumHealth = region.maximumHealth;
+	update.startingMana = region.supplyProfile.mana;
+	update.startingMaximumMana = region.supplyProfile.maximumMana;
+	update.endingHealth = health;
+	update.endingMaximumHealth = maximumHealth;
+	update.endingMana = mana;
+	update.endingMaximumMana = capabilityAfter.maximumMana;
+	update.activeCombatSeconds = combat.activeSeconds;
+	update.kills = combat.kills;
+	update.p10HealthPercent = combat.p10HealthPercent;
+	update.p10ManaPercent = combat.p10ManaPercent;
+	update.foodActiveSeconds = combat.foodActiveSeconds;
+	update.foodAvailableSeconds = combat.foodAvailableSeconds;
+	update.levelHealthRestored = combat.levelHealthRestored;
+	update.levelManaRestored = combat.levelManaRestored;
+	update.interrupted = interrupted;
+	update.dangerObserved = combat.dangerObserved;
+	update.deathObserved = combat.deathObserved;
 	std::tie(update.observedAttackerCoverage, update.observedAttackerCoverageSeconds) =
 	    qualifiedSupplyCrowdCoverage(combat);
 	if (const auto applicable = playerBotSupplyCalibrationForCapability(learned, capabilityAfter)) {
@@ -234,20 +269,22 @@ PlayerBotSupplyObservation PlayerBotHuntPolicy::observeSupplies(const PlayerBotH
 	update.changedFields = capabilityChange.changedFields;
 	update.direction = capabilityChange.direction;
 
-	auto withoutFood = [](PlayerBotSupplyCapabilitySnapshot capability) {
-		capability.foodActive = false;
-		capability.foodHealthGain = 0;
-		capability.foodHealthIntervalMilliseconds = 0;
-		capability.foodManaGain = 0;
-		capability.foodManaIntervalMilliseconds = 0;
-		return capability;
-	};
-	const PlayerBotSupplyCapabilityComparison nonFoodChange = playerBotCompareSupplyCapabilities(
-	    withoutFood(region.supplyCapability), withoutFood(capabilityAfter));
-	const bool foodContextBoundary = capabilityChange.recoveryContextChanged &&
-	    !capabilityChange.materialChange && nonFoodChange.compatible;
+	// An outing that had normal food available remains evidence for that
+	// recovery contract even if the final condition or last carried item expired.
+	// The retained estimate is not applicable while future food is unavailable.
+	PlayerBotSupplyCapabilitySnapshot sampleCapability = capabilityAfter;
+	if (region.supplyCapability.foodAvailable || combat.foodAvailableSeconds > 0 || combat.foodActiveSeconds > 0) {
+		sampleCapability.foodAvailable = true;
+	}
+	const PlayerBotSupplyCapabilityComparison sampleCapabilityChange =
+	    playerBotCompareSupplyCapabilities(region.supplyCapability, sampleCapability);
 	if (capabilityChange.materialChange) {
 		update.reason = "material_capability_change";
+		return update;
+	}
+	if (!sampleCapabilityChange.compatible) {
+		update.reason = sampleCapabilityChange.recoveryContextChanged ? "recovery_contract_changed" :
+		                                                               "capability_regression";
 		return update;
 	}
 	if (combat.activeSeconds <= 0) {
@@ -260,39 +297,41 @@ PlayerBotSupplyObservation PlayerBotHuntPolicy::observeSupplies(const PlayerBotH
 	const double prior = compatibleHistory ? compatibleHistory->potionsPerCombatSecond :
 	    region.sharedSupplyEstimate.available ? region.supplyAppliedPotionsPerCombatSecond :
 	    exposure > 0 ? region.supplyBudget.expectedPotions / exposure : 0;
-	const double observed = combat.potionRecoveries / combat.activeSeconds;
-	const bool depleted = region.supplyProfile.potions > 0 && potions == 0;
-	const bool unsafe = combat.dangerObserved || combat.deathObserved || depleted || combat.p10HealthPercent < 70;
-	const bool enoughEvidence = !interrupted && durationSeconds >= 120 &&
-	    combat.activeSeconds >= 60 && combat.kills >= 3;
-	const bool resourcesStable = combat.p10HealthPercent >= 80 && combat.p10ManaPercent >= 50 &&
-	    health >= region.currentHealth - maximumHealth / 20 &&
-	    mana + region.supplyProfile.maximumMana / 20 >= region.supplyProfile.mana;
-	const bool recoveryIndependent = foodContextBoundary && enoughEvidence && resourcesStable &&
-	    combat.damageTaken == 0 && combat.spellRecoveries == 0;
+	update.levelAdjustedHealthDebt = std::max<double>(0, static_cast<double>(region.currentHealth) +
+	    combat.levelHealthRestored - health);
+	update.levelAdjustedManaDebt = std::max<double>(0, static_cast<double>(region.supplyProfile.mana) +
+	    combat.levelManaRestored - mana);
+	const double potionHealing = std::max<double>(1, region.supplyProfile.potionHealing);
+	const double healthDebtPotions = update.levelAdjustedHealthDebt / potionHealing;
+	double manaDebtPotions = 0;
+	if (region.supplyProfile.spellLegal && region.supplyProfile.spellMana > 0 &&
+	    region.supplyProfile.spellHealing > 0) {
+		manaDebtPotions = update.levelAdjustedManaDebt * region.supplyProfile.spellHealing /
+		    (static_cast<double>(region.supplyProfile.spellMana) * potionHealing);
+	} else if (region.supplyProfile.maximumMana > 0) {
+		manaDebtPotions = update.levelAdjustedManaDebt / region.supplyProfile.maximumMana;
+	}
+	update.potionEquivalentDemand = combat.potionRecoveries + healthDebtPotions + manaDebtPotions;
+	const double observed = update.potionEquivalentDemand / combat.activeSeconds;
+	update.potionsDepleted = region.supplyProfile.potions > 0 && potions == 0;
+	update.manaDepleted = combat.spellRecoveries > 0 && combat.minimumMana == 0;
+	const bool healthPressure = combat.p10HealthPercent < update.unsafeHealthPercent;
+	const bool unsafe = combat.dangerObserved || combat.deathObserved || update.potionsDepleted ||
+	    update.manaDepleted || healthPressure;
 
-	PlayerBotSupplyProfile supplyWithoutFood = region.supplyProfile;
-	supplyWithoutFood.regenerationSeconds = 0;
-	supplyWithoutFood.healthGain = 0;
-	supplyWithoutFood.healthInterval = 0;
-	supplyWithoutFood.manaGain = 0;
-	supplyWithoutFood.manaInterval = 0;
-	const PlayerBotSupplyBudget budgetWithoutFood = playerBotSupplyBudget(supplyWithoutFood,
-	    region.expectedDamagePerSecond, region.combatFraction, region.availableHuntSeconds,
-	    region.estimatedTravelSeconds);
-	const double endStaticRequired = exposure > 0 && !capabilityAfter.foodActive ?
-	    budgetWithoutFood.expectedPotions / exposure : prior;
 	auto estimateDirection = [](double before, double after) {
 		return after > before ? PlayerBotSupplyEstimateDirection::Upward :
 		       after < before ? PlayerBotSupplyEstimateDirection::Downward :
 		                        PlayerBotSupplyEstimateDirection::Unchanged;
 	};
 	PlayerBotSupplyCalibration candidate;
-	candidate.capability = capabilityAfter;
-	candidate.capabilityHash = playerBotSupplyCapabilityHash(capabilityAfter);
+	candidate.capability = sampleCapability;
+	candidate.capabilityHash = playerBotSupplyCapabilityHash(sampleCapability);
 	candidate.potionsPerCombatSecond = prior;
 	candidate.samples = compatibleHistory ? compatibleHistory->samples : 0;
 	auto recordTransferEvidence = [&](bool safeEvidence, bool upwardEvidence) {
+		if (!compatibleHistory || upwardEvidence) history.supplyGuardedSamples = 0;
+		if (safeEvidence) ++history.supplyGuardedSamples;
 		const std::string species = region.monsters.size() == 1 ? region.monsters.front().name : std::string();
 		const bool retain = compatibleHistory && !species.empty() && history.supplySpecies == species &&
 		    history.supplyAtlasSiteId == region.atlasSiteId;
@@ -308,9 +347,6 @@ PlayerBotSupplyObservation PlayerBotHuntPolicy::observeSupplies(const PlayerBotH
 		history.supplySpecies = species;
 		history.supplyAtlasSiteId = region.atlasSiteId;
 		if (upwardEvidence) {
-			// Danger or higher demand starts a new downward-evidence window. The
-			// raised local rate remains, but pre-danger safe samples cannot make it
-			// immediately transferable as a cheaper shared estimate.
 			history.supplySafeSamples = 0;
 			history.supplyAttackerCoverage = 0;
 			history.supplyAttackerCoverageSeconds = 0;
@@ -325,68 +361,87 @@ PlayerBotSupplyObservation PlayerBotHuntPolicy::observeSupplies(const PlayerBotH
 			history.supplyAttackerCoverage = update.observedAttackerCoverage;
 			history.supplyAttackerCoverageSeconds = update.observedAttackerCoverageSeconds;
 		} else {
-			// A higher-coverage sample also covers the retained lower bound. Its
-			// qualified seconds are a conservative lower bound for that overlap.
 			history.supplyAttackerCoverageSeconds = std::min(
 			    history.supplyAttackerCoverageSeconds, update.observedAttackerCoverageSeconds);
 		}
 		++history.supplySafeSamples;
 	};
 
-	// Upward evidence may cross a food-context boundary when every non-food
-	// capability remains compatible. Preserve both the prior and the static
-	// no-food requirement so an unsafe outing can never make demand cheaper.
-	if (unsafe || observed > prior) {
-		if (!capabilityChange.compatible && !foodContextBoundary) {
-			update.reason = "capability_regression";
+	if (unsafe) {
+		candidate.potionsPerCombatSecond = std::max({prior, observed, 1.0 / 60.0});
+		update.estimateDirection = estimateDirection(prior, candidate.potionsPerCombatSecond);
+		if (update.estimateDirection != PlayerBotSupplyEstimateDirection::Upward) {
+			recordTransferEvidence(false, true);
+			update.reason = combat.deathObserved ? "death_observed" :
+			                combat.dangerObserved ? "danger_observed" :
+			                update.potionsDepleted ? "potions_depleted" :
+			                update.manaDepleted ? "mana_depleted" : "health_pressure";
 			return update;
 		}
-		candidate.potionsPerCombatSecond = std::max({prior, endStaticRequired, observed});
-		if (unsafe) candidate.potionsPerCombatSecond = std::max(candidate.potionsPerCombatSecond, 1.0 / 60.0);
 		++candidate.samples;
 		learned = candidate;
 		recordTransferEvidence(false, true);
 		update.calibration = learned;
 		update.accepted = true;
-		update.estimateDirection = estimateDirection(prior, candidate.potionsPerCombatSecond);
-		update.reason = unsafe ?
-		    (update.estimateDirection == PlayerBotSupplyEstimateDirection::Upward ?
-		         "unsafe_upward_correction" : "unsafe_demand_held") :
-		    "higher_observed_demand";
+		update.reason = "unsafe_upward_correction";
 		return update;
 	}
-	if (!capabilityChange.compatible && !recoveryIndependent) {
-		update.reason = capabilityChange.recoveryContextChanged ? "recovery_context_changed" :
-		                                                          "capability_regression";
+	// Higher observed demand corrects immediately, even when an otherwise safe
+	// outing ended early. Only cheaper evidence needs the full exposure guards.
+	if (observed > prior) {
+		candidate.potionsPerCombatSecond = observed;
+		++candidate.samples;
+		learned = candidate;
+		recordTransferEvidence(false, true);
+		update.calibration = learned;
+		update.accepted = true;
+		update.estimateDirection = PlayerBotSupplyEstimateDirection::Upward;
+		update.reason = "higher_observed_demand";
 		return update;
 	}
 	if (interrupted) {
 		update.reason = "interrupted_outing";
 		return update;
 	}
-	if (!enoughEvidence) {
-		update.reason = "insufficient_combat_evidence";
+	if (durationSeconds < update.minimumDurationSeconds) {
+		update.reason = "insufficient_duration";
 		return update;
 	}
-	if (!resourcesStable) {
-		update.reason = "resource_guard_failed";
+	if (combat.activeSeconds < update.minimumActiveCombatSeconds) {
+		update.reason = "insufficient_active_combat";
+		return update;
+	}
+	if (combat.kills < update.minimumKills) {
+		update.reason = "insufficient_kills";
+		return update;
+	}
+	if (combat.p10HealthPercent < update.minimumDownwardHealthPercent) {
+		update.reason = "health_pressure";
+		return update;
+	}
+	if (combat.spellRecoveries > 0 && combat.p10ManaPercent < update.minimumDownwardManaPercent) {
+		update.reason = "mana_pressure";
 		return update;
 	}
 
 	candidate.potionsPerCombatSecond = prior * 0.8 + observed * 0.2;
 	++candidate.samples;
-	// Zero is established only after repeated samples leave less than one
-	// projected potion over this outing's combat exposure.
-	if (observed == 0 && candidate.samples >= 3 && candidate.potionsPerCombatSecond * exposure < 1)
+	// Only repeated fully guarded safe samples can establish zero demand.
+	const uint32_t compatibleGuardedSamples = compatibleHistory ? history.supplyGuardedSamples : 0;
+	if (observed == 0 && compatibleGuardedSamples + 1 >= 3 &&
+	    candidate.potionsPerCombatSecond * exposure < 1) {
 		candidate.potionsPerCombatSecond = 0;
+	}
 	learned = candidate;
 	recordTransferEvidence(true, false);
 	update.calibration = learned;
 	update.accepted = true;
 	update.estimateDirection = estimateDirection(prior, candidate.potionsPerCombatSecond);
-	update.reason = recoveryIndependent ? "recovery_independent_evidence" :
-	                capabilityChange.recoveryContextChanged ? "improved_recovery_context" :
-	                                                          "safe_combat_evidence";
+	update.reason = combat.levelHealthRestored > 0 || combat.levelManaRestored > 0 ?
+	    "level_restoration_accounted" :
+	    (combat.spellRecoveries > 0 || combat.foodActiveSeconds > 0 ?
+	         "mixed_recovery_evidence" : "safe_combat_evidence");
+	(void)maximumHealth;
 	return update;
 }
 

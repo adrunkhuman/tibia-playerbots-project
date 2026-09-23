@@ -51,7 +51,7 @@ namespace {
 		append(PlayerBotSupplyCapabilitySpellMana, "spell_mana");
 		append(PlayerBotSupplyCapabilitySpellInterval, "spell_interval");
 		append(PlayerBotSupplyCapabilityPotionHealing, "potion_healing");
-		append(PlayerBotSupplyCapabilityFoodState, "food_state");
+		append(PlayerBotSupplyCapabilityFoodState, "food_availability");
 		append(PlayerBotSupplyCapabilityFoodHealth, "food_health_recovery");
 		append(PlayerBotSupplyCapabilityFoodMana, "food_mana_recovery");
 		append(PlayerBotSupplyCapabilityEquipment, "equipment_identity");
@@ -98,7 +98,15 @@ namespace {
 
 	PlayerBotHuntPlanningProfile huntPlanningFacts(Player& player, const PlayerBotCombatProfile& combat)
 	{
-		return playerBotHuntPlanningProfile(player, combat, 0);
+		PlayerBotHuntPlanningProfile profile = playerBotHuntPlanningProfile(player, combat, 0);
+		PlayerBotEquipmentPlayerSnapshot equipmentPlayer = PlayerBotEquipmentAdapter::player(player);
+		// getDefenseFactor() changes briefly after an attack. Supply compatibility
+		// uses the same equipment formula without that transient; attackFactor
+		// separately preserves the selected fight mode.
+		equipmentPlayer.defenseFactor = 1.0f;
+		profile.supplyCapabilityDefense = PlayerBotEquipmentPolicy(oracleVocationId).combatProfile(
+		    equipmentPlayer, PlayerBotEquipmentAdapter::loadout(player)).defense;
+		return profile;
 	}
 
 	PlayerBotCombatProfile huntCombatProfile(Player& player)
@@ -730,8 +738,15 @@ void PlayerBotController::recordActiveHuntCombat(const Player& player)
 			}
 		}
 	}
+	bool foodActive = false;
+	bool foodAvailable = false;
+	if (active) {
+		foodActive = player.getCondition(CONDITION_REGENERATION, CONDITIONID_DEFAULT, 0) != nullptr;
+		foodAvailable = foodActive || PlayerBotInventoryPolicy::foodInventory(player).count > 0;
+	}
 	huntCoordinator.sampleHuntCombat({active, now, player.getHealth(), player.getMaxHealth(),
-	                                player.getMana(), player.getMaxMana(), attackers});
+	                                player.getMana(), player.getMaxMana(), attackers,
+	                                foodActive, foodAvailable});
 }
 
 void PlayerBotController::recordHuntRecovery(bool potion)
@@ -1001,6 +1016,59 @@ void PlayerBotController::finishHuntRegion(const Player& player, const Position&
 	       << completion->region.supplyAppliedPotionsPerCombatSecond * 60
 	       << ",\"supply_observation_updated_potions_per_combat_minute\":"
 	       << completion->supplyObservation.calibration.potionsPerCombatSecond * 60
+	       << ",\"supply_arrival_baseline_observed\":"
+	       << (completion->supplyObservation.arrivalBaselineObserved ? "true" : "false")
+	       << ",\"supply_starting_health\":" << completion->supplyObservation.startingHealth
+	       << ",\"supply_starting_maximum_health\":"
+	       << completion->supplyObservation.startingMaximumHealth
+	       << ",\"supply_starting_mana\":" << completion->supplyObservation.startingMana
+	       << ",\"supply_starting_maximum_mana\":"
+	       << completion->supplyObservation.startingMaximumMana
+	       << ",\"supply_ending_health\":" << completion->supplyObservation.endingHealth
+	       << ",\"supply_ending_maximum_health\":"
+	       << completion->supplyObservation.endingMaximumHealth
+	       << ",\"supply_ending_mana\":" << completion->supplyObservation.endingMana
+	       << ",\"supply_ending_maximum_mana\":"
+	       << completion->supplyObservation.endingMaximumMana
+	       << ",\"supply_guard_duration_seconds\":" << completion->supplyObservation.durationSeconds
+	       << ",\"supply_guard_minimum_duration_seconds\":"
+	       << completion->supplyObservation.minimumDurationSeconds
+	       << ",\"supply_guard_active_combat_seconds\":"
+	       << completion->supplyObservation.activeCombatSeconds
+	       << ",\"supply_guard_minimum_active_combat_seconds\":"
+	       << completion->supplyObservation.minimumActiveCombatSeconds
+	       << ",\"supply_guard_kills\":" << completion->supplyObservation.kills
+	       << ",\"supply_guard_minimum_kills\":" << completion->supplyObservation.minimumKills
+	       << ",\"supply_guard_p10_health_percent\":"
+	       << static_cast<uint16_t>(completion->supplyObservation.p10HealthPercent)
+	       << ",\"supply_guard_p10_mana_percent\":"
+	       << static_cast<uint16_t>(completion->supplyObservation.p10ManaPercent)
+	       << ",\"supply_guard_unsafe_health_percent\":"
+	       << static_cast<uint16_t>(completion->supplyObservation.unsafeHealthPercent)
+	       << ",\"supply_guard_minimum_downward_health_percent\":"
+	       << static_cast<uint16_t>(completion->supplyObservation.minimumDownwardHealthPercent)
+	       << ",\"supply_guard_minimum_downward_mana_percent\":"
+	       << static_cast<uint16_t>(completion->supplyObservation.minimumDownwardManaPercent)
+	       << ",\"supply_guard_interrupted\":"
+	       << (completion->supplyObservation.interrupted ? "true" : "false")
+	       << ",\"supply_guard_potions_depleted\":"
+	       << (completion->supplyObservation.potionsDepleted ? "true" : "false")
+	       << ",\"supply_guard_mana_depleted\":"
+	       << (completion->supplyObservation.manaDepleted ? "true" : "false")
+	       << ",\"supply_guard_danger_observed\":"
+	       << (completion->supplyObservation.dangerObserved ? "true" : "false")
+	       << ",\"supply_guard_death_observed\":"
+	       << (completion->supplyObservation.deathObserved ? "true" : "false")
+	       << ",\"supply_food_active_seconds\":" << completion->supplyObservation.foodActiveSeconds
+	       << ",\"supply_food_available_seconds\":" << completion->supplyObservation.foodAvailableSeconds
+	       << ",\"supply_level_health_restored\":" << completion->supplyObservation.levelHealthRestored
+	       << ",\"supply_level_mana_restored\":" << completion->supplyObservation.levelManaRestored
+	       << ",\"supply_level_adjusted_health_debt\":"
+	       << completion->supplyObservation.levelAdjustedHealthDebt
+	       << ",\"supply_level_adjusted_mana_debt\":"
+	       << completion->supplyObservation.levelAdjustedManaDebt
+	       << ",\"supply_potion_equivalent_demand\":"
+	       << completion->supplyObservation.potionEquivalentDemand
 	       << ",\"kills\":" << combat.kills << ",\"damage_taken\":" << combat.damageTaken
 	       << ",\"active_combat_seconds\":" << combat.activeSeconds
 	       << ",\"active_combat_uptime\":" << (completion->durationSeconds == 0 ? 0 : combat.activeSeconds / completion->durationSeconds)
@@ -1514,7 +1582,10 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 	    huntCoordinator.insideHuntArea(currentPosition, Map::maxClientViewportX, Map::maxClientViewportX + 1,
 	                                    Map::maxClientViewportY, Map::maxClientViewportY + 1)) {
 		huntRegionReached = true;
-		huntCoordinator.enterHuntArea();
+		PlayerBotHuntPlanningProfile arrivalProfile = huntPlanningFacts(*player, huntCombatProfile(*player));
+		PlayerBotHuntRuntimePlayerObservation arrival = huntPlayerObservation(*player);
+		arrival.supplyCapability = playerBotSupplyCapability(arrivalProfile);
+		huntCoordinator.enterHuntArea(arrival, arrivalProfile.supply, std::chrono::steady_clock::now());
 		const PlayerBotHuntPatrolOutcome patrol = huntCoordinator.huntPatrolTarget();
 		emit("hunt_area_entered", currentPosition,
 		     "\"region_id\":" + (patrol.regionId ? std::to_string(*patrol.regionId) : "null") +
@@ -1850,6 +1921,12 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 	const PlayerBotHuntPatrolOutcome reached = huntCoordinator.observeHuntPatrolNavigation(navigation, now,
 		maximumRepeatedNavigationStepFailures, maximumPatrolRouteFailures);
 	if (reached.command == PlayerBotHuntPatrolCommand::WaypointReached) {
+		if (!huntRegionReached) {
+			PlayerBotHuntPlanningProfile arrivalProfile = huntPlanningFacts(*player, huntCombatProfile(*player));
+			PlayerBotHuntRuntimePlayerObservation arrival = huntPlayerObservation(*player);
+			arrival.supplyCapability = playerBotSupplyCapability(arrivalProfile);
+			huntCoordinator.enterHuntArea(arrival, arrivalProfile.supply, now);
+		}
 		huntRegionReached = true;
 		emit("action_result", currentPosition, "\"action\":\"hunt_waypoint\",\"result\":\"reached\",\"waypoint\":" +
 			std::to_string(reached.waypoint) + ",\"region_id\":" + (reached.regionId ? std::to_string(*reached.regionId) : "null"));

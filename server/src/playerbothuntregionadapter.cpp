@@ -781,18 +781,26 @@ PlayerBotHuntPlanningProfile PlayerBotHuntRegionAdapter::planningProfile(const P
 		}
 	}
 	profile.supply.maximumMana = player.getMaxMana();
-	if (Condition* food = player.getCondition(CONDITION_REGENERATION, CONDITIONID_DEFAULT)) {
+	auto interval = [](int64_t ticks) {
+		// Conditions execute on creature ticks, resetting their counter on gain.
+		return ticks > 0 ? std::ceil(static_cast<double>(ticks) / EVENT_CREATURE_THINK_INTERVAL) *
+		    EVENT_CREATURE_THINK_INTERVAL / 1000.0 : 0;
+	};
+	Condition* food = player.getCondition(CONDITION_REGENERATION, CONDITIONID_DEFAULT);
+	profile.foodAvailable = food || playerbot::PlayerBotInventoryPolicy::foodInventory(player).count > 0;
+	if (food) {
 		profile.supply.regenerationSeconds = food->getTicks() == -1 ?
 		    std::numeric_limits<double>::max() : std::max(0, food->getTicks()) / 1000.0;
 		profile.supply.healthGain = std::max(0, food->getParam(CONDITION_PARAM_HEALTHGAIN));
-		profile.supply.manaGain = std::max(0, food->getParam(CONDITION_PARAM_MANAGAIN));
-		auto interval = [](int32_t ticks) {
-			// Conditions execute on creature ticks, resetting their counter on gain.
-			return ticks > 0 ? std::ceil(static_cast<double>(ticks) / EVENT_CREATURE_THINK_INTERVAL) *
-			    EVENT_CREATURE_THINK_INTERVAL / 1000.0 : 0;
-		};
 		profile.supply.healthInterval = interval(food->getParam(CONDITION_PARAM_HEALTHTICKS));
+		profile.supply.manaGain = std::max(0, food->getParam(CONDITION_PARAM_MANAGAIN));
 		profile.supply.manaInterval = interval(food->getParam(CONDITION_PARAM_MANATICKS));
+	} else {
+		const Vocation* vocation = player.getVocation();
+		profile.supply.healthGain = vocation->getHealthGainAmount();
+		profile.supply.healthInterval = interval(static_cast<int64_t>(vocation->getHealthGainTicks()) * 1000);
+		profile.supply.manaGain = vocation->getManaGainAmount();
+		profile.supply.manaInterval = interval(static_cast<int64_t>(vocation->getManaGainTicks()) * 1000);
 	}
 	InstantSpell* spell = g_spells ? g_spells->getInstantSpellByName("Light Healing") : nullptr;
 	if (!spell || spell->getWords() != "exura" || !spell->isLearnable() || !spell->isEnabled() ||

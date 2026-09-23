@@ -75,6 +75,10 @@ struct PlayerBotHuntPlanningProfile {
 	bool lightHealingLegal = false;
 	bool cashPressure = false;
 	bool supplyRecovery = false;
+	bool foodAvailable = false;
+	// Supply compatibility uses a stable equipment/skill defense value. The
+	// combat profile keeps the engine's live defense for actual hunt scoring.
+	int32_t supplyCapabilityDefense = -1;
 	std::array<uint16_t, playerBotSupplyEquipmentSlotCount> equipmentItemIds{};
 	std::vector<PlayerBotHuntTransportArrival> transportArrivals;
 	PlayerBotSupplyProfile supply;
@@ -86,7 +90,8 @@ inline PlayerBotSupplyCapabilitySnapshot playerBotSupplyCapability(const PlayerB
 	capability.level = profile.combat.level;
 	capability.maximumHealth = profile.combat.maximumHealth;
 	capability.armor = profile.combat.armor;
-	capability.defense = profile.combat.defense;
+	capability.defense = profile.supplyCapabilityDefense >= 0 ?
+	    profile.supplyCapabilityDefense : profile.combat.defense;
 	capability.attack = profile.combat.attack;
 	capability.attackSkill = profile.combat.attackSkill;
 	capability.attackFactorMilli = static_cast<int32_t>(profile.combat.attackFactor * 1000);
@@ -97,7 +102,7 @@ inline PlayerBotSupplyCapabilitySnapshot playerBotSupplyCapability(const PlayerB
 	capability.spellMana = profile.supply.spellMana;
 	capability.spellIntervalMilliseconds = static_cast<uint32_t>(profile.supply.spellInterval * 1000);
 	capability.potionHealing = profile.supply.potionHealing;
-	capability.foodActive = profile.supply.regenerationSeconds > 0;
+	capability.foodAvailable = profile.foodAvailable;
 	capability.foodHealthGain = profile.supply.healthGain;
 	capability.foodHealthIntervalMilliseconds = static_cast<uint32_t>(profile.supply.healthInterval * 1000);
 	capability.foodManaGain = profile.supply.manaGain;
@@ -300,6 +305,7 @@ struct PlayerBotHuntRegionPerformance {
 	std::string supplySpecies{};
 	uint64_t supplyAtlasSiteId = 0;
 	uint32_t supplySafeSamples = 0;
+	uint32_t supplyGuardedSamples = 0;
 	uint8_t supplyAttackerCoverage = 0;
 	double supplyAttackerCoverageSeconds = 0;
 	bool supplyUpwardEvidence = false;

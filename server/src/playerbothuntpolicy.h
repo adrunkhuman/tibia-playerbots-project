@@ -21,6 +21,10 @@ struct PlayerBotHuntCombatEvidence {
 	uint32_t spellRecoveries = 0;
 	uint32_t maximumAttackerOverlap = 0;
 	std::array<double, 6> attackerExposureSeconds{};
+	double foodActiveSeconds = 0;
+	double foodAvailableSeconds = 0;
+	uint64_t levelHealthRestored = 0;
+	uint64_t levelManaRestored = 0;
 	int32_t minimumHealth = std::numeric_limits<int32_t>::max();
 	uint32_t minimumMana = std::numeric_limits<uint32_t>::max();
 	bool dangerObserved = false;
@@ -37,6 +41,8 @@ struct PlayerBotHuntCombatSample {
 	uint32_t mana = 0;
 	uint32_t maximumMana = 0;
 	uint32_t attackers = 0;
+	bool foodActive = false;
+	bool foodAvailable = false;
 };
 
 struct PlayerBotHuntCombatSnapshot {
@@ -47,6 +53,8 @@ struct PlayerBotHuntCombatSnapshot {
 	uint32_t mana = 0;
 	uint32_t maximumMana = 0;
 	uint32_t attackers = 0;
+	bool foodActive = false;
+	bool foodAvailable = false;
 };
 
 struct PlayerBotHuntCombatSummary : PlayerBotHuntCombatEvidence {
@@ -112,6 +120,7 @@ class PlayerBotHuntPolicy
 		void observeKill();
 		void observeDamage(uint32_t damage);
 		void observeRecovery(bool potion);
+		void observeLevelRestoration(uint32_t health, uint32_t mana);
 		void observeDeath();
 		bool observeDanger(int32_t maximumHealth, std::chrono::steady_clock::duration huntAge);
 

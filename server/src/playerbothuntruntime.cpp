@@ -278,6 +278,7 @@ void PlayerBotHuntRuntime::activate(PlayerBotHuntRegion region, const PlayerBotH
 	auto first = std::find(region.patrolPoints.begin(), region.patrolPoints.end(), region.destination);
 	if (first != region.patrolPoints.end()) std::rotate(region.patrolPoints.begin(), first, region.patrolPoints.end());
 	activeRegion = std::move(region);
+	supplyBaseline.reset();
 	patrolIndex = 0;
 	singleWaypointReached = false;
 	huntStarted = now;
@@ -320,6 +321,14 @@ bool PlayerBotHuntRuntime::matchesMonster(const std::string& name) const
 	return !activeRegion || std::any_of(activeRegion->monsters.begin(), activeRegion->monsters.end(), [&name](const auto& monster) {
 		return strcasecmp(monster.name.c_str(), name.c_str()) == 0;
 	});
+}
+
+void PlayerBotHuntRuntime::enterHuntArea(const PlayerBotHuntRuntimePlayerObservation& player,
+	const PlayerBotSupplyProfile& supplyProfile, std::chrono::steady_clock::time_point now)
+{
+	if (!activeRegion || supplyBaseline) return;
+	supplyBaseline = PlayerBotHuntSupplyBaseline{player, supplyProfile, now};
+	policy.resetCombatEvidence();
 }
 
 bool PlayerBotHuntRuntime::insideHuntArea(const Position& position, uint32_t westRange, uint32_t eastRange,
@@ -384,13 +393,34 @@ std::optional<PlayerBotHuntRuntimeCompletion> PlayerBotHuntRuntime::complete(con
 	     activeRegion->projectedExperience, activeRegion->observedCorrection,
 	     activeRegion->supplyRecovery ? std::min<uint32_t>(configuredDurationSeconds, 120) : configuredDurationSeconds,
 	     result.combat.dangerObserved, result.combat.deathObserved});
-	result.supplyObservation = policy.observeSupplies(*activeRegion, player.supplyCapability,
-	    result.durationSeconds, player.health, player.maximumHealth, player.mana, player.potions,
-	    player.supplyInterrupted);
+	if (supplyBaseline) {
+		PlayerBotHuntRegion supplyRegion = *activeRegion;
+		supplyRegion.currentHealth = supplyBaseline->player.health;
+		supplyRegion.maximumHealth = supplyBaseline->player.maximumHealth;
+		supplyRegion.supplyProfile = supplyBaseline->supplyProfile;
+		supplyRegion.supplyCapability = supplyBaseline->player.supplyCapability;
+		if (!playerBotCompareSupplyCapabilities(
+		        activeRegion->supplyCapability, supplyRegion.supplyCapability).compatible) {
+			supplyRegion.sharedSupplyEstimate = {};
+		}
+		const uint64_t supplyDurationSeconds = static_cast<uint64_t>(std::max<int64_t>(0,
+		    std::chrono::duration_cast<std::chrono::seconds>(now - supplyBaseline->observedAt).count()));
+		result.supplyObservation = policy.observeSupplies(supplyRegion, player.supplyCapability,
+		    supplyDurationSeconds, player.health, player.maximumHealth, player.mana, player.potions,
+		    player.supplyInterrupted);
+	} else {
+		result.supplyObservation.calibration = activeRegion->supplyCalibration;
+		result.supplyObservation.endingHealth = player.health;
+		result.supplyObservation.endingMaximumHealth = player.maximumHealth;
+		result.supplyObservation.endingMana = player.mana;
+		result.supplyObservation.endingMaximumMana = player.supplyCapability.maximumMana;
+		result.supplyObservation.reason = "hunt_arrival_not_observed";
+	}
 	result.region.supplyCalibration = result.supplyObservation.calibration;
 	result.challenge = policy.updateChallengeFrontier({result.durationSeconds, player.maximumHealth});
 	activeRegion.reset();
 	capacityPressureStarted = {};
+	supplyBaseline.reset();
 	policy.resetCombatEvidence();
 	return result;
 }

@@ -75,7 +75,9 @@ struct PlayerBotSupplyCapabilitySnapshot {
 	uint32_t spellMana = 0;
 	uint32_t spellIntervalMilliseconds = 0;
 	uint32_t potionHealing = 0;
-	bool foodActive = false;
+	// Availability is separate from the stable vocation recovery contract.
+	// A condition may expire while carried food can immediately renew it.
+	bool foodAvailable = false;
 	uint32_t foodHealthGain = 0;
 	uint32_t foodHealthIntervalMilliseconds = 0;
 	uint32_t foodManaGain = 0;
@@ -91,7 +93,7 @@ struct PlayerBotSupplyCapabilitySnapshot {
 		       maximumMana == other.maximumMana && spellLegal == other.spellLegal &&
 		       spellHealing == other.spellHealing && spellMana == other.spellMana &&
 		       spellIntervalMilliseconds == other.spellIntervalMilliseconds &&
-		       potionHealing == other.potionHealing && foodActive == other.foodActive &&
+		       potionHealing == other.potionHealing && foodAvailable == other.foodAvailable &&
 		       foodHealthGain == other.foodHealthGain &&
 		       foodHealthIntervalMilliseconds == other.foodHealthIntervalMilliseconds &&
 		       foodManaGain == other.foodManaGain &&
@@ -160,6 +162,10 @@ inline PlayerBotSupplyCapabilityComparison playerBotCompareSupplyCapabilities(
 	if (before.spellMana != after.spellMana) result.changedFields |= PlayerBotSupplyCapabilitySpellMana;
 	if (before.spellIntervalMilliseconds != after.spellIntervalMilliseconds)
 		result.changedFields |= PlayerBotSupplyCapabilitySpellInterval;
+	if (before.spellLegal != after.spellLegal || before.spellHealing != after.spellHealing ||
+	    before.spellMana != after.spellMana || before.spellIntervalMilliseconds != after.spellIntervalMilliseconds) {
+		result.recoveryContextChanged = true;
+	}
 	if (before.spellLegal && after.spellLegal) {
 		monotonic(before.spellHealing, after.spellHealing, PlayerBotSupplyCapabilitySpellHealing);
 		monotonic(before.spellMana, after.spellMana, PlayerBotSupplyCapabilitySpellMana, true);
@@ -169,32 +175,21 @@ inline PlayerBotSupplyCapabilityComparison playerBotCompareSupplyCapabilities(
 	material(before.potionHealing, after.potionHealing, PlayerBotSupplyCapabilityPotionHealing);
 	material(before.equipmentItemIds, after.equipmentItemIds, PlayerBotSupplyCapabilityEquipment);
 
-	if (before.foodActive != after.foodActive) {
+	if (before.foodAvailable != after.foodAvailable) {
 		result.changedFields |= PlayerBotSupplyCapabilityFoodState;
-		if (before.foodHealthGain != after.foodHealthGain ||
-		    before.foodHealthIntervalMilliseconds != after.foodHealthIntervalMilliseconds) {
-			result.changedFields |= PlayerBotSupplyCapabilityFoodHealth;
-		}
-		if (before.foodManaGain != after.foodManaGain ||
-		    before.foodManaIntervalMilliseconds != after.foodManaIntervalMilliseconds) {
-			result.changedFields |= PlayerBotSupplyCapabilityFoodMana;
-		}
 		result.recoveryContextChanged = true;
-		improved = improved || after.foodActive;
-		regressed = regressed || !after.foodActive;
-	} else if (before.foodActive &&
-	           (before.foodHealthGain != after.foodHealthGain ||
-	            before.foodHealthIntervalMilliseconds != after.foodHealthIntervalMilliseconds ||
-	            before.foodManaGain != after.foodManaGain ||
-	            before.foodManaIntervalMilliseconds != after.foodManaIntervalMilliseconds)) {
-		if (before.foodHealthGain != after.foodHealthGain ||
-		    before.foodHealthIntervalMilliseconds != after.foodHealthIntervalMilliseconds) {
-			result.changedFields |= PlayerBotSupplyCapabilityFoodHealth;
-		}
-		if (before.foodManaGain != after.foodManaGain ||
-		    before.foodManaIntervalMilliseconds != after.foodManaIntervalMilliseconds) {
-			result.changedFields |= PlayerBotSupplyCapabilityFoodMana;
-		}
+		improved = improved || after.foodAvailable;
+		regressed = regressed || !after.foodAvailable;
+	}
+	if (before.foodHealthGain != after.foodHealthGain ||
+	    before.foodHealthIntervalMilliseconds != after.foodHealthIntervalMilliseconds) {
+		result.changedFields |= PlayerBotSupplyCapabilityFoodHealth;
+		result.recoveryContextChanged = true;
+		improved = regressed = true;
+	}
+	if (before.foodManaGain != after.foodManaGain ||
+	    before.foodManaIntervalMilliseconds != after.foodManaIntervalMilliseconds) {
+		result.changedFields |= PlayerBotSupplyCapabilityFoodMana;
 		result.recoveryContextChanged = true;
 		improved = regressed = true;
 	}
@@ -217,7 +212,7 @@ inline uint64_t playerBotSupplyCapabilityHash(const PlayerBotSupplyCapabilitySna
 	     uint64_t(capability.magicLevel), uint64_t(capability.maximumMana), uint64_t(capability.spellLegal),
 	     uint64_t(capability.spellHealing), uint64_t(capability.spellMana),
 	     uint64_t(capability.spellIntervalMilliseconds), uint64_t(capability.potionHealing),
-	     uint64_t(capability.foodActive), uint64_t(capability.foodHealthGain),
+	     uint64_t(capability.foodAvailable), uint64_t(capability.foodHealthGain),
 	     uint64_t(capability.foodHealthIntervalMilliseconds), uint64_t(capability.foodManaGain),
 	     uint64_t(capability.foodManaIntervalMilliseconds)}) append(value);
 	for (uint16_t itemId : capability.equipmentItemIds) append(itemId);
@@ -263,6 +258,38 @@ struct PlayerBotSupplyObservation {
 	PlayerBotSupplyEstimateDirection estimateDirection = PlayerBotSupplyEstimateDirection::None;
 	uint8_t observedAttackerCoverage = 0;
 	double observedAttackerCoverageSeconds = 0;
+	uint64_t durationSeconds = 0;
+	bool arrivalBaselineObserved = false;
+	int32_t startingHealth = 0;
+	int32_t startingMaximumHealth = 0;
+	uint32_t startingMana = 0;
+	uint32_t startingMaximumMana = 0;
+	int32_t endingHealth = 0;
+	int32_t endingMaximumHealth = 0;
+	uint32_t endingMana = 0;
+	uint32_t endingMaximumMana = 0;
+	double activeCombatSeconds = 0;
+	uint32_t kills = 0;
+	uint8_t p10HealthPercent = 0;
+	uint8_t p10ManaPercent = 100;
+	double foodActiveSeconds = 0;
+	double foodAvailableSeconds = 0;
+	uint64_t levelHealthRestored = 0;
+	uint64_t levelManaRestored = 0;
+	double levelAdjustedHealthDebt = 0;
+	double levelAdjustedManaDebt = 0;
+	double potionEquivalentDemand = 0;
+	uint64_t minimumDurationSeconds = 120;
+	double minimumActiveCombatSeconds = 60;
+	uint32_t minimumKills = 3;
+	uint8_t unsafeHealthPercent = 70;
+	uint8_t minimumDownwardHealthPercent = 80;
+	uint8_t minimumDownwardManaPercent = 50;
+	bool interrupted = false;
+	bool potionsDepleted = false;
+	bool manaDepleted = false;
+	bool dangerObserved = false;
+	bool deathObserved = false;
 	const char* reason = "insufficient_evidence";
 	bool accepted = false;
 };

@@ -150,6 +150,12 @@ struct PlayerBotHuntRuntimeCompletion {
 	uint32_t levelBefore = 0;
 };
 
+struct PlayerBotHuntSupplyBaseline {
+	PlayerBotHuntRuntimePlayerObservation player;
+	PlayerBotSupplyProfile supplyProfile;
+	std::chrono::steady_clock::time_point observedAt;
+};
+
 enum class PlayerBotHuntPatrolCommand : uint8_t {
 	Continue,
 	WaypointReached,
@@ -222,10 +228,14 @@ class PlayerBotHuntRuntime
 		bool insideHuntArea(const Position& position, uint32_t westRange, uint32_t eastRange,
 		                    uint32_t northRange, uint32_t southRange) const;
 		bool matchesMonster(const std::string& name) const;
+		void enterHuntArea(const PlayerBotHuntRuntimePlayerObservation& player,
+		                   const PlayerBotSupplyProfile& supplyProfile,
+		                   std::chrono::steady_clock::time_point now);
 
 		void sampleCombat(const PlayerBotHuntCombatSnapshot& snapshot) { policy.sampleCombat(snapshot); }
 		void observeDamage(uint32_t damage) { policy.observeDamage(damage); }
 		void observeRecovery(bool potion) { policy.observeRecovery(potion); }
+		void observeLevelRestoration(uint32_t health, uint32_t mana) { policy.observeLevelRestoration(health, mana); }
 		void observeKill() { policy.observeKill(); }
 		void observeCoinAcquisition(uint64_t gold) { if (activeRegion) coinGoldAcquired += gold; }
 		bool observeDanger(int32_t maximumHealth, std::chrono::steady_clock::duration age) { return policy.observeDanger(maximumHealth, age); }
@@ -263,6 +273,7 @@ class PlayerBotHuntRuntime
 		PlayerBotHuntPolicy policy;
 		bool supplyRecoveryDegraded = false;
 		std::optional<PlayerBotHuntRegion> activeRegion;
+		std::optional<PlayerBotHuntSupplyBaseline> supplyBaseline;
 		std::vector<Position> fallbackPatrol;
 		std::chrono::steady_clock::time_point scopeReevaluationAfter;
 		std::chrono::steady_clock::time_point huntStarted;

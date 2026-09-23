@@ -181,6 +181,13 @@ void PlayerBotManager::onHealthDrain(const Player& player, uint32_t damage)
 	}
 }
 
+void PlayerBotManager::onLevelRestoration(const Player& player, uint32_t health, uint32_t mana)
+{
+	if (controller) {
+		controller->onLevelRestoration(player, health, mana);
+	}
+}
+
 void PlayerBotManager::onCombatDamage(Creature* attacker, const Creature& target, uint32_t damage)
 {
 	if (controller) {

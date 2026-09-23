@@ -646,6 +646,14 @@ void PlayerBotController::onHealthDrain(const Player& player, uint32_t damage)
 	}
 }
 
+void PlayerBotController::onLevelRestoration(const Player& player, uint32_t health, uint32_t mana)
+{
+	if (player.getID() == playerId && huntCoordinator.huntActive() && huntRegionReached &&
+	    turnRouter.cyclePhase() == CyclePhase::Hunt) {
+		huntCoordinator.observeHuntLevelRestoration(health, mana);
+	}
+}
+
 void PlayerBotController::onCombatDamage(Creature* attacker, const Creature& target, uint32_t damage)
 {
 	survivalRuntime.observeCombatDamage(attacker ? attacker->getID() : 0, target.getID(), playerId, damage);
