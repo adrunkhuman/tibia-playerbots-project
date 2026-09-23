@@ -297,4 +297,24 @@ foreach ($reason in @("fare_breaks_restock_reserve", "route_danger_above_toleran
     } "Navigation $reason preflight rejection was not bounded."
 }
 
+function New-MutablePortalFixture {
+    param([bool]$ShovelAvailable)
+
+    return @(
+        @{ event = "shovel_passages_contract"; item_closed_lookup = $true; closed_requires_shovel = $true;
+           shovel_available = $ShovelAvailable; closed_resolves_use = $ShovelAvailable;
+           item_open_lookup = $true; open_without_shovel = $true; normal_open_semantic = $true;
+           open_resolves_move = $true; blocked_rejected = $true; invalid_rejected = $true }
+        @{ event = "action_result"; action = "hunt_waypoint"; result = "reached";
+           position = @{ x = 32181; y = 31794; z = 8 } }
+    )
+}
+Assert-MutablePortalRouteEvents -Logs (ConvertTo-FixtureLogs (New-MutablePortalFixture $true))
+Assert-MutablePortalRouteEvents -Logs (ConvertTo-FixtureLogs (New-MutablePortalFixture $false))
+$invalidMutablePortal = New-MutablePortalFixture $false
+$invalidMutablePortal[0].closed_resolves_use = $true
+Assert-Rejected "Closed shovel passage ignored missing tool" {
+    Assert-MutablePortalRouteEvents -Logs (ConvertTo-FixtureLogs $invalidMutablePortal)
+} "Mutable portal route failed."
+
 "Playerbot navigation assertion regression PASS"

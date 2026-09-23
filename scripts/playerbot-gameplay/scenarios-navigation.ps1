@@ -38,7 +38,9 @@
 	}
 
 
-	if ($FullNavigation -or $selectedScenarios.Contains("carlin_service_route") -or $selectedScenarios.Contains("mutable_portal_route")) {
+	if ($FullNavigation -or $selectedScenarios.Contains("carlin_service_route") -or
+		$selectedScenarios.Contains("mutable_portal_route") -or
+		$selectedScenarios.Contains("mutable_portal_open_no_shovel")) {
 		Invoke-Scenario -Name "navigation" -DefaultTimeoutSeconds 240 -Body {
 			Invoke-Compose down --volumes --remove-orphans
 			$env:PLAYERBOT_GAMEPLAY_MODE = "navigation"
@@ -77,9 +79,20 @@
 		Invoke-Scenario -Name "mutable_portal_route" -DefaultTimeoutSeconds 60 -Body {
 			Invoke-Compose down --volumes --remove-orphans
 			$env:PLAYERBOT_GAMEPLAY_MODE = "mutable_portal_route"
+			$env:PLAYERBOT_MUTABLE_PORTAL_VARIANT = "closed_with_shovel"
 			$env:PLAYERBOT_HUNT_DURATION_SECONDS = "900"
 			Invoke-Compose up --detach
-			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST MUTABLE_PORTAL_ROUTE_START' | Out-Null
+			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST MUTABLE_PORTAL_ROUTE_START CLOSED_WITH_SHOVEL' | Out-Null
+			$routeLogs = Wait-ForPlayerbotEventCount -Action "hunt_waypoint" -Count 1
+			Assert-MutablePortalRouteEvents -Logs $routeLogs
+		}
+		Invoke-Scenario -Name "mutable_portal_open_no_shovel" -DefaultTimeoutSeconds 60 -Body {
+			Invoke-Compose down --volumes --remove-orphans
+			$env:PLAYERBOT_GAMEPLAY_MODE = "mutable_portal_route"
+			$env:PLAYERBOT_MUTABLE_PORTAL_VARIANT = "open_without_shovel"
+			$env:PLAYERBOT_HUNT_DURATION_SECONDS = "900"
+			Invoke-Compose up --detach
+			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST MUTABLE_PORTAL_ROUTE_START OPEN_WITHOUT_SHOVEL' | Out-Null
 			$routeLogs = Wait-ForPlayerbotEventCount -Action "hunt_waypoint" -Count 1
 			Assert-MutablePortalRouteEvents -Logs $routeLogs
 		}

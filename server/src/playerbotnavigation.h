@@ -25,6 +25,7 @@
 
 class Player;
 class Item;
+class Tile;
 
 inline constexpr uint64_t playerBotNavigationMaximumExpandedNodes = 100000;
 
@@ -118,6 +119,43 @@ enum class PlayerBotNavigationAction : uint8_t {
 	UseDoor,
 	NpcTravel,
 };
+
+// UseShovel steps carry this stable passage identity until dispatch; the live
+// tile then selects an ordinary move or normal shovel use.
+struct PlayerBotShovelPassage {
+	uint16_t closedItemId = 0;
+	uint16_t openItemId = 0;
+};
+
+inline std::optional<PlayerBotShovelPassage> playerBotShovelPassage(uint16_t itemId)
+{
+	// These are the exact closed/open pairs used by data/actions/lib/actions.lua.
+	switch (itemId) {
+		case 468:
+		case 469: return PlayerBotShovelPassage{468, 469};
+		case 481:
+		case 482: return PlayerBotShovelPassage{481, 482};
+		case 483:
+		case 484: return PlayerBotShovelPassage{483, 484};
+		case 7932:
+		case 7933: return PlayerBotShovelPassage{7932, 7933};
+		default: return std::nullopt;
+	}
+}
+
+const Item* playerBotShovelPassageItem(const Tile& tile, uint16_t passageItemId = 0);
+Item* playerBotShovelPassageItem(Tile& tile, uint16_t passageItemId = 0);
+
+inline std::optional<PlayerBotNavigationAction> playerBotResolveShovelPassageAction(
+    uint16_t passageItemId, uint16_t liveItemId, bool canUseShovel)
+{
+	const auto passage = playerBotShovelPassage(passageItemId);
+	const auto livePassage = playerBotShovelPassage(liveItemId);
+	if (!passage || !livePassage || passage->closedItemId != livePassage->closedItemId) return std::nullopt;
+	if (liveItemId == passage->openItemId) return PlayerBotNavigationAction::Move;
+	return canUseShovel && liveItemId == passage->closedItemId ?
+	    std::optional<PlayerBotNavigationAction>(PlayerBotNavigationAction::UseShovel) : std::nullopt;
+}
 
 enum class PlayerBotNavigationResult : uint8_t {
 	Reached,
@@ -220,6 +258,10 @@ class PlayerBotNavigator
 		                                   bool sameFloorOnly = false) const;
 		bool resolveMove(Player& player, const Position& from, Direction direction,
 		                 const std::set<Position>& blockedPositions, PlayerBotNavigationStep& step) const;
+		bool resolveShovelPassage(Player& player, const Position& from,
+		                          const PlayerBotNavigationStep& passage,
+		                          const std::set<Position>& blockedPositions,
+		                          PlayerBotNavigationStep& step) const;
 };
 
 #endif

@@ -613,6 +613,26 @@ void modeledPatrolFailure()
 	assert(exhaustedFare.routeFailures == 3);
 }
 
+void mutableShovelPassages()
+{
+	for (const auto& [closedItemId, openItemId] : std::array<std::pair<uint16_t, uint16_t>, 4>{
+	         std::pair<uint16_t, uint16_t>{468, 469}, {481, 482}, {483, 484}, {7932, 7933}}) {
+		const auto closed = playerBotShovelPassage(closedItemId);
+		const auto open = playerBotShovelPassage(openItemId);
+		assert(closed && open && closed->closedItemId == closedItemId && closed->openItemId == openItemId);
+		assert(open->closedItemId == closed->closedItemId && open->openItemId == closed->openItemId);
+		assert(playerBotResolveShovelPassageAction(closedItemId, openItemId, false) ==
+		       PlayerBotNavigationAction::Move);
+		assert(playerBotResolveShovelPassageAction(openItemId, closedItemId, true) ==
+		       PlayerBotNavigationAction::UseShovel);
+		assert(!playerBotResolveShovelPassageAction(openItemId, closedItemId, false));
+	}
+	// A planned passage follows its own identity, not an arbitrary hole-like tile.
+	assert(!playerBotShovelPassage(470));
+	assert(!playerBotResolveShovelPassageAction(468, 482, true));
+	assert(!playerBotResolveShovelPassageAction(468, 470, true));
+}
+
 void navigationFailureAccounting()
 {
 	// Only a completed local proof of unreachability can offer paid travel.
@@ -2269,6 +2289,7 @@ int main()
 	incrementalHuntValidationPipeline();
 	lootArithmeticMemo();
 	modeledPatrolFailure();
+	mutableShovelPassages();
 	navigationFailureAccounting();
 	transitCombat();
 	crowdDamageInflation();

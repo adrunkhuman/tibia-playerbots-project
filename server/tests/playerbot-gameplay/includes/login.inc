@@ -909,12 +909,31 @@ function F.login.onLogin(player)
         return true
     end
     if mode == "mutable_portal_route" then
-        assert(player:teleportTo(F.mutablePortalRouteStart), "Mutable portal route fixture could not reach its start")
-        if player:getItemCount(2554) == 0 then
-            assert(player:addItem(2554, 1), "Mutable portal route fixture could not add a shovel")
+        local variant = os.getenv("PLAYERBOT_MUTABLE_PORTAL_VARIANT") or "closed_with_shovel"
+        assert(variant == "closed_with_shovel" or variant == "open_without_shovel",
+            "unknown mutable portal variant: " .. variant)
+        local passageTile = Tile(F.mutablePortalRouteStart)
+        local passage = passageTile and (passageTile:getItemById(F.mutablePortalClosedItemId) or
+            passageTile:getItemById(F.mutablePortalOpenItemId))
+        assert(passage, "Mutable portal route fixture did not find the mapped shovel passage")
+        local expectedItemId = variant == "closed_with_shovel" and
+            F.mutablePortalClosedItemId or F.mutablePortalOpenItemId
+        if passage:getId() ~= expectedItemId then passage:transform(expectedItemId) end
+        assert((passageTile:getItemById(expectedItemId)),
+            "Mutable portal route fixture could not set the requested passage state")
+        assert(player:teleportTo(Position(F.mutablePortalRouteStart.x, F.mutablePortalRouteStart.y - 1,
+            F.mutablePortalRouteStart.z)), "Mutable portal route fixture could not reach its start")
+        if variant == "closed_with_shovel" then
+            if player:getItemCount(F.shovelItemId) == 0 then
+                assert(player:addItem(F.shovelItemId, 1), "Mutable portal route fixture could not add a shovel")
+            end
+        else
+            F.removeAll(player, F.shovelItemId)
+            assert(player:getItemCount(F.shovelItemId) == 0,
+                "Mutable portal route fixture could not remove the shovel")
         end
         F.suppressNearbyMonsters(player:getId())
-        print("PLAYERBOT_GAMEPLAY_TEST MUTABLE_PORTAL_ROUTE_START")
+        print("PLAYERBOT_GAMEPLAY_TEST MUTABLE_PORTAL_ROUTE_START " .. string.upper(variant))
         return true
     end
     if mode == "patrol_recovery" then F.suppressNearbyMonsters(player:getId()); print("PLAYERBOT_GAMEPLAY_TEST PATROL_RECOVERY_START"); return true end

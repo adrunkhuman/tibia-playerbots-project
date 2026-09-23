@@ -528,6 +528,128 @@ std::vector<playerbot::PlayerBotFixtureEvent> playerbot::PlayerBotFixtureDriver:
 	return {{"door_passages_contract", fields.str()}};
 }
 
+std::vector<playerbot::PlayerBotFixtureEvent> playerbot::PlayerBotFixtureDriver::runShovelPassagesContract(Player& player)
+{
+	if (!policy.mutablePortalRouteFixture) return {};
+
+	constexpr Position approach(64990, 64990, 7);
+	constexpr Position target(64991, 64990, 7);
+	constexpr Position destination(64991, 64990, 8);
+	constexpr uint16_t closedItemId = 7932;
+	constexpr uint16_t openItemId = 7933;
+	std::vector<Position> fixtureTiles;
+	auto cleanup = [&fixtureTiles]() {
+		for (const Position& position : fixtureTiles) g_game.map.removeTile(position);
+		PlayerBotTopology::instance().build(g_game.map);
+		PlayerBotHuntRegionPlanner::rebuildAtlas();
+	};
+	auto boolField = [](bool value) { return value ? "true" : "false"; };
+
+	uint16_t groundId = 0;
+	for (size_t itemIndex = 1; itemIndex < Item::items.size(); ++itemIndex) {
+		const uint16_t itemId = static_cast<uint16_t>(itemIndex);
+		const ItemType& type = Item::items[itemId];
+		if (type.isGroundTile() && !type.blockSolid) {
+			groundId = itemId;
+			break;
+		}
+	}
+	bool mapReady = groundId != 0;
+	for (const Position& position : {approach, target, destination}) {
+		if (!mapReady || g_game.map.getTile(position)) {
+			mapReady = false;
+			break;
+		}
+		auto* tile = new DynamicTile(position.x, position.y, position.z);
+		tile->internalAddThing(Item::CreateItem(groundId));
+		g_game.map.setTile(position, tile);
+		fixtureTiles.push_back(position);
+	}
+	Item* passage = mapReady ? Item::CreateItem(openItemId) : nullptr;
+	if (passage) g_game.map.getTile(target)->internalAddThing(passage);
+	mapReady = mapReady && passage;
+
+	const bool shovelAvailable = g_game.findItemOfType(&player, 2554, true) != nullptr;
+	bool itemClosedLookup = false;
+	bool closedRequiresShovel = false;
+	bool closedResolvesUse = false;
+	bool itemOpenLookup = false;
+	bool openWithoutShovel = false;
+	bool normalOpenSemantic = false;
+	bool openResolvesMove = false;
+	bool blockedRejected = false;
+	bool invalidRejected = false;
+	if (mapReady) {
+		PlayerBotTopology& topology = PlayerBotTopology::instance();
+		topology.build(g_game.map);
+		Tile* passageTile = g_game.map.getTile(target);
+		itemOpenLookup = passageTile && passageTile->getGround() != passage &&
+		                 playerBotShovelPassageItem(*passageTile, closedItemId) == passage;
+		const auto openRoute = topology.route(approach, destination, {}, false, false, player.getLevel());
+		openWithoutShovel = openRoute && openRoute->portal &&
+		                    openRoute->portal->action == PlayerBotTopologyPortalAction::UseShovel;
+		std::deque<PlayerBotNavigationStep> steps;
+		uint64_t expandedNodes = 0;
+		normalOpenSemantic = PlayerBotNavigator().planFrom(
+		    player, approach, destination, {}, steps, expandedNodes,
+		    playerBotNavigationMaximumExpandedNodes) == PlayerBotNavigationResult::Reached &&
+		    std::any_of(steps.begin(), steps.end(), [=](const PlayerBotNavigationStep& step) {
+			    return step.action == PlayerBotNavigationAction::UseShovel && step.itemId == closedItemId &&
+			           step.expectedItemId == openItemId;
+		    });
+
+		// Keep the topology built from the open item while the live item closes.
+		passage = g_game.transformItem(passage, closedItemId);
+		passageTile = g_game.map.getTile(target);
+		itemClosedLookup = passage && passageTile && passageTile->getGround() != passage &&
+		                   playerBotShovelPassageItem(*passageTile, closedItemId) == passage;
+		const auto closedRoute = topology.route(approach, destination, {}, false, true, player.getLevel());
+		closedRequiresShovel = closedRoute && closedRoute->portal &&
+		                        closedRoute->portal->action == PlayerBotTopologyPortalAction::UseShovel &&
+		                        !topology.route(approach, destination, {}, false, false, player.getLevel());
+		if (closedRoute && closedRoute->portal) {
+			PlayerBotNavigationStep semantic;
+			semantic.action = PlayerBotNavigationAction::UseShovel;
+			semantic.target = closedRoute->portal->target;
+			semantic.expectedPosition = closedRoute->portal->destination;
+			semantic.itemId = closedRoute->portal->itemId;
+			semantic.expectedItemId = closedRoute->portal->expectedItemId;
+			semantic.topologyPortal = true;
+			PlayerBotNavigationStep resolved;
+			closedResolvesUse = PlayerBotNavigator().resolveShovelPassage(
+			    player, approach, semantic, {}, resolved) &&
+			    resolved.action == PlayerBotNavigationAction::UseShovel && resolved.itemId == closedItemId &&
+			    resolved.expectedItemId == openItemId;
+
+			// Exercise the reverse case with topology actually built while closed.
+			topology.build(g_game.map);
+			passage = g_game.transformItem(passage, openItemId);
+			openResolvesMove = passage &&
+			    topology.route(approach, destination, {}, false, false, player.getLevel()).has_value() &&
+			    PlayerBotNavigator().resolveShovelPassage(
+			    player, approach, semantic, {}, resolved) &&
+			    resolved.action == PlayerBotNavigationAction::Move && resolved.expectedPosition == destination;
+		}
+		blockedRejected = !topology.route(approach, destination, {target}, false, true, player.getLevel());
+		passage = g_game.transformItem(passage, 7934);
+		invalidRejected = passage && !topology.route(approach, destination, {}, false, true, player.getLevel());
+	}
+	cleanup();
+
+	std::ostringstream fields;
+	fields << "\"item_closed_lookup\":" << boolField(itemClosedLookup)
+	       << ",\"closed_requires_shovel\":" << boolField(closedRequiresShovel)
+	       << ",\"shovel_available\":" << boolField(shovelAvailable)
+	       << ",\"closed_resolves_use\":" << boolField(closedResolvesUse)
+	       << ",\"item_open_lookup\":" << boolField(itemOpenLookup)
+	       << ",\"open_without_shovel\":" << boolField(openWithoutShovel)
+	       << ",\"normal_open_semantic\":" << boolField(normalOpenSemantic)
+	       << ",\"open_resolves_move\":" << boolField(openResolvesMove)
+	       << ",\"blocked_rejected\":" << boolField(blockedRejected)
+	       << ",\"invalid_rejected\":" << boolField(invalidRejected);
+	return {{"shovel_passages_contract", fields.str()}};
+}
+
 std::vector<playerbot::PlayerBotFixtureEvent> playerbot::PlayerBotFixtureDriver::runDepotRiskFallbackContract() const
 {
 	if (!policy.depotRiskFallbackFixture) return {};

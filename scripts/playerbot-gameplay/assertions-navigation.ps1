@@ -212,17 +212,30 @@ function Assert-MutablePortalRouteEvents {
 	param([string]$Logs)
 
 	$events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
+	$contract = @($events | Where-Object {
+		$_.event -eq "shovel_passages_contract" -and $_.item_closed_lookup -eq $true -and
+		$_.closed_requires_shovel -eq $true -and
+		$_.closed_resolves_use -eq $_.shovel_available -and
+		$_.item_open_lookup -eq $true -and $_.open_without_shovel -eq $true -and
+		$_.normal_open_semantic -eq $true -and $_.open_resolves_move -eq $true -and
+		$_.blocked_rejected -eq $true -and $_.invalid_rejected -eq $true
+	})
 	$reached = @($events | Where-Object {
 		$_.event -eq "action_result" -and $_.action -eq "hunt_waypoint" -and $_.result -eq "reached" -and
 		$_.position.x -eq 32181 -and $_.position.y -eq 31794 -and $_.position.z -eq 8
 	})
 	$transitionFailures = @($events | Where-Object {
 		$_.event -eq "action_result" -and $_.action -eq "navigate" -and
-		$_.result -eq "failed" -and $_.reason -eq "transition_unavailable"
+		$_.result -eq "failed" -and
+		($_.reason -eq "transition_unavailable" -or $_.reason -eq "transition_state_unchanged")
+	})
+	$routeFailures = @($events | Where-Object {
+		$_.event -eq "navigation_progress" -and $_.result -eq "failed" -and $_.reason -eq "route_unavailable"
 	})
 	$terminal = @($events | Where-Object { $_.event -eq "terminal" })
-	if ($reached.Count -ne 1 -or $transitionFailures.Count -ne 0 -or $terminal.Count -ne 0) {
-		throw "Mutable portal route failed. reached=$($reached.Count), transitionFailures=$($transitionFailures.Count), terminal=$($terminal.Count)."
+	if ($contract.Count -ne 1 -or $reached.Count -ne 1 -or $transitionFailures.Count -ne 0 -or
+		$routeFailures.Count -ne 0 -or $terminal.Count -ne 0) {
+		throw "Mutable portal route failed. contract=$($contract.Count), reached=$($reached.Count), transitionFailures=$($transitionFailures.Count), routeFailures=$($routeFailures.Count), terminal=$($terminal.Count)."
 	}
 }
 
