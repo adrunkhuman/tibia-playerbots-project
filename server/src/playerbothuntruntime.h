@@ -154,6 +154,8 @@ struct PlayerBotHuntSupplyBaseline {
 	PlayerBotHuntRuntimePlayerObservation player;
 	PlayerBotSupplyProfile supplyProfile;
 	std::chrono::steady_clock::time_point observedAt;
+	double plannedHuntSeconds = 0;
+	double staticPotionsPerCombatSecond = 0;
 };
 
 enum class PlayerBotHuntPatrolCommand : uint8_t {
@@ -248,6 +250,7 @@ class PlayerBotHuntRuntime
 		std::optional<PlayerBotHuntRuntimeCooldownCommand> observeDeath(bool activeCombat,
 		                                                                std::chrono::steady_clock::duration cooldown);
 		PlayerBotHuntPlanningProfile planningProfile(PlayerBotHuntPlanningProfile profile) const;
+		PlayerBotSupplyGlobalLearning supplyGlobalLearning() const { return policy.supplyGlobalLearning(); }
 		std::map<uint64_t, PlayerBotHuntRegionPerformance> regionPerformance() const { return policy.regionPerformance(); }
 		PlayerBotEquipmentHuntSummary summarizeEquipmentHunts(const std::vector<PlayerBotHuntRegion>& regions, bool truncated) const;
 

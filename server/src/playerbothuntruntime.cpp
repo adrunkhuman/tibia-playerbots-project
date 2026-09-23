@@ -327,7 +327,17 @@ void PlayerBotHuntRuntime::enterHuntArea(const PlayerBotHuntRuntimePlayerObserva
 	const PlayerBotSupplyProfile& supplyProfile, std::chrono::steady_clock::time_point now)
 {
 	if (!activeRegion || supplyBaseline) return;
-	supplyBaseline = PlayerBotHuntSupplyBaseline{player, supplyProfile, now};
+	double plannedHuntSeconds = activeRegion->availableHuntSeconds;
+	if (huntDeadline.time_since_epoch().count() != 0) {
+		plannedHuntSeconds = std::max(0.0, std::chrono::duration<double>(huntDeadline - now).count());
+	}
+	const double exposure = plannedHuntSeconds * std::clamp(activeRegion->combatFraction, 0.0, 1.0);
+	const PlayerBotSupplyBudget staticBudget = playerBotSupplyBudget(
+	    supplyProfile, activeRegion->expectedDamagePerSecond, activeRegion->combatFraction,
+	    plannedHuntSeconds, 0);
+	const double staticRate = exposure > 0 ? staticBudget.expectedPotions / exposure : 0;
+	supplyBaseline = PlayerBotHuntSupplyBaseline{
+	    player, supplyProfile, now, plannedHuntSeconds, staticRate};
 	policy.resetCombatEvidence();
 }
 
@@ -348,6 +358,7 @@ PlayerBotHuntPlanningProfile PlayerBotHuntRuntime::planningProfile(PlayerBotHunt
 {
 	profile.challengeFrontier = playerBotSupplyRecoveryChallengeFrontier(policy.challengeFrontier(), supplyRecoveryDegraded);
 	profile.supplyRecovery = supplyRecoveryDegraded;
+	profile.supplyGlobalLearning = policy.supplyGlobalLearning();
 	return profile;
 }
 
@@ -399,10 +410,10 @@ std::optional<PlayerBotHuntRuntimeCompletion> PlayerBotHuntRuntime::complete(con
 		supplyRegion.maximumHealth = supplyBaseline->player.maximumHealth;
 		supplyRegion.supplyProfile = supplyBaseline->supplyProfile;
 		supplyRegion.supplyCapability = supplyBaseline->player.supplyCapability;
-		if (!playerBotCompareSupplyCapabilities(
-		        activeRegion->supplyCapability, supplyRegion.supplyCapability).compatible) {
-			supplyRegion.sharedSupplyEstimate = {};
-		}
+		supplyRegion.availableHuntSeconds = supplyBaseline->plannedHuntSeconds;
+		supplyRegion.estimatedTravelSeconds = 0;
+		supplyRegion.supplyStaticPotionsPerCombatSecond =
+		    supplyBaseline->staticPotionsPerCombatSecond;
 		const uint64_t supplyDurationSeconds = static_cast<uint64_t>(std::max<int64_t>(0,
 		    std::chrono::duration_cast<std::chrono::seconds>(now - supplyBaseline->observedAt).count()));
 		result.supplyObservation = policy.observeSupplies(supplyRegion, player.supplyCapability,
@@ -410,6 +421,13 @@ std::optional<PlayerBotHuntRuntimeCompletion> PlayerBotHuntRuntime::complete(con
 		    player.supplyInterrupted);
 	} else {
 		result.supplyObservation.calibration = activeRegion->supplyCalibration;
+		result.supplyObservation.staticPotionsPerCombatSecond =
+		    activeRegion->supplyStaticPotionsPerCombatSecond;
+		result.supplyObservation.globalMultiplierBefore = policy.supplyGlobalLearning().multiplier;
+		result.supplyObservation.globalMultiplierAfter = policy.supplyGlobalLearning().multiplier;
+		result.supplyObservation.globalSamplesBefore = policy.supplyGlobalLearning().samples;
+		result.supplyObservation.globalSamplesAfter = policy.supplyGlobalLearning().samples;
+		result.supplyObservation.globalReason = "hunt_arrival_not_observed";
 		result.supplyObservation.endingHealth = player.health;
 		result.supplyObservation.endingMaximumHealth = player.maximumHealth;
 		result.supplyObservation.endingMana = player.mana;

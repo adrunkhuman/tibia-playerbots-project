@@ -51,9 +51,6 @@ namespace {
 		append(PlayerBotSupplyCapabilitySpellMana, "spell_mana");
 		append(PlayerBotSupplyCapabilitySpellInterval, "spell_interval");
 		append(PlayerBotSupplyCapabilityPotionHealing, "potion_healing");
-		append(PlayerBotSupplyCapabilityFoodState, "food_availability");
-		append(PlayerBotSupplyCapabilityFoodHealth, "food_health_recovery");
-		append(PlayerBotSupplyCapabilityFoodMana, "food_mana_recovery");
 		append(PlayerBotSupplyCapabilityEquipment, "equipment_identity");
 		result << ']';
 		return result.str();
@@ -839,24 +836,12 @@ void PlayerBotController::emitHuntRegionCandidate(const PlayerBotHuntRegion& reg
 	       << ",\"route_validated\":" << (region.routeValidated ? "true" : "false")
 	       << ",\"supply_estimate_source\":" << jsonString(region.supplyEstimateSource)
 	       << ",\"supply_estimate_reason\":" << jsonString(region.supplyEstimateReason)
-	       << ",\"supply_shared_contributing_areas\":" << region.sharedSupplyEstimate.contributingAreas
-	       << ",\"supply_shared_downward_contributing_areas\":"
-	       << region.sharedSupplyEstimate.downwardContributingAreas
-	       << ",\"supply_shared_weight\":" << region.sharedSupplyEstimate.weight
-	       << ",\"supply_shared_observed_potions_per_combat_minute\":"
-	       << region.sharedSupplyEstimate.observedPotionsPerCombatSecond * 60
-	       << ",\"supply_shared_upward_floor_per_combat_minute\":"
-	       << region.sharedSupplyEstimate.upwardPotionsPerCombatSecond * 60
-	       << ",\"supply_shared_confidence_basis\":\"qualified_source_area_count_bounded_weight\""
-	       << ",\"supply_shared_minimum_safe_samples\":" << playerBotSharedSupplyMinimumSafeSamples
-	       << ",\"supply_shared_minimum_crowd_seconds\":" << playerBotSharedSupplyMinimumCrowdSeconds
-	       << ",\"supply_shared_minimum_crowd_ratio\":" << playerBotSharedSupplyMinimumCrowdRatio
-	       << ",\"supply_target_modeled_attacker_overlap\":"
-	       << static_cast<uint16_t>(region.modeledMaximumAttackerOverlap)
-	       << ",\"supply_shared_minimum_attacker_coverage\":"
-	       << static_cast<uint16_t>(region.sharedSupplyEstimate.minimumObservedAttackerCoverage)
-	       << ",\"supply_shared_minimum_attacker_coverage_seconds\":"
-	       << region.sharedSupplyEstimate.minimumObservedAttackerCoverageSeconds
+	       << ",\"supply_local_rejection_reason\":"
+	       << (region.supplyLocalRejectionReason ? jsonString(region.supplyLocalRejectionReason) : "null")
+	       << ",\"supply_global_multiplier\":" << region.supplyGlobalLearning.multiplier
+	       << ",\"supply_global_samples\":" << region.supplyGlobalLearning.samples
+	       << ",\"supply_static_potions_per_combat_minute\":"
+	       << region.supplyStaticPotionsPerCombatSecond * 60
 	       << ",\"supply_budget_fits\":" << (region.supplyBudget.fits ? "true" : "false")
 	       << ",\"supply_expected_damage\":" << region.supplyBudget.expectedDamage
 	       << ",\"supply_regeneration_healing\":" << region.supplyBudget.regenerationHealing
@@ -979,37 +964,37 @@ void PlayerBotController::finishHuntRegion(const Player& player, const Position&
 	       << ",\"performance_evidence_reason\":" << jsonString(completion->performance.evidenceReason)
 	       << ",\"supply_estimate_source\":" << jsonString(completion->region.supplyEstimateSource)
 	       << ",\"supply_estimate_reason\":" << jsonString(completion->region.supplyEstimateReason)
-	       << ",\"supply_shared_contributing_areas\":"
-	       << completion->region.sharedSupplyEstimate.contributingAreas
-	       << ",\"supply_shared_downward_contributing_areas\":"
-	       << completion->region.sharedSupplyEstimate.downwardContributingAreas
-	       << ",\"supply_shared_weight\":" << completion->region.sharedSupplyEstimate.weight
-	       << ",\"supply_shared_observed_potions_per_combat_minute\":"
-	       << completion->region.sharedSupplyEstimate.observedPotionsPerCombatSecond * 60
-	       << ",\"supply_shared_upward_floor_per_combat_minute\":"
-	       << completion->region.sharedSupplyEstimate.upwardPotionsPerCombatSecond * 60
-	       << ",\"supply_shared_confidence_basis\":\"qualified_source_area_count_bounded_weight\""
-	       << ",\"supply_shared_minimum_safe_samples\":" << playerBotSharedSupplyMinimumSafeSamples
-	       << ",\"supply_shared_minimum_crowd_seconds\":" << playerBotSharedSupplyMinimumCrowdSeconds
-	       << ",\"supply_shared_minimum_crowd_ratio\":" << playerBotSharedSupplyMinimumCrowdRatio
-	       << ",\"supply_target_modeled_attacker_overlap\":"
-	       << static_cast<uint16_t>(completion->region.modeledMaximumAttackerOverlap)
-	       << ",\"supply_shared_minimum_attacker_coverage\":"
-	       << static_cast<uint16_t>(completion->region.sharedSupplyEstimate.minimumObservedAttackerCoverage)
-	       << ",\"supply_shared_minimum_attacker_coverage_seconds\":"
-	       << completion->region.sharedSupplyEstimate.minimumObservedAttackerCoverageSeconds
-	       << ",\"supply_observed_attacker_coverage\":"
-	       << static_cast<uint16_t>(completion->supplyObservation.observedAttackerCoverage)
-	       << ",\"supply_observed_attacker_coverage_seconds\":"
-	       << completion->supplyObservation.observedAttackerCoverageSeconds
+	       << ",\"supply_local_rejection_reason\":"
+	       << (completion->region.supplyLocalRejectionReason ?
+	               jsonString(completion->region.supplyLocalRejectionReason) : "null")
+	       << ",\"supply_static_potions_per_combat_minute\":"
+	       << completion->supplyObservation.staticPotionsPerCombatSecond * 60
+	       << ",\"supply_global_multiplier_before\":"
+	       << completion->supplyObservation.globalMultiplierBefore
+	       << ",\"supply_global_multiplier_after\":"
+	       << completion->supplyObservation.globalMultiplierAfter
+	       << ",\"supply_global_samples_before\":"
+	       << completion->supplyObservation.globalSamplesBefore
+	       << ",\"supply_global_samples_after\":"
+	       << completion->supplyObservation.globalSamplesAfter
+	       << ",\"supply_global_updated\":"
+	       << (completion->supplyObservation.globalUpdated ? "true" : "false")
+	       << ",\"supply_global_update_direction\":"
+	       << jsonString(playerBotSupplyEstimateDirectionName(
+	              completion->supplyObservation.globalEstimateDirection))
+	       << ",\"supply_global_update_reason\":"
+	       << jsonString(completion->supplyObservation.globalReason)
 	       << ",\"supply_observation_accepted\":" << (completion->supplyObservation.accepted ? "true" : "false")
 	       << ",\"supply_observation_reason\":" << jsonString(completion->supplyObservation.reason)
 	       << ",\"supply_capability_changed_fields\":"
 	       << supplyCapabilityChangedFields(completion->supplyObservation.changedFields)
 	       << ",\"supply_capability_direction\":"
 	       << jsonString(playerBotSupplyCapabilityDirectionName(completion->supplyObservation.direction))
-	       << ",\"supply_estimate_update_direction\":"
-	       << jsonString(playerBotSupplyEstimateDirectionName(completion->supplyObservation.estimateDirection))
+	       << ",\"supply_local_updated\":"
+	       << (completion->supplyObservation.localUpdated ? "true" : "false")
+	       << ",\"supply_local_update_direction\":"
+	       << jsonString(playerBotSupplyEstimateDirectionName(
+	              completion->supplyObservation.localEstimateDirection))
 	       << ",\"supply_observation_samples\":" << completion->supplyObservation.calibration.samples
 	       << ",\"supply_calibration_samples\":" << completion->region.supplyCalibration.samples
 	       << ",\"supply_potions_per_combat_minute\":"
@@ -1043,18 +1028,12 @@ void PlayerBotController::finishHuntRegion(const Player& player, const Position&
 	       << static_cast<uint16_t>(completion->supplyObservation.p10HealthPercent)
 	       << ",\"supply_guard_p10_mana_percent\":"
 	       << static_cast<uint16_t>(completion->supplyObservation.p10ManaPercent)
-	       << ",\"supply_guard_unsafe_health_percent\":"
-	       << static_cast<uint16_t>(completion->supplyObservation.unsafeHealthPercent)
-	       << ",\"supply_guard_minimum_downward_health_percent\":"
-	       << static_cast<uint16_t>(completion->supplyObservation.minimumDownwardHealthPercent)
-	       << ",\"supply_guard_minimum_downward_mana_percent\":"
-	       << static_cast<uint16_t>(completion->supplyObservation.minimumDownwardManaPercent)
+	       << ",\"supply_guard_minimum_health_percent\":"
+	       << static_cast<uint16_t>(completion->supplyObservation.minimumHealthPercent)
 	       << ",\"supply_guard_interrupted\":"
 	       << (completion->supplyObservation.interrupted ? "true" : "false")
 	       << ",\"supply_guard_potions_depleted\":"
 	       << (completion->supplyObservation.potionsDepleted ? "true" : "false")
-	       << ",\"supply_guard_mana_depleted\":"
-	       << (completion->supplyObservation.manaDepleted ? "true" : "false")
 	       << ",\"supply_guard_danger_observed\":"
 	       << (completion->supplyObservation.dangerObserved ? "true" : "false")
 	       << ",\"supply_guard_death_observed\":"

@@ -20,7 +20,6 @@ struct PlayerBotHuntCombatEvidence {
 	uint32_t potionRecoveries = 0;
 	uint32_t spellRecoveries = 0;
 	uint32_t maximumAttackerOverlap = 0;
-	std::array<double, 6> attackerExposureSeconds{};
 	double foodActiveSeconds = 0;
 	double foodAvailableSeconds = 0;
 	uint64_t levelHealthRestored = 0;
@@ -134,12 +133,14 @@ class PlayerBotHuntPolicy
 		    int32_t health, int32_t maximumHealth, uint32_t mana, uint32_t potions, bool interrupted);
 
 		double challengeFrontier() const { return frontier; }
+		PlayerBotSupplyGlobalLearning supplyGlobalLearning() const { return globalSupplyLearning; }
 		const std::map<uint64_t, PlayerBotHuntRegionPerformance>& regionPerformance() const { return performance; }
 
 	private:
 		PlayerBotHuntCombatEvidence evidence;
 		std::chrono::steady_clock::time_point lastSample;
 		std::map<uint64_t, PlayerBotHuntRegionPerformance> performance;
+		PlayerBotSupplyGlobalLearning globalSupplyLearning;
 		double frontier = 0.20;
 		uint8_t qualifyingHuntsToHold = 0;
 };

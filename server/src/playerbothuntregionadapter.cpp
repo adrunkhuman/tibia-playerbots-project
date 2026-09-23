@@ -576,13 +576,13 @@ namespace {
 		region.clearExperiencePerMinute = yield.clearExperiencePerMinute;
 		region.experiencePerMinute = std::min(yield.spawnExperiencePerMinute, yield.clearExperiencePerMinute);
 		region.supplyProfile = planningProfile.supply;
+		region.supplyGlobalLearning = planningProfile.supplyGlobalLearning;
 		region.supplyCapability = playerBotSupplyCapability(planningProfile);
 		if (const auto found = performance.find(region.atlasVariantId);
 		    found != performance.end() && found->second.atlasRevision == region.atlasRevision) {
-			if (const auto calibration = playerBotSupplyCalibrationForCapability(
-			        found->second.supply, region.supplyCapability)) {
-				region.supplyCalibration = *calibration;
-			}
+			// Retain incompatible local evidence for an honest rejection reason;
+			// reconciliation falls back to the independent global multiplier.
+			region.supplyCalibration = found->second.supply;
 		}
 		region.destination = *std::min_element(region.patrolPoints.begin(), region.patrolPoints.end(),
 			[&player](const Position& left, const Position& right) {
@@ -632,7 +632,6 @@ namespace {
 			(void)name;
 			region.monsters.push_back(std::move(monsterProfile));
 		}
-		region.sharedSupplyEstimate = playerBotSharedSupplyEstimateForRegion(region, performance);
 		const uint32_t geometricDistance = Position::getDistanceX(player.getPosition(), region.destination) +
 		                                   Position::getDistanceY(player.getPosition(), region.destination) +
 		                                   Position::getDistanceZ(player.getPosition(), region.destination) * 20;

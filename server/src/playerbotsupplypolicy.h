@@ -54,10 +54,7 @@ enum PlayerBotSupplyCapabilityField : uint64_t {
 	PlayerBotSupplyCapabilitySpellMana = 1ULL << 11,
 	PlayerBotSupplyCapabilitySpellInterval = 1ULL << 12,
 	PlayerBotSupplyCapabilityPotionHealing = 1ULL << 13,
-	PlayerBotSupplyCapabilityFoodState = 1ULL << 14,
-	PlayerBotSupplyCapabilityFoodHealth = 1ULL << 15,
-	PlayerBotSupplyCapabilityFoodMana = 1ULL << 16,
-	PlayerBotSupplyCapabilityEquipment = 1ULL << 17,
+	PlayerBotSupplyCapabilityEquipment = 1ULL << 14,
 };
 
 struct PlayerBotSupplyCapabilitySnapshot {
@@ -75,8 +72,8 @@ struct PlayerBotSupplyCapabilitySnapshot {
 	uint32_t spellMana = 0;
 	uint32_t spellIntervalMilliseconds = 0;
 	uint32_t potionHealing = 0;
-	// Availability is separate from the stable vocation recovery contract.
-	// A condition may expire while carried food can immediately renew it.
+	// Retained for food exposure telemetry and future fed/unfed calibration.
+	// Food is deliberately excluded from the current calibration identity.
 	bool foodAvailable = false;
 	uint32_t foodHealthGain = 0;
 	uint32_t foodHealthIntervalMilliseconds = 0;
@@ -93,12 +90,7 @@ struct PlayerBotSupplyCapabilitySnapshot {
 		       maximumMana == other.maximumMana && spellLegal == other.spellLegal &&
 		       spellHealing == other.spellHealing && spellMana == other.spellMana &&
 		       spellIntervalMilliseconds == other.spellIntervalMilliseconds &&
-		       potionHealing == other.potionHealing && foodAvailable == other.foodAvailable &&
-		       foodHealthGain == other.foodHealthGain &&
-		       foodHealthIntervalMilliseconds == other.foodHealthIntervalMilliseconds &&
-		       foodManaGain == other.foodManaGain &&
-		       foodManaIntervalMilliseconds == other.foodManaIntervalMilliseconds &&
-		       equipmentItemIds == other.equipmentItemIds;
+		       potionHealing == other.potionHealing && equipmentItemIds == other.equipmentItemIds;
 	}
 	bool operator!=(const PlayerBotSupplyCapabilitySnapshot& other) const { return !(*this == other); }
 };
@@ -175,25 +167,6 @@ inline PlayerBotSupplyCapabilityComparison playerBotCompareSupplyCapabilities(
 	material(before.potionHealing, after.potionHealing, PlayerBotSupplyCapabilityPotionHealing);
 	material(before.equipmentItemIds, after.equipmentItemIds, PlayerBotSupplyCapabilityEquipment);
 
-	if (before.foodAvailable != after.foodAvailable) {
-		result.changedFields |= PlayerBotSupplyCapabilityFoodState;
-		result.recoveryContextChanged = true;
-		improved = improved || after.foodAvailable;
-		regressed = regressed || !after.foodAvailable;
-	}
-	if (before.foodHealthGain != after.foodHealthGain ||
-	    before.foodHealthIntervalMilliseconds != after.foodHealthIntervalMilliseconds) {
-		result.changedFields |= PlayerBotSupplyCapabilityFoodHealth;
-		result.recoveryContextChanged = true;
-		improved = regressed = true;
-	}
-	if (before.foodManaGain != after.foodManaGain ||
-	    before.foodManaIntervalMilliseconds != after.foodManaIntervalMilliseconds) {
-		result.changedFields |= PlayerBotSupplyCapabilityFoodMana;
-		result.recoveryContextChanged = true;
-		improved = regressed = true;
-	}
-
 	result.direction = improved && regressed ? PlayerBotSupplyCapabilityDirection::Mixed :
 	                   improved ? PlayerBotSupplyCapabilityDirection::Improved :
 	                   regressed ? PlayerBotSupplyCapabilityDirection::Regressed :
@@ -202,27 +175,21 @@ inline PlayerBotSupplyCapabilityComparison playerBotCompareSupplyCapabilities(
 	return result;
 }
 
-inline uint64_t playerBotSupplyCapabilityHash(const PlayerBotSupplyCapabilitySnapshot& capability)
-{
-	uint64_t key = 14695981039346656037ULL;
-	auto append = [&key](uint64_t value) { key = (key ^ value) * 1099511628211ULL; };
-	for (uint64_t value : {uint64_t(capability.level), uint64_t(capability.maximumHealth),
-	     uint64_t(capability.armor), uint64_t(capability.defense), uint64_t(capability.attack),
-	     uint64_t(capability.attackSkill), uint64_t(capability.attackFactorMilli),
-	     uint64_t(capability.magicLevel), uint64_t(capability.maximumMana), uint64_t(capability.spellLegal),
-	     uint64_t(capability.spellHealing), uint64_t(capability.spellMana),
-	     uint64_t(capability.spellIntervalMilliseconds), uint64_t(capability.potionHealing),
-	     uint64_t(capability.foodAvailable), uint64_t(capability.foodHealthGain),
-	     uint64_t(capability.foodHealthIntervalMilliseconds), uint64_t(capability.foodManaGain),
-	     uint64_t(capability.foodManaIntervalMilliseconds)}) append(value);
-	for (uint16_t itemId : capability.equipmentItemIds) append(itemId);
-	return key;
-}
-
 struct PlayerBotSupplyCalibration {
 	PlayerBotSupplyCapabilitySnapshot capability;
-	uint64_t capabilityHash = 0;
 	double potionsPerCombatSecond = 0;
+	uint32_t samples = 0;
+};
+
+// Global learning corrects the static model proportionally, preserving its
+// relative area difficulty. Local learning is deliberately twice as responsive
+// and stores a final absolute estimate so the global multiplier is not applied twice.
+inline constexpr double playerBotSupplyGlobalMinimumMultiplier = 0.25;
+inline constexpr double playerBotSupplyGlobalDownwardBlend = 0.10;
+inline constexpr double playerBotSupplyLocalDownwardBlend = 0.20;
+
+struct PlayerBotSupplyGlobalLearning {
+	double multiplier = 1;
 	uint32_t samples = 0;
 };
 
@@ -255,9 +222,16 @@ struct PlayerBotSupplyObservation {
 	PlayerBotSupplyCalibration calibration;
 	uint64_t changedFields = 0;
 	PlayerBotSupplyCapabilityDirection direction = PlayerBotSupplyCapabilityDirection::Unchanged;
-	PlayerBotSupplyEstimateDirection estimateDirection = PlayerBotSupplyEstimateDirection::None;
-	uint8_t observedAttackerCoverage = 0;
-	double observedAttackerCoverageSeconds = 0;
+	PlayerBotSupplyEstimateDirection localEstimateDirection = PlayerBotSupplyEstimateDirection::None;
+	PlayerBotSupplyEstimateDirection globalEstimateDirection = PlayerBotSupplyEstimateDirection::None;
+	double staticPotionsPerCombatSecond = 0;
+	double globalMultiplierBefore = 1;
+	double globalMultiplierAfter = 1;
+	uint32_t globalSamplesBefore = 0;
+	uint32_t globalSamplesAfter = 0;
+	bool localUpdated = false;
+	bool globalUpdated = false;
+	const char* globalReason = "not_updated";
 	uint64_t durationSeconds = 0;
 	bool arrivalBaselineObserved = false;
 	int32_t startingHealth = 0;
@@ -282,12 +256,9 @@ struct PlayerBotSupplyObservation {
 	uint64_t minimumDurationSeconds = 120;
 	double minimumActiveCombatSeconds = 60;
 	uint32_t minimumKills = 3;
-	uint8_t unsafeHealthPercent = 70;
-	uint8_t minimumDownwardHealthPercent = 80;
-	uint8_t minimumDownwardManaPercent = 50;
+	uint8_t minimumHealthPercent = 30;
 	bool interrupted = false;
 	bool potionsDepleted = false;
-	bool manaDepleted = false;
 	bool dangerObserved = false;
 	bool deathObserved = false;
 	const char* reason = "insufficient_evidence";
