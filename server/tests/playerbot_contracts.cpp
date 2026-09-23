@@ -1568,12 +1568,50 @@ void sharedHuntPerformanceCalibration()
 
 	// Default, malformed, stale, and explicitly unreliable entries are not observations.
 	performance.emplace(4, PlayerBotHuntRegionPerformance{});
-	performance.emplace(5, PlayerBotHuntRegionPerformance{10, 0, 9, 1, atlasRevision, true, {}});
+	performance.emplace(5, PlayerBotHuntRegionPerformance{10, 0, 11, 1, atlasRevision, true, {}});
 	performance.emplace(6, PlayerBotHuntRegionPerformance{10, 0, 1.25, 1, atlasRevision, false, {}});
 	performance.emplace(8, PlayerBotHuntRegionPerformance{10, 0, 1.75, 1, atlasRevision - 1, true, {}});
 	const auto filtered = playerBotHuntCorrectionForVariant(7, atlasRevision, performance);
 	assert(filtered.sampleCount == 2 && std::abs(filtered.correction - 1.5) < 1e-12);
 	assert(std::string(playerBotHuntCorrectionForVariant(4, atlasRevision, {}).source) == "default");
+
+	// An already doubled projection must still learn from a much better outing.
+	PlayerBotHuntPolicy underestimated;
+	PlayerBotHuntPerformanceSample actualHunt{2400, 600, 79, 2096, 876.34, 2, 2400, false, false};
+	const double actualCorrection = 2 * 2096 / 876.34;
+	const auto corrected = underestimated.observePerformance(1, atlasRevision, actualHunt);
+	assert(corrected.observed && std::abs(corrected.updatedCorrection - actualCorrection) < 1e-12);
+	for (uint64_t variant : {1, 2}) {
+		const auto learned = playerBotHuntCorrectionForVariant(variant, atlasRevision, underestimated.regionPerformance());
+		assert(std::abs(learned.correction - actualCorrection) < 1e-12);
+		assert(std::abs(876.34 / 2 * learned.correction - 2096) < 1e-9);
+	}
+	actualHunt.projectedExperience = 2096;
+	actualHunt.observedCorrection = actualCorrection;
+	assert(std::abs(underestimated.observePerformance(1, atlasRevision, actualHunt).updatedCorrection -
+	                actualCorrection) < 1e-12);
+
+	// Both bounds are valid observations and reusable by local and shared lookup.
+	for (const auto& [experience, bound] : {std::pair<uint64_t, double>{1, 0.1}, {2000, 10.0}}) {
+		PlayerBotHuntPolicy bounded;
+		const auto clamped = bounded.observePerformance(1, atlasRevision, reliableSample(experience));
+		assert(clamped.observed && clamped.updatedCorrection == bound);
+		for (uint64_t variant : {1, 2}) {
+			assert(playerBotHuntCorrectionForVariant(variant, atlasRevision,
+			       bounded.regionPerformance()).correction == bound);
+		}
+		auto repeat = reliableSample(experience);
+		repeat.observedCorrection = bound;
+		repeat.projectedExperience *= bound;
+		assert(bounded.observePerformance(1, atlasRevision, repeat).observed);
+	}
+	for (double invalid : {0.09, 10.01, std::numeric_limits<double>::infinity(),
+	                       std::numeric_limits<double>::quiet_NaN()}) {
+		PlayerBotHuntPolicy rejected;
+		auto invalidSample = reliableSample(200);
+		invalidSample.observedCorrection = invalid;
+		assert(!rejected.observePerformance(1, atlasRevision, invalidSample).observed);
+	}
 
 	PlayerBotHuntPolicy insufficient;
 	PlayerBotHuntPerformanceSample sample = reliableSample(200);
