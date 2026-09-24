@@ -88,7 +88,7 @@ $scenarioCatalog = @(
 	"equipment_offer_shadow_no_upgrade", "equipment_purchase", "equipment_purchase_resume", "equipment_purchase_provider_moved", "equipment_purchase_provider_unreachable", "equipment_purchase_space",
 	"equipment_purchase_rejected", "equipment_tool_replenishment", "equipment_tool_nested_inventory", "adaptive_challenge", "mainland_equipment_reward", "oracle_departure",
 		"oracle_level_eight_interrupt", "oracle_level_eight_recovery",
-		"navigation", "navigation_recovery", "svargrond_local_route_recovery", "navigation_fare_rejection", "navigation_risk_rejection", "door_passages", "carlin_service_route", "mutable_portal_route", "patrol_recovery", "target_approach", "target_approach_unreachable", "target_attacker_priority",
+		"navigation", "navigation_recovery", "svargrond_local_route_recovery", "navigation_fare_rejection", "navigation_risk_rejection", "door_passages", "carlin_service_route", "mutable_portal_route", "mutable_portal_open_no_shovel", "patrol_recovery", "target_approach", "target_approach_unreachable", "target_attacker_priority",
 	"spell_training", "spell_training_shortlist", "spell_training_low_supplies", "spell_training_low_supplies_unaffordable", "spell_use", "spell_calibration", "magic_training_haste", "magic_training_great_light",
 	"magic_training_light", "magic_training_refresh", "magic_training_reserve", "magic_training_exact_full",
 	"magic_training_pz", "magic_training_absent", "magic_training_expired", "magic_training_failed",
@@ -103,8 +103,8 @@ foreach ($scenarioName in $scenarioCatalog) {
 		throw "Duplicate gameplay scenario name: $scenarioName"
 	}
 }
-if ($scenarioCatalog.Count -ne 102) {
-	throw "The gameplay scenario catalog must contain 102 scenarios; found $($scenarioCatalog.Count)."
+if ($scenarioCatalog.Count -ne 103) {
+	throw "The gameplay scenario catalog must contain 103 scenarios; found $($scenarioCatalog.Count)."
 }
 $requestedScenarioNames = @($Scenario | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
 $exactScenarioSelection = $requestedScenarioNames.Count -gt 0
@@ -125,6 +125,7 @@ $scenarioResults = [System.Collections.Generic.List[object]]::new()
 $scenarioRunId = [DateTime]::UtcNow.ToString("yyyyMMddTHHmmssZ")
 $previousDuration = $env:PLAYERBOT_HUNT_DURATION_SECONDS
 $previousMode = $env:PLAYERBOT_GAMEPLAY_MODE
+$previousMutablePortalVariant = $env:PLAYERBOT_MUTABLE_PORTAL_VARIANT
 $previousRelogDelay = $env:PLAYERBOT_RELOG_DELAY_SECONDS
 $previousMaximumDeaths = $env:PLAYERBOT_MAX_CONSECUTIVE_DEATHS
 $previousDepotRestartPhase = $env:PLAYERBOT_DEPOT_RESTART_PHASE
@@ -236,6 +237,7 @@ finally {
 	finally {
 		$env:PLAYERBOT_HUNT_DURATION_SECONDS = $previousDuration
 		$env:PLAYERBOT_GAMEPLAY_MODE = $previousMode
+		$env:PLAYERBOT_MUTABLE_PORTAL_VARIANT = $previousMutablePortalVariant
 		$env:PLAYERBOT_RELOG_DELAY_SECONDS = $previousRelogDelay
 		$env:PLAYERBOT_MAX_CONSECUTIVE_DEATHS = $previousMaximumDeaths
 		$env:PLAYERBOT_DEPOT_RESTART_PHASE = $previousDepotRestartPhase

@@ -26,13 +26,6 @@ namespace {
 	constexpr size_t maximumNpcLocalReplans = 8;
 	constexpr uint64_t maximumNpcLocalPathNodes = 5000;
 	constexpr uint16_t shovelToolItemId = 2554;
-	constexpr std::array<uint16_t, 4> shovelHoleIds = {468, 481, 483, 7932};
-
-	template<typename T, size_t N>
-	bool contains(const std::array<T, N>& values, T value)
-	{
-		return std::find(values.begin(), values.end(), value) != values.end();
-	}
 
 	Item* usableClosedDoor(Tile& tile, Player& player)
 	{
@@ -245,6 +238,7 @@ void PlayerBotController::start(const Position& position, bool recovered, uint32
 		emitFixtureEvents(fixtureDriver.runAdaptiveChallenge(*controlledPlayer), position);
 		emitFixtureEvents(fixtureDriver.runDepotRiskFallbackContract(), position);
 		emitFixtureEvents(fixtureDriver.runDoorPassagesContract(*controlledPlayer), position);
+		emitFixtureEvents(fixtureDriver.runShovelPassagesContract(*controlledPlayer), position);
 	}
 	if (backpackUpgradeResumed) {
 		// Durable backpack recovery owns the normal progression command until resolved.
@@ -510,11 +504,16 @@ Item* PlayerBotController::findNavigationItem(const PlayerBotNavigationStep& ste
 	return nullptr;
 }
 
-PlayerBotNavigationStep PlayerBotController::resolveTopologyPortal(
+std::optional<PlayerBotNavigationStep> PlayerBotController::resolveTopologyPortal(
 	Player& player, const PlayerBotNavigationStep& portal,
 	const std::set<Position>& blockedPositions) const
 {
 	PlayerBotNavigationStep step = portal;
+	if (portal.action == PlayerBotNavigationAction::UseShovel) {
+		return PlayerBotNavigator().resolveShovelPassage(
+		    player, player.getPosition(), portal, blockedPositions, step) ?
+		    std::optional<PlayerBotNavigationStep>(step) : std::nullopt;
+	}
 	Tile* tile = g_game.map.getTile(portal.target);
 	if (!tile) return step;
 	if (Item* door = usableClosedDoor(*tile, player)) {
@@ -523,23 +522,13 @@ PlayerBotNavigationStep PlayerBotController::resolveTopologyPortal(
 		step.expectedItemId = *playerBotPassageOpenItemId(*door);
 		return step;
 	}
-	if (portal.action == PlayerBotNavigationAction::UseShovel) {
-		Item* ground = tile->getGround();
-		if (ground && contains(shovelHoleIds, ground->getID())) {
-			step.itemId = ground->getID();
-			return step;
-		}
-	}
 	if (portal.action == PlayerBotNavigationAction::Move ||
-	    portal.action == PlayerBotNavigationAction::UseDoor ||
-	    portal.action == PlayerBotNavigationAction::UseShovel) {
+	    portal.action == PlayerBotNavigationAction::UseDoor) {
 		const Position currentPosition = player.getPosition();
 		const Direction direction = getDirectionTo(currentPosition, portal.target);
 		PlayerBotNavigationStep move;
 		if (getNextPosition(direction, currentPosition) == portal.target &&
-		    PlayerBotNavigator().resolveMove(player, currentPosition, direction, blockedPositions, move) &&
-		    (portal.action != PlayerBotNavigationAction::UseShovel ||
-		     move.expectedPosition == portal.expectedPosition)) {
+		    PlayerBotNavigator().resolveMove(player, currentPosition, direction, blockedPositions, move)) {
 			move.topologyPortal = true;
 			return move;
 		}
@@ -603,8 +592,9 @@ bool PlayerBotController::executeNavigationStep(Player* player, const PlayerBotN
 		return travelled;
 	}
 
-	Item* target = findNavigationItem(step);
 	Tile* tile = g_game.map.getTile(step.target);
+	Item* target = step.action == PlayerBotNavigationAction::UseShovel && tile ?
+	    playerBotShovelPassageItem(*tile, step.itemId) : findNavigationItem(step);
 	const int32_t stackPosition = target && tile ? tile->getThingIndex(target) : -1;
 	if (!target || stackPosition < 0 || stackPosition > UINT8_MAX) {
 		return false;
@@ -802,43 +792,6 @@ PlayerBotNavigationRoutePlan PlayerBotController::planNavigationRoute(Player& pl
 	const bool canUseRope = g_game.findItemOfType(&player, playerbot::ropeItemId, true) != nullptr;
 	const bool canUseShovel = g_game.findItemOfType(&player, shovelToolItemId, true) != nullptr;
 	const Position currentPosition = player.getPosition();
-	if (canUseShovel && destination.z > currentPosition.z) {
-		for (int32_t xOffset = -1; xOffset <= 1; ++xOffset) {
-			for (int32_t yOffset = -1; yOffset <= 1; ++yOffset) {
-				const int32_t x = static_cast<int32_t>(currentPosition.x) + xOffset;
-				const int32_t y = static_cast<int32_t>(currentPosition.y) + yOffset;
-				if (x < 0 || y < 0 || x > std::numeric_limits<uint16_t>::max() ||
-				    y > std::numeric_limits<uint16_t>::max() || currentPosition.z >= MAP_MAX_LAYERS - 1) continue;
-				const Position target(static_cast<uint16_t>(x), static_cast<uint16_t>(y), currentPosition.z);
-				Tile* tile = g_game.map.getTile(target);
-				Item* ground = tile ? tile->getGround() : nullptr;
-				if (!ground || !contains(shovelHoleIds, ground->getID()) ||
-				    blockedPositions.find(target) != blockedPositions.end()) continue;
-				const Position expected(target.x, target.y, target.z + 1);
-				if (blockedPositions.find(expected) != blockedPositions.end() ||
-				    !topology.route(expected, destination, blockedPositions, canUseRope, canUseShovel,
-				                    player.getLevel(), &costPolicy)) continue;
-
-				PlayerBotNavigationStep step;
-				step.action = PlayerBotNavigationAction::UseShovel;
-				step.target = target;
-				step.expectedPosition = expected;
-				step.itemId = ground->getID();
-				step.topologyPortal = true;
-				routePlan.steps.push_back(step);
-				routePlan.metrics.waypoint = expected;
-				routePlan.metrics.result = PlayerBotNavigationResult::Reached;
-				routePlan.metrics.steps = 1;
-				routePlan.metrics.estimatedTravelSeconds = 1;
-				routePlan.metrics.dangerCost = costPolicy.dangerCost(target, 1000);
-				routePlan.metrics.maximumHealthLossPerSecond = costPolicy.dangerAt(target);
-				routePlan.metrics.dangerAware = costPolicy.enabled();
-				routePlan.metrics.elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
-				    std::chrono::steady_clock::now() - startedAt);
-				return routePlan;
-			}
-		}
-	}
 	const std::optional<PlayerBotTopologyRoute> topologyRoute =
 	    topology.route(currentPosition, destination, blockedPositions, canUseRope, canUseShovel, player.getLevel(), &costPolicy);
 	const PlayerBotTopologyDistances coarseDistances = topology.distancesFrom(
@@ -1555,16 +1508,17 @@ bool PlayerBotController::processNavigation(Player* player, const Position& curr
 	if (outcome.pendingWorldChange) {
 		const bool unchanged = findNavigationItem(*outcome.pendingWorldChange) != nullptr;
 		Tile* targetTile = g_game.map.getTile(outcome.pendingWorldChange->target);
-		const bool doorOpened = outcome.pendingWorldChange->action != PlayerBotNavigationAction::UseDoor ||
-		                        (outcome.pendingWorldChange->expectedItemId != 0 &&
-		                         findNavigationItem(*outcome.pendingWorldChange,
-		                                            outcome.pendingWorldChange->expectedItemId) != nullptr);
+		const bool expectedStateReached = outcome.pendingWorldChange->expectedItemId == 0 ||
+		                                  findNavigationItem(*outcome.pendingWorldChange,
+		                                                     outcome.pendingWorldChange->expectedItemId) != nullptr;
 		const bool blockedDoor = outcome.pendingWorldChange->action == PlayerBotNavigationAction::UseDoor &&
 		                         (!targetTile || targetTile->queryAdd(0, *player, 1, FLAG_IGNOREBLOCKCREATURE) != RETURNVALUE_NOERROR);
-		if (unchanged || !doorOpened || blockedDoor) {
+		if (unchanged || !expectedStateReached || blockedDoor) {
 			telemetry.logActionFailure("navigate", "transition_state_unchanged", currentPosition);
 		}
-		navigationRuntime.observeWorldChange({*outcome.pendingWorldChange, unchanged || !doorOpened || blockedDoor, now, navigationBlockSuppression});
+		navigationRuntime.observeWorldChange(
+		    {*outcome.pendingWorldChange, unchanged || !expectedStateReached || blockedDoor,
+		     now, navigationBlockSuppression});
 	}
 	if (outcome.plan.attempted) {
 		telemetry.recordPathfinding(outcome.plan.elapsed, !outcome.routeUnavailable);
@@ -1614,19 +1568,21 @@ bool PlayerBotController::processNavigation(Player* player, const Position& curr
 		return false;
 	}
 	PlayerBotNavigationStep step = *outcome.nextStep;
-	if (step.action == PlayerBotNavigationAction::Move) {
+	std::optional<PlayerBotNavigationStep> resolvedStep = step;
+	if (step.topologyPortal || step.action == PlayerBotNavigationAction::UseShovel) {
+		resolvedStep = resolveTopologyPortal(*player, step, navigationRuntime.activeBlockedPositions(now));
+	}
+	if (resolvedStep && resolvedStep->action == PlayerBotNavigationAction::Move) {
 		SpectatorVec spectators;
 		g_game.map.getSpectators(spectators, currentPosition);
-		const bool occupied = std::any_of(spectators.begin(), spectators.end(), [&step](Creature* creature) {
-			return !creature->isRemoved() && !creature->isDead() && creature->getPosition() == step.target;
+		const bool occupied = std::any_of(spectators.begin(), spectators.end(), [&resolvedStep](Creature* creature) {
+			return !creature->isRemoved() && !creature->isDead() && creature->getPosition() == resolvedStep->target;
 		});
 		if (!occupied) huntCoordinator.observeViableTransitMovement();
 	}
-	if (step.topologyPortal) {
-		step = resolveTopologyPortal(*player, step, navigationRuntime.activeBlockedPositions(now));
-	}
-	if (!executeNavigationStep(player, step)) {
-		if (step.action == PlayerBotNavigationAction::Move) {
+	if (!resolvedStep || !executeNavigationStep(player, *resolvedStep)) {
+		if ((resolvedStep && resolvedStep->action == PlayerBotNavigationAction::Move) ||
+		    step.action == PlayerBotNavigationAction::Move) {
 			huntCoordinator.observeTransitMovementFailure(currentPosition, step.target);
 		}
 		navigationRuntime.observeStep({step, PlayerBotNavigationStepResult::Rejected,
@@ -1636,6 +1592,7 @@ bool PlayerBotController::processNavigation(Player* player, const Position& curr
 		return false;
 	}
 
+	step = *resolvedStep;
 	navigationRuntime.observeStep({step, PlayerBotNavigationStepResult::Dispatched,
 	                               std::chrono::steady_clock::now(), navigationBlockSuppression});
 	schedule(navigationDecisionDelay(*player));

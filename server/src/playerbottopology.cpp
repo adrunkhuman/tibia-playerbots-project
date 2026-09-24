@@ -40,7 +40,6 @@ namespace {
 	constexpr std::array<uint16_t, 3> ladderIds = {1386, 3678, 5543};
 	constexpr std::array<uint16_t, 1> downUseIds = {430};
 	constexpr std::array<uint16_t, 4> ropeSpotIds = {384, 418, 8278, 8592};
-	constexpr std::array<uint16_t, 4> shovelHoleIds = {468, 481, 483, 7932};
 
 	template<typename T, size_t N>
 	bool contains(const std::array<T, N>& values, T value)
@@ -80,6 +79,17 @@ namespace {
 		if (!tile.getGround() || tile.hasFlag(TILESTATE_TELEPORT) || dynamic_cast<const HouseTile*>(&tile)) return false;
 		return !tile.hasFlag(TILESTATE_BLOCKSOLID) || staticDoor(tile);
 	}
+
+	bool canTraversePortal(const Map* map, const PlayerBotTopologyPortal& portal,
+	                       bool canUseRope, bool canUseShovel)
+	{
+		if (portal.action == PlayerBotTopologyPortalAction::UseRope) return canUseRope;
+		if (portal.action != PlayerBotTopologyPortalAction::UseShovel) return true;
+		const Tile* tile = map ? map->getTile(portal.target) : nullptr;
+		const Item* passage = tile ? playerBotShovelPassageItem(*tile, portal.itemId) : nullptr;
+		return passage && playerBotResolveShovelPassageAction(
+		    portal.itemId, passage->getID(), canUseShovel).has_value();
+	}
 }
 
 PlayerBotTopology& PlayerBotTopology::instance()
@@ -91,6 +101,7 @@ PlayerBotTopology& PlayerBotTopology::instance()
 void PlayerBotTopology::invalidate()
 {
 	++topologyGeneration;
+	liveMap = nullptr;
 	walkNodes.clear();
 	nodeComponents.clear();
 	edges.clear();
@@ -103,6 +114,7 @@ void PlayerBotTopology::invalidate()
 void PlayerBotTopology::build(const Map& map)
 {
 	invalidate();
+	liveMap = &map;
 	size_t walkableTiles = 0;
 	map.forEachTile([&walkableTiles](const Tile& tile) {
 		if (isStaticWalkTile(tile)) ++walkableTiles;
@@ -216,12 +228,20 @@ void PlayerBotTopology::build(const Map& map)
 			if (entry == walkNodes.end() || entry->second == from) continue;
 			const Tile* targetTile = map.getTile(transition.entry);
 			const Item* targetDoor = targetTile ? staticDoor(*targetTile) : nullptr;
+			const Item* targetPassage = targetTile ? playerBotShovelPassageItem(*targetTile) : nullptr;
+			const auto shovelPassage = targetPassage ? playerBotShovelPassage(targetPassage->getID()) : std::nullopt;
 			PlayerBotTopologyPortal portal{position, transition.target, transition.destination, direction};
 			if (targetDoor) {
 				portal.action = PlayerBotTopologyPortalAction::UseDoor;
 				portal.itemId = targetDoor->getID();
 				portal.expectedItemId = *playerBotPassageOpenItemId(*targetDoor);
 				portal.minimumLevel = doorMinimumLevel(*targetDoor);
+			} else if (shovelPassage && targetPassage->getID() == shovelPassage->openItemId &&
+			           transition.destination != transition.entry) {
+				// Keep the passage identity stable when an open hole later decays closed.
+				portal.action = PlayerBotTopologyPortalAction::UseShovel;
+				portal.itemId = shovelPassage->closedItemId;
+				portal.expectedItemId = shovelPassage->openItemId;
 			}
 			addEdge(from, entry->second, portal);
 		}
@@ -249,24 +269,33 @@ void PlayerBotTopology::build(const Map& map)
 	};
 	map.forEachTile([this, &addEdge, &upperDestination](const Tile& tile) {
 		const Position& target = tile.getPosition();
-		std::vector<std::pair<uint16_t, PlayerBotTopologyPortalAction>> transitions;
+		struct Transition {
+			uint16_t itemId;
+			uint16_t expectedItemId;
+			PlayerBotTopologyPortalAction action;
+		};
+		std::vector<Transition> transitions;
 		Item* ground = tile.getGround();
 		if (ground && contains(ropeSpotIds, ground->getID())) {
-			transitions.emplace_back(ground->getID(), PlayerBotTopologyPortalAction::UseRope);
+			transitions.push_back({ground->getID(), 0, PlayerBotTopologyPortalAction::UseRope});
 		}
-		if (ground && contains(shovelHoleIds, ground->getID())) {
-			transitions.emplace_back(ground->getID(), PlayerBotTopologyPortalAction::UseShovel);
+		const Item* passageItem = playerBotShovelPassageItem(tile);
+		const auto shovelPassage = passageItem ? playerBotShovelPassage(passageItem->getID()) : std::nullopt;
+		if (shovelPassage && passageItem->getID() == shovelPassage->closedItemId) {
+			transitions.push_back({shovelPassage->closedItemId, shovelPassage->openItemId,
+			                       PlayerBotTopologyPortalAction::UseShovel});
 		}
 		if (const TileItemVector* items = tile.getItemList()) {
 			for (const Item* item : *items) {
 				if (contains(ladderIds, item->getID()) || contains(downUseIds, item->getID())) {
-					transitions.emplace_back(item->getID(), PlayerBotTopologyPortalAction::Use);
+					transitions.push_back({item->getID(), 0, PlayerBotTopologyPortalAction::Use});
 				}
 			}
 		}
-		for (const auto& [itemId, action] : transitions) {
+		for (const Transition& transition : transitions) {
 			std::optional<Position> destination;
-			if (action == PlayerBotTopologyPortalAction::UseShovel || contains(downUseIds, itemId)) {
+			if (transition.action == PlayerBotTopologyPortalAction::UseShovel ||
+			    contains(downUseIds, transition.itemId)) {
 				if (target.z < MAP_MAX_LAYERS - 1) destination = Position(target.x, target.y, target.z + 1);
 			} else {
 				destination = upperDestination(target);
@@ -278,7 +307,9 @@ void PlayerBotTopology::build(const Map& map)
 				const Position approach = getNextPosition(direction, target);
 				const auto sourceNode = walkNodes.find(positionKey(approach));
 				if (sourceNode == walkNodes.end()) continue;
-				PlayerBotTopologyPortal portal{approach, target, *destination, DIRECTION_NONE, action, itemId};
+				PlayerBotTopologyPortal portal{approach, target, *destination, DIRECTION_NONE,
+				                                  transition.action, transition.itemId,
+				                                  transition.expectedItemId};
 				addEdge(sourceNode->second, destinationNode->second, portal);
 			}
 		}
@@ -299,8 +330,7 @@ void PlayerBotTopology::build(const Map& map)
 		for (const Edge& edge : edges[sourceNode]) {
 			const uint32_t destinationComponent = nodeComponents[edge.destinationNode];
 			if (sourceComponent == destinationComponent) continue;
-			componentEdges[sourceComponent].push_back(
-			    {destinationComponent, edge.portal.action, edge.portal.minimumLevel});
+			componentEdges[sourceComponent].push_back({destinationComponent, edge.portal});
 		}
 	}
 }
@@ -341,8 +371,7 @@ PlayerBotTopologyDistances PlayerBotTopology::distancesFrom(const Position& star
 		const uint32_t current = open.front();
 		open.pop();
 		for (const Edge& edge : edges[current]) {
-			if ((edge.portal.action == PlayerBotTopologyPortalAction::UseRope && !canUseRope) ||
-			    (edge.portal.action == PlayerBotTopologyPortalAction::UseShovel && !canUseShovel) ||
+			if (!canTraversePortal(liveMap, edge.portal, canUseRope, canUseShovel) ||
 			    edge.portal.minimumLevel > playerLevel) continue;
 			if (result.costs[edge.destinationNode] != std::numeric_limits<uint32_t>::max()) continue;
 			result.costs[edge.destinationNode] = result.costs[current] + 1;
@@ -400,9 +429,13 @@ std::shared_ptr<const PlayerBotTopologyReachability> PlayerBotTopology::reachabi
 	if (startNode == walkNodes.end()) return {};
 	const uint32_t startComponent = nodeComponents[startNode->second];
 	const auto key = std::make_tuple(startComponent, canUseRope, canUseShovel, playerLevel);
-	if (auto found = reachabilityCache.find(key); found != reachabilityCache.end()) {
-		if (auto cached = found->second.lock()) return cached;
-		reachabilityCache.erase(found);
+	// Without a shovel, reachability depends on whether each known passage is
+	// open right now, so an open/decay cycle cannot reuse a cached answer.
+	if (canUseShovel) {
+		if (auto found = reachabilityCache.find(key); found != reachabilityCache.end()) {
+			if (auto cached = found->second.lock()) return cached;
+			reachabilityCache.erase(found);
+		}
 	}
 	constexpr size_t maximumReachabilityCacheEntries = 512;
 	if (reachabilityCache.size() >= maximumReachabilityCacheEntries) {
@@ -422,14 +455,13 @@ std::shared_ptr<const PlayerBotTopologyReachability> PlayerBotTopology::reachabi
 		const uint32_t current = open.front();
 		open.pop();
 		for (const ComponentEdge& edge : componentEdges[current]) {
-			if ((edge.action == PlayerBotTopologyPortalAction::UseRope && !canUseRope) ||
-			    (edge.action == PlayerBotTopologyPortalAction::UseShovel && !canUseShovel) ||
-			    edge.minimumLevel > playerLevel || result->components[edge.destination]) continue;
+			if (!canTraversePortal(liveMap, edge.portal, canUseRope, canUseShovel) ||
+			    edge.portal.minimumLevel > playerLevel || result->components[edge.destination]) continue;
 			result->components[edge.destination] = 1;
 			open.push(edge.destination);
 		}
 	}
-	reachabilityCache.emplace(key, result);
+	if (canUseShovel) reachabilityCache.emplace(key, result);
 	return result;
 }
 
@@ -481,8 +513,7 @@ std::optional<PlayerBotTopologyRoute> PlayerBotTopology::route(
 			if (blockedPositions.find(edge.portal.approach) != blockedPositions.end() ||
 			    blockedPositions.find(edge.portal.target) != blockedPositions.end() ||
 			    blockedPositions.find(edge.portal.destination) != blockedPositions.end()) continue;
-			if ((edge.portal.action == PlayerBotTopologyPortalAction::UseRope && !canUseRope) ||
-			    (edge.portal.action == PlayerBotTopologyPortalAction::UseShovel && !canUseShovel) ||
+			if (!canTraversePortal(liveMap, edge.portal, canUseRope, canUseShovel) ||
 			    edge.portal.minimumLevel > playerLevel) continue;
 			const uint64_t edgeDanger = costPolicy ?
 			    static_cast<uint64_t>(costPolicy->dangerCost(edge.portal.approach, costPolicy->topologyExposureMs)) +

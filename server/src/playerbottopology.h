@@ -140,10 +140,10 @@ class PlayerBotTopology
 		};
 		struct ComponentEdge {
 			uint32_t destination = 0;
-			PlayerBotTopologyPortalAction action = PlayerBotTopologyPortalAction::Move;
-			uint32_t minimumLevel = 0;
+			PlayerBotTopologyPortal portal;
 		};
 
+		const Map* liveMap = nullptr;
 		std::unordered_map<uint64_t, uint32_t> walkNodes;
 		std::vector<uint32_t> nodeComponents;
 		std::vector<std::vector<Edge>> edges;

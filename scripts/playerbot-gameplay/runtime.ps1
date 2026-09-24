@@ -567,6 +567,7 @@ function Invoke-Scenario {
 	# Scenario-owned settings only; defaults match the gameplay Compose stack.
 	$scenarioDefaults = @{
 		PLAYERBOT_GAMEPLAY_MODE = "cycle"
+		PLAYERBOT_MUTABLE_PORTAL_VARIANT = "closed_with_shovel"
 		PLAYERBOT_HUNT_DURATION_SECONDS = "1500"
 		PLAYERBOT_RELOG_DELAY_SECONDS = "5"
 		PLAYERBOT_MAX_CONSECUTIVE_DEATHS = "3"

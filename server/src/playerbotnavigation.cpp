@@ -45,7 +45,6 @@ namespace {
 	constexpr std::array<uint16_t, 3> ladderIds = {1386, 3678, 5543};
 	constexpr std::array<uint16_t, 1> downUseIds = {430};
 	constexpr std::array<uint16_t, 4> ropeSpotIds = {384, 418, 8278, 8592};
-	constexpr std::array<uint16_t, 4> shovelHoleIds = {468, 481, 483, 7932};
 
 	template<typename T, size_t N>
 	bool contains(const std::array<T, N>& values, T value)
@@ -196,6 +195,29 @@ namespace {
 		uint32_t dangerCost = 0;
 		double danger = 0;
 	};
+}
+
+const Item* playerBotShovelPassageItem(const Tile& tile, uint16_t passageItemId)
+{
+	const auto expected = passageItemId == 0 ? std::nullopt : playerBotShovelPassage(passageItemId);
+	if (passageItemId != 0 && !expected) return nullptr;
+	auto matches = [&expected](const Item* item) {
+		if (!item) return false;
+		const auto passage = playerBotShovelPassage(item->getID());
+		return passage && (!expected || passage->closedItemId == expected->closedItemId);
+	};
+	if (const Item* ground = tile.getGround(); matches(ground)) return ground;
+	if (const TileItemVector* items = tile.getItemList()) {
+		const auto found = std::find_if(items->begin(), items->end(), matches);
+		if (found != items->end()) return *found;
+	}
+	return nullptr;
+}
+
+Item* playerBotShovelPassageItem(Tile& tile, uint16_t passageItemId)
+{
+	return const_cast<Item*>(playerBotShovelPassageItem(
+	    static_cast<const Tile&>(tile), passageItemId));
 }
 
 uint32_t PlayerBotNavigationCostPolicy::dangerCost(const Position& position, uint32_t exposureMs) const
@@ -372,6 +394,38 @@ bool PlayerBotNavigator::resolveMove(Player& player, const Position& from, Direc
 	return true;
 }
 
+bool PlayerBotNavigator::resolveShovelPassage(Player& player, const Position& from,
+	                                           const PlayerBotNavigationStep& passage,
+	                                           const std::set<Position>& blockedPositions,
+	                                           PlayerBotNavigationStep& step) const
+{
+	if (passage.action != PlayerBotNavigationAction::UseShovel ||
+	    passage.target.z >= MAP_MAX_LAYERS - 1 ||
+	    passage.expectedPosition != Position(passage.target.x, passage.target.y, passage.target.z + 1) ||
+	    blockedPositions.find(passage.target) != blockedPositions.end() ||
+	    blockedPositions.find(passage.expectedPosition) != blockedPositions.end()) return false;
+	const Direction direction = getDirectionTo(from, passage.target);
+	if (getNextPosition(direction, from) != passage.target) return false;
+	Tile* tile = g_game.map.getTile(passage.target);
+	const Item* passageItem = tile ? playerBotShovelPassageItem(*tile, passage.itemId) : nullptr;
+	if (!passageItem) return false;
+	const bool canUseShovel = g_game.findItemOfType(&player, shovelItemId, true) != nullptr;
+	const auto action = playerBotResolveShovelPassageAction(passage.itemId, passageItem->getID(), canUseShovel);
+	if (!action) return false;
+	if (*action == PlayerBotNavigationAction::Move) {
+		if (!resolveMove(player, from, direction, blockedPositions, step) ||
+		    step.expectedPosition != passage.expectedPosition) return false;
+		step.topologyPortal = passage.topologyPortal;
+		return true;
+	}
+	const auto descriptor = playerBotShovelPassage(passageItem->getID());
+	if (!descriptor) return false;
+	step = passage;
+	step.itemId = descriptor->closedItemId;
+	step.expectedItemId = descriptor->openItemId;
+	return true;
+}
+
 PlayerBotNavigationResult PlayerBotNavigator::planFrom(Player& player, const Position& start, const Position& destination,
 	                                                    const std::set<Position>& blockedPositions,
 	                                                    std::deque<PlayerBotNavigationStep>& steps, uint64_t& expandedNodes,
@@ -472,6 +526,16 @@ PlayerBotNavigationResult PlayerBotNavigator::planFrom(Player& player, const Pos
 			step.direction = direction;
 			step.target = getNextPosition(direction, current.position);
 			step.expectedPosition = next;
+			Tile* entryTile = g_game.map.getTile(step.target);
+			const Item* entryPassage = entryTile ? playerBotShovelPassageItem(*entryTile) : nullptr;
+			const auto shovelPassage = entryPassage ? playerBotShovelPassage(entryPassage->getID()) : std::nullopt;
+			if (shovelPassage && entryPassage->getID() == shovelPassage->openItemId && next != step.target) {
+				// Keep a live-open local move recognizable if the hole closes before dispatch.
+				step.action = PlayerBotNavigationAction::UseShovel;
+				step.itemId = shovelPassage->closedItemId;
+				step.expectedItemId = shovelPassage->openItemId;
+				step.topologyPortal = true;
+			}
 			addCandidate(current.position, current.pathCost, next,
 			             (direction & DIRECTION_DIAGONAL_MASK) ? diagonalCost : cardinalCost,
 			             player.getStepDuration(direction), step);
@@ -497,6 +561,7 @@ PlayerBotNavigationResult PlayerBotNavigator::planFrom(Player& player, const Pos
 				step.expectedPosition = expected;
 				step.itemId = itemId;
 				step.expectedItemId = expectedItemId;
+				step.topologyPortal = action == PlayerBotNavigationAction::UseShovel;
 				addCandidate(current.position, current.pathCost, expected, transitionCost, 1000, step);
 			};
 
@@ -508,10 +573,12 @@ PlayerBotNavigationResult PlayerBotNavigator::planFrom(Player& player, const Pos
 					addDirectUse(ground->getID(), PlayerBotNavigationAction::UseRope, expected);
 				}
 			}
-			if (ground && contains(shovelHoleIds, ground->getID()) &&
+			const Item* passageItem = playerBotShovelPassageItem(*tile);
+			const auto shovelPassage = passageItem ? playerBotShovelPassage(passageItem->getID()) : std::nullopt;
+			if (shovelPassage && passageItem->getID() == shovelPassage->closedItemId &&
 			    g_game.findItemOfType(&player, shovelItemId, true) && target.z < MAP_MAX_LAYERS - 1) {
-				addDirectUse(ground->getID(), PlayerBotNavigationAction::UseShovel,
-				             Position(target.x, target.y, target.z + 1));
+				addDirectUse(shovelPassage->closedItemId, PlayerBotNavigationAction::UseShovel,
+				             Position(target.x, target.y, target.z + 1), shovelPassage->openItemId);
 			}
 
 			std::vector<Item*> tileItems;
