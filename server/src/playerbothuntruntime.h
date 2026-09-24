@@ -7,6 +7,7 @@
 
 #include "playerbothuntplanningsession.h"
 #include "playerbothuntpolicy.h"
+#include "playerbothuntrouteselection.h"
 #include "playerbotnavigationruntime.h"
 #include "playerbotsupplyrecovery.h"
 
@@ -206,7 +207,13 @@ class PlayerBotHuntRuntime
 		PlayerBotHuntRuntimeOutcome completeScoreWork(const std::vector<PlayerBotHuntRuntimeScoreObservation>& observations,
 		                                              uint64_t elapsedUs);
 		// Keep the completed session through final telemetry, then release it.
-		void completePlanningSelection() { planning.reset(); currentPlanningPass = 0; pendingTransportOffers.clear(); pendingScoreCandidates.clear(); }
+		void completePlanningSelection() { planning.reset(); routeSelection.reset(); currentPlanningPass = 0; pendingTransportOffers.clear(); pendingScoreCandidates.clear(); }
+		// Seed once from the scored snapshot; keep even a finished selector until
+		// selection telemetry completes or the planning pass is cancelled.
+		bool beginRouteSelection(uint64_t pass, uint64_t revision, const std::vector<PlayerBotHuntRegion>& candidates);
+		std::optional<PlayerBotHuntRouteRequest> nextRouteRequest();
+		PlayerBotHuntRouteResult observeRoute(const PlayerBotHuntRouteRequest& request,
+		                                    const PlayerBotHuntRouteObservation& observation);
 		void selectPlanningRegion(PlayerBotHuntRegion region, const PlayerBotHuntRuntimePlayerObservation& player,
 		                         std::chrono::steady_clock::time_point now) { activate(std::move(region), player, now); }
 		PlayerBotHuntRuntimeOutcome cancelPlanning();
@@ -268,6 +275,7 @@ class PlayerBotHuntRuntime
 		const char* planningInvalidationReason(const PlayerBotHuntPlanningSnapshot& current) const;
 
 		std::optional<PlayerBotHuntPlanningSession> planning;
+		std::optional<PlayerBotHuntRouteSelection> routeSelection;
 		PlayerBotHuntPolicy policy;
 		bool supplyRecoveryDegraded = false;
 		std::optional<PlayerBotHuntRegion> activeRegion;

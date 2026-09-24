@@ -99,6 +99,20 @@ PlayerBotHuntRuntimeOutcome PlayerBotHuntCoordinator::completeScoreWork(const st
 	uint64_t elapsedUs) { return huntRuntime.completeScoreWork(observations, elapsedUs); }
 std::optional<PlayerBotHuntPlanningSession> PlayerBotHuntCoordinator::planningSession() const { return huntRuntime.planningSession(); }
 void PlayerBotHuntCoordinator::completePlanningSelection() { huntRuntime.completePlanningSelection(); }
+bool PlayerBotHuntCoordinator::beginRouteSelection(uint64_t pass, uint64_t revision,
+    const std::vector<PlayerBotHuntRegion>& candidates)
+{
+	return huntRuntime.beginRouteSelection(pass, revision, candidates);
+}
+std::optional<PlayerBotHuntRouteRequest> PlayerBotHuntCoordinator::nextRouteRequest()
+{
+	return huntRuntime.nextRouteRequest();
+}
+PlayerBotHuntRouteResult PlayerBotHuntCoordinator::observeRoute(const PlayerBotHuntRouteRequest& request,
+    const PlayerBotHuntRouteObservation& observation)
+{
+	return huntRuntime.observeRoute(request, observation);
+}
 void PlayerBotHuntCoordinator::selectPlanningRegion(PlayerBotHuntRegion region,
 	const PlayerBotHuntRuntimePlayerObservation& player, std::chrono::steady_clock::time_point now)
 {

@@ -11,6 +11,37 @@ PlayerBotHuntRuntime::PlayerBotHuntRuntime(std::vector<Position> fallbackPatrol)
 	fallbackPatrol(std::move(fallbackPatrol))
 {}
 
+bool PlayerBotHuntRuntime::beginRouteSelection(uint64_t pass, uint64_t revision,
+    const std::vector<PlayerBotHuntRegion>& candidates)
+{
+	if (!planning || !planning->ready() || pass == 0 || pass != currentPlanningPass ||
+	    revision != planning->snapshot().cacheRevision) return false;
+	if (routeSelection) return false;
+	routeSelection.emplace(candidates);
+	return true;
+}
+
+std::optional<PlayerBotHuntRouteRequest> PlayerBotHuntRuntime::nextRouteRequest()
+{
+	if (!planning || !routeSelection || routeSelection->done()) return std::nullopt;
+	auto request = routeSelection->next();
+	request.planningPass = currentPlanningPass;
+	request.scoringRevision = planning->snapshot().cacheRevision;
+	return request;
+}
+
+PlayerBotHuntRouteResult PlayerBotHuntRuntime::observeRoute(const PlayerBotHuntRouteRequest& request,
+    const PlayerBotHuntRouteObservation& observation)
+{
+	if (!planning || !routeSelection || request.planningPass != currentPlanningPass ||
+	    request.scoringRevision != planning->snapshot().cacheRevision) return {};
+	PlayerBotHuntRouteResult result = routeSelection->observe(request, observation);
+	if (!result.accepted) return {};
+	result.planningPass = currentPlanningPass;
+	result.scoringRevision = planning->snapshot().cacheRevision;
+	return result;
+}
+
 PlayerBotHuntPlanningSnapshot PlayerBotHuntRuntime::snapshot(const PlayerBotHuntRuntimePlayerObservation& player, uint64_t revision)
 {
 	return {player.position, player.level, player.health, player.staminaMinutes, revision, player.topologyGeneration,
@@ -53,6 +84,7 @@ PlayerBotHuntRuntimeOutcome PlayerBotHuntRuntime::advancePlanning(const PlayerBo
 	if (!planning) {
 		if (!input.start) return outcome;
 		PlayerBotHuntPlanningProfile profile = planningProfile(input.start->profile);
+		routeSelection.reset();
 		planning.emplace(PlayerBotHuntPlanningStart{input.start->scan, std::move(profile),
 		                                             snapshot(input.player, input.start->scan.revision),
 		                                             input.start->topologyDistances, input.start->originReachability,
@@ -183,6 +215,7 @@ PlayerBotHuntRuntimeOutcome PlayerBotHuntRuntime::cancelPlanning()
 	outcome.planningCancelled = true;
 	outcome.cancellationReason = "planning_cancelled";
 	planning.reset();
+	routeSelection.reset();
 	currentPlanningPass = 0;
 	pendingTransportOffers.clear();
 	pendingScoreCandidates.clear();
@@ -218,6 +251,7 @@ void PlayerBotHuntRuntime::invalidatePlanning(PlayerBotHuntRuntimeOutcome& outco
 	outcome.cancellationReason = cancellationReason;
 	outcome.staleRevision = staleRevision;
 	planning.reset();
+	routeSelection.reset();
 	currentPlanningPass = 0;
 	pendingTransportOffers.clear();
 	pendingScoreCandidates.clear();
@@ -266,6 +300,7 @@ PlayerBotHuntRuntimeOutcome PlayerBotHuntRuntime::exhaustScope(std::chrono::stea
 	outcome.retryAfter = retryAfter;
 	scopeReevaluationAfter = now + retryAfter;
 	planning.reset();
+	routeSelection.reset();
 	currentPlanningPass = 0;
 	pendingTransportOffers.clear();
 	pendingScoreCandidates.clear();
