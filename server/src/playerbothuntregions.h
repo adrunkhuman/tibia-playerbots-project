@@ -230,10 +230,10 @@ struct PlayerBotHuntRegion {
 		reconcileSupplies(supplyProfile.reserve);
 	}
 
-	void reconcileRecovery(uint32_t reserve, uint64_t funds, uint64_t spendingReserve)
+	void reconcileRecovery(uint32_t reserve, uint64_t funds)
 	{
 		reconcileSupplies(reserve);
-		cashPressure = playerBotHuntCashPressure(supplyProfile.potions, reserve, funds, spendingReserve);
+		cashPressure = playerBotHuntCashPressure(funds);
 	}
 
 	void reconcileSupplies(uint32_t reserve)

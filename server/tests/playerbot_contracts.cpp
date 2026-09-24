@@ -111,17 +111,28 @@ void huntEconomy()
 	pocket.resize(257);
 	assert(playerBotHuntViability(pocket, 0.2).modelLimited);
 
-	assert(playerBotHuntCashPressure(2, 1, 132, 500));
-	assert(!playerBotHuntCashPressure(2, 1, 500, 500));
-	assert(!playerBotHuntCashPressure(10, 1, 132, 500));
+	assert(playerBotHuntCashPressure(0));
+	assert(playerBotHuntCashPressure(199));
+	assert(!playerBotHuntCashPressure(200));
+	assert(!playerBotHuntCashPressure(201));
+	assert(!playerBotHuntCashPressure(100 + 100)); // Withdrawing gold does not change total funds.
 	PlayerBotHuntRegion income, xp;
 	income.suitable = xp.suitable = income.reachable = xp.reachable = true;
-	income.cashPressure = xp.cashPressure = true;
+	income.supplyProfile.potions = xp.supplyProfile.potions = 20;
+	income.reconcileRecovery(1, 199);
+	xp.reconcileRecovery(1, 199);
+	assert(income.cashPressure && xp.cashPressure);
 	income.coinGoldPerMinute = 10;
 	income.score = 10;
 	xp.score = 100;
 	assert(playerBotPreferHuntRegion(income, xp));
-	income.cashPressure = xp.cashPressure = false;
+	assert(playerBotHuntCandidateCanBeatValidated(income, xp));
+	income.coinGoldPerMinute = 0;
+	assert(playerBotPreferHuntRegion(xp, income)); // No coin-producing option: retain XP fallback.
+	income.coinGoldPerMinute = 10;
+	income.reconcileRecovery(1, 200);
+	xp.reconcileRecovery(1, 200);
+	assert(!income.cashPressure && !xp.cashPressure);
 	assert(playerBotPreferHuntRegion(xp, income));
 	income.cashPressure = xp.cashPressure = true;
 	income.suitable = false;
@@ -368,9 +379,7 @@ void raisedHuntRecoveryReserve()
 	const uint64_t funds = 200;
 	const uint32_t price = 45;
 	auto reconcile = [&](PlayerBotHuntRegion& region, uint32_t reserve, uint64_t money) {
-		const uint32_t target = recoveryPotionRestockTargetForReserve(reserve);
-		region.reconcileRecovery(reserve, money, playerBotRecoverySpendingReserve(
-		    region.supplyProfile.potions, target, price, carriedGoldReserve));
+		region.reconcileRecovery(reserve, money);
 	};
 	reconcile(income, 1, funds);
 	reconcile(xp, 1, funds);
@@ -385,6 +394,10 @@ void raisedHuntRecoveryReserve()
 	assert(recoveryPotionRestockTargetForReserve(UINT32_MAX) == UINT32_MAX);
 	reconcile(income, candidateReserve, funds);
 	reconcile(xp, candidateReserve, funds);
+	assert(!income.cashPressure && !income.supplyBudget.fits);
+	assert(selectRuntimeHunt({income, xp}).atlasVariantId == 2);
+	reconcile(income, candidateReserve, 199);
+	reconcile(xp, candidateReserve, 199);
 	assert(income.cashPressure && !income.supplyBudget.fits);
 	assert(selectRuntimeHunt({income, xp}).atlasVariantId == 1);
 	income.predictedLethal = true;

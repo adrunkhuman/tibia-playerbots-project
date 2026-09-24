@@ -48,11 +48,11 @@ private:
 	size_t evaluations = 0;
 };
 
-inline bool playerBotHuntCashPressure(uint32_t potions, uint32_t returnReserve,
-    uint64_t funds, uint64_t recoverySpendingReserve)
+inline constexpr uint64_t playerBotHuntCashBuffer = 200;
+
+inline bool playerBotHuntCashPressure(uint64_t funds)
 {
-	return static_cast<uint64_t>(potions) <= static_cast<uint64_t>(returnReserve) + 1 &&
-	    funds < recoverySpendingReserve;
+	return funds < playerBotHuntCashBuffer;
 }
 
 struct PlayerBotReplenishmentPoint {

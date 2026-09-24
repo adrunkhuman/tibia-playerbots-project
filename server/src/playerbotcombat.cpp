@@ -1095,8 +1095,7 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 			    std::chrono::steady_clock::now() - topologyStarted).count();
 			PlayerBotHuntRegionScan scan = planner.beginScan(player, topologyDistances.get());
 			auto profile = huntPlanningFacts(player, huntCombatProfile(player));
-			profile.cashPressure = playerBotHuntCashPressure(profile.potionCount, huntPotionReturnThreshold,
-			    input.player.funds, recoverySpendingReserve(player, potionStockTarget(player)));
+			profile.cashPressure = playerBotHuntCashPressure(input.player.funds);
 
 			input.start = {{std::move(scan), std::move(profile), std::move(topologyDistances),
 			                std::move(topologyReachability), huntTransportCatalog(), topologyTimeUs}};
@@ -1350,8 +1349,7 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 			const uint32_t candidateReserve = static_cast<uint32_t>(std::min<uint64_t>(UINT32_MAX,
 			    static_cast<uint64_t>(returnReserve) + outboundReserve));
 			routed.supplyProfile = huntPlanningFacts(player, huntCombatProfile(player)).supply;
-			routed.reconcileRecovery(candidateReserve, player.getMoney() + player.getBankBalance(),
-			    recoverySpendingReserve(player, potionStockTarget(player, candidateReserve)));
+			routed.reconcileRecovery(candidateReserve, player.getMoney() + player.getBankBalance());
 			const bool needsSupplyRoute = !routed.supplyRecovery && playerBotHuntNeedsSupplyRoute(
 			    routed.supplyBudget.expectedPotions, routed.supplyProfile.potions, candidateReserve);
 			huntSupplyExitApproaches = needsSupplyRoute ? huntSupplyExitCandidates(player, depotApproach) :
@@ -1403,7 +1401,7 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 		routed.recoveryPotionReserve = candidateReserve;
 		routed.recoveryRouteHealthLoss = (static_cast<double>(routed.routeDangerCost) + routed.returnRouteDangerCost) *
 		    player.getMaxHealth() / risk.healthLossCost;
-		routed.reconcileRecovery(candidateReserve, player.getMoney() + player.getBankBalance(), recoveryReserve);
+		routed.reconcileRecovery(candidateReserve, player.getMoney() + player.getBankBalance());
 		if (!routed.recoverySustainable()) {
 			routed.suitable = false;
 			routed.rejectionReason = "recovery_hunt_not_sustainable";
@@ -1496,6 +1494,12 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 	huntCoordinator.selectPlanningRegion(selected, huntPlayerObservation(player), now);
 	emit("hunt_region_selection", position, "\"result\":\"selected\",\"region_id\":" + std::to_string(selected.id) +
 		",\"selection_rule\":" + jsonString(playerBotHuntSelectionRule(selected)) +
+		",\"cash_pressure\":" + (selected.cashPressure ? "true" : "false") +
+		",\"available_gold\":" + std::to_string(player.getMoney() + player.getBankBalance()) +
+		",\"cash_buffer\":" + std::to_string(playerBotHuntCashBuffer) +
+		",\"coin_income_fallback\":" +
+		    (selected.cashPressure && selected.coinGoldPerMinute <= 0 && selected.observedCoinGoldPerMinute <= 0 ?
+		        "true" : "false") +
 		",\"route_rejection_counts\":" + routeFailureCounts() + "," +
 		planningAttribution(huntPlanningPass, huntPlanningScoringRevision) +
 		",\"atlas_site_id\":" + std::to_string(selected.atlasSiteId) + ",\"atlas_variant_id\":" +
