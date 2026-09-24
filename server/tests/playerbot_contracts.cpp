@@ -852,59 +852,426 @@ void adaptiveChallenge()
 
 void supplyCalibration()
 {
+	auto capability = [](uint32_t level = 10) {
+		PlayerBotHuntPlanningProfile profile;
+		profile.combat.level = level;
+		profile.combat.maximumHealth = 100 + static_cast<int32_t>(level - 10) * 5;
+		profile.combat.armor = 10;
+		profile.combat.defense = 20 + static_cast<int32_t>(level - 10);
+		profile.combat.attack = 15;
+		profile.combat.attackSkill = 30 + static_cast<int32_t>(level - 10);
+		profile.magicLevel = level - 10;
+		profile.supply.maximumMana = 100 + (level - 10) * 5;
+		profile.supply.potionHealing = 125;
+		profile.equipmentItemIds[5] = 2383;
+		return playerBotSupplyCapability(profile);
+	};
+	auto regionFor = [&](uint64_t variant, PlayerBotSupplyCapabilitySnapshot snapshot) {
+		PlayerBotHuntRegion region;
+		region.atlasVariantId = variant;
+		region.atlasRevision = 2;
+		region.supplyCapability = snapshot;
+		region.supplyRecovery = true;
+		region.currentHealth = region.maximumHealth = 100;
+		region.supplyProfile.potionHealing = 125;
+		region.supplyProfile.maximumMana = region.supplyProfile.mana = 100;
+		region.combatFraction = 0.5;
+		region.availableHuntSeconds = 120;
+		region.supplyBudget.expectedPotions = 1;
+		region.supplyStaticPotionsPerCombatSecond = 1.0 / 60.0;
+		return region;
+	};
 	PlayerBotHuntPolicy policy;
-	PlayerBotHuntRegion region;
-	region.atlasVariantId = 1;
-	region.atlasRevision = 2;
-	region.supplyCapability = 3;
-	region.supplyRecovery = true;
-	region.currentHealth = region.maximumHealth = 100;
-	region.supplyProfile.potionHealing = 125;
-	region.supplyProfile.maximumMana = region.supplyProfile.mana = 100;
-	region.combatFraction = 0.5;
-	region.availableHuntSeconds = 120;
-	region.supplyBudget.expectedPotions = 1;
-	auto observe = [&](uint32_t potions, int32_t health, uint32_t mana, bool interrupted = false) {
+	PlayerBotHuntRegion region = regionFor(1, capability());
+	auto observe = [&](uint32_t potionUses, int32_t health, uint32_t mana, bool interrupted = false) {
 		policy.resetCombatEvidence();
 		policy.observeCombat({true, 60, health, 100, mana, 100, 1});
 		for (unsigned i = 0; i < 3; ++i) policy.observeKill();
-		for (unsigned i = 0; i < potions; ++i) policy.observeRecovery(true);
-		return policy.observeSupplies(region, 120, health, 100, mana, 0, interrupted);
+		for (unsigned i = 0; i < potionUses; ++i) policy.observeRecovery(true);
+		return policy.observeSupplies(region, region.supplyCapability, 120,
+		                              health, 100, mana, 0, interrupted);
 	};
-	assert(observe(0, 90, 100).samples == 0); // Health loss is unpaid demand.
-	assert(observe(0, 100, 80).samples == 0); // Spending the mana pool is not sustain.
-	assert(observe(0, 100, 100, true).samples == 0);
-	assert(observe(0, 100, 100).potionsPerCombatSecond > 0);
+	const auto healthDebt = observe(0, 90, 100);
+	assert(healthDebt.accepted && healthDebt.levelAdjustedHealthDebt == 10);
+	assert(healthDebt.potionEquivalentDemand > 0);
+	assert(!observe(0, 100, 100, true).accepted);
+	assert(std::string(observe(0, 100, 100, true).reason) == "interrupted_outing");
+	const auto firstSafe = observe(0, 100, 100);
+	assert(firstSafe.calibration.potionsPerCombatSecond > 0);
 	observe(0, 100, 100);
-	region.supplyCalibration = observe(0, 100, 100);
-	assert(region.supplyCalibration.potionsPerCombatSecond == 0);
-	region.reconcileSupplies(1);
-	assert(region.supplyBudget.fits && region.supplyBudget.expectedPotions == 0);
-	region.supplyCalibration = observe(2, 100, 100);
-	region.reconcileSupplies(1);
-	assert(region.supplyBudget.expectedPotions == 2 && !region.supplyBudget.fits);
-	region.reconcileTravel(240, 0, 1);
-	assert(region.supplyBudget.expectedPotions == 4);
-	const auto unsafe = observe(0, 50, 100);
-	assert(unsafe.potionsPerCombatSecond >= region.supplyCalibration.potionsPerCombatSecond);
-	region.supplyCapability = 4;
-	assert(observe(0, 100, 100, true).samples == 0);
-	region.atlasRevision = 3;
-	assert(observe(0, 100, 100, true).samples == 0);
+	region.supplyCalibration = observe(0, 100, 100).calibration;
+	// Zero-demand evidence decays at the local 0.20 blend; it never snaps to zero.
+	assert(region.supplyCalibration.potionsPerCombatSecond > 0);
+	assert(region.supplyCalibration.samples == 4);
+
+	// Guarded zero evidence does not cross an incompatible stored capability.
+	PlayerBotHuntPolicy contextPolicy;
+	PlayerBotHuntRegion contextA = regionFor(20, capability());
+	auto safeContextOuting = [&](const PlayerBotHuntRegion& context) {
+		contextPolicy.resetCombatEvidence();
+		contextPolicy.observeCombat({true, 60, 100, 100, 100, 100, 1});
+		for (unsigned i = 0; i < 3; ++i) contextPolicy.observeKill();
+		return contextPolicy.observeSupplies(
+		    context, context.supplyCapability, 120, 100, 100, 100, 0, false);
+	};
+	assert(safeContextOuting(contextA).accepted);
+	assert(safeContextOuting(contextA).accepted);
+	PlayerBotHuntRegion contextB = contextA;
+	contextB.supplyCapability.equipmentItemIds[5] = 2395;
+	const auto firstNewContext = safeContextOuting(contextB);
+	assert(firstNewContext.accepted && firstNewContext.calibration.potionsPerCombatSecond > 0);
+	assert(contextPolicy.regionPerformance().at(contextB.atlasVariantId).supply.samples == 1);
+
+	// A final spell and its mana debt are ordinary accounted demand, not an
+	// endpoint veto.
+	PlayerBotHuntPolicy manaDebtPolicy;
+	PlayerBotHuntRegion manaDebtRegion = regionFor(2, capability());
+	manaDebtRegion.supplyProfile.spellLegal = true;
+	manaDebtRegion.supplyProfile.spellMana = 10;
+	manaDebtRegion.supplyProfile.spellHealing = 20;
+	manaDebtRegion.supplyProfile.spellInterval = 1;
+	manaDebtPolicy.observeCombat({true, 60, 100, 100, 80, 100, 1});
+	manaDebtPolicy.observeRecovery(false);
+	for (unsigned i = 0; i < 3; ++i) manaDebtPolicy.observeKill();
+	const auto manaDebt = manaDebtPolicy.observeSupplies(
+	    manaDebtRegion, manaDebtRegion.supplyCapability, 120, 100, 100, 80, 0, false);
+	assert(manaDebt.accepted && manaDebt.levelAdjustedManaDebt == 20);
+	assert(manaDebt.potionEquivalentDemand > 0);
+
+	// Level restoration is netted before clipping, so only resources spent
+	// during the outing become debt.
+	auto levelDebt = [&](int32_t startHealth, uint32_t startMana, uint32_t restoredHealth,
+	                     uint32_t restoredMana, int32_t endHealth, uint32_t endMana) {
+		PlayerBotHuntPolicy debtPolicy;
+		PlayerBotHuntRegion debtRegion = regionFor(21, capability());
+		debtRegion.currentHealth = startHealth;
+		debtRegion.supplyProfile.mana = startMana;
+		debtRegion.supplyProfile.maximumMana = 200;
+		debtRegion.supplyProfile.spellLegal = true;
+		debtRegion.supplyProfile.spellMana = 10;
+		debtRegion.supplyProfile.spellHealing = 20;
+		debtPolicy.observeCombat({true, 60, endHealth, 200, endMana, 200, 1});
+		debtPolicy.observeRecovery(false);
+		debtPolicy.observeLevelRestoration(restoredHealth, restoredMana);
+		for (unsigned i = 0; i < 3; ++i) debtPolicy.observeKill();
+		return debtPolicy.observeSupplies(
+		    debtRegion, debtRegion.supplyCapability, 120, endHealth, 200, endMana, 0, false);
+	};
+	const auto fullAdvance = levelDebt(185, 90, 15, 30, 200, 120);
+	assert(fullAdvance.levelAdjustedHealthDebt == 0 && fullAdvance.levelAdjustedManaDebt == 0);
+	const auto depletedAdvance = levelDebt(100, 50, 100, 150, 200, 200);
+	assert(depletedAdvance.levelAdjustedHealthDebt == 0 && depletedAdvance.levelAdjustedManaDebt == 0);
+	const auto restoredDamage = levelDebt(185, 100, 55, 40, 200, 120);
+	assert(restoredDamage.levelAdjustedHealthDebt == 40 && restoredDamage.levelAdjustedManaDebt == 20);
+	const auto postAdvanceDamage = levelDebt(185, 100, 55, 40, 180, 100);
+	assert(postAdvanceDamage.levelAdjustedHealthDebt == 60 && postAdvanceDamage.levelAdjustedManaDebt == 40);
+	PlayerBotHuntPolicy multipleAdvancePolicy;
+	PlayerBotHuntRegion multipleAdvance = regionFor(22, capability());
+	multipleAdvance.currentHealth = 185;
+	multipleAdvancePolicy.observeCombat({true, 60, 200, 210, 100, 100, 1});
+	multipleAdvancePolicy.observeLevelRestoration(10, 0);
+	multipleAdvancePolicy.observeLevelRestoration(15, 0);
+	for (unsigned i = 0; i < 3; ++i) multipleAdvancePolicy.observeKill();
+	const auto multipleAdvances = multipleAdvancePolicy.observeSupplies(
+	    multipleAdvance, multipleAdvance.supplyCapability, 120, 200, 210, 100, 0, false);
+	assert(multipleAdvances.levelHealthRestored == 25);
+	assert(multipleAdvances.levelAdjustedHealthDebt == 10);
+
+	// A partially fed hunt may contain damage, a healing spell, and one level-up.
+	// Food exposure remains telemetry but does not partition supply learning.
+	PlayerBotHuntPolicy progression;
+	PlayerBotHuntRegion progressing = regionFor(3, capability(10));
+	progressing.supplyCapability.foodAvailable = true;
+	progressing.supplyCapability.foodHealthGain = 1;
+	progressing.supplyCapability.foodHealthIntervalMilliseconds = 6000;
+	progressing.supplyCapability.foodManaGain = 2;
+	progressing.supplyCapability.foodManaIntervalMilliseconds = 6000;
+	progressing.supplyProfile.healthGain = 1;
+	progressing.supplyProfile.healthInterval = 6;
+	progressing.supplyProfile.manaGain = 2;
+	progressing.supplyProfile.manaInterval = 6;
+	progressing.supplyProfile.spellLegal = true;
+	progressing.supplyProfile.spellMana = 10;
+	progressing.supplyProfile.spellHealing = 20;
+	progression.observeCombat({true, 30, 90, 105, 85, 105, 1, true, true});
+	progression.observeCombat({true, 30, 90, 105, 85, 105, 1, false, false});
+	progression.observeDamage(30);
+	progression.observeRecovery(false);
+	progression.observeLevelRestoration(30, 20);
+	for (unsigned i = 0; i < 3; ++i) progression.observeKill();
+	auto leveledWithoutFood = capability(11);
+	leveledWithoutFood.foodHealthGain = 1;
+	leveledWithoutFood.foodHealthIntervalMilliseconds = 6000;
+	leveledWithoutFood.foodManaGain = 2;
+	leveledWithoutFood.foodManaIntervalMilliseconds = 6000;
+	const auto leveled = progression.observeSupplies(
+	    progressing, leveledWithoutFood, 120, 105, 105, 105, 0, false);
+	assert(leveled.accepted && std::string(leveled.reason) == "level_restoration_accounted");
+	assert(leveled.levelHealthRestored == 30 && leveled.levelManaRestored == 20);
+	assert(leveled.foodActiveSeconds == 30 && leveled.foodAvailableSeconds == 30);
+	assert(leveled.potionEquivalentDemand > 0);
+	auto leveledWithFood = leveledWithoutFood;
+	leveledWithFood.foodAvailable = true;
+	assert(leveled.calibration.capability == leveledWithFood);
+	assert(playerBotSupplyCalibrationForCapability(leveled.calibration, leveledWithFood));
+	assert(playerBotSupplyCalibrationForCapability(leveled.calibration, leveledWithoutFood));
+	progressing.supplyCalibration = leveled.calibration;
+	progressing.supplyCapability = leveledWithoutFood;
+	progressing.reconcileSupplies(1);
+	assert(std::string(progressing.supplyEstimateSource) == "local");
+	assert(progressing.supplyLocalRejectionReason == nullptr);
+
+	// Equipment remains a hard boundary; food-only differences do not.
+	PlayerBotHuntPolicy boundaryPolicy;
+	PlayerBotHuntRegion boundary = regionFor(4, capability());
+	boundaryPolicy.observeCombat({true, 60, 100, 100, 100, 100, 1, true, true});
+	for (unsigned i = 0; i < 3; ++i) boundaryPolicy.observeKill();
+	auto changedEquipment = boundary.supplyCapability;
+	changedEquipment.equipmentItemIds[5] = 2395;
+	const auto material = boundaryPolicy.observeSupplies(
+	    boundary, changedEquipment, 120, 100, 100, 100, 0, false);
+	assert(!material.accepted && std::string(material.reason) == "material_capability_change");
+	auto changedFood = boundary.supplyCapability;
+	changedFood.foodHealthGain = 2;
+	changedFood.foodManaGain = 3;
+	assert(changedFood == boundary.supplyCapability);
+	const auto foodChange = boundaryPolicy.observeSupplies(
+	    boundary, changedFood, 120, 100, 100, 100, 0, false);
+	assert(foodChange.accepted && std::string(foodChange.reason) == "safe_combat_evidence");
+	assert(foodChange.foodActiveSeconds == 60 && foodChange.foodAvailableSeconds == 60);
+	assert(foodChange.changedFields == 0);
+	assert(foodChange.direction == PlayerBotSupplyCapabilityDirection::Unchanged);
+
+	// Transient live defense never changes a supply capability when the stable
+	// equipment-derived defense and fight mode are unchanged.
+	PlayerBotHuntPlanningProfile transientA;
+	transientA.combat.defense = 10;
+	transientA.combat.attackFactor = 1.2f;
+	transientA.supplyCapabilityDefense = 24;
+	PlayerBotHuntPlanningProfile transientB = transientA;
+	transientB.combat.defense = 20;
+	assert(playerBotSupplyCapability(transientA) == playerBotSupplyCapability(transientB));
+	transientB.combat.attackFactor = 1.0f;
+	assert(playerBotSupplyCapability(transientA) != playerBotSupplyCapability(transientB));
+
+	// Failed exposure guards identify both the measured and required values.
+	PlayerBotHuntPolicy guards;
+	PlayerBotHuntRegion guarded = regionFor(5, capability());
+	guards.observeCombat({true, 60, 100, 100, 100, 100, 1});
+	for (unsigned i = 0; i < 3; ++i) guards.observeKill();
+	const auto shortDuration = guards.observeSupplies(
+	    guarded, guarded.supplyCapability, 119, 100, 100, 100, 0, false);
+	assert(!shortDuration.accepted && std::string(shortDuration.reason) == "insufficient_duration");
+	assert(shortDuration.durationSeconds == 119 && shortDuration.minimumDurationSeconds == 120);
+	guards.resetCombatEvidence();
+	guards.observeCombat({true, 59, 100, 100, 100, 100, 1});
+	for (unsigned i = 0; i < 3; ++i) guards.observeKill();
+	const auto shortCombat = guards.observeSupplies(
+	    guarded, guarded.supplyCapability, 120, 100, 100, 100, 0, false);
+	assert(!shortCombat.accepted && std::string(shortCombat.reason) == "insufficient_active_combat");
+	assert(shortCombat.activeCombatSeconds == 59 && shortCombat.minimumActiveCombatSeconds == 60);
+	guards.resetCombatEvidence();
+	guards.observeCombat({true, 60, 100, 100, 100, 100, 1});
+	for (unsigned i = 0; i < 2; ++i) guards.observeKill();
+	const auto fewKills = guards.observeSupplies(
+	    guarded, guarded.supplyCapability, 120, 100, 100, 100, 0, false);
+	assert(!fewKills.accepted && std::string(fewKills.reason) == "insufficient_kills");
+	assert(fewKills.kills == 2 && fewKills.minimumKills == 3);
+	guards.resetCombatEvidence();
+	guards.observeCombat({true, 60, 30, 100, 100, 100, 1});
+	for (unsigned i = 0; i < 3; ++i) guards.observeKill();
+	const auto thresholdHealth = guards.observeSupplies(
+	    guarded, guarded.supplyCapability, 120, 100, 100, 100, 0, false);
+	assert(thresholdHealth.accepted && thresholdHealth.p10HealthPercent == 30);
+	assert(thresholdHealth.minimumHealthPercent == 30);
+	PlayerBotHuntPolicy belowHealth;
+	belowHealth.observeCombat({true, 60, 29, 100, 100, 100, 1});
+	for (unsigned i = 0; i < 3; ++i) belowHealth.observeKill();
+	const auto healthPressure = belowHealth.observeSupplies(
+	    guarded, guarded.supplyCapability, 120, 100, 100, 100, 0, false);
+	assert(!healthPressure.accepted && std::string(healthPressure.reason) == "health_pressure");
+	assert(healthPressure.p10HealthPercent == 29 && healthPressure.minimumHealthPercent == 30);
+
+	// Exhausted mana is valid evidence. Its unrecovered debt remains part of demand.
+	guards.resetCombatEvidence();
+	guarded.supplyProfile.spellLegal = true;
+	guarded.supplyProfile.spellMana = 10;
+	guarded.supplyProfile.spellHealing = 20;
+	guards.observeCombat({true, 60, 100, 100, 0, 100, 1});
+	guards.observeRecovery(false);
+	for (unsigned i = 0; i < 3; ++i) guards.observeKill();
+	const auto manaDebtAccepted = guards.observeSupplies(
+	    guarded, guarded.supplyCapability, 120, 100, 100, 0, 0, false);
+	assert(manaDebtAccepted.accepted && manaDebtAccepted.p10ManaPercent == 0);
+	assert(manaDebtAccepted.levelAdjustedManaDebt == 100);
+	assert(manaDebtAccepted.potionEquivalentDemand > 0);
+
+	// Unsafe short evidence cannot lower a high prior, but can raise a low prior
+	// immediately. Neither path contributes a guarded cheap sample.
+	PlayerBotHuntPolicy unsafePolicy;
+	PlayerBotHuntRegion unsafeRegion = regionFor(6, capability());
+	unsafeRegion.supplyBudget.expectedPotions = 10;
+	unsafeRegion.supplyStaticPotionsPerCombatSecond = 10.0 / 60.0;
+	unsafePolicy.observeCombat({true, 10, 20, 100, 100, 100, 1});
+	const auto unsafeRejected = unsafePolicy.observeSupplies(
+	    unsafeRegion, unsafeRegion.supplyCapability, 20, 20, 100, 100, 0, false);
+	assert(!unsafeRejected.accepted && std::string(unsafeRejected.reason) == "health_pressure");
+	assert(unsafeRejected.p10HealthPercent == 20 && unsafeRejected.minimumHealthPercent == 30);
+	unsafePolicy.resetCombatEvidence();
+	unsafeRegion.supplyBudget.expectedPotions = 0;
+	unsafeRegion.supplyStaticPotionsPerCombatSecond = 0;
+	unsafePolicy.observeCombat({true, 10, 40, 100, 100, 100, 1});
+	unsafePolicy.observeDeath();
+	const auto unsafe = unsafePolicy.observeSupplies(
+	    unsafeRegion, unsafeRegion.supplyCapability, 20, 40, 100, 100, 0, false);
+	assert(unsafe.accepted && std::string(unsafe.reason) == "unsafe_upward_correction");
+	assert(unsafe.localEstimateDirection == PlayerBotSupplyEstimateDirection::Upward);
 
 	PlayerBotHuntRuntime runtime({});
 	PlayerBotHuntRuntimePlayerObservation player;
+	region = regionFor(8, capability());
+	region.expectedDamagePerSecond = 1;
 	player.health = player.maximumHealth = player.mana = 100;
-	player.supplyCapability = region.supplyCapability;
+	player.supplyCapability = capability(11);
 	const auto start = std::chrono::steady_clock::time_point{};
 	runtime.selectPlanningRegion(region, player, start);
+	runtime.enterHuntArea(player, region.supplyProfile, start);
 	runtime.sampleCombat({true, start + std::chrono::seconds(1), 100, 100, 100, 100, 1});
 	runtime.sampleCombat({true, start + std::chrono::seconds(61), 100, 100, 100, 100, 1});
 	for (unsigned i = 0; i < 3; ++i) runtime.observeKill();
 	const auto completed = runtime.complete(player, start + std::chrono::seconds(120), 2400);
-	assert(completed && completed->region.supplyCalibration.samples == 1);
+	assert(completed && completed->supplyObservation.accepted);
+	assert(completed->supplyObservation.arrivalBaselineObserved);
+	assert(completed->region.supplyCalibration.samples == 1);
 	assert(runtime.regionPerformance().at(region.atlasVariantId).supply.samples == 1);
+	assert(runtime.supplyGlobalLearning().samples == 1);
+	assert(runtime.planningProfile({}).supplyGlobalLearning.samples == 1);
 	assert(!runtime.complete(player, start + std::chrono::seconds(121), 2400));
+
+	// Outbound events are outside the supply frame. Arrival captures the swapped
+	// equipment context once; a duplicate waypoint arrival cannot reset evidence.
+	PlayerBotHuntRuntime arrivalRuntime({});
+	PlayerBotHuntRegion arrivalRegion = regionFor(23, capability(10));
+	arrivalRegion.expectedDamagePerSecond = 1;
+	arrivalRegion.supplyStaticPotionsPerCombatSecond = 10.0 / 60.0;
+	arrivalRegion.supplyGlobalLearning = {0.9, 1};
+	PlayerBotHuntRuntimePlayerObservation planningPlayer;
+	planningPlayer.health = planningPlayer.maximumHealth = planningPlayer.mana = 100;
+	planningPlayer.supplyCapability = arrivalRegion.supplyCapability;
+	arrivalRuntime.selectPlanningRegion(arrivalRegion, planningPlayer, start);
+	arrivalRuntime.observeDamage(80);
+	arrivalRuntime.observeLevelRestoration(50, 50);
+	arrivalRuntime.observeKill();
+
+	PlayerBotHuntRuntimePlayerObservation arrivalPlayer = planningPlayer;
+	arrivalPlayer.health = 150;
+	arrivalPlayer.maximumHealth = 170;
+	arrivalPlayer.mana = 150;
+	arrivalPlayer.supplyCapability = capability(11);
+	arrivalPlayer.supplyCapability.equipmentItemIds[5] = 2395;
+	PlayerBotSupplyProfile arrivalSupply = arrivalRegion.supplyProfile;
+	arrivalSupply.mana = 150;
+	arrivalSupply.maximumMana = 170;
+	arrivalRuntime.enterHuntArea(arrivalPlayer, arrivalSupply, start + std::chrono::seconds(60));
+	arrivalRuntime.observeLevelRestoration(20, 30);
+	arrivalRuntime.observeDamage(10);
+	arrivalRuntime.sampleCombat({true, start + std::chrono::seconds(60), 160, 170, 170, 180, 1});
+	arrivalRuntime.sampleCombat({true, start + std::chrono::seconds(90), 160, 170, 170, 180, 1});
+	arrivalRuntime.observeKill();
+	PlayerBotHuntRuntimePlayerObservation duplicateArrival = arrivalPlayer;
+	duplicateArrival.health = 1;
+	duplicateArrival.mana = 1;
+	arrivalRuntime.enterHuntArea(duplicateArrival, arrivalSupply, start + std::chrono::seconds(90));
+	arrivalRuntime.sampleCombat({true, start + std::chrono::seconds(120), 160, 170, 170, 180, 1});
+	arrivalRuntime.observeKill();
+	arrivalRuntime.observeKill();
+	PlayerBotHuntRuntimePlayerObservation arrivalEnd = arrivalPlayer;
+	arrivalEnd.health = 160;
+	arrivalEnd.maximumHealth = 170;
+	arrivalEnd.mana = 170;
+	arrivalEnd.supplyCapability = capability(12);
+	arrivalEnd.supplyCapability.equipmentItemIds[5] = 2395;
+	const auto arrivalCompleted = arrivalRuntime.complete(
+	    arrivalEnd, start + std::chrono::seconds(180), 2400);
+	assert(arrivalCompleted && arrivalCompleted->supplyObservation.accepted);
+	assert(arrivalCompleted->durationSeconds == 180);
+	assert(arrivalCompleted->supplyObservation.durationSeconds == 120);
+	assert(arrivalCompleted->supplyObservation.startingHealth == 150);
+	assert(arrivalCompleted->supplyObservation.startingMana == 150);
+	assert(arrivalCompleted->supplyObservation.endingHealth == 160);
+	assert(arrivalCompleted->supplyObservation.endingMana == 170);
+	assert(arrivalCompleted->supplyObservation.levelHealthRestored == 20);
+	assert(arrivalCompleted->supplyObservation.levelManaRestored == 30);
+	assert(arrivalCompleted->supplyObservation.levelAdjustedHealthDebt == 10);
+	assert(arrivalCompleted->supplyObservation.levelAdjustedManaDebt == 10);
+	assert(std::abs(arrivalCompleted->supplyObservation.staticPotionsPerCombatSecond - 1.0 / 60.0) < 1e-12);
+	assert(arrivalCompleted->region.supplyStaticPotionsPerCombatSecond == 10.0 / 60.0);
+	assert(arrivalCompleted->combat.damageTaken == 10 && arrivalCompleted->combat.kills == 3);
+	assert((arrivalCompleted->supplyObservation.changedFields & PlayerBotSupplyCapabilityLevel) != 0);
+	assert((arrivalCompleted->supplyObservation.changedFields & PlayerBotSupplyCapabilityEquipment) == 0);
+	assert(arrivalCompleted->supplyObservation.direction == PlayerBotSupplyCapabilityDirection::Improved);
+	assert(arrivalCompleted->supplyObservation.localEstimateDirection == PlayerBotSupplyEstimateDirection::Downward);
+	assert(arrivalCompleted->supplyObservation.globalUpdated);
+	assert(arrivalCompleted->supplyObservation.calibration.capability == arrivalEnd.supplyCapability);
+
+	// Arrival recomputes the raw static denominator from the arrival profile,
+	// zero outbound travel, and the hunt time still planned at arrival. It does
+	// not retain the pretravel rate or substitute the later observed duration.
+	PlayerBotHuntRuntime regenerationArrivalRuntime({});
+	PlayerBotHuntRegion regenerationRegion = regionFor(25, capability());
+	regenerationRegion.expectedDamagePerSecond = 1.5;
+	regenerationRegion.availableHuntSeconds = 180;
+	regenerationRegion.estimatedTravelSeconds = 60;
+	PlayerBotSupplyProfile regenerationSupply = regenerationRegion.supplyProfile;
+	regenerationSupply.regenerationSeconds = 180;
+	regenerationSupply.healthGain = 20;
+	regenerationSupply.healthInterval = 10;
+	const PlayerBotSupplyBudget pretravelBudget = playerBotSupplyBudget(
+	    regenerationSupply, regenerationRegion.expectedDamagePerSecond,
+	    regenerationRegion.combatFraction, 180, 60);
+	regenerationRegion.supplyStaticPotionsPerCombatSecond =
+	    pretravelBudget.expectedPotions / 90.0;
+	assert(std::abs(regenerationRegion.supplyStaticPotionsPerCombatSecond - 2.0 / 90.0) < 1e-12);
+	PlayerBotHuntRuntimePlayerObservation regenerationPlayer;
+	regenerationPlayer.health = regenerationPlayer.maximumHealth = 100;
+	regenerationPlayer.mana = 100;
+	regenerationPlayer.supplyCapability = regenerationRegion.supplyCapability;
+	regenerationArrivalRuntime.selectPlanningRegion(regenerationRegion, regenerationPlayer, start);
+	regenerationArrivalRuntime.beginCycle(start, 240);
+	regenerationArrivalRuntime.enterHuntArea(
+	    regenerationPlayer, regenerationSupply, start + std::chrono::seconds(60));
+	regenerationArrivalRuntime.sampleCombat(
+	    {true, start + std::chrono::seconds(60), 100, 100, 100, 100, 1});
+	regenerationArrivalRuntime.sampleCombat(
+	    {true, start + std::chrono::seconds(120), 100, 100, 100, 100, 1});
+	for (unsigned i = 0; i < 3; ++i) regenerationArrivalRuntime.observeKill();
+	const auto regenerationCompleted = regenerationArrivalRuntime.complete(
+	    regenerationPlayer, start + std::chrono::seconds(180), 240);
+	assert(regenerationCompleted && regenerationCompleted->supplyObservation.accepted);
+	assert(regenerationCompleted->supplyObservation.durationSeconds == 120);
+	assert(std::abs(regenerationCompleted->supplyObservation.staticPotionsPerCombatSecond -
+	                1.0 / 90.0) < 1e-12);
+	assert(regenerationCompleted->region.availableHuntSeconds == 180);
+	assert(regenerationCompleted->region.supplyStaticPotionsPerCombatSecond == 2.0 / 90.0);
+
+	PlayerBotHuntRuntime noArrivalRuntime({});
+	PlayerBotHuntRegion noArrivalRegion = regionFor(24, capability());
+	noArrivalRuntime.selectPlanningRegion(noArrivalRegion, planningPlayer, start);
+	noArrivalRuntime.sampleCombat({true, start + std::chrono::seconds(1), 100, 100, 100, 100, 1});
+	noArrivalRuntime.sampleCombat({true, start + std::chrono::seconds(61), 100, 100, 100, 100, 1});
+	for (unsigned i = 0; i < 3; ++i) noArrivalRuntime.observeKill();
+	const auto noArrival = noArrivalRuntime.complete(
+	    planningPlayer, start + std::chrono::seconds(120), 2400);
+	assert(noArrival && !noArrival->supplyObservation.accepted);
+	assert(!noArrival->supplyObservation.arrivalBaselineObserved);
+	assert(std::string(noArrival->supplyObservation.reason) == "hunt_arrival_not_observed");
+	assert(noArrival->supplyObservation.endingHealth == planningPlayer.health);
+	const auto noArrivalPerformance = noArrivalRuntime.regionPerformance();
+	assert(noArrivalPerformance.find(noArrivalRegion.atlasVariantId) == noArrivalPerformance.end());
+
+	PlayerBotHuntRuntime fallbackArrival({});
+	fallbackArrival.enterHuntArea(planningPlayer, noArrivalRegion.supplyProfile, start);
+	assert(!fallbackArrival.active());
 
 	PlayerBotHuntPlanningProfile capabilities;
 	const auto original = playerBotSupplyCapability(capabilities);
@@ -941,6 +1308,215 @@ void supplyCalibration()
 	recovery.currentHealth = 80;
 	recovery.reconcileSupplies(1);
 	assert(!recovery.supplyBudget.fits);
+}
+
+void globalAndLocalSupplyLearning()
+{
+	auto capability = [] {
+		PlayerBotHuntPlanningProfile profile;
+		profile.combat.level = 20;
+		profile.combat.maximumHealth = 200;
+		profile.combat.armor = 20;
+		profile.combat.defense = 30;
+		profile.combat.attack = 20;
+		profile.combat.attackSkill = 50;
+		profile.supply.maximumMana = 100;
+		profile.supply.potionHealing = 125;
+		profile.equipmentItemIds[5] = 2383;
+		return playerBotSupplyCapability(profile);
+	}();
+	auto region = [&](uint64_t variant, const char* firstSpecies,
+	                  const char* secondSpecies = nullptr, double damagePerSecond = 4) {
+		PlayerBotHuntRegion value;
+		value.atlasVariantId = variant;
+		value.atlasSiteId = 1000 + variant;
+		value.atlasRevision = 7;
+		value.supplyCapability = capability;
+		value.currentHealth = value.maximumHealth = 200;
+		value.supplyProfile.maximumMana = value.supplyProfile.mana = 100;
+		value.supplyProfile.potionHealing = 125;
+		value.supplyProfile.potions = 20;
+		value.availableHuntSeconds = 120;
+		value.combatFraction = 0.5;
+		value.expectedDamagePerSecond = damagePerSecond;
+		value.monsters.push_back({firstSpecies});
+		if (secondSpecies) value.monsters.push_back({secondSpecies});
+		value.reconcileSupplies(1);
+		return value;
+	};
+	auto easyOuting = [&](PlayerBotHuntPolicy& policy, const PlayerBotHuntRegion& value,
+	                     bool interrupted = false, uint32_t endingPotions = 20) {
+		policy.resetCombatEvidence();
+		policy.observeCombat({true, 60, 200, 200, 100, 100, 1});
+		for (unsigned kill = 0; kill < 3; ++kill) policy.observeKill();
+		return policy.observeSupplies(
+		    value, value.supplyCapability, 120, 200, 200, 100, endingPotions, interrupted);
+	};
+
+	// One ordinary mixed-troll observation updates one policy-global multiplier.
+	// The global 0.10 blend is modest; the final local 0.20 blend is stronger.
+	PlayerBotHuntPolicy policy;
+	PlayerBotHuntRegion source = region(1, "Troll", "Swamp Troll");
+	const double sourceStatic = source.supplyStaticPotionsPerCombatSecond;
+	const auto easy = easyOuting(policy, source);
+	assert(easy.accepted && easy.localUpdated && easy.globalUpdated);
+	assert(easy.globalSamplesBefore == 0 && easy.globalSamplesAfter == 1);
+	assert(std::abs(easy.globalMultiplierAfter - 0.9) < 1e-12);
+	assert(std::abs(easy.calibration.potionsPerCombatSecond - sourceStatic * 0.8) < 1e-12);
+	assert(policy.regionPerformance().size() == 1);
+
+	// A legitimate zero raw estimate stays zero even when a learned/local budget
+	// is positive. Local evidence still updates, but no global ratio is invented.
+	PlayerBotHuntPolicy zeroStaticPolicy;
+	PlayerBotHuntRegion zeroStatic = region(10, "Rat", nullptr, 0);
+	zeroStaticPolicy.observeCombat({true, 60, 200, 200, 100, 100, 1});
+	zeroStaticPolicy.observeRecovery(true);
+	const auto firstZeroStatic = zeroStaticPolicy.observeSupplies(
+	    zeroStatic, capability, 120, 200, 200, 100, 20, false);
+	assert(firstZeroStatic.accepted && firstZeroStatic.localUpdated && !firstZeroStatic.globalUpdated);
+	assert(firstZeroStatic.staticPotionsPerCombatSecond == 0);
+	assert(zeroStaticPolicy.supplyGlobalLearning().samples == 0);
+	zeroStatic.supplyCalibration = firstZeroStatic.calibration;
+	zeroStatic.reconcileSupplies(1);
+	assert(std::string(zeroStatic.supplyEstimateSource) == "local");
+	assert(zeroStatic.supplyStaticPotionsPerCombatSecond == 0);
+	assert(zeroStatic.supplyBudget.expectedPotions > 0);
+	zeroStaticPolicy.resetCombatEvidence();
+	zeroStaticPolicy.observeCombat({true, 60, 200, 200, 100, 100, 1});
+	for (unsigned kill = 0; kill < 3; ++kill) zeroStaticPolicy.observeKill();
+	const auto learnedBudgetAtZeroStatic = zeroStaticPolicy.observeSupplies(
+	    zeroStatic, capability, 120, 200, 200, 100, 20, false);
+	assert(learnedBudgetAtZeroStatic.accepted && learnedBudgetAtZeroStatic.localUpdated);
+	assert(!learnedBudgetAtZeroStatic.globalUpdated);
+	assert(learnedBudgetAtZeroStatic.staticPotionsPerCombatSecond == 0);
+	assert(std::string(learnedBudgetAtZeroStatic.globalReason) == "static_rate_unavailable");
+	assert(zeroStaticPolicy.supplyGlobalLearning().samples == 0);
+	assert(learnedBudgetAtZeroStatic.calibration.potionsPerCombatSecond > 0);
+
+	// The global multiplier applies to every unvisited area, including a mixed
+	// different-species area, and preserves the static model's relative costs.
+	PlayerBotHuntRegion different = region(2, "Rotworm", "Carrion Worm");
+	different.supplyGlobalLearning = policy.supplyGlobalLearning();
+	different.supplyCapability.equipmentItemIds[5] = 2395;
+	different.reconcileSupplies(1);
+	assert(std::string(different.supplyEstimateSource) == "global");
+	assert(std::string(different.supplyEstimateReason) == "global_policy_multiplier");
+	assert(std::abs(different.supplyAppliedPotionsPerCombatSecond -
+	                different.supplyStaticPotionsPerCombatSecond * 0.9) < 1e-12);
+	PlayerBotHuntRegion changedLocal = region(1, "Troll", "Swamp Troll");
+	changedLocal.supplyCalibration = easy.calibration;
+	changedLocal.supplyGlobalLearning = policy.supplyGlobalLearning();
+	changedLocal.supplyCapability.equipmentItemIds[5] = 2395;
+	changedLocal.reconcileSupplies(1);
+	assert(std::string(changedLocal.supplyEstimateSource) == "global");
+	assert(std::string(changedLocal.supplyLocalRejectionReason) == "material_capability_change");
+	PlayerBotHuntRegion harder = region(3, "Dragon", nullptr, 8);
+	harder.supplyGlobalLearning = policy.supplyGlobalLearning();
+	harder.reconcileSupplies(1);
+	assert(harder.supplyStaticPotionsPerCombatSecond > different.supplyStaticPotionsPerCombatSecond);
+	assert(std::abs(harder.supplyAppliedPotionsPerCombatSecond /
+	                    harder.supplyStaticPotionsPerCombatSecond - 0.9) < 1e-12);
+
+	// Local is a final absolute estimate. The same observation's global factor is
+	// not multiplied into it a second time.
+	source.supplyGlobalLearning = policy.supplyGlobalLearning();
+	source.supplyCalibration = easy.calibration;
+	source.reconcileSupplies(1);
+	assert(std::string(source.supplyEstimateSource) == "local");
+	assert(source.supplyLocalRejectionReason == nullptr);
+	assert(std::abs(source.supplyAppliedPotionsPerCombatSecond - sourceStatic * 0.8) < 1e-12);
+	assert(source.supplyAppliedPotionsPerCombatSecond < different.supplyAppliedPotionsPerCombatSecond);
+
+	// Scoring any number of atlas variants only reads policy state. It cannot
+	// duplicate the single actual outing's global update.
+	PlayerBotHuntRegion duplicateA = region(4, "Troll");
+	PlayerBotHuntRegion duplicateB = region(5, "Troll");
+	duplicateA.supplyGlobalLearning = duplicateB.supplyGlobalLearning = policy.supplyGlobalLearning();
+	duplicateA.reconcileSupplies(1);
+	duplicateB.reconcileSupplies(1);
+	assert(policy.supplyGlobalLearning().samples == 1);
+	assert(duplicateA.supplyGlobalLearning.samples == 1 && duplicateB.supplyGlobalLearning.samples == 1);
+
+	// Interrupted, dangerous, and potion-exhausted evidence cannot reduce global
+	// or local estimates.
+	const PlayerBotSupplyGlobalLearning guardedBefore = policy.supplyGlobalLearning();
+	PlayerBotHuntRegion interruptedRegion = region(6, "Troll");
+	interruptedRegion.supplyGlobalLearning = guardedBefore;
+	const auto interrupted = easyOuting(policy, interruptedRegion, true);
+	assert(!interrupted.accepted && std::string(interrupted.reason) == "interrupted_outing");
+	assert(policy.supplyGlobalLearning().samples == guardedBefore.samples);
+	assert(policy.supplyGlobalLearning().multiplier == guardedBefore.multiplier);
+
+	PlayerBotHuntRegion dangerRegion = region(7, "Troll");
+	dangerRegion.supplyGlobalLearning = policy.supplyGlobalLearning();
+	policy.resetCombatEvidence();
+	policy.observeCombat({true, 60, 200, 200, 100, 100, 1});
+	for (unsigned kill = 0; kill < 3; ++kill) policy.observeKill();
+	policy.observeDamage(200);
+	assert(policy.observeDanger(200, std::chrono::seconds(30)));
+	const auto danger = policy.observeSupplies(
+	    dangerRegion, capability, 120, 200, 200, 100, 20, false);
+	assert(!danger.accepted && std::string(danger.reason) == "danger_observed");
+	assert(policy.supplyGlobalLearning().samples == guardedBefore.samples);
+
+	PlayerBotHuntRegion deathRegion = region(70, "Troll");
+	deathRegion.supplyGlobalLearning = policy.supplyGlobalLearning();
+	policy.resetCombatEvidence();
+	policy.observeCombat({true, 60, 200, 200, 100, 100, 1});
+	for (unsigned kill = 0; kill < 3; ++kill) policy.observeKill();
+	policy.observeDeath();
+	const auto death = policy.observeSupplies(
+	    deathRegion, capability, 120, 200, 200, 100, 20, false);
+	assert(!death.accepted && std::string(death.reason) == "death_observed");
+	assert(policy.supplyGlobalLearning().samples == guardedBefore.samples);
+
+	PlayerBotHuntRegion depletedRegion = region(8, "Troll");
+	depletedRegion.supplyGlobalLearning = policy.supplyGlobalLearning();
+	const auto depleted = easyOuting(policy, depletedRegion, false, 0);
+	assert(!depleted.accepted && std::string(depleted.reason) == "potions_depleted");
+	assert(policy.supplyGlobalLearning().samples == guardedBefore.samples);
+
+	// Underestimation transfers in one observation rather than using the slow
+	// downward blend. This still changes supply cost only, never viability.
+	PlayerBotHuntPolicy upwardPolicy;
+	PlayerBotHuntRegion costly = region(9, "Troll");
+	upwardPolicy.observeCombat({true, 60, 200, 200, 100, 100, 1});
+	for (unsigned potion = 0; potion < 8; ++potion) upwardPolicy.observeRecovery(true);
+	upwardPolicy.observeDeath();
+	const auto upward = upwardPolicy.observeSupplies(
+	    costly, capability, 120, 200, 200, 100, 20, false);
+	assert(upward.accepted && upward.globalUpdated);
+	assert(upward.globalEstimateDirection == PlayerBotSupplyEstimateDirection::Upward);
+	assert(std::abs(upward.globalMultiplierAfter -
+	                (8.0 / 60.0) / costly.supplyStaticPotionsPerCombatSecond) < 1e-12);
+
+	PlayerBotHuntRegion safe = different;
+	safe.suitable = safe.reachable = true;
+	safe.score = 10;
+	PlayerBotHuntRegion lethal = harder;
+	lethal.suitable = false;
+	lethal.reachable = true;
+	lethal.predictedLethal = true;
+	lethal.score = 1000;
+	assert(selectRuntimeHunt({lethal, safe}).atlasVariantId == safe.atlasVariantId);
+
+	// Repeated easy evidence approaches but never crosses the positive floor.
+	PlayerBotHuntPolicy floorPolicy;
+	for (unsigned outing = 0; outing < 40; ++outing) {
+		PlayerBotHuntRegion floorRegion = region(100 + outing, "Troll");
+		floorRegion.supplyGlobalLearning = floorPolicy.supplyGlobalLearning();
+		assert(easyOuting(floorPolicy, floorRegion).accepted);
+	}
+	assert(floorPolicy.supplyGlobalLearning().multiplier == playerBotSupplyGlobalMinimumMultiplier);
+	assert(floorPolicy.supplyGlobalLearning().samples == 40);
+
+	// Learning is controller-session state only; a new policy starts clean.
+	PlayerBotHuntPolicy restartedPolicy;
+	assert(restartedPolicy.supplyGlobalLearning().multiplier == 1);
+	assert(restartedPolicy.supplyGlobalLearning().samples == 0);
+	PlayerBotHuntRuntime restartedRuntime({});
+	assert(restartedRuntime.supplyGlobalLearning().multiplier == 1);
+	assert(restartedRuntime.supplyGlobalLearning().samples == 0);
 }
 
 void sharedHuntPerformanceCalibration()
@@ -1716,6 +2292,7 @@ int main()
 	sharedHuntPerformanceCalibration();
 	supplyRecoveryMode();
 	supplyCalibration();
+	globalAndLocalSupplyLearning();
 	navigationFixedObjective();
 	topologyComponentCompression();
 	fixtureHuntHorizons();

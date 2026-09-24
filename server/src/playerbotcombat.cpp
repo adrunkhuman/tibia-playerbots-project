@@ -26,6 +26,36 @@ extern Spells* g_spells;
 namespace {
 	constexpr uint64_t maximumTargetApproachExpandedNodes = 10000;
 
+	std::string supplyCapabilityChangedFields(uint64_t fields)
+	{
+		std::ostringstream result;
+		result << '[';
+		bool first = true;
+		auto append = [&](uint64_t field, const char* name) {
+			if ((fields & field) == 0) return;
+			if (!first) result << ',';
+			first = false;
+			result << jsonString(name);
+		};
+		append(PlayerBotSupplyCapabilityLevel, "level");
+		append(PlayerBotSupplyCapabilityMaximumHealth, "maximum_health");
+		append(PlayerBotSupplyCapabilityArmor, "armor");
+		append(PlayerBotSupplyCapabilityDefense, "defense");
+		append(PlayerBotSupplyCapabilityAttack, "attack");
+		append(PlayerBotSupplyCapabilityAttackSkill, "attack_skill");
+		append(PlayerBotSupplyCapabilityAttackFactor, "attack_factor");
+		append(PlayerBotSupplyCapabilityMagicLevel, "magic_level");
+		append(PlayerBotSupplyCapabilityMaximumMana, "maximum_mana");
+		append(PlayerBotSupplyCapabilitySpellLegal, "spell_legal");
+		append(PlayerBotSupplyCapabilitySpellHealing, "spell_healing");
+		append(PlayerBotSupplyCapabilitySpellMana, "spell_mana");
+		append(PlayerBotSupplyCapabilitySpellInterval, "spell_interval");
+		append(PlayerBotSupplyCapabilityPotionHealing, "potion_healing");
+		append(PlayerBotSupplyCapabilityEquipment, "equipment_identity");
+		result << ']';
+		return result.str();
+	}
+
 	double projectedHuntStaminaMultiplier(const Player& player, double availableHuntSeconds)
 	{
 		const uint16_t staminaMinutes = player.getStaminaMinutes();
@@ -65,7 +95,15 @@ namespace {
 
 	PlayerBotHuntPlanningProfile huntPlanningFacts(Player& player, const PlayerBotCombatProfile& combat)
 	{
-		return playerBotHuntPlanningProfile(player, combat, 0);
+		PlayerBotHuntPlanningProfile profile = playerBotHuntPlanningProfile(player, combat, 0);
+		PlayerBotEquipmentPlayerSnapshot equipmentPlayer = PlayerBotEquipmentAdapter::player(player);
+		// getDefenseFactor() changes briefly after an attack. Supply compatibility
+		// uses the same equipment formula without that transient; attackFactor
+		// separately preserves the selected fight mode.
+		equipmentPlayer.defenseFactor = 1.0f;
+		profile.supplyCapabilityDefense = PlayerBotEquipmentPolicy(oracleVocationId).combatProfile(
+		    equipmentPlayer, PlayerBotEquipmentAdapter::loadout(player)).defense;
+		return profile;
 	}
 
 	PlayerBotCombatProfile huntCombatProfile(Player& player)
@@ -697,8 +735,15 @@ void PlayerBotController::recordActiveHuntCombat(const Player& player)
 			}
 		}
 	}
+	bool foodActive = false;
+	bool foodAvailable = false;
+	if (active) {
+		foodActive = player.getCondition(CONDITION_REGENERATION, CONDITIONID_DEFAULT, 0) != nullptr;
+		foodAvailable = foodActive || PlayerBotInventoryPolicy::foodInventory(player).count > 0;
+	}
 	huntCoordinator.sampleHuntCombat({active, now, player.getHealth(), player.getMaxHealth(),
-	                                player.getMana(), player.getMaxMana(), attackers});
+	                                player.getMana(), player.getMaxMana(), attackers,
+	                                foodActive, foodAvailable});
 }
 
 void PlayerBotController::recordHuntRecovery(bool potion)
@@ -789,15 +834,22 @@ void PlayerBotController::emitHuntRegionCandidate(const PlayerBotHuntRegion& reg
 	       << ",\"projected_experience\":" << region.projectedExperience
 	       << ",\"optimistic_projected_experience\":" << region.optimisticProjectedExperience
 	       << ",\"route_validated\":" << (region.routeValidated ? "true" : "false")
-	       << ",\"supply_estimate_source\":" << jsonString(region.supplyCalibration.samples != 0 ?
-	           "observed_combat_consumption" : "static_duration_budget")
+	       << ",\"supply_estimate_source\":" << jsonString(region.supplyEstimateSource)
+	       << ",\"supply_estimate_reason\":" << jsonString(region.supplyEstimateReason)
+	       << ",\"supply_local_rejection_reason\":"
+	       << (region.supplyLocalRejectionReason ? jsonString(region.supplyLocalRejectionReason) : "null")
+	       << ",\"supply_global_multiplier\":" << region.supplyGlobalLearning.multiplier
+	       << ",\"supply_global_samples\":" << region.supplyGlobalLearning.samples
+	       << ",\"supply_static_potions_per_combat_minute\":"
+	       << region.supplyStaticPotionsPerCombatSecond * 60
 	       << ",\"supply_budget_fits\":" << (region.supplyBudget.fits ? "true" : "false")
 	       << ",\"supply_expected_damage\":" << region.supplyBudget.expectedDamage
 	       << ",\"supply_regeneration_healing\":" << region.supplyBudget.regenerationHealing
 	       << ",\"supply_spell_healing\":" << region.supplyBudget.spellHealing
 	       << ",\"supply_expected_potions\":" << region.supplyBudget.expectedPotions
 	       << ",\"supply_calibration_samples\":" << region.supplyCalibration.samples
-	       << ",\"supply_potions_per_combat_minute\":" << region.supplyCalibration.potionsPerCombatSecond * 60
+	       << ",\"supply_potions_per_combat_minute\":"
+	       << region.supplyAppliedPotionsPerCombatSecond * 60
 	       << ",\"supply_reserved_potions\":" << region.supplyBudget.reservedPotions
 	       << ",\"supply_routine_potions\":" << region.supplyBudget.routinePotions
 	       << ",\"threat_ratio\":" << region.threatRatio
@@ -910,8 +962,92 @@ void PlayerBotController::finishHuntRegion(const Player& player, const Position&
 	       << ",\"updated_observed_correction\":" << completion->performance.updatedCorrection
 	       << ",\"performance_observed\":" << (completion->performance.observed ? "true" : "false")
 	       << ",\"performance_evidence_reason\":" << jsonString(completion->performance.evidenceReason)
+	       << ",\"supply_estimate_source\":" << jsonString(completion->region.supplyEstimateSource)
+	       << ",\"supply_estimate_reason\":" << jsonString(completion->region.supplyEstimateReason)
+	       << ",\"supply_local_rejection_reason\":"
+	       << (completion->region.supplyLocalRejectionReason ?
+	               jsonString(completion->region.supplyLocalRejectionReason) : "null")
+	       << ",\"supply_static_potions_per_combat_minute\":"
+	       << completion->supplyObservation.staticPotionsPerCombatSecond * 60
+	       << ",\"supply_global_multiplier_before\":"
+	       << completion->supplyObservation.globalMultiplierBefore
+	       << ",\"supply_global_multiplier_after\":"
+	       << completion->supplyObservation.globalMultiplierAfter
+	       << ",\"supply_global_samples_before\":"
+	       << completion->supplyObservation.globalSamplesBefore
+	       << ",\"supply_global_samples_after\":"
+	       << completion->supplyObservation.globalSamplesAfter
+	       << ",\"supply_global_updated\":"
+	       << (completion->supplyObservation.globalUpdated ? "true" : "false")
+	       << ",\"supply_global_update_direction\":"
+	       << jsonString(playerBotSupplyEstimateDirectionName(
+	              completion->supplyObservation.globalEstimateDirection))
+	       << ",\"supply_global_update_reason\":"
+	       << jsonString(completion->supplyObservation.globalReason)
+	       << ",\"supply_observation_accepted\":" << (completion->supplyObservation.accepted ? "true" : "false")
+	       << ",\"supply_observation_reason\":" << jsonString(completion->supplyObservation.reason)
+	       << ",\"supply_capability_changed_fields\":"
+	       << supplyCapabilityChangedFields(completion->supplyObservation.changedFields)
+	       << ",\"supply_capability_direction\":"
+	       << jsonString(playerBotSupplyCapabilityDirectionName(completion->supplyObservation.direction))
+	       << ",\"supply_local_updated\":"
+	       << (completion->supplyObservation.localUpdated ? "true" : "false")
+	       << ",\"supply_local_update_direction\":"
+	       << jsonString(playerBotSupplyEstimateDirectionName(
+	              completion->supplyObservation.localEstimateDirection))
+	       << ",\"supply_observation_samples\":" << completion->supplyObservation.calibration.samples
 	       << ",\"supply_calibration_samples\":" << completion->region.supplyCalibration.samples
-	       << ",\"supply_potions_per_combat_minute\":" << completion->region.supplyCalibration.potionsPerCombatSecond * 60
+	       << ",\"supply_potions_per_combat_minute\":"
+	       << completion->region.supplyAppliedPotionsPerCombatSecond * 60
+	       << ",\"supply_observation_updated_potions_per_combat_minute\":"
+	       << completion->supplyObservation.calibration.potionsPerCombatSecond * 60
+	       << ",\"supply_arrival_baseline_observed\":"
+	       << (completion->supplyObservation.arrivalBaselineObserved ? "true" : "false")
+	       << ",\"supply_starting_health\":" << completion->supplyObservation.startingHealth
+	       << ",\"supply_starting_maximum_health\":"
+	       << completion->supplyObservation.startingMaximumHealth
+	       << ",\"supply_starting_mana\":" << completion->supplyObservation.startingMana
+	       << ",\"supply_starting_maximum_mana\":"
+	       << completion->supplyObservation.startingMaximumMana
+	       << ",\"supply_ending_health\":" << completion->supplyObservation.endingHealth
+	       << ",\"supply_ending_maximum_health\":"
+	       << completion->supplyObservation.endingMaximumHealth
+	       << ",\"supply_ending_mana\":" << completion->supplyObservation.endingMana
+	       << ",\"supply_ending_maximum_mana\":"
+	       << completion->supplyObservation.endingMaximumMana
+	       << ",\"supply_guard_duration_seconds\":" << completion->supplyObservation.durationSeconds
+	       << ",\"supply_guard_minimum_duration_seconds\":"
+	       << completion->supplyObservation.minimumDurationSeconds
+	       << ",\"supply_guard_active_combat_seconds\":"
+	       << completion->supplyObservation.activeCombatSeconds
+	       << ",\"supply_guard_minimum_active_combat_seconds\":"
+	       << completion->supplyObservation.minimumActiveCombatSeconds
+	       << ",\"supply_guard_kills\":" << completion->supplyObservation.kills
+	       << ",\"supply_guard_minimum_kills\":" << completion->supplyObservation.minimumKills
+	       << ",\"supply_guard_p10_health_percent\":"
+	       << static_cast<uint16_t>(completion->supplyObservation.p10HealthPercent)
+	       << ",\"supply_guard_p10_mana_percent\":"
+	       << static_cast<uint16_t>(completion->supplyObservation.p10ManaPercent)
+	       << ",\"supply_guard_minimum_health_percent\":"
+	       << static_cast<uint16_t>(completion->supplyObservation.minimumHealthPercent)
+	       << ",\"supply_guard_interrupted\":"
+	       << (completion->supplyObservation.interrupted ? "true" : "false")
+	       << ",\"supply_guard_potions_depleted\":"
+	       << (completion->supplyObservation.potionsDepleted ? "true" : "false")
+	       << ",\"supply_guard_danger_observed\":"
+	       << (completion->supplyObservation.dangerObserved ? "true" : "false")
+	       << ",\"supply_guard_death_observed\":"
+	       << (completion->supplyObservation.deathObserved ? "true" : "false")
+	       << ",\"supply_food_active_seconds\":" << completion->supplyObservation.foodActiveSeconds
+	       << ",\"supply_food_available_seconds\":" << completion->supplyObservation.foodAvailableSeconds
+	       << ",\"supply_level_health_restored\":" << completion->supplyObservation.levelHealthRestored
+	       << ",\"supply_level_mana_restored\":" << completion->supplyObservation.levelManaRestored
+	       << ",\"supply_level_adjusted_health_debt\":"
+	       << completion->supplyObservation.levelAdjustedHealthDebt
+	       << ",\"supply_level_adjusted_mana_debt\":"
+	       << completion->supplyObservation.levelAdjustedManaDebt
+	       << ",\"supply_potion_equivalent_demand\":"
+	       << completion->supplyObservation.potionEquivalentDemand
 	       << ",\"kills\":" << combat.kills << ",\"damage_taken\":" << combat.damageTaken
 	       << ",\"active_combat_seconds\":" << combat.activeSeconds
 	       << ",\"active_combat_uptime\":" << (completion->durationSeconds == 0 ? 0 : combat.activeSeconds / completion->durationSeconds)
@@ -1425,7 +1561,10 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 	    huntCoordinator.insideHuntArea(currentPosition, Map::maxClientViewportX, Map::maxClientViewportX + 1,
 	                                    Map::maxClientViewportY, Map::maxClientViewportY + 1)) {
 		huntRegionReached = true;
-		huntCoordinator.enterHuntArea();
+		PlayerBotHuntPlanningProfile arrivalProfile = huntPlanningFacts(*player, huntCombatProfile(*player));
+		PlayerBotHuntRuntimePlayerObservation arrival = huntPlayerObservation(*player);
+		arrival.supplyCapability = playerBotSupplyCapability(arrivalProfile);
+		huntCoordinator.enterHuntArea(arrival, arrivalProfile.supply, std::chrono::steady_clock::now());
 		const PlayerBotHuntPatrolOutcome patrol = huntCoordinator.huntPatrolTarget();
 		emit("hunt_area_entered", currentPosition,
 		     "\"region_id\":" + (patrol.regionId ? std::to_string(*patrol.regionId) : "null") +
@@ -1761,6 +1900,12 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 	const PlayerBotHuntPatrolOutcome reached = huntCoordinator.observeHuntPatrolNavigation(navigation, now,
 		maximumRepeatedNavigationStepFailures, maximumPatrolRouteFailures);
 	if (reached.command == PlayerBotHuntPatrolCommand::WaypointReached) {
+		if (!huntRegionReached) {
+			PlayerBotHuntPlanningProfile arrivalProfile = huntPlanningFacts(*player, huntCombatProfile(*player));
+			PlayerBotHuntRuntimePlayerObservation arrival = huntPlayerObservation(*player);
+			arrival.supplyCapability = playerBotSupplyCapability(arrivalProfile);
+			huntCoordinator.enterHuntArea(arrival, arrivalProfile.supply, now);
+		}
 		huntRegionReached = true;
 		emit("action_result", currentPosition, "\"action\":\"hunt_waypoint\",\"result\":\"reached\",\"waypoint\":" +
 			std::to_string(reached.waypoint) + ",\"region_id\":" + (reached.regionId ? std::to_string(*reached.regionId) : "null"));

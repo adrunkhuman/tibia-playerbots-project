@@ -483,6 +483,7 @@ function F.login.onLogin(player)
             local function verifyIncome(id, attempts)
                 local bot = Player(id)
                 assert(bot, "supply recovery bot disappeared")
+                F.armSupplyRecoveryIncome(bot)
                 if bot:getMoney() + bot:getBankBalance() > 0 then
                     print("PLAYERBOT_GAMEPLAY_TEST SUPPLY_RECOVERY_INCOME_PASS")
                     return

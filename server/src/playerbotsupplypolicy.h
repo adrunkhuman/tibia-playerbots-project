@@ -5,9 +5,12 @@
 #define FS_PLAYERBOTSUPPLYPOLICY_H
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <optional>
 
 // Spawn-rate damage already includes every attacker's isolated fight. Only
 // concurrent exposure is additional; both totals must describe the same crowd.
@@ -34,10 +37,232 @@ struct PlayerBotSupplyProfile {
 	double manaInterval = 0;
 };
 
+inline constexpr std::size_t playerBotSupplyEquipmentSlotCount = 11;
+
+enum PlayerBotSupplyCapabilityField : uint64_t {
+	PlayerBotSupplyCapabilityLevel = 1ULL << 0,
+	PlayerBotSupplyCapabilityMaximumHealth = 1ULL << 1,
+	PlayerBotSupplyCapabilityArmor = 1ULL << 2,
+	PlayerBotSupplyCapabilityDefense = 1ULL << 3,
+	PlayerBotSupplyCapabilityAttack = 1ULL << 4,
+	PlayerBotSupplyCapabilityAttackSkill = 1ULL << 5,
+	PlayerBotSupplyCapabilityAttackFactor = 1ULL << 6,
+	PlayerBotSupplyCapabilityMagicLevel = 1ULL << 7,
+	PlayerBotSupplyCapabilityMaximumMana = 1ULL << 8,
+	PlayerBotSupplyCapabilitySpellLegal = 1ULL << 9,
+	PlayerBotSupplyCapabilitySpellHealing = 1ULL << 10,
+	PlayerBotSupplyCapabilitySpellMana = 1ULL << 11,
+	PlayerBotSupplyCapabilitySpellInterval = 1ULL << 12,
+	PlayerBotSupplyCapabilityPotionHealing = 1ULL << 13,
+	PlayerBotSupplyCapabilityEquipment = 1ULL << 14,
+};
+
+struct PlayerBotSupplyCapabilitySnapshot {
+	uint32_t level = 0;
+	int32_t maximumHealth = 0;
+	int32_t armor = 0;
+	int32_t defense = 0;
+	int32_t attack = 0;
+	int32_t attackSkill = 0;
+	int32_t attackFactorMilli = 1000;
+	uint32_t magicLevel = 0;
+	uint32_t maximumMana = 0;
+	bool spellLegal = false;
+	uint32_t spellHealing = 0;
+	uint32_t spellMana = 0;
+	uint32_t spellIntervalMilliseconds = 0;
+	uint32_t potionHealing = 0;
+	// Retained for food exposure telemetry and future fed/unfed calibration.
+	// Food is deliberately excluded from the current calibration identity.
+	bool foodAvailable = false;
+	uint32_t foodHealthGain = 0;
+	uint32_t foodHealthIntervalMilliseconds = 0;
+	uint32_t foodManaGain = 0;
+	uint32_t foodManaIntervalMilliseconds = 0;
+	// Type IDs for combat-bearing slots. Backpack and slot zero stay empty.
+	std::array<uint16_t, playerBotSupplyEquipmentSlotCount> equipmentItemIds{};
+
+	bool operator==(const PlayerBotSupplyCapabilitySnapshot& other) const
+	{
+		return level == other.level && maximumHealth == other.maximumHealth && armor == other.armor &&
+		       defense == other.defense && attack == other.attack && attackSkill == other.attackSkill &&
+		       attackFactorMilli == other.attackFactorMilli && magicLevel == other.magicLevel &&
+		       maximumMana == other.maximumMana && spellLegal == other.spellLegal &&
+		       spellHealing == other.spellHealing && spellMana == other.spellMana &&
+		       spellIntervalMilliseconds == other.spellIntervalMilliseconds &&
+		       potionHealing == other.potionHealing && equipmentItemIds == other.equipmentItemIds;
+	}
+	bool operator!=(const PlayerBotSupplyCapabilitySnapshot& other) const { return !(*this == other); }
+};
+
+enum class PlayerBotSupplyCapabilityDirection : uint8_t {
+	Unchanged,
+	Improved,
+	Regressed,
+	Mixed,
+};
+
+inline const char* playerBotSupplyCapabilityDirectionName(PlayerBotSupplyCapabilityDirection direction)
+{
+	switch (direction) {
+		case PlayerBotSupplyCapabilityDirection::Improved: return "improved";
+		case PlayerBotSupplyCapabilityDirection::Regressed: return "regressed";
+		case PlayerBotSupplyCapabilityDirection::Mixed: return "mixed";
+		default: return "unchanged";
+	}
+}
+
+struct PlayerBotSupplyCapabilityComparison {
+	uint64_t changedFields = 0;
+	PlayerBotSupplyCapabilityDirection direction = PlayerBotSupplyCapabilityDirection::Unchanged;
+	bool compatible = true;
+	bool materialChange = false;
+	bool recoveryContextChanged = false;
+};
+
+inline PlayerBotSupplyCapabilityComparison playerBotCompareSupplyCapabilities(
+    const PlayerBotSupplyCapabilitySnapshot& before, const PlayerBotSupplyCapabilitySnapshot& after)
+{
+	PlayerBotSupplyCapabilityComparison result;
+	bool improved = false;
+	bool regressed = false;
+	auto monotonic = [&](auto left, auto right, uint64_t field, bool lowerIsBetter = false) {
+		if (left == right) return;
+		result.changedFields |= field;
+		const bool better = lowerIsBetter ? right < left : right > left;
+		improved = improved || better;
+		regressed = regressed || !better;
+	};
+	auto material = [&](const auto& left, const auto& right, uint64_t field) {
+		if (left == right) return;
+		result.changedFields |= field;
+		result.materialChange = true;
+		improved = regressed = true;
+	};
+
+	monotonic(before.level, after.level, PlayerBotSupplyCapabilityLevel);
+	monotonic(before.maximumHealth, after.maximumHealth, PlayerBotSupplyCapabilityMaximumHealth);
+	material(before.armor, after.armor, PlayerBotSupplyCapabilityArmor);
+	monotonic(before.defense, after.defense, PlayerBotSupplyCapabilityDefense);
+	material(before.attack, after.attack, PlayerBotSupplyCapabilityAttack);
+	monotonic(before.attackSkill, after.attackSkill, PlayerBotSupplyCapabilityAttackSkill);
+	material(before.attackFactorMilli, after.attackFactorMilli, PlayerBotSupplyCapabilityAttackFactor);
+	monotonic(before.magicLevel, after.magicLevel, PlayerBotSupplyCapabilityMagicLevel);
+	monotonic(before.maximumMana, after.maximumMana, PlayerBotSupplyCapabilityMaximumMana);
+	monotonic(before.spellLegal, after.spellLegal, PlayerBotSupplyCapabilitySpellLegal);
+	if (before.spellHealing != after.spellHealing) result.changedFields |= PlayerBotSupplyCapabilitySpellHealing;
+	if (before.spellMana != after.spellMana) result.changedFields |= PlayerBotSupplyCapabilitySpellMana;
+	if (before.spellIntervalMilliseconds != after.spellIntervalMilliseconds)
+		result.changedFields |= PlayerBotSupplyCapabilitySpellInterval;
+	if (before.spellLegal != after.spellLegal || before.spellHealing != after.spellHealing ||
+	    before.spellMana != after.spellMana || before.spellIntervalMilliseconds != after.spellIntervalMilliseconds) {
+		result.recoveryContextChanged = true;
+	}
+	if (before.spellLegal && after.spellLegal) {
+		monotonic(before.spellHealing, after.spellHealing, PlayerBotSupplyCapabilitySpellHealing);
+		monotonic(before.spellMana, after.spellMana, PlayerBotSupplyCapabilitySpellMana, true);
+		monotonic(before.spellIntervalMilliseconds, after.spellIntervalMilliseconds,
+		          PlayerBotSupplyCapabilitySpellInterval, true);
+	}
+	material(before.potionHealing, after.potionHealing, PlayerBotSupplyCapabilityPotionHealing);
+	material(before.equipmentItemIds, after.equipmentItemIds, PlayerBotSupplyCapabilityEquipment);
+
+	result.direction = improved && regressed ? PlayerBotSupplyCapabilityDirection::Mixed :
+	                   improved ? PlayerBotSupplyCapabilityDirection::Improved :
+	                   regressed ? PlayerBotSupplyCapabilityDirection::Regressed :
+	                               PlayerBotSupplyCapabilityDirection::Unchanged;
+	result.compatible = !result.materialChange && !regressed;
+	return result;
+}
+
 struct PlayerBotSupplyCalibration {
-	uint64_t capability = 0;
+	PlayerBotSupplyCapabilitySnapshot capability;
 	double potionsPerCombatSecond = 0;
 	uint32_t samples = 0;
+};
+
+// Global learning corrects the static model proportionally, preserving its
+// relative area difficulty. Local learning is deliberately twice as responsive
+// and stores a final absolute estimate so the global multiplier is not applied twice.
+inline constexpr double playerBotSupplyGlobalMinimumMultiplier = 0.25;
+inline constexpr double playerBotSupplyGlobalDownwardBlend = 0.10;
+inline constexpr double playerBotSupplyLocalDownwardBlend = 0.20;
+
+struct PlayerBotSupplyGlobalLearning {
+	double multiplier = 1;
+	uint32_t samples = 0;
+};
+
+inline std::optional<PlayerBotSupplyCalibration> playerBotSupplyCalibrationForCapability(
+    const PlayerBotSupplyCalibration& calibration, const PlayerBotSupplyCapabilitySnapshot& capability)
+{
+	if (calibration.samples == 0 ||
+	    !playerBotCompareSupplyCapabilities(calibration.capability, capability).compatible) return std::nullopt;
+	return calibration;
+}
+
+enum class PlayerBotSupplyEstimateDirection : uint8_t {
+	None,
+	Upward,
+	Downward,
+	Unchanged,
+};
+
+inline const char* playerBotSupplyEstimateDirectionName(PlayerBotSupplyEstimateDirection direction)
+{
+	switch (direction) {
+		case PlayerBotSupplyEstimateDirection::Upward: return "upward";
+		case PlayerBotSupplyEstimateDirection::Downward: return "downward";
+		case PlayerBotSupplyEstimateDirection::Unchanged: return "unchanged";
+		default: return "none";
+	}
+}
+
+struct PlayerBotSupplyObservation {
+	PlayerBotSupplyCalibration calibration;
+	uint64_t changedFields = 0;
+	PlayerBotSupplyCapabilityDirection direction = PlayerBotSupplyCapabilityDirection::Unchanged;
+	PlayerBotSupplyEstimateDirection localEstimateDirection = PlayerBotSupplyEstimateDirection::None;
+	PlayerBotSupplyEstimateDirection globalEstimateDirection = PlayerBotSupplyEstimateDirection::None;
+	double staticPotionsPerCombatSecond = 0;
+	double globalMultiplierBefore = 1;
+	double globalMultiplierAfter = 1;
+	uint32_t globalSamplesBefore = 0;
+	uint32_t globalSamplesAfter = 0;
+	bool localUpdated = false;
+	bool globalUpdated = false;
+	const char* globalReason = "not_updated";
+	uint64_t durationSeconds = 0;
+	bool arrivalBaselineObserved = false;
+	int32_t startingHealth = 0;
+	int32_t startingMaximumHealth = 0;
+	uint32_t startingMana = 0;
+	uint32_t startingMaximumMana = 0;
+	int32_t endingHealth = 0;
+	int32_t endingMaximumHealth = 0;
+	uint32_t endingMana = 0;
+	uint32_t endingMaximumMana = 0;
+	double activeCombatSeconds = 0;
+	uint32_t kills = 0;
+	uint8_t p10HealthPercent = 0;
+	uint8_t p10ManaPercent = 100;
+	double foodActiveSeconds = 0;
+	double foodAvailableSeconds = 0;
+	uint64_t levelHealthRestored = 0;
+	uint64_t levelManaRestored = 0;
+	double levelAdjustedHealthDebt = 0;
+	double levelAdjustedManaDebt = 0;
+	double potionEquivalentDemand = 0;
+	uint64_t minimumDurationSeconds = 120;
+	double minimumActiveCombatSeconds = 60;
+	uint32_t minimumKills = 3;
+	uint8_t minimumHealthPercent = 30;
+	bool interrupted = false;
+	bool potionsDepleted = false;
+	bool dangerObserved = false;
+	bool deathObserved = false;
+	const char* reason = "insufficient_evidence";
+	bool accepted = false;
 };
 
 struct PlayerBotSupplyBudget {

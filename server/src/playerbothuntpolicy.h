@@ -20,6 +20,10 @@ struct PlayerBotHuntCombatEvidence {
 	uint32_t potionRecoveries = 0;
 	uint32_t spellRecoveries = 0;
 	uint32_t maximumAttackerOverlap = 0;
+	double foodActiveSeconds = 0;
+	double foodAvailableSeconds = 0;
+	uint64_t levelHealthRestored = 0;
+	uint64_t levelManaRestored = 0;
 	int32_t minimumHealth = std::numeric_limits<int32_t>::max();
 	uint32_t minimumMana = std::numeric_limits<uint32_t>::max();
 	bool dangerObserved = false;
@@ -36,6 +40,8 @@ struct PlayerBotHuntCombatSample {
 	uint32_t mana = 0;
 	uint32_t maximumMana = 0;
 	uint32_t attackers = 0;
+	bool foodActive = false;
+	bool foodAvailable = false;
 };
 
 struct PlayerBotHuntCombatSnapshot {
@@ -46,6 +52,8 @@ struct PlayerBotHuntCombatSnapshot {
 	uint32_t mana = 0;
 	uint32_t maximumMana = 0;
 	uint32_t attackers = 0;
+	bool foodActive = false;
+	bool foodAvailable = false;
 };
 
 struct PlayerBotHuntCombatSummary : PlayerBotHuntCombatEvidence {
@@ -111,6 +119,7 @@ class PlayerBotHuntPolicy
 		void observeKill();
 		void observeDamage(uint32_t damage);
 		void observeRecovery(bool potion);
+		void observeLevelRestoration(uint32_t health, uint32_t mana);
 		void observeDeath();
 		bool observeDanger(int32_t maximumHealth, std::chrono::steady_clock::duration huntAge);
 
@@ -119,16 +128,19 @@ class PlayerBotHuntPolicy
 		PlayerBotHuntPerformanceUpdate observePerformance(uint64_t variantId, uint64_t atlasRevision,
 		                                                  const PlayerBotHuntPerformanceSample& sample);
 
-		PlayerBotSupplyCalibration observeSupplies(const PlayerBotHuntRegion& region, uint64_t durationSeconds,
+		PlayerBotSupplyObservation observeSupplies(const PlayerBotHuntRegion& region,
+		    const PlayerBotSupplyCapabilitySnapshot& capabilityAfter, uint64_t durationSeconds,
 		    int32_t health, int32_t maximumHealth, uint32_t mana, uint32_t potions, bool interrupted);
 
 		double challengeFrontier() const { return frontier; }
+		PlayerBotSupplyGlobalLearning supplyGlobalLearning() const { return globalSupplyLearning; }
 		const std::map<uint64_t, PlayerBotHuntRegionPerformance>& regionPerformance() const { return performance; }
 
 	private:
 		PlayerBotHuntCombatEvidence evidence;
 		std::chrono::steady_clock::time_point lastSample;
 		std::map<uint64_t, PlayerBotHuntRegionPerformance> performance;
+		PlayerBotSupplyGlobalLearning globalSupplyLearning;
 		double frontier = 0.20;
 		uint8_t qualifyingHuntsToHold = 0;
 };

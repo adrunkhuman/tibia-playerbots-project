@@ -72,7 +72,7 @@ namespace playerbot {
 			uint64_t desiredCarriedGold(const Player& player) const;
 			static bool isFoodItem(uint16_t itemId);
 			static bool isCurrencyItem(uint16_t itemId);
-			PlayerBotFoodInventory foodInventory(const Player& player) const;
+			static PlayerBotFoodInventory foodInventory(const Player& player);
 			uint32_t effectiveFreeCapacity(const Player& player) const;
 			uint32_t currencyInventoryWeight(const Player& player) const;
 			uint32_t huntFreeCapacity(const Player& player) const;

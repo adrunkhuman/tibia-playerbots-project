@@ -66,6 +66,7 @@ class PlayerBotManager
 		bool announcementsEnabled(uint32_t playerGuid) const;
 		void onDeath(const Player& player, const Creature* killer, const Creature* mostDamageKiller);
 		void onHealthDrain(const Player& player, uint32_t damage);
+		void onLevelRestoration(const Player& player, uint32_t health, uint32_t mana);
 		void onCombatDamage(Creature* attacker, const Creature& target, uint32_t damage);
 		void onHealthGain(Creature* healer, const Creature& target, uint32_t gain);
 		void onNpcReply(uint32_t playerId, uint32_t npcId, uint8_t type, const std::string& text);

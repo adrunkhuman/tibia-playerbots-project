@@ -17,6 +17,7 @@
 #include "position.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <map>
@@ -74,24 +75,41 @@ struct PlayerBotHuntPlanningProfile {
 	bool lightHealingLegal = false;
 	bool cashPressure = false;
 	bool supplyRecovery = false;
+	bool foodAvailable = false;
+	// Supply compatibility uses a stable equipment/skill defense value. The
+	// combat profile keeps the engine's live defense for actual hunt scoring.
+	int32_t supplyCapabilityDefense = -1;
+	std::array<uint16_t, playerBotSupplyEquipmentSlotCount> equipmentItemIds{};
 	std::vector<PlayerBotHuntTransportArrival> transportArrivals;
 	PlayerBotSupplyProfile supply;
+	PlayerBotSupplyGlobalLearning supplyGlobalLearning;
 };
 
-inline uint64_t playerBotSupplyCapability(const PlayerBotHuntPlanningProfile& profile)
+inline PlayerBotSupplyCapabilitySnapshot playerBotSupplyCapability(const PlayerBotHuntPlanningProfile& profile)
 {
-	uint64_t key = 14695981039346656037ULL;
-	for (uint64_t value : {uint64_t(profile.combat.level), uint64_t(profile.combat.maximumHealth),
-	     uint64_t(profile.combat.armor), uint64_t(profile.combat.defense), uint64_t(profile.combat.attack),
-	     uint64_t(profile.combat.attackSkill), uint64_t(profile.combat.attackFactor * 1000),
-	     uint64_t(profile.magicLevel), uint64_t(profile.supply.maximumMana), uint64_t(profile.supply.spellLegal),
-	     uint64_t(profile.supply.spellHealing), uint64_t(profile.supply.spellMana),
-	     uint64_t(profile.supply.potionHealing), uint64_t(profile.supply.healthGain), uint64_t(profile.supply.manaGain),
-	     uint64_t(profile.supply.spellInterval * 1000), uint64_t(profile.supply.healthInterval * 1000),
-	     uint64_t(profile.supply.manaInterval * 1000), uint64_t(profile.supply.regenerationSeconds > 0)}) {
-		key = (key ^ value) * 1099511628211ULL;
-	}
-	return key;
+	PlayerBotSupplyCapabilitySnapshot capability;
+	capability.level = profile.combat.level;
+	capability.maximumHealth = profile.combat.maximumHealth;
+	capability.armor = profile.combat.armor;
+	capability.defense = profile.supplyCapabilityDefense >= 0 ?
+	    profile.supplyCapabilityDefense : profile.combat.defense;
+	capability.attack = profile.combat.attack;
+	capability.attackSkill = profile.combat.attackSkill;
+	capability.attackFactorMilli = static_cast<int32_t>(profile.combat.attackFactor * 1000);
+	capability.magicLevel = profile.magicLevel;
+	capability.maximumMana = profile.supply.maximumMana;
+	capability.spellLegal = profile.supply.spellLegal;
+	capability.spellHealing = profile.supply.spellHealing;
+	capability.spellMana = profile.supply.spellMana;
+	capability.spellIntervalMilliseconds = static_cast<uint32_t>(profile.supply.spellInterval * 1000);
+	capability.potionHealing = profile.supply.potionHealing;
+	capability.foodAvailable = profile.foodAvailable;
+	capability.foodHealthGain = profile.supply.healthGain;
+	capability.foodHealthIntervalMilliseconds = static_cast<uint32_t>(profile.supply.healthInterval * 1000);
+	capability.foodManaGain = profile.supply.manaGain;
+	capability.foodManaIntervalMilliseconds = static_cast<uint32_t>(profile.supply.manaInterval * 1000);
+	capability.equipmentItemIds = profile.equipmentItemIds;
+	return capability;
 }
 
 struct PlayerBotHuntMonsterProfile {
@@ -159,9 +177,16 @@ struct PlayerBotHuntRegion {
 	PlayerBotSupplyProfile supplyProfile;
 	PlayerBotSupplyBudget supplyBudget;
 	PlayerBotSupplyCalibration supplyCalibration;
-	uint64_t supplyCapability = 0;
+	PlayerBotSupplyGlobalLearning supplyGlobalLearning;
+	PlayerBotSupplyCapabilitySnapshot supplyCapability;
+	const char* supplyEstimateSource = "static";
+	const char* supplyEstimateReason = "static_duration_budget";
+	const char* supplyLocalRejectionReason = "no_local_evidence";
+	double supplyStaticPotionsPerCombatSecond = 0;
+	double supplyAppliedPotionsPerCombatSecond = 0;
 	double expectedDamagePerSecond = 0;
 	double combatFraction = 0;
+	uint8_t modeledMaximumAttackerOverlap = 0;
 	uint32_t returnRouteDangerCost = 0;
 	double recoveryRouteHealthLoss = 0;
 	uint64_t outboundFare = 0;
@@ -226,9 +251,36 @@ struct PlayerBotHuntRegion {
 			supplyBudget.fits = supplyBudget.expectedPotions == 0 &&
 			    recoveryRouteHealthLoss <= currentHealth - maximumHealth * 0.8;
 		}
-		if (supplyCalibration.samples != 0 && supplyCalibration.capability == supplyCapability) {
-			supplyBudget.expectedPotions = std::ceil(supplyCalibration.potionsPerCombatSecond *
-			    availableHuntSeconds * std::clamp(combatFraction, 0.0, 1.0));
+		const double exposure = availableHuntSeconds * std::clamp(combatFraction, 0.0, 1.0);
+		supplyEstimateSource = "static";
+		supplyEstimateReason = "static_duration_budget";
+		supplyLocalRejectionReason = "no_local_evidence";
+		supplyStaticPotionsPerCombatSecond = exposure > 0 ? supplyBudget.expectedPotions / exposure : 0;
+		supplyAppliedPotionsPerCombatSecond = supplyStaticPotionsPerCombatSecond;
+		bool learnedEstimate = false;
+		if (playerBotSupplyCalibrationForCapability(supplyCalibration, supplyCapability)) {
+			learnedEstimate = true;
+			supplyEstimateSource = "local";
+			supplyEstimateReason = "local_variant_learning";
+			supplyLocalRejectionReason = nullptr;
+			supplyAppliedPotionsPerCombatSecond = supplyCalibration.potionsPerCombatSecond;
+		} else {
+			if (supplyCalibration.samples != 0) {
+				const auto change = playerBotCompareSupplyCapabilities(
+				    supplyCalibration.capability, supplyCapability);
+				supplyLocalRejectionReason = change.materialChange ? "material_capability_change" :
+				    change.recoveryContextChanged ? "recovery_contract_changed" : "capability_regression";
+			}
+			if (supplyGlobalLearning.samples != 0) {
+				learnedEstimate = true;
+				supplyEstimateSource = "global";
+				supplyEstimateReason = "global_policy_multiplier";
+				supplyAppliedPotionsPerCombatSecond = supplyStaticPotionsPerCombatSecond *
+				    std::max(playerBotSupplyGlobalMinimumMultiplier, supplyGlobalLearning.multiplier);
+			}
+		}
+		if (learnedEstimate) {
+			supplyBudget.expectedPotions = std::ceil(supplyAppliedPotionsPerCombatSecond * exposure);
 			supplyBudget.fits = (supplyRecovery && supplyBudget.expectedPotions == 0 &&
 			    recoveryRouteHealthLoss <= currentHealth - maximumHealth * 0.8) ||
 			    ((supplyProfile.potions > reserve || reserve == 0) &&

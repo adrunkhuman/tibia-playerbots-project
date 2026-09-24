@@ -421,6 +421,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		uint32_t navigationDecisionDelay(const Player& player) const;
 
 		void onHealthDrain(const Player& player, uint32_t damage);
+		void onLevelRestoration(const Player& player, uint32_t health, uint32_t mana);
 		void onCombatDamage(Creature* attacker, const Creature& target, uint32_t damage);
 		void onHealthGain(Creature* healer, const Creature& target, uint32_t gain);
 

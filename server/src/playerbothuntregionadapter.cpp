@@ -516,6 +516,8 @@ namespace {
 				return left.damagePerSecond > right.damagePerSecond;
 			});
 			const size_t attackers = std::min(maximumModeledAttackers, localAttackers.size());
+			region.modeledMaximumAttackerOverlap = std::max<uint8_t>(
+			    region.modeledMaximumAttackerOverlap, static_cast<uint8_t>(attackers));
 			double remainingDamagePerSecond = 0;
 			for (size_t index = 0; index < attackers; ++index) remainingDamagePerSecond += localAttackers[index].damagePerSecond;
 			double fightDamage = 0;
@@ -574,10 +576,12 @@ namespace {
 		region.clearExperiencePerMinute = yield.clearExperiencePerMinute;
 		region.experiencePerMinute = std::min(yield.spawnExperiencePerMinute, yield.clearExperiencePerMinute);
 		region.supplyProfile = planningProfile.supply;
+		region.supplyGlobalLearning = planningProfile.supplyGlobalLearning;
 		region.supplyCapability = playerBotSupplyCapability(planningProfile);
 		if (const auto found = performance.find(region.atlasVariantId);
-		    found != performance.end() && found->second.atlasRevision == region.atlasRevision &&
-		    found->second.supply.capability == region.supplyCapability) {
+		    found != performance.end() && found->second.atlasRevision == region.atlasRevision) {
+			// Retain incompatible local evidence for an honest rejection reason;
+			// reconciliation falls back to the independent global multiplier.
 			region.supplyCalibration = found->second.supply;
 		}
 		region.destination = *std::min_element(region.patrolPoints.begin(), region.patrolPoints.end(),
@@ -769,19 +773,33 @@ PlayerBotHuntPlanningProfile PlayerBotHuntRegionAdapter::planningProfile(const P
 	profile.supply.potions = profile.potionCount;
 	profile.supply.potionHealing = profile.potionMinimumHealing;
 	profile.supply.mana = profile.mana;
+	for (uint8_t slot = CONST_SLOT_FIRST; slot <= CONST_SLOT_LAST; ++slot) {
+		if (slot == CONST_SLOT_BACKPACK) continue;
+		if (const Item* item = player.getInventoryItem(static_cast<slots_t>(slot))) {
+			profile.equipmentItemIds[slot] = item->getID();
+		}
+	}
 	profile.supply.maximumMana = player.getMaxMana();
-	if (Condition* food = player.getCondition(CONDITION_REGENERATION, CONDITIONID_DEFAULT)) {
+	auto interval = [](int64_t ticks) {
+		// Conditions execute on creature ticks, resetting their counter on gain.
+		return ticks > 0 ? std::ceil(static_cast<double>(ticks) / EVENT_CREATURE_THINK_INTERVAL) *
+		    EVENT_CREATURE_THINK_INTERVAL / 1000.0 : 0;
+	};
+	Condition* food = player.getCondition(CONDITION_REGENERATION, CONDITIONID_DEFAULT);
+	profile.foodAvailable = food || playerbot::PlayerBotInventoryPolicy::foodInventory(player).count > 0;
+	if (food) {
 		profile.supply.regenerationSeconds = food->getTicks() == -1 ?
 		    std::numeric_limits<double>::max() : std::max(0, food->getTicks()) / 1000.0;
 		profile.supply.healthGain = std::max(0, food->getParam(CONDITION_PARAM_HEALTHGAIN));
-		profile.supply.manaGain = std::max(0, food->getParam(CONDITION_PARAM_MANAGAIN));
-		auto interval = [](int32_t ticks) {
-			// Conditions execute on creature ticks, resetting their counter on gain.
-			return ticks > 0 ? std::ceil(static_cast<double>(ticks) / EVENT_CREATURE_THINK_INTERVAL) *
-			    EVENT_CREATURE_THINK_INTERVAL / 1000.0 : 0;
-		};
 		profile.supply.healthInterval = interval(food->getParam(CONDITION_PARAM_HEALTHTICKS));
+		profile.supply.manaGain = std::max(0, food->getParam(CONDITION_PARAM_MANAGAIN));
 		profile.supply.manaInterval = interval(food->getParam(CONDITION_PARAM_MANATICKS));
+	} else {
+		const Vocation* vocation = player.getVocation();
+		profile.supply.healthGain = vocation->getHealthGainAmount();
+		profile.supply.healthInterval = interval(static_cast<int64_t>(vocation->getHealthGainTicks()) * 1000);
+		profile.supply.manaGain = vocation->getManaGainAmount();
+		profile.supply.manaInterval = interval(static_cast<int64_t>(vocation->getManaGainTicks()) * 1000);
 	}
 	InstantSpell* spell = g_spells ? g_spells->getInstantSpellByName("Light Healing") : nullptr;
 	if (!spell || spell->getWords() != "exura" || !spell->isLearnable() || !spell->isEnabled() ||

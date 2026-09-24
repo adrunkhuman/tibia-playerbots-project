@@ -63,7 +63,7 @@ bool PlayerBotInventoryPolicy::isCurrencyItem(uint16_t itemId)
 	return Item::items[itemId].worth != 0;
 }
 
-PlayerBotFoodInventory PlayerBotInventoryPolicy::foodInventory(const Player& player) const
+PlayerBotFoodInventory PlayerBotInventoryPolicy::foodInventory(const Player& player)
 {
 	uint64_t count = 0;
 	uint64_t weight = 0;

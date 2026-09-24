@@ -1653,6 +1653,8 @@ void Player::addExperience(Creature* source, uint64_t exp, bool sendText/* = fal
 	}
 
 	uint32_t prevLevel = level;
+	const int32_t healthBeforeLevel = health;
+	const uint32_t manaBeforeLevel = mana;
 	while (experience >= nextLevelExp) {
 		++level;
 		healthMax += vocation->getHPGain();
@@ -1672,6 +1674,12 @@ void Player::addExperience(Creature* source, uint64_t exp, bool sendText/* = fal
 	if (prevLevel != level) {
 		health = getMaxHealth();
 		mana = getMaxMana();
+		const uint32_t healthRestored = health > healthBeforeLevel ?
+		    static_cast<uint32_t>(health - healthBeforeLevel) : 0;
+		const uint32_t manaRestored = mana > manaBeforeLevel ? mana - manaBeforeLevel : 0;
+		if (isPlayerBot()) {
+			g_playerBots.onLevelRestoration(*this, healthRestored, manaRestored);
+		}
 
 		updateBaseSpeed();
 		setBaseSpeed(getBaseSpeed());

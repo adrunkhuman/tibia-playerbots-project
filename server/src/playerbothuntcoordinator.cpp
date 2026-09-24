@@ -119,6 +119,12 @@ void PlayerBotHuntCoordinator::beginHuntCycle(std::chrono::steady_clock::time_po
 bool PlayerBotHuntCoordinator::huntDeadlineReached(std::chrono::steady_clock::time_point now) const { return huntRuntime.deadlineReached(now); }
 uint32_t PlayerBotHuntCoordinator::completedHuntCycles() const { return huntRuntime.completedCycles(); }
 bool PlayerBotHuntCoordinator::huntActive() const { return huntRuntime.active(); }
+void PlayerBotHuntCoordinator::enterHuntArea(const PlayerBotHuntRuntimePlayerObservation& player,
+	const PlayerBotSupplyProfile& supplyProfile, std::chrono::steady_clock::time_point now)
+{
+	transitCombat.finish();
+	huntRuntime.enterHuntArea(player, supplyProfile, now);
+}
 bool PlayerBotHuntCoordinator::insideHuntArea(const Position& position, uint32_t westRange, uint32_t eastRange,
 	uint32_t northRange, uint32_t southRange) const
 {
@@ -142,6 +148,10 @@ bool PlayerBotHuntCoordinator::matchesHuntMonster(const std::string& name) const
 void PlayerBotHuntCoordinator::sampleHuntCombat(const PlayerBotHuntCombatSnapshot& snapshot) { huntRuntime.sampleCombat(snapshot); }
 void PlayerBotHuntCoordinator::observeHuntDamage(uint32_t damage) { huntRuntime.observeDamage(damage); }
 void PlayerBotHuntCoordinator::observeHuntRecovery(bool potion) { huntRuntime.observeRecovery(potion); }
+void PlayerBotHuntCoordinator::observeHuntLevelRestoration(uint32_t health, uint32_t mana)
+{
+	huntRuntime.observeLevelRestoration(health, mana);
+}
 bool PlayerBotHuntCoordinator::observeHuntDanger(int32_t maximumHealth, std::chrono::steady_clock::time_point now,
 	std::chrono::steady_clock::duration cooldown)
 {
