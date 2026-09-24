@@ -6,6 +6,8 @@ A playerbot is a normal server `Player` whose decisions come from a scheduled co
 
 The controller observes current state, selects a goal at a safe boundary, executes one prioritized command per scheduler turn, verifies the result, and reevaluates. Survival and pending irreversible actions take precedence over discretionary work. Decisions are deterministic; language models are not in the control path.
 
+The hunt runtime owns each planning pass, including its [route-selection session](../server/src/playerbothuntrouteselection.h). The controller supplies world observations and executes route queries; the session owns candidate progression, depot and supplier validation, and selection. Cancelling a planning pass discards its route-selection state without cancelling unrelated navigation or changing shared hunt cooldowns.
+
 This design is intended to scale without one thread, graphical client, renderer, UI, or blocking loop per bot. The current manager controls only the registered `Bot One`; population-scale scheduling has not been implemented.
 
 ## Capabilities and limits

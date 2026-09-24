@@ -121,6 +121,10 @@ class PlayerBotHuntCoordinator
 		                                             uint64_t elapsedUs);
 		std::optional<PlayerBotHuntPlanningSession> planningSession() const;
 		void completePlanningSelection();
+		bool beginRouteSelection(uint64_t pass, uint64_t revision, const std::vector<PlayerBotHuntRegion>& candidates);
+		std::optional<PlayerBotHuntRouteRequest> nextRouteRequest();
+		PlayerBotHuntRouteResult observeRoute(const PlayerBotHuntRouteRequest& request,
+		                                    const PlayerBotHuntRouteObservation& observation);
 		void selectPlanningRegion(PlayerBotHuntRegion region, const PlayerBotHuntRuntimePlayerObservation& player,
 		                         std::chrono::steady_clock::time_point now);
 		void rejectHuntVariant(uint64_t variantId, std::chrono::steady_clock::time_point now,

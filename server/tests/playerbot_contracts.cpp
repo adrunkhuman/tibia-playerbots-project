@@ -411,6 +411,462 @@ void raisedHuntRecoveryReserve()
 	assert(selectRuntimeHunt({income, xp}).atlasVariantId == 2);
 }
 
+PlayerBotHuntRegion routeFixture(uint64_t id, double score = 100)
+{
+	PlayerBotHuntRegion region;
+	region.atlasVariantId = id;
+	region.destination = Position(static_cast<uint16_t>(100 + id), 100, 7);
+	region.suitable = region.reachable = region.supplyBudget.fits = true;
+	region.score = score;
+	region.optimisticProjectedExperience = score;
+	region.experiencePerMinute = score;
+	region.observedCorrection = region.staminaExperienceMultiplier = 1;
+	region.supplyProfile.potions = 100;
+	return region;
+}
+
+PlayerBotHuntRouteObservation routeFacts(bool reached = true)
+{
+	PlayerBotHuntRouteObservation observation;
+	observation.reached = reached;
+	observation.huntDurationSeconds = 60;
+	observation.funds = 100;
+	observation.supplyProfile.potions = 100;
+	return observation;
+}
+
+void routeSelectionContracts()
+{
+	const Position depot(200, 100, 7), nextDepot(201, 100, 7), supplier(300, 100, 7);
+	// Outbound failures remain distinct; a later candidate can still win.
+	PlayerBotHuntRouteSelection selection({routeFixture(1), routeFixture(2), routeFixture(3), routeFixture(4)});
+	auto request = selection.next();
+	auto result = selection.observe(request, routeFacts(false));
+	assert(result.completedCandidate && result.yield && result.completedCandidate->rejectionReason == "route_unreachable");
+	request = selection.next();
+	auto unsafe = routeFacts(); unsafe.dangerCost = 501;
+	result = selection.observe(request, unsafe);
+	assert(result.completedCandidate && result.completedCandidate->rejectionReason == "route_danger_above_tolerance");
+	request = selection.next(); unsafe.dangerCost = 0; unsafe.peakDanger = 0.081;
+	result = selection.observe(request, unsafe);
+	assert(result.completedCandidate && result.completedCandidate->rejectionReason == "route_peak_danger_above_tolerance");
+	request = selection.next();
+	auto outbound = routeFacts(); outbound.approaches = {depot}; outbound.travelSeconds = 5;
+	result = selection.observe(request, outbound);
+	assert(result.accepted && result.yield && !result.completedCandidate);
+	request = selection.next(); assert(request.stage == PlayerBotHuntRouteStage::Depot && request.to == depot);
+	result = selection.observe(request, routeFacts());
+	assert(result.accepted && !result.yield && !result.terminal);
+	request = selection.next(); assert(request.stage == PlayerBotHuntRouteStage::Final);
+	result = selection.observe(request, routeFacts());
+	assert(result.terminal && result.selectedRouteRegion && result.selectedRouteRegion->atlasVariantId == 4);
+	assert(result.failureCounts.at("route_unreachable") == 1 &&
+	       result.failureCounts.at("route_danger_above_tolerance") == 1 &&
+	       result.failureCounts.at("route_peak_danger_above_tolerance") == 1 && result.rejectedVariants.size() == 3);
+
+	// Depot search tries another approach; supplier failure never backtracks.
+	PlayerBotHuntRouteSelection supply({routeFixture(1), routeFixture(2)});
+	request = supply.next(); outbound.approaches = {depot, nextDepot};
+	supply.observe(request, outbound);
+	request = supply.next(); assert(request.to == depot);
+	result = supply.observe(request, routeFacts(false));
+	assert(result.yield);
+	request = supply.next(); assert(request.to == nextDepot);
+	auto recovery = routeFacts(); recovery.potionReserve = 10; recovery.supplyProfile.potions = 0;
+	supply.observe(request, recovery);
+	request = supply.next(); assert(request.stage == PlayerBotHuntRouteStage::DiscoverSupply);
+	auto discovery = routeFacts(); discovery.approaches = {supplier};
+	supply.observe(request, discovery);
+	request = supply.next(); assert(request.stage == PlayerBotHuntRouteStage::Supplier && request.to == supplier);
+	result = supply.observe(request, routeFacts(false));
+	assert(result.yield);
+	request = supply.next(); assert(request.stage == PlayerBotHuntRouteStage::RejectSupply);
+	recovery.supplyProfile.potions = 100; // last supplier failure cannot be undone by a later profile
+	result = supply.observe(request, recovery);
+	assert(result.completedCandidate && result.completedCandidate->routeValidated &&
+	       result.completedCandidate->rejectionReason == "recovery_supply_route_unavailable");
+	request = supply.next(); assert(request.stage == PlayerBotHuntRouteStage::Outbound);
+	outbound.approaches.clear(); supply.observe(request, outbound);
+	request = supply.next(); assert(request.stage == PlayerBotHuntRouteStage::Depot);
+	result = supply.observe(request, routeFacts(false));
+	assert(result.completedCandidate && result.yield &&
+	       result.completedCandidate->rejectionReason == "safe_depot_exit_unavailable");
+	request = supply.next(); result = supply.observe(request, routeFacts());
+	assert(result.terminal && !result.selectedRouteRegion && result.failureCounts.size() == 2);
+
+	// The depot-time decision is retained: a later supply refresh does not
+	// introduce a new supplier requirement after the depot route was accepted.
+	PlayerBotHuntRouteSelection refreshed({routeFixture(6)});
+	request = refreshed.next(); outbound.approaches = {depot}; refreshed.observe(request, outbound);
+	request = refreshed.next(); refreshed.observe(request, routeFacts());
+	request = refreshed.next(); assert(request.stage == PlayerBotHuntRouteStage::Final);
+	auto depleted = routeFacts(); depleted.supplyProfile.potions = 0;
+	result = refreshed.observe(request, depleted);
+	assert(result.terminal && result.selectedRouteRegion &&
+	       result.selectedRouteRegion->supplyDestination == Position() && result.selectedRouteRegion->routeValidated);
+
+	PlayerBotHuntRouteSelection noSupplier({routeFixture(8)});
+	request = noSupplier.next(); noSupplier.observe(request, outbound);
+	request = noSupplier.next(); auto shortage = routeFacts(); shortage.supplyProfile.potions = 0;
+	noSupplier.observe(request, shortage);
+	request = noSupplier.next(); assert(request.stage == PlayerBotHuntRouteStage::DiscoverSupply);
+	result = noSupplier.observe(request, routeFacts());
+	assert(result.completedCandidate && result.yield && result.completedCandidate->routeValidated &&
+	       result.completedCandidate->rejectionReason == "recovery_supply_route_unavailable" &&
+	       noSupplier.next().stage == PlayerBotHuntRouteStage::Done);
+
+	// A supplier is only needed for a non-recovery hunt with a deficit. The
+	// selected fare must cover all legs, while zero fares bypass unknown prices.
+	for (bool recoveryMode : {false, true}) {
+		recovery.supplyProfile.potions = 0;
+		auto candidate = routeFixture(7); candidate.supplyRecovery = recoveryMode;
+		if (recoveryMode) { candidate.coinGoldPerMinute = 1; candidate.currentHealth = candidate.maximumHealth = 100; }
+		PlayerBotHuntRouteSelection selector({candidate});
+		request = selector.next(); outbound.approaches = {depot};
+		outbound.fare = recoveryMode ? 0 : 10;
+		selector.observe(request, outbound);
+		request = selector.next(); recovery.fare = recoveryMode ? 0 : 10;
+		selector.observe(request, recovery);
+		request = selector.next();
+		assert(request.stage == (recoveryMode ? PlayerBotHuntRouteStage::Final : PlayerBotHuntRouteStage::DiscoverSupply));
+		if (!recoveryMode) {
+			selector.observe(request, discovery);
+			request = selector.next(); auto paid = routeFacts(); paid.fare = 11;
+			selector.observe(request, paid);
+			request = selector.next();
+		}
+		auto final = routeFacts(); final.recoverySpendingReserve = recoveryMode ? UINT64_MAX : 69;
+		result = selector.observe(request, final);
+		assert(result.terminal && result.selectedRouteRegion && result.selectedRouteRegion->routeValidated);
+	}
+	for (uint64_t reserve : {uint64_t{79}, uint64_t{80}, uint64_t{81}, UINT64_MAX}) {
+		PlayerBotHuntRouteSelection selector({routeFixture(9)});
+		request = selector.next(); outbound.approaches = {depot}; outbound.fare = 10;
+		selector.observe(request, outbound);
+		request = selector.next(); auto paid = routeFacts(); paid.fare = 10; selector.observe(request, paid);
+		request = selector.next(); auto final = routeFacts(); final.funds = 100;
+		final.recoverySpendingReserve = reserve;
+		result = selector.observe(request, final);
+		if (reserve > 80) {
+			assert(result.completedCandidate && result.completedCandidate->rejectionReason ==
+			       "travel_fare_breaks_recovery_reserve");
+			request = selector.next(); result = selector.observe(request, routeFacts());
+		}
+		assert(result.terminal && static_cast<bool>(result.selectedRouteRegion) == (reserve <= 80));
+	}
+	// Optimistic bounds permit a later winner after actual travel, but prune
+	// candidates that cannot beat an already validated incumbent.
+	PlayerBotHuntRouteSelection ranking({routeFixture(1, 100), routeFixture(2, 99),
+	                                     routeFixture(3, 10)});
+	request = ranking.next(); outbound.fare = 0; outbound.travelSeconds = 40;
+	outbound.approaches = {depot}; ranking.observe(request, outbound);
+	request = ranking.next(); ranking.observe(request, routeFacts());
+	request = ranking.next(); result = ranking.observe(request, routeFacts());
+	assert(result.completedCandidate && !result.terminal);
+	request = ranking.next(); assert(request.stage == PlayerBotHuntRouteStage::Outbound && request.to == Position(102, 100, 7));
+	outbound.travelSeconds = 5; ranking.observe(request, outbound);
+	request = ranking.next(); ranking.observe(request, routeFacts());
+	request = ranking.next(); result = ranking.observe(request, routeFacts());
+	assert(result.terminal && result.selectedRouteRegion && result.selectedRouteRegion->atlasVariantId == 2);
+	assert(ranking.next().stage == PlayerBotHuntRouteStage::Done); // low optimistic bound is pruned
+
+	// Stable ties preserve the first candidate; a live supply profile can
+	// reorder a previously scored tie without changing the initial shortlist.
+	PlayerBotHuntRouteSelection ties({routeFixture(4), routeFixture(5)});
+	request = ties.next(); ties.observe(request, outbound);
+	request = ties.next(); ties.observe(request, routeFacts());
+	request = ties.next(); result = ties.observe(request, routeFacts());
+	assert(!result.terminal);
+	request = ties.next(); ties.observe(request, outbound);
+	request = ties.next(); ties.observe(request, routeFacts());
+	request = ties.next(); result = ties.observe(request, routeFacts());
+	assert(result.terminal && result.selectedRouteRegion->atlasVariantId == 4);
+
+	// A verified supplier does not claim the bot already carries potions:
+	// live supply fit still decides the winner after routing.
+	auto hungry = routeFixture(11, 100), stocked = routeFixture(12, 90);
+	hungry.expectedDamagePerSecond = 1;
+	hungry.combatFraction = 1;
+	hungry.supplyProfile.potionHealing = 100;
+	stocked.optimisticProjectedExperience = 100;
+	PlayerBotHuntRouteSelection supplyRank({hungry, stocked});
+	request = supplyRank.next(); outbound.travelSeconds = 5; supplyRank.observe(request, outbound);
+	request = supplyRank.next(); auto deficit = routeFacts(); deficit.supplyProfile.potions = 0;
+	deficit.supplyProfile.potionHealing = 100;
+	supplyRank.observe(request, deficit);
+	request = supplyRank.next(); supplyRank.observe(request, discovery);
+	request = supplyRank.next(); supplyRank.observe(request, routeFacts());
+	request = supplyRank.next(); result = supplyRank.observe(request, deficit);
+	assert(result.completedCandidate && !result.terminal && !result.completedCandidate->supplyBudget.fits);
+	request = supplyRank.next(); assert(request.to == stocked.destination);
+	supplyRank.observe(request, outbound);
+	request = supplyRank.next(); supplyRank.observe(request, routeFacts());
+	request = supplyRank.next(); result = supplyRank.observe(request, routeFacts());
+	assert(result.terminal && result.selectedRouteRegion && result.selectedRouteRegion->atlasVariantId == 12);
+
+	// Retry unsafe supplier approaches without abandoning the first safe depot.
+	PlayerBotHuntRouteSelection supplierRetry({routeFixture(13)});
+	request = supplierRetry.next();
+	outbound = routeFacts(); outbound.approaches = {depot, nextDepot};
+	supplierRetry.observe(request, outbound);
+	request = supplierRetry.next();
+	auto lowStock = routeFacts(); lowStock.supplyProfile.potions = 0;
+	supplierRetry.observe(request, lowStock);
+	request = supplierRetry.next();
+	const Position secondSupplier(301, 100, 7);
+	discovery.approaches = {supplier, secondSupplier};
+	assert(supplierRetry.observe(request, discovery).yield);
+	request = supplierRetry.next();
+	auto unsafeSupplier = routeFacts(); unsafeSupplier.peakDanger = 0.081;
+	result = supplierRetry.observe(request, unsafeSupplier);
+	assert(result.yield && !result.completedCandidate);
+	request = supplierRetry.next();
+	assert(request.stage == PlayerBotHuntRouteStage::Supplier && request.from == depot && request.to == secondSupplier);
+	auto safeSupplier = routeFacts(); safeSupplier.fare = 5; safeSupplier.npcTravel = true;
+	assert(!supplierRetry.observe(request, safeSupplier).yield);
+	request = supplierRetry.next();
+	result = supplierRetry.observe(request, routeFacts());
+	assert(result.terminal && result.selectedRouteRegion && result.failureCounts.empty());
+	assert(result.selectedRouteRegion->exitDepotDestination == depot &&
+	       result.selectedRouteRegion->supplyDestination == secondSupplier &&
+	       result.selectedRouteRegion->supplyFare == 5 && result.selectedRouteRegion->supplyNpcTravel);
+
+	assert(playerBotHuntTravelAffordable(100, 70, 10, 10, 10));
+	assert(!playerBotHuntTravelAffordable(100, 71, 10, 10, 10));
+	assert(!playerBotHuntTravelAffordable(UINT64_MAX, UINT64_MAX, UINT64_MAX, 1, 0));
+}
+
+void routeTurnContracts()
+{
+	const Position depot(200, 100, 7), supplier(300, 100, 7);
+	struct Tick {
+		std::vector<PlayerBotHuntRouteStage> requests;
+		PlayerBotHuntRouteResult result;
+	};
+	auto tick = [&](PlayerBotHuntRouteSelection& selection, bool shortSupply, bool failSupplier,
+	                bool failDepot = false) {
+		Tick turn;
+		for (unsigned step = 0; step < 4; ++step) {
+			const auto request = selection.next();
+			turn.requests.push_back(request.stage);
+			auto observation = routeFacts();
+			if (request.stage == PlayerBotHuntRouteStage::Outbound) {
+				observation.approaches = {depot};
+				observation.travelSeconds = 5;
+			}
+			if (request.stage == PlayerBotHuntRouteStage::Depot && failDepot) observation.reached = false;
+			if (request.stage == PlayerBotHuntRouteStage::Depot && shortSupply) {
+				observation.potionReserve = 10;
+				observation.supplyProfile.potions = 0;
+			}
+			if (request.stage == PlayerBotHuntRouteStage::DiscoverSupply) observation.approaches = {supplier};
+			if (request.stage == PlayerBotHuntRouteStage::Supplier && failSupplier) observation.reached = false;
+			turn.result = selection.observe(request, observation);
+			assert(turn.result.accepted);
+			if (turn.result.yield || turn.result.terminal) break;
+		}
+		assert(turn.result.yield || turn.result.terminal);
+		assert(std::count_if(turn.requests.begin(), turn.requests.end(), [](auto stage) {
+			return stage == PlayerBotHuntRouteStage::Outbound || stage == PlayerBotHuntRouteStage::Depot ||
+			       stage == PlayerBotHuntRouteStage::Supplier;
+		}) <= 1);
+		return turn;
+	};
+	PlayerBotHuntRouteSelection failedSupply({routeFixture(1), routeFixture(2, 99)});
+	assert(tick(failedSupply, true, true).requests == std::vector<PlayerBotHuntRouteStage>{PlayerBotHuntRouteStage::Outbound});
+	assert((tick(failedSupply, true, true).requests == std::vector<PlayerBotHuntRouteStage>{
+	    PlayerBotHuntRouteStage::Depot, PlayerBotHuntRouteStage::DiscoverSupply}));
+	assert(tick(failedSupply, true, true).requests == std::vector<PlayerBotHuntRouteStage>{PlayerBotHuntRouteStage::Supplier});
+	auto rejected = tick(failedSupply, true, true);
+	assert(rejected.requests == std::vector<PlayerBotHuntRouteStage>{PlayerBotHuntRouteStage::RejectSupply} &&
+	       rejected.result.completedCandidate && rejected.result.yield);
+	assert(tick(failedSupply, false, false).requests == std::vector<PlayerBotHuntRouteStage>{PlayerBotHuntRouteStage::Outbound});
+	auto selected = tick(failedSupply, false, false);
+	assert((selected.requests == std::vector<PlayerBotHuntRouteStage>{
+	    PlayerBotHuntRouteStage::Depot, PlayerBotHuntRouteStage::Final}) &&
+	    selected.result.terminal && !selected.result.yield && selected.result.selectedRouteRegion);
+
+	PlayerBotHuntRouteSelection more({routeFixture(1), routeFixture(2, 99)});
+	tick(more, false, false);
+	auto continueAfterAccept = tick(more, false, false);
+	assert((continueAfterAccept.requests == std::vector<PlayerBotHuntRouteStage>{
+	    PlayerBotHuntRouteStage::Depot, PlayerBotHuntRouteStage::Final}) &&
+	    continueAfterAccept.result.completedCandidate && continueAfterAccept.result.yield &&
+	    !continueAfterAccept.result.terminal);
+	assert(tick(more, false, false).requests == std::vector<PlayerBotHuntRouteStage>{PlayerBotHuntRouteStage::Outbound});
+
+	PlayerBotHuntRouteSelection failedDepot({routeFixture(3)});
+	assert(tick(failedDepot, false, false).requests == std::vector<PlayerBotHuntRouteStage>{PlayerBotHuntRouteStage::Outbound});
+	auto depotFailure = tick(failedDepot, false, false, true);
+	assert(depotFailure.requests == std::vector<PlayerBotHuntRouteStage>{PlayerBotHuntRouteStage::Depot} &&
+	       depotFailure.result.completedCandidate && depotFailure.result.yield);
+}
+
+void routeDurationRefreshContracts()
+{
+	PlayerBotHuntRuntime runtime({});
+	PlayerBotHuntRuntimePlanningInput input;
+	input.cacheRevision = 1;
+	input.huntDurationSeconds = 2400; // Scored session precedes a config/recovery-mode change.
+	input.start.emplace();
+	input.start->scan.revision = 1;
+	input.start->scan.candidateCount = 1;
+	input.start->scan.candidateIndices = {0};
+	const auto now = std::chrono::steady_clock::time_point{};
+	const auto started = runtime.advancePlanning(input, now);
+	assert(runtime.advancePlanning(input, now).scoreWork.size() == 1);
+	auto region = routeFixture(1, 60);
+	region.expectedDamagePerSecond = region.combatFraction = 1;
+	region.supplyProfile.potionHealing = 10;
+	const auto scored = runtime.completeScoreWork({{0, true, true, true, region}}, 0);
+	assert(scored.candidateSnapshot && runtime.beginRouteSelection(
+	    started.planningPass, started.scoringRevision, scored.routeCandidates));
+	assert(runtime.advancePlanning(input, now).command == PlayerBotHuntRuntimeCommand::RegionSelected);
+
+	const Position depot(200, 100, 7), supplier(300, 100, 7);
+	auto request = *runtime.nextRouteRequest();
+	auto outbound = routeFacts();
+	outbound.approaches = {depot};
+	outbound.huntDurationSeconds = 120; // Current select invocation, not scored duration.
+	outbound.travelSeconds = 10;
+	outbound.staminaMultiplier = 0.5;
+	assert(runtime.observeRoute(request, outbound).yield);
+	request = *runtime.nextRouteRequest();
+	auto live = routeFacts(); live.supplyProfile.potionHealing = 10;
+	assert(request.stage == PlayerBotHuntRouteStage::Depot && !runtime.observeRoute(request, live).yield);
+	request = *runtime.nextRouteRequest();
+	auto discovery = routeFacts(); discovery.approaches = {supplier};
+	assert(request.stage == PlayerBotHuntRouteStage::DiscoverSupply && runtime.observeRoute(request, discovery).yield);
+	request = *runtime.nextRouteRequest();
+	assert(request.stage == PlayerBotHuntRouteStage::Supplier && !runtime.observeRoute(request, routeFacts()).yield);
+	request = *runtime.nextRouteRequest();
+	assert(request.stage == PlayerBotHuntRouteStage::Final);
+	const auto result = runtime.observeRoute(request, live);
+	assert(result.terminal && result.selectedRouteRegion);
+	const auto& selected = *result.selectedRouteRegion;
+	assert(selected.availableHuntSeconds == 110 && selected.estimatedTravelSeconds == 10 &&
+	       selected.staminaExperienceMultiplier == 0.5 && selected.projectedExperience == 55 &&
+	       selected.score == 55 && selected.supplyBudget.expectedDamage == 110 &&
+	       selected.supplyBudget.expectedPotions == 11 && selected.supplyBudget.fits);
+}
+
+void routeRuntimeContracts()
+{
+	PlayerBotHuntRuntime runtime({});
+	PlayerBotHuntRuntimePlanningInput input;
+	input.cacheRevision = 1;
+	input.start.emplace();
+	input.start->scan.revision = 1;
+	input.start->scan.candidateIndices = {0, 1};
+	input.start->scan.candidateCount = 2;
+	const auto now = std::chrono::steady_clock::time_point{};
+	auto begin = [&]() {
+		const auto started = runtime.advancePlanning(input, now);
+		assert(started.command == PlayerBotHuntRuntimeCommand::PlanningStarted);
+		assert(!runtime.beginRouteSelection(started.planningPass, started.scoringRevision,
+		                                    {routeFixture(1)}));
+		const auto work = runtime.advancePlanning(input, now);
+		assert(work.scoreWork.size() == 2);
+		assert(!runtime.beginRouteSelection(started.planningPass, started.scoringRevision,
+		                                    {routeFixture(1)}));
+		const auto scored = runtime.completeScoreWork({{0, true, true, true, routeFixture(1, 100)},
+		                                                  {1, true, true, true, routeFixture(2, 99)}}, 0);
+		assert(scored.command == PlayerBotHuntRuntimeCommand::PlanningScored);
+		assert(runtime.beginRouteSelection(started.planningPass, started.scoringRevision, scored.routeCandidates));
+		assert(!runtime.beginRouteSelection(started.planningPass, started.scoringRevision,
+		                                    {routeFixture(99)}));
+		assert(runtime.advancePlanning(input, now).command == PlayerBotHuntRuntimeCommand::RegionSelected);
+		return started;
+	};
+	auto started = begin();
+	auto request = *runtime.nextRouteRequest();
+	assert(request.planningPass == started.planningPass && request.scoringRevision == 1);
+	auto unreachable = runtime.observeRoute(request, routeFacts(false));
+	assert(unreachable.completedCandidate && unreachable.completedCandidate->atlasVariantId == 1 &&
+	       unreachable.planningPass == started.planningPass && unreachable.scoringRevision == 1);
+	const Position depot(200, 100, 7), supplier(300, 100, 7);
+	for (auto stage : {PlayerBotHuntRouteStage::Outbound, PlayerBotHuntRouteStage::Depot,
+	                   PlayerBotHuntRouteStage::DiscoverSupply, PlayerBotHuntRouteStage::Supplier,
+	                   PlayerBotHuntRouteStage::Final}) {
+		// Drive the real wrapper to each barrier, then cancel or revise the pass.
+		for (unsigned advance = 0; advance < 5 && runtime.nextRouteRequest()->stage != stage; ++advance) {
+			request = *runtime.nextRouteRequest();
+			auto observation = routeFacts();
+			if (request.stage == PlayerBotHuntRouteStage::Outbound) observation.approaches = {depot};
+			if (request.stage == PlayerBotHuntRouteStage::Depot) {
+				observation.potionReserve = 10;
+				observation.supplyProfile.potions = 0;
+			}
+			if (request.stage == PlayerBotHuntRouteStage::DiscoverSupply) observation.approaches = {supplier};
+			runtime.observeRoute(request, observation);
+		}
+		request = *runtime.nextRouteRequest();
+		assert(request.stage == stage);
+		PlayerBotHuntRuntimeOutcome cancelled;
+		if (stage == PlayerBotHuntRouteStage::Depot || stage == PlayerBotHuntRouteStage::Supplier) {
+			input.cacheRevision++;
+			input.start->scan.revision = input.cacheRevision;
+			cancelled = runtime.advancePlanning(input, now);
+			assert(cancelled.planningCancelled && cancelled.staleRevision &&
+			       cancelled.invalidatedPlanningPass == started.planningPass);
+			// Invalidation starts the next pass in the same turn.
+			assert(cancelled.command == PlayerBotHuntRuntimeCommand::PlanningStarted);
+			assert(!runtime.observeRoute(request, routeFacts()).accepted);
+			runtime.cancelPlanning();
+		} else {
+			cancelled = runtime.cancelPlanning();
+			assert(cancelled.planningCancelled && !runtime.nextRouteRequest());
+			assert(!runtime.observeRoute(request, routeFacts()).terminal);
+		}
+		started = begin();
+		assert(started.planningPass > cancelled.invalidatedPlanningPass);
+		assert(!runtime.observeRoute(request, routeFacts()).accepted);
+		assert(runtime.nextRouteRequest()->stage == PlayerBotHuntRouteStage::Outbound);
+	}
+	// Commit rejections only on the terminal result and never replay it.
+	request = *runtime.nextRouteRequest();
+	unreachable = runtime.observeRoute(request, routeFacts(false));
+	assert(unreachable.completedCandidate && !runtime.observeRoute(request, routeFacts(false)).completedCandidate);
+	request = *runtime.nextRouteRequest();
+	auto outbound = routeFacts(); outbound.approaches = {depot};
+	runtime.observeRoute(request, outbound);
+	request = *runtime.nextRouteRequest(); runtime.observeRoute(request, routeFacts());
+	request = *runtime.nextRouteRequest();
+	auto terminal = runtime.observeRoute(request, routeFacts());
+	assert(terminal.terminal && terminal.selectedRouteRegion && terminal.selectedRouteRegion->atlasVariantId == 2 &&
+	       terminal.failureCounts.at("route_unreachable") == 1 && terminal.rejectedVariants == std::vector<uint64_t>{1} &&
+	       terminal.planningPass == started.planningPass && terminal.scoringRevision == input.cacheRevision);
+	assert(runtime.planningActive() && !runtime.observeRoute(request, routeFacts()).terminal &&
+	       !runtime.nextRouteRequest());
+	assert(!runtime.beginRouteSelection(started.planningPass, started.scoringRevision,
+	                                    {routeFixture(99)}) && !runtime.nextRouteRequest());
+	assert(!runtime.observeRoute(request, routeFacts()).accepted);
+	runtime.completePlanningSelection();
+	assert(!runtime.nextRouteRequest() && !runtime.observeRoute(request, routeFacts()).accepted);
+	started = begin();
+	assert(!runtime.observeRoute(request, routeFacts()).accepted);
+	request = *runtime.nextRouteRequest();
+	PlayerBotHuntPlanningObservation unavailable;
+	unavailable.candidatesAvailable = false;
+	const auto exhausted = runtime.advancePlanning(input, now, unavailable);
+	assert(exhausted.command == PlayerBotHuntRuntimeCommand::ScopeExhausted && !runtime.nextRouteRequest() &&
+	       !runtime.observeRoute(request, routeFacts()).terminal);
+
+	PlayerBotHuntRuntime empty({});
+	PlayerBotHuntRuntimePlanningInput noCandidates;
+	noCandidates.cacheRevision = 7;
+	noCandidates.start.emplace();
+	noCandidates.start->scan.revision = 7;
+	const auto emptyPass = empty.advancePlanning(noCandidates, now);
+	assert(!empty.beginRouteSelection(emptyPass.planningPass, 7, {}));
+	const auto scoredEmpty = empty.advancePlanning(noCandidates, now);
+	assert(scoredEmpty.command == PlayerBotHuntRuntimeCommand::PlanningScored && scoredEmpty.candidateSnapshot);
+	assert(empty.beginRouteSelection(emptyPass.planningPass, 7, scoredEmpty.routeCandidates));
+	// The preliminary selection guard still owns scope exhaustion, not the selector.
+	assert(empty.advancePlanning(noCandidates, now).command == PlayerBotHuntRuntimeCommand::ScopeExhausted &&
+	       !empty.nextRouteRequest());
+}
+
 void incrementalHuntValidationPipeline()
 {
 	std::vector<PlayerBotHuntRegion> candidates(10);
@@ -2338,6 +2794,10 @@ int main()
 	huntCandidateTelemetryCompleteness();
 	huntCandidateTelemetryDeltas();
 	incrementalHuntValidationPipeline();
+	routeSelectionContracts();
+	routeTurnContracts();
+	routeDurationRefreshContracts();
+	routeRuntimeContracts();
 	lootArithmeticMemo();
 	modeledPatrolFailure();
 	mutableShovelPassages();

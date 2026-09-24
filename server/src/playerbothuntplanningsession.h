@@ -78,6 +78,7 @@ class PlayerBotHuntPlanningSession
 		bool invalidated(const PlayerBotHuntPlanningSnapshot& current) const;
 		bool transportPlanning() const { return phase == Phase::Transport; }
 		bool scoring() const { return phase == Phase::Scoring; }
+		bool ready() const { return phase == Phase::Ready; }
 		const PlayerBotHuntPlanningProfile& profile() const { return planningProfile; }
 		const PlayerBotHuntPlanningSnapshot& snapshot() const { return planningSnapshot; }
 		const std::shared_ptr<const PlayerBotTopologyDistances>& topology() const { return topologyDistances; }
