@@ -434,8 +434,9 @@ PlayerBotHuntPerformanceUpdate PlayerBotHuntPolicy::observePerformance(uint64_t 
 		return update;
 	}
 	if (sample.experienceGained == 0 || !std::isfinite(sample.projectedExperience) ||
-	    !std::isfinite(sample.observedCorrection) || sample.observedCorrection < 0.25 ||
-	    sample.observedCorrection > 2.0) {
+	    !std::isfinite(sample.observedCorrection) ||
+	    sample.observedCorrection < playerBotHuntMinimumXpCorrection ||
+	    sample.observedCorrection > playerBotHuntMaximumXpCorrection) {
 		update.evidenceReason = "invalid_performance_sample";
 		return update;
 	}
@@ -449,7 +450,8 @@ PlayerBotHuntPerformanceUpdate PlayerBotHuntPolicy::observePerformance(uint64_t 
 	PlayerBotHuntRegionPerformance& regionPerformance = performance[variantId];
 	if (regionPerformance.atlasRevision != atlasRevision) regionPerformance = {};
 	const double sampleCorrection = std::clamp(
-		sample.observedCorrection * update.actualExperiencePerMinute / predictedNetRate, 0.25, 2.0);
+		sample.observedCorrection * update.actualExperiencePerMinute / predictedNetRate,
+		playerBotHuntMinimumXpCorrection, playerBotHuntMaximumXpCorrection);
 	if (!regionPerformance.reliable || regionPerformance.samples == 0 ||
 	    regionPerformance.atlasRevision != atlasRevision || !std::isfinite(regionPerformance.correction)) {
 		regionPerformance.observedExperiencePerMinute = update.actualExperiencePerMinute;

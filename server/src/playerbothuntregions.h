@@ -299,6 +299,9 @@ struct PlayerBotHuntRegionPerformance {
 	PlayerBotSupplyCalibration supply;
 };
 
+inline constexpr double playerBotHuntMinimumXpCorrection = 0.1;
+inline constexpr double playerBotHuntMaximumXpCorrection = 10.0;
+
 struct PlayerBotHuntSharedCorrection {
 	double correction = 1;
 	uint32_t testedVariants = 0;
@@ -313,12 +316,14 @@ inline PlayerBotHuntSharedCorrection playerBotSharedHuntCorrection(
 		const PlayerBotHuntRegionPerformance& observed = entry.second;
 		if (!observed.reliable || observed.samples == 0 || observed.atlasRevision != atlasRevision ||
 		    !std::isfinite(observed.correction) ||
-		    observed.correction < 0.25 || observed.correction > 2.0) continue;
+		    observed.correction < playerBotHuntMinimumXpCorrection ||
+		    observed.correction > playerBotHuntMaximumXpCorrection) continue;
 		total += observed.correction;
 		++result.testedVariants;
 	}
 	if (result.testedVariants != 0) {
-		result.correction = std::clamp(total / result.testedVariants, 0.25, 2.0);
+		result.correction = std::clamp(total / result.testedVariants,
+		    playerBotHuntMinimumXpCorrection, playerBotHuntMaximumXpCorrection);
 	}
 	return result;
 }
@@ -339,7 +344,8 @@ inline PlayerBotHuntCorrection playerBotHuntCorrectionForVariant(
 		const PlayerBotHuntRegionPerformance& observed = found->second;
 		if (observed.reliable && observed.samples != 0 && observed.atlasRevision == atlasRevision &&
 		    std::isfinite(observed.correction) &&
-		    observed.correction >= 0.25 && observed.correction <= 2.0) {
+		    observed.correction >= playerBotHuntMinimumXpCorrection &&
+		    observed.correction <= playerBotHuntMaximumXpCorrection) {
 			return {observed.correction, observed.observedExperiencePerMinute,
 			        observed.observedCoinGoldPerMinute, observed.samples, "variant_observed"};
 		}
