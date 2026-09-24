@@ -98,6 +98,7 @@ namespace playerbot {
 			uint64_t observedMagicTrainingMana(uint64_t engineObservation) const;
 			std::vector<PlayerBotFixtureEvent> runAdaptiveChallenge(Player& player);
 			std::vector<PlayerBotFixtureEvent> runDepotRiskFallbackContract() const;
+			std::vector<PlayerBotFixtureEvent> runDoorPassagesContract(Player& player);
 			std::vector<PlayerBotFixtureEvent> runSpellCalibration(Player& player);
 			std::vector<PlayerBotFixtureEvent> runMagicTraining(Player& player);
 

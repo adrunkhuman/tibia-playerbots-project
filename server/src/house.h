@@ -81,7 +81,7 @@ class Door final : public Item
 			return getIntAttr(ITEM_ATTRIBUTE_DOORID);
 		}
 
-		bool canUse(const Player* player);
+		bool canUse(const Player* player) const;
 
 		void setAccessList(const std::string& textlist);
 		bool getAccessList(std::string& list) const;

@@ -24,9 +24,26 @@
 #include "enums.h"
 #include "luascript.h"
 
+#include <cstdint>
+#include <map>
+#include <optional>
+
 class Action;
 using Action_ptr = std::unique_ptr<Action>;
 using ActionFunction = std::function<bool(Player* player, Item* item, const Position& fromPosition, Thing* target, const Position& toPosition, bool isHotkey)>;
+
+enum class ActionPassageAccess : uint8_t {
+	Ordinary,
+	Level,
+	House,
+};
+
+struct ActionPassageDescriptor {
+	uint16_t closedItemId = 0;
+	uint16_t openItemId = 0;
+	ActionPassageAccess access = ActionPassageAccess::Ordinary;
+	uint32_t levelActionIdOffset = 0;
+};
 
 class Action : public Event
 {
@@ -82,6 +99,10 @@ class Action : public Event
 			aids.emplace_back(id);
 		}
 
+		bool addPassage(uint16_t closedItemId, uint16_t openItemId, ActionPassageAccess access,
+		                uint32_t levelActionIdOffset = 0);
+		const ActionPassageDescriptor* getPassage(uint16_t itemId) const;
+
 		virtual ReturnValue canExecuteAction(const Player* player, const Position& toPos);
 		virtual bool hasOwnErrorHandler() {
 			return false;
@@ -99,6 +120,7 @@ class Action : public Event
 		std::vector<uint16_t> ids;
 		std::vector<uint16_t> uids;
 		std::vector<uint16_t> aids;
+		std::map<uint16_t, ActionPassageDescriptor> passages;
 };
 
 class Actions final : public BaseEvents
@@ -121,6 +143,7 @@ class Actions final : public BaseEvents
 		bool registerLuaEvent(Action* event);
 		void clear(bool fromLua) override final;
 		bool hasAction(const Item* item) { return getAction(item) != nullptr; }
+		std::optional<ActionPassageDescriptor> getPassageDescriptor(const Item* item);
 
 	private:
 		ReturnValue internalUseItem(Player* player, const Position& pos, uint8_t index, Item* item, bool isHotkey);

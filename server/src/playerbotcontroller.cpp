@@ -39,11 +39,7 @@ namespace {
 		const TileItemVector* items = tile.getItemList();
 		if (!items) return nullptr;
 		const auto door = std::find_if(items->begin(), items->end(), [&player](Item* item) {
-			if (!item) return false;
-			const ItemType& type = Item::items[item->getID()];
-			return playerBotIsTraversableDoor(*item) &&
-			       type.description != "It is locked." &&
-			       (!item->getDoor() || item->getDoor()->canUse(&player));
+			return item && playerBotCanTraverseDoor(player, *item);
 		});
 		return door == items->end() ? nullptr : *door;
 	}
@@ -250,6 +246,7 @@ void PlayerBotController::start(const Position& position, bool recovered, uint32
 		emitFixtureEvents(fixtureDriver.runSpellCalibration(*controlledPlayer), position);
 		emitFixtureEvents(fixtureDriver.runAdaptiveChallenge(*controlledPlayer), position);
 		emitFixtureEvents(fixtureDriver.runDepotRiskFallbackContract(), position);
+		emitFixtureEvents(fixtureDriver.runDoorPassagesContract(*controlledPlayer), position);
 	}
 	if (backpackUpgradeResumed) {
 		// Durable backpack recovery owns the normal progression command until resolved.
@@ -495,18 +492,19 @@ void PlayerBotController::onDeath(const Player& player, const Creature* killer, 
 	telemetry.emit("lifecycle", lastPosition, fields.str());
 }
 
-Item* PlayerBotController::findNavigationItem(const PlayerBotNavigationStep& step) const
+Item* PlayerBotController::findNavigationItem(const PlayerBotNavigationStep& step, uint16_t itemId) const
 {
+	if (itemId == 0) itemId = step.itemId;
 	Tile* tile = g_game.map.getTile(step.target);
 	if (!tile) {
 		return nullptr;
 	}
-	if (Item* ground = tile->getGround(); ground && ground->getID() == step.itemId) {
+	if (Item* ground = tile->getGround(); ground && ground->getID() == itemId) {
 		return ground;
 	}
 	if (TileItemVector* items = tile->getItemList()) {
 		for (Item* item : *items) {
-			if (item->getID() == step.itemId) {
+			if (item->getID() == itemId) {
 				return item;
 			}
 		}
@@ -524,6 +522,7 @@ PlayerBotNavigationStep PlayerBotController::resolveTopologyPortal(
 	if (Item* door = usableClosedDoor(*tile, player)) {
 		step.action = PlayerBotNavigationAction::UseDoor;
 		step.itemId = door->getID();
+		step.expectedItemId = *playerBotPassageOpenItemId(*door);
 		return step;
 	}
 	if (portal.action == PlayerBotNavigationAction::UseShovel) {
@@ -612,6 +611,10 @@ bool PlayerBotController::executeNavigationStep(Player* player, const PlayerBotN
 	if (!target || stackPosition < 0 || stackPosition > UINT8_MAX) {
 		return false;
 	}
+
+	if (step.action == PlayerBotNavigationAction::UseDoor &&
+	    (!playerBotCanTraverseDoor(*player, *target) ||
+	     playerBotPassageOpenItemId(*target) != std::optional<uint16_t>(step.expectedItemId))) return false;
 
 	if (step.action == PlayerBotNavigationAction::UseRope ||
 	    step.action == PlayerBotNavigationAction::UseShovel) {
@@ -737,6 +740,7 @@ PlayerBotNavigationRoutePlan PlayerBotController::planCompleteNavigationRoute(
 		step.target = portal.target;
 		step.expectedPosition = portal.destination;
 		step.itemId = portal.itemId;
+		step.expectedItemId = portal.expectedItemId;
 		step.topologyPortal = true;
 		plan.steps.push_back(step);
 		const uint32_t portalExposureMs = stepDuration(step);
@@ -881,6 +885,7 @@ PlayerBotNavigationRoutePlan PlayerBotController::planNavigationRoute(Player& pl
 		step.target = portal.target;
 		step.expectedPosition = portal.destination;
 		step.itemId = portal.itemId;
+		step.expectedItemId = portal.expectedItemId;
 		step.topologyPortal = true;
 		routePlan.steps.push_back(step);
 	}
@@ -1544,12 +1549,16 @@ bool PlayerBotController::processNavigation(Player* player, const Position& curr
 	if (outcome.pendingWorldChange) {
 		const bool unchanged = findNavigationItem(*outcome.pendingWorldChange) != nullptr;
 		Tile* targetTile = g_game.map.getTile(outcome.pendingWorldChange->target);
+		const bool doorOpened = outcome.pendingWorldChange->action != PlayerBotNavigationAction::UseDoor ||
+		                        (outcome.pendingWorldChange->expectedItemId != 0 &&
+		                         findNavigationItem(*outcome.pendingWorldChange,
+		                                            outcome.pendingWorldChange->expectedItemId) != nullptr);
 		const bool blockedDoor = outcome.pendingWorldChange->action == PlayerBotNavigationAction::UseDoor &&
 		                         (!targetTile || targetTile->queryAdd(0, *player, 1, FLAG_IGNOREBLOCKCREATURE) != RETURNVALUE_NOERROR);
-		if (unchanged || blockedDoor) {
+		if (unchanged || !doorOpened || blockedDoor) {
 			telemetry.logActionFailure("navigate", "transition_state_unchanged", currentPosition);
 		}
-		navigationRuntime.observeWorldChange({*outcome.pendingWorldChange, unchanged || blockedDoor, now, navigationBlockSuppression});
+		navigationRuntime.observeWorldChange({*outcome.pendingWorldChange, unchanged || !doorOpened || blockedDoor, now, navigationBlockSuppression});
 	}
 	if (outcome.plan.attempted) {
 		telemetry.recordPathfinding(outcome.plan.elapsed, !outcome.routeUnavailable);

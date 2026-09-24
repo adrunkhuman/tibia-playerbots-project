@@ -70,6 +70,7 @@ namespace playerbot {
 		bool remoteHuntFixture;
 		bool mainlandLoopFixture;
 		bool localRouteRecoveryFixture;
+		bool doorPassagesFixture;
 		NavigationPreflightFixture navigationPreflightFixture;
 	};
 

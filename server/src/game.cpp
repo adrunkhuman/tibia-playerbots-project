@@ -32,6 +32,7 @@
 #include "globalevent.h"
 #include "iologindata.h"
 #include "items.h"
+#include "luascript.h"
 #include "monster.h"
 #include "movement.h"
 #include "playerbothuntregions.h"
@@ -59,6 +60,7 @@ extern Monsters g_monsters;
 extern MoveEvents* g_moveEvents;
 extern Weapons* g_weapons;
 extern Scripts* g_scripts;
+extern LuaEnvironment g_luaEnvironment;
 
 Game::~Game()
 {
@@ -5030,6 +5032,9 @@ bool Game::reload(ReloadTypes_t reloadType)
 		PlayerBotTopology::instance().build(map);
 		PlayerBotHuntRegionPlanner::rebuildAtlas();
 	};
+	auto invalidatePlayerBotTopology = []() {
+		if (g_config.getBoolean(ConfigManager::PLAYERBOT_ENABLED)) PlayerBotTopology::instance().invalidate();
+	};
 	auto rebuildPlayerBotAtlas = []() {
 		if (g_config.getBoolean(ConfigManager::PLAYERBOT_ENABLED)) PlayerBotHuntRegionPlanner::rebuildAtlas();
 	};
@@ -5037,6 +5042,7 @@ bool Game::reload(ReloadTypes_t reloadType)
 		case RELOAD_TYPE_ACTIONS: {
 			const bool reloaded = g_actions->reload();
 			if (reloaded) rebuildPlayerBotTopology();
+			else invalidatePlayerBotTopology();
 			return reloaded;
 		}
 		case RELOAD_TYPE_CHAT: return g_chat->load();
@@ -5051,6 +5057,7 @@ bool Game::reload(ReloadTypes_t reloadType)
 		case RELOAD_TYPE_ITEMS: {
 			const bool reloaded = Item::items.reload();
 			if (reloaded) rebuildPlayerBotTopology();
+			else invalidatePlayerBotTopology();
 			return reloaded;
 		}
 		case RELOAD_TYPE_MONSTERS: {
@@ -5109,6 +5116,7 @@ bool Game::reload(ReloadTypes_t reloadType)
 			g_chat->load();
 			*/
 			if (reloaded) rebuildPlayerBotTopology();
+			else invalidatePlayerBotTopology();
 			return reloaded;
 		}
 
@@ -5130,7 +5138,9 @@ bool Game::reload(ReloadTypes_t reloadType)
 			Npcs::reload();
 			raids.reload() && raids.startup();
 			g_talkActions->reload();
-			Item::items.reload();
+			const bool itemsReloaded = Item::items.reload();
+			const bool globalLoaded = g_luaEnvironment.loadFile("data/global.lua") == 0;
+			const bool librariesLoaded = g_scripts->loadScripts("scripts/lib", true, true);
 			g_weapons->reload();
 			g_weapons->clear(true);
 			g_weapons->loadDefaults();
@@ -5144,10 +5154,11 @@ bool Game::reload(ReloadTypes_t reloadType)
 			g_talkActions->clear(true);
 			g_globalEvents->clear(true);
 			g_spells->clear(true);
-			g_scripts->loadScripts("scripts", false, true);
+			const bool scriptsReloaded = g_scripts->loadScripts("scripts", false, true);
 			g_creatureEvents->removeInvalidEvents();
-			rebuildPlayerBotTopology();
-			return true;
+			if (itemsReloaded && globalLoaded && librariesLoaded && scriptsReloaded) rebuildPlayerBotTopology();
+			else invalidatePlayerBotTopology();
+			return itemsReloaded && globalLoaded && librariesLoaded && scriptsReloaded;
 		}
 	}
 	return true;

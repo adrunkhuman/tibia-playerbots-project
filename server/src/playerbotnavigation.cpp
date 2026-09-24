@@ -15,6 +15,7 @@
 #include "actions.h"
 #include "container.h"
 #include "game.h"
+#include "groups.h"
 #include "house.h"
 #include "item.h"
 #include "player.h"
@@ -297,9 +298,45 @@ uint32_t PlayerBotNavigationGoal::distance(const Position& candidate) const
 
 bool playerBotIsTraversableDoor(const Item& item)
 {
-	const ItemType& type = Item::items[item.getID()];
-	return type.isDoor() && type.blockSolid && (item.getActionId() == 0 || type.levelDoor != 0) &&
-	       g_actions && g_actions->hasAction(&item);
+	if (!g_actions) return false;
+	const auto passage = g_actions->getPassageDescriptor(&item);
+	// doors.lua treats any nonzero AID on an ordinary door as locked.
+	return passage && (passage->access != ActionPassageAccess::Ordinary || item.getActionId() == 0);
+}
+
+std::optional<uint16_t> playerBotPassageOpenItemId(const Item& item)
+{
+	if (!g_actions) return std::nullopt;
+	const auto passage = g_actions->getPassageDescriptor(&item);
+	return passage ? std::optional<uint16_t>(passage->openItemId) : std::nullopt;
+}
+
+std::optional<uint32_t> playerBotPassageMinimumLevel(const Item& item)
+{
+	if (!g_actions) return std::nullopt;
+	const auto passage = g_actions->getPassageDescriptor(&item);
+	if (!passage) return std::nullopt;
+	if (passage->access != ActionPassageAccess::Level) return 0;
+
+	const uint32_t actionId = item.getActionId();
+	if (actionId == 0) return std::numeric_limits<uint32_t>::max();
+	return actionId > passage->levelActionIdOffset ? actionId - passage->levelActionIdOffset : 0;
+}
+
+bool playerBotCanTraverseDoor(const Player& player, const Item& item)
+{
+	if (!g_actions) return false;
+	const auto passage = g_actions->getPassageDescriptor(&item);
+	if (!passage) return false;
+	if (const Door* door = item.getDoor(); door && !door->canUse(&player)) return false;
+	if (passage->access == ActionPassageAccess::Ordinary) return item.getActionId() == 0;
+	if (passage->access == ActionPassageAccess::House) return true;
+
+	const Group* group = player.getGroup();
+	if (group && group->access) return true;
+	const uint32_t actionId = item.getActionId();
+	return actionId != 0 && player.getLevel() >=
+	       (actionId > passage->levelActionIdOffset ? actionId - passage->levelActionIdOffset : 0);
 }
 
 PlayerBotNavigationResult PlayerBotNavigator::plan(Player& player, const Position& destination, const std::set<Position>& blockedPositions,
@@ -447,7 +484,8 @@ PlayerBotNavigationResult PlayerBotNavigator::planFrom(Player& player, const Pos
 				continue;
 			}
 
-			auto addDirectUse = [&](uint16_t itemId, PlayerBotNavigationAction action, const Position& expected) {
+			auto addDirectUse = [&](uint16_t itemId, PlayerBotNavigationAction action, const Position& expected,
+			                        uint16_t expectedItemId = 0) {
 				if (blockedPositions.find(target) != blockedPositions.end() ||
 				    blockedPositions.find(expected) != blockedPositions.end() ||
 				    (sameFloorOnly && expected.z != start.z)) {
@@ -458,6 +496,7 @@ PlayerBotNavigationResult PlayerBotNavigator::planFrom(Player& player, const Pos
 				step.target = target;
 				step.expectedPosition = expected;
 				step.itemId = itemId;
+				step.expectedItemId = expectedItemId;
 				addCandidate(current.position, current.pathCost, expected, transitionCost, 1000, step);
 			};
 
@@ -492,10 +531,9 @@ PlayerBotNavigationResult PlayerBotNavigator::planFrom(Player& player, const Pos
 				} else if (contains(downUseIds, itemId) && target.z < MAP_MAX_LAYERS - 1) {
 					addDirectUse(itemId, PlayerBotNavigationAction::Use,
 					             Position(target.x, target.y, target.z + 1));
-				} else if (playerBotIsTraversableDoor(*item) &&
-				           Item::items[itemId].description != "It is locked." &&
-				           (!item->getDoor() || item->getDoor()->canUse(&player))) {
-					addDirectUse(itemId, PlayerBotNavigationAction::UseDoor, target);
+				} else if (const auto openItemId = playerBotPassageOpenItemId(*item);
+				           openItemId && playerBotCanTraverseDoor(player, *item)) {
+					addDirectUse(itemId, PlayerBotNavigationAction::UseDoor, target, *openItemId);
 				}
 			}
 		}

@@ -59,7 +59,7 @@ function F.login.onLogin(player)
         mode == "magic_training_exact_full" or mode == "magic_training_restart" or mode == "magic_training_absent" or
         mode == "magic_training_expired" or mode == "magic_training_post_hunt" or mode == "magic_training_post_hunt_no_overflow" or
         mode == "svargrond_local_route_recovery" or mode == "navigation_fare_rejection" or
-        mode == "navigation_risk_rejection",
+        mode == "navigation_risk_rejection" or mode == "door_passages",
         "unknown PLAYERBOT_GAMEPLAY_MODE: " .. mode)
     if mode == "equipment_shadow" or mode == "equipment_shadow_unaffordable" or mode == "equipment_shadow_no_upgrade" or
         mode == "equipment_buy" or mode == "equipment_buy_resume" or mode == "equipment_buy_space" or

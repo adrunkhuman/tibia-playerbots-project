@@ -165,6 +165,7 @@ const playerbot::PlayerBotTestPolicy& playerbot::playerBotTestPolicyFromEnvironm
 			remoteHuntFixture,
 			gameplayMode && std::strcmp(gameplayMode, "mainland") == 0,
 			gameplayMode && std::strcmp(gameplayMode, "svargrond_local_route_recovery") == 0,
+			gameplayMode && std::strcmp(gameplayMode, "door_passages") == 0,
 			navigationPreflightFixture,
 		};
 	}();

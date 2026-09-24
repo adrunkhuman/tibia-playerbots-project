@@ -3,10 +3,18 @@
 #include "playerbotfixturedriver.h"
 
 #include "playerbotdepotworkflow.h"
+#include "playerbothuntregions.h"
+#include "playerbotnavigation.h"
+#include "playerbottopology.h"
 
+#include "actions.h"
 #include "condition.h"
 #include "depotchest.h"
+#include "game.h"
+#include "house.h"
+#include "item.h"
 #include "player.h"
+#include "tile.h"
 #include "playerbot.h"
 #include "playerbotcombatruntime.h"
 #include "playerbotinventorypolicy.h"
@@ -15,6 +23,9 @@
 #include "playerbotserviceworkflow.h"
 #include "playerbotsurvivalruntime.h"
 #include "playerbotspellcalibration.h"
+
+extern Actions* g_actions;
+extern Game g_game;
 
 namespace {
 	constexpr uint32_t maximumRepeatedNavigationStepFailures = 3;
@@ -397,6 +408,138 @@ std::vector<playerbot::PlayerBotFixtureEvent> playerbot::PlayerBotFixtureDriver:
 		events.push_back({"supply_budget_fixture", supply.str()});
 	}
 	return events;
+}
+
+std::vector<playerbot::PlayerBotFixtureEvent> playerbot::PlayerBotFixtureDriver::runDoorPassagesContract(Player& player)
+{
+	if (!policy.doorPassagesFixture || !g_actions) return {};
+
+	constexpr Position origin(65000, 65000, 7);
+	constexpr uint16_t ordinaryDoorId = 1210;
+	constexpr uint16_t levelDoorId = 1227;
+	constexpr uint16_t windowId = 6440;
+	constexpr uint16_t fixtureActionId = 65000;
+	constexpr uint16_t fixtureUniqueId = 65001;
+	constexpr uint16_t unregisteredActionId = 65002;
+	std::vector<Position> fixtureTiles;
+	auto cleanup = [&fixtureTiles]() {
+		for (const Position& position : fixtureTiles) g_game.map.removeTile(position);
+		PlayerBotTopology::instance().build(g_game.map);
+		PlayerBotHuntRegionPlanner::rebuildAtlas();
+	};
+	auto boolField = [](bool value) { return value ? "true" : "false"; };
+
+	uint16_t groundId = 0;
+	for (size_t itemIndex = 1; itemIndex < Item::items.size(); ++itemIndex) {
+		const uint16_t itemId = static_cast<uint16_t>(itemIndex);
+		const ItemType& type = Item::items[itemId];
+		if (type.isGroundTile() && !type.blockSolid) {
+			groundId = itemId;
+			break;
+		}
+	}
+	bool mapReady = groundId != 0;
+	for (uint16_t x = 0; mapReady && x < 5; ++x) {
+		for (uint16_t y = 0; y < 3; ++y) {
+			const Position position(origin.x + x, origin.y + y, origin.z);
+			if (g_game.map.getTile(position)) {
+				mapReady = false;
+				break;
+			}
+			auto* tile = new DynamicTile(position.x, position.y, position.z);
+			tile->internalAddThing(Item::CreateItem(groundId));
+			g_game.map.setTile(position, tile);
+			fixtureTiles.push_back(position);
+		}
+	}
+
+	Item* window = nullptr;
+	Item* ordinaryDoor = nullptr;
+	Item* actionDoor = nullptr;
+	if (mapReady) {
+		window = Item::CreateItem(windowId);
+		ordinaryDoor = Item::CreateItem(ordinaryDoorId);
+		actionDoor = Item::CreateItem(ordinaryDoorId);
+		mapReady = window && ordinaryDoor && actionDoor;
+		if (mapReady) {
+			g_game.map.getTile(Position(origin.x + 2, origin.y, origin.z))->internalAddThing(window);
+			g_game.map.getTile(Position(origin.x + 2, origin.y + 1, origin.z))->internalAddThing(ordinaryDoor);
+			actionDoor->setActionId(unregisteredActionId);
+			g_game.map.getTile(Position(origin.x + 2, origin.y + 2, origin.z))->internalAddThing(actionDoor);
+		}
+	}
+
+	const bool reloaded = mapReady && g_game.reload(RELOAD_TYPE_GLOBAL);
+	const bool ordinaryDescriptor = reloaded && g_actions->getPassageDescriptor(ordinaryDoor).has_value();
+	const bool windowRejected = reloaded && !g_actions->getPassageDescriptor(window).has_value();
+	const bool unregisteredFallback = reloaded && g_actions->getPassageDescriptor(actionDoor).has_value();
+	const bool ordinaryActionDenied = unregisteredFallback && !playerBotCanTraverseDoor(player, *actionDoor);
+
+	std::unique_ptr<Item> actionOverride(Item::CreateItem(ordinaryDoorId));
+	std::unique_ptr<Item> uniqueOverride(Item::CreateItem(ordinaryDoorId));
+	bool actionPrecedence = false;
+	if (reloaded && actionOverride && uniqueOverride) {
+		actionOverride->setActionId(fixtureActionId);
+		uniqueOverride->setActionId(fixtureActionId);
+		uniqueOverride->setUniqueId(fixtureUniqueId);
+		actionPrecedence = g_actions->getPassageDescriptor(actionOverride.get()).has_value() &&
+		                   !g_actions->getPassageDescriptor(uniqueOverride.get()).has_value();
+	}
+
+	std::unique_ptr<Item> levelDoor(Item::CreateItem(levelDoorId));
+	if (levelDoor) levelDoor->setActionId(static_cast<uint16_t>(1000 + player.getLevel() + 1));
+	const bool levelDenied = levelDoor && g_actions->getPassageDescriptor(levelDoor.get()).has_value() &&
+	                         !playerBotCanTraverseDoor(player, *levelDoor);
+	bool houseDenied = false;
+	g_game.map.forEachTile([&](const Tile& tile) {
+		if (houseDenied) return;
+		const TileItemVector* items = tile.getItemList();
+		if (!items) return;
+		for (const Item* item : *items) {
+			const Door* door = item ? item->getDoor() : nullptr;
+			if (door && const_cast<Door*>(door)->getHouse() && g_actions->getPassageDescriptor(item).has_value() &&
+			    !playerBotCanTraverseDoor(player, *item)) {
+				houseDenied = true;
+				return;
+			}
+		}
+	});
+
+	bool staticActionDenied = false;
+	bool navigatorUsedDoor = false;
+	if (reloaded) {
+		staticActionDenied = std::none_of(PlayerBotTopology::instance().portals().begin(),
+		                                  PlayerBotTopology::instance().portals().end(), [&](const PlayerBotTopologyPortal& portal) {
+			                                  return portal.itemId == ordinaryDoorId && portal.target == Position(origin.x + 2, origin.y + 2, origin.z);
+			                                  });
+		std::deque<PlayerBotNavigationStep> steps;
+		uint64_t expandedNodes = 0;
+		const PlayerBotNavigator navigator;
+		const PlayerBotNavigationResult result = navigator.planFrom(
+		    player, Position(origin.x, origin.y + 1, origin.z), Position(origin.x + 4, origin.y + 1, origin.z), {}, steps,
+		    expandedNodes, playerBotNavigationMaximumExpandedNodes);
+		navigatorUsedDoor = result == PlayerBotNavigationResult::Reached &&
+		                   std::any_of(steps.begin(), steps.end(), [&](const PlayerBotNavigationStep& step) {
+			                   return step.action == PlayerBotNavigationAction::UseDoor && step.itemId == ordinaryDoorId && step.expectedItemId == ordinaryDoorId + 1;
+			                   }) &&
+		                   std::none_of(steps.begin(), steps.end(), [&](const PlayerBotNavigationStep& step) {
+			                   return step.itemId == windowId;
+			                   });
+	}
+	cleanup();
+
+	std::ostringstream fields;
+	fields << "\"reloaded\":" << boolField(reloaded)
+	       << ",\"ordinary_descriptor\":" << boolField(ordinaryDescriptor)
+	       << ",\"window_rejected\":" << boolField(windowRejected)
+	       << ",\"unregistered_aid_fallback\":" << boolField(unregisteredFallback)
+	       << ",\"ordinary_aid_denied\":" << boolField(ordinaryActionDenied)
+	       << ",\"uid_precedence\":" << boolField(actionPrecedence)
+	       << ",\"level_denied\":" << boolField(levelDenied)
+	       << ",\"house_denied\":" << boolField(houseDenied)
+	       << ",\"static_aid_denied\":" << boolField(staticActionDenied)
+	       << ",\"navigator_used_door\":" << boolField(navigatorUsedDoor);
+	return {{"door_passages_contract", fields.str()}};
 }
 
 std::vector<playerbot::PlayerBotFixtureEvent> playerbot::PlayerBotFixtureDriver::runDepotRiskFallbackContract() const
