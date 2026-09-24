@@ -29,10 +29,7 @@ PlayerBotHuntRuntimeOutcome PlayerBotHuntRuntime::advancePlanning(const PlayerBo
 {
 	PlayerBotHuntRuntimeOutcome outcome;
 	if (observation.invalidateCacheRevision) {
-		planning.reset();
-		pendingTransportOffers.clear();
-		pendingScoreCandidates.clear();
-		outcome.staleRevision = true;
+		invalidatePlanning(outcome, "cache_revision_invalidated");
 		outcome.invalidateCache = true;
 		return outcome;
 	}
@@ -43,17 +40,14 @@ PlayerBotHuntRuntimeOutcome PlayerBotHuntRuntime::advancePlanning(const PlayerBo
 		return outcome;
 	}
 	if (planning && planning->invalidated(current)) {
-		outcome.staleRevision = planning->snapshot().cacheRevision != input.cacheRevision;
-		planning.reset();
-		pendingTransportOffers.clear();
-		pendingScoreCandidates.clear();
+		const char* cancellationReason = planningInvalidationReason(current);
+		invalidatePlanning(outcome, cancellationReason,
+		                   planning->snapshot().cacheRevision != input.cacheRevision);
 	}
 	if (planning && observation.cancelAtScoreBarrier && pendingTransportOffers.empty() &&
 	    pendingScoreCandidates.empty()) {
-		planning.reset();
-		pendingTransportOffers.clear();
-		pendingScoreCandidates.clear();
-		outcome.command = PlayerBotHuntRuntimeCommand::PlanningCancelled;
+		outcome = cancelPlanning();
+		outcome.cancellationReason = "fixture_cancelled";
 		return outcome;
 	}
 	if (!planning) {
@@ -65,10 +59,13 @@ PlayerBotHuntRuntimeOutcome PlayerBotHuntRuntime::advancePlanning(const PlayerBo
 		                                             input.start->transportOffers, input.start->topologyDistanceTimeUs,
 		                                             input.reason, now});
 		plannedHuntDurationSeconds = input.huntDurationSeconds;
+		currentPlanningPass = ++nextPlanningPass;
+		attributeOutcome(outcome);
 		outcome.command = PlayerBotHuntRuntimeCommand::PlanningStarted;
 		return outcome;
 	}
 
+	attributeOutcome(outcome);
 	planning->beginTurn();
 	if (planning->transportPlanning()) {
 		while (const auto work = planning->nextTransportWork(8)) {
@@ -92,14 +89,18 @@ PlayerBotHuntRuntimeOutcome PlayerBotHuntRuntime::advancePlanning(const PlayerBo
 				plannedHuntDurationSeconds});
 		}
 		if (outcome.scoreWork.empty()) {
-			outcome.command = planning->completeScoring() == PlayerBotHuntPlanningProgress::ScoringYield ?
-			                         PlayerBotHuntRuntimeCommand::PlanningYield : PlayerBotHuntRuntimeCommand::PlanningScored;
+			if (planning->completeScoring() == PlayerBotHuntPlanningProgress::ScoringYield) {
+				outcome.command = PlayerBotHuntRuntimeCommand::PlanningYield;
+			} else {
+				outcome.candidateSnapshot = true;
+				outcome.candidates = planning->regions();
+				outcome.routeCandidates = planning->routeCandidates();
+				outcome.command = PlayerBotHuntRuntimeCommand::PlanningScored;
+			}
 		}
 		return outcome;
 	}
 	const auto& regions = planning->regions();
-	outcome.candidates = regions;
-	outcome.routeCandidates = planning->routeCandidates();
 	if (!observation.candidatesAvailable) return exhaustScope(now, std::chrono::seconds(1));
 	if (playerBotHuntScopeExhausted(regions)) {
 		return exhaustScope(now, std::chrono::seconds(30));
@@ -118,13 +119,11 @@ PlayerBotHuntRuntimeOutcome PlayerBotHuntRuntime::completeTransportWork(
 	const std::vector<PlayerBotHuntRuntimeTransportObservation>& observations)
 {
 	PlayerBotHuntRuntimeOutcome outcome;
+	attributeOutcome(outcome);
 	if (!planning || !planning->transportPlanning() || observations.size() != pendingTransportOffers.size()) return outcome;
 	for (size_t index = 0; index < observations.size(); ++index) {
 		if (observations[index].offerIndex != pendingTransportOffers[index]) {
-			outcome.staleRevision = true;
-			planning.reset();
-			pendingTransportOffers.clear();
-			pendingScoreCandidates.clear();
+			invalidatePlanning(outcome, "transport_observation_changed");
 			return outcome;
 		}
 		planning->transportCompleted(observations[index].offerIndex, observations[index].arrival);
@@ -144,13 +143,11 @@ PlayerBotHuntRuntimeOutcome PlayerBotHuntRuntime::completeScoreWork(const std::v
 	                                                                  uint64_t elapsedUs)
 {
 	PlayerBotHuntRuntimeOutcome outcome;
+	attributeOutcome(outcome);
 	if (!planning || !planning->scoring() || observations.size() != pendingScoreCandidates.size()) return outcome;
 	for (size_t index = 0; index < observations.size(); ++index) {
 		if (!observations[index].valid || observations[index].candidateIndex != pendingScoreCandidates[index]) {
-			outcome.staleRevision = true;
-			planning.reset();
-			pendingTransportOffers.clear();
-			pendingScoreCandidates.clear();
+			invalidatePlanning(outcome, "score_observation_changed");
 			return outcome;
 		}
 		PlayerBotHuntRegion region = observations[index].region;
@@ -163,8 +160,67 @@ PlayerBotHuntRuntimeOutcome PlayerBotHuntRuntime::completeScoreWork(const std::v
 		outcome.command = PlayerBotHuntRuntimeCommand::PlanningYield;
 		return outcome;
 	}
+	outcome.candidateSnapshot = true;
+	outcome.candidates = planning->regions();
+	outcome.routeCandidates = planning->routeCandidates();
 	outcome.command = PlayerBotHuntRuntimeCommand::PlanningScored;
 	return outcome;
+}
+
+void PlayerBotHuntRuntime::attributeOutcome(PlayerBotHuntRuntimeOutcome& outcome) const
+{
+	if (!planning) return;
+	outcome.planningPass = currentPlanningPass;
+	outcome.scoringRevision = planning->snapshot().cacheRevision;
+}
+
+PlayerBotHuntRuntimeOutcome PlayerBotHuntRuntime::cancelPlanning()
+{
+	PlayerBotHuntRuntimeOutcome outcome;
+	attributeOutcome(outcome);
+	if (outcome.planningPass == 0) return outcome;
+	outcome.command = PlayerBotHuntRuntimeCommand::PlanningCancelled;
+	outcome.planningCancelled = true;
+	outcome.cancellationReason = "planning_cancelled";
+	planning.reset();
+	currentPlanningPass = 0;
+	pendingTransportOffers.clear();
+	pendingScoreCandidates.clear();
+	return outcome;
+}
+
+const char* PlayerBotHuntRuntime::planningInvalidationReason(const PlayerBotHuntPlanningSnapshot& current) const
+{
+	const PlayerBotHuntPlanningSnapshot& previous = planning->snapshot();
+	if (current.cacheRevision != previous.cacheRevision) return "cache_revision_changed";
+	if (current.topologyGeneration != previous.topologyGeneration) return "topology_changed";
+	if (current.npcGeneration != previous.npcGeneration) return "npc_topology_changed";
+	if (current.playerPosition != previous.playerPosition) return "position_changed";
+	if (current.playerLevel != previous.playerLevel) return "level_changed";
+	if (current.currentHealth < previous.currentHealth) return "health_decreased";
+	if (current.staminaMinutes != previous.staminaMinutes) return "stamina_changed";
+	if (current.potions != previous.potions) return "potions_changed";
+	if (current.mana < previous.mana) return "mana_decreased";
+	if (current.funds != previous.funds) return "funds_changed";
+	if (current.canUseRope != previous.canUseRope || current.canUseShovel != previous.canUseShovel ||
+	    current.premium != previous.premium) return "travel_capability_changed";
+	return "hunt_cooldowns_changed";
+}
+
+void PlayerBotHuntRuntime::invalidatePlanning(PlayerBotHuntRuntimeOutcome& outcome, const char* cancellationReason,
+	bool staleRevision)
+{
+	attributeOutcome(outcome);
+	if (outcome.planningPass == 0) return;
+	outcome.invalidatedPlanningPass = outcome.planningPass;
+	outcome.invalidatedScoringRevision = outcome.scoringRevision;
+	outcome.planningCancelled = true;
+	outcome.cancellationReason = cancellationReason;
+	outcome.staleRevision = staleRevision;
+	planning.reset();
+	currentPlanningPass = 0;
+	pendingTransportOffers.clear();
+	pendingScoreCandidates.clear();
 }
 
 void PlayerBotHuntRuntime::applyCandidateSuitability(PlayerBotHuntRegion& region,
@@ -202,7 +258,7 @@ PlayerBotHuntRuntimeOutcome PlayerBotHuntRuntime::exhaustScope(std::chrono::stea
 	std::chrono::steady_clock::duration retryAfter)
 {
 	PlayerBotHuntRuntimeOutcome outcome;
-	outcome.candidates = planning->regions();
+	attributeOutcome(outcome);
 	scopeExhaustions = std::min<uint32_t>(scopeExhaustions + 1, 3);
 	outcome.command = PlayerBotHuntRuntimeCommand::ScopeExhausted;
 	outcome.scopeExhaustionAttempt = scopeExhaustions;
@@ -210,6 +266,7 @@ PlayerBotHuntRuntimeOutcome PlayerBotHuntRuntime::exhaustScope(std::chrono::stea
 	outcome.retryAfter = retryAfter;
 	scopeReevaluationAfter = now + retryAfter;
 	planning.reset();
+	currentPlanningPass = 0;
 	pendingTransportOffers.clear();
 	pendingScoreCandidates.clear();
 	return outcome;

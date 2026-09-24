@@ -82,7 +82,7 @@ uint32_t PlayerBotHuntCoordinator::lootNavigationSuspensions() const { return lo
 int64_t PlayerBotHuntCoordinator::lootElapsedMilliseconds(std::chrono::steady_clock::time_point now) const { return lootWorkflow.elapsedMilliseconds(now); }
 std::chrono::steady_clock::time_point PlayerBotHuntCoordinator::lootNavigationRetryAt() const { return lootWorkflow.navigationRetryAt(); }
 
-void PlayerBotHuntCoordinator::cancelPlanning() { huntRuntime.cancelPlanning(); }
+PlayerBotHuntRuntimeOutcome PlayerBotHuntCoordinator::cancelPlanning() { return huntRuntime.cancelPlanning(); }
 bool PlayerBotHuntCoordinator::planningStartRequired(std::chrono::steady_clock::time_point now) const { return huntRuntime.planningStartRequired(now); }
 bool PlayerBotHuntCoordinator::planningActive() const { return huntRuntime.planningActive(); }
 PlayerBotHuntRuntimeOutcome PlayerBotHuntCoordinator::advancePlanning(const PlayerBotHuntRuntimePlanningInput& input,

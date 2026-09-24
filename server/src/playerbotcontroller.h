@@ -451,14 +451,18 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		bool openContainer(Player& player, Container& container, uint8_t containerId, const Position& currentPosition);
 		uint8_t containerDestinationIndex(const Container& container, const Item& item) const;
 
-		void emitHuntRegionCandidate(const PlayerBotHuntRegion& region, const Position& position) const;
+		void emitHuntRegionCandidate(const PlayerBotHuntRegion& region, const Position& position,
+		                             uint64_t planningPass, uint64_t scoringRevision,
+		                             const char* candidatePhase) const;
 		bool isActiveHuntCombat(const Player& player) const;
 		void recordActiveHuntCombat(const Player& player);
 		void recordHuntRecovery(bool potion);
 		void emitChallengeFrontier(const PlayerBotHuntChallengeUpdate& update, const Position& position,
 		                           const char* reason) const;
 		void emitFixtureEvents(const std::vector<playerbot::PlayerBotFixtureEvent>& events, const Position& position) const;
-		void emitHuntRegionPlanning(const PlayerBotHuntPlanningSession& planning, const Position& position, const char* phase) const;
+		void emitHuntRegionPlanning(const PlayerBotHuntPlanningSession& planning, const Position& position,
+		                            const char* phase, uint64_t planningPass, uint64_t scoringRevision) const;
+		void cancelHuntPlanning(const char* reason, const Position& position);
 		void finishHuntRegion(const Player& player, const Position& position, const char* reason);
 
 		bool selectHuntRegion(Player& player, const Position& position, const char* reason,
@@ -562,6 +566,10 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		uint64_t serviceTopologyGeneration = 0;
 		PlayerBotNavigationRuntime navigationRuntime;
 		bool huntRegionReached = false;
+		uint64_t huntPlanningPass = 0;
+		uint64_t huntPlanningScoringRevision = 0;
+		std::vector<PlayerBotHuntRegion> huntScoredCandidates;
+		std::vector<PlayerBotHuntRegion> huntRouteCandidates;
 		size_t huntRouteCandidateIndex = 0;
 		std::optional<PlayerBotHuntRegion> huntRouteValidationCandidate;
 		std::vector<Position> huntDepotExitApproaches;

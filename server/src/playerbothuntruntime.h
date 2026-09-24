@@ -112,8 +112,17 @@ struct PlayerBotHuntRuntimeOutcome {
 	std::vector<PlayerBotHuntRuntimeTransportWork> transportWork;
 	std::vector<PlayerBotHuntRuntimeScoreWork> scoreWork;
 	std::optional<PlayerBotHuntRegion> selectedRegion;
+	// A complete scored snapshot is returned exactly once, when scoring completes.
 	std::vector<PlayerBotHuntRegion> candidates;
 	std::vector<PlayerBotHuntRegion> routeCandidates;
+	uint64_t planningPass = 0;
+	uint64_t scoringRevision = 0;
+	uint64_t invalidatedPlanningPass = 0;
+	uint64_t invalidatedScoringRevision = 0;
+	bool candidateSnapshot = false;
+	// The prior pass ended without a selection or scope-exhaustion terminal.
+	bool planningCancelled = false;
+	const char* cancellationReason = nullptr;
 	bool staleRevision = false;
 	bool invalidateCache = false;
 	bool stopForScopeExhaustion = false;
@@ -188,10 +197,10 @@ class PlayerBotHuntRuntime
 		PlayerBotHuntRuntimeOutcome completeScoreWork(const std::vector<PlayerBotHuntRuntimeScoreObservation>& observations,
 		                                              uint64_t elapsedUs);
 		// Keep the completed session through final telemetry, then release it.
-		void completePlanningSelection() { planning.reset(); pendingTransportOffers.clear(); pendingScoreCandidates.clear(); }
+		void completePlanningSelection() { planning.reset(); currentPlanningPass = 0; pendingTransportOffers.clear(); pendingScoreCandidates.clear(); }
 		void selectPlanningRegion(PlayerBotHuntRegion region, const PlayerBotHuntRuntimePlayerObservation& player,
 		                         std::chrono::steady_clock::time_point now) { activate(std::move(region), player, now); }
-		void cancelPlanning() { planning.reset(); pendingTransportOffers.clear(); pendingScoreCandidates.clear(); }
+		PlayerBotHuntRuntimeOutcome cancelPlanning();
 		bool planningActive() const { return planning.has_value(); }
 		std::optional<PlayerBotHuntPlanningSession> planningSession() const
 		{
@@ -244,6 +253,10 @@ class PlayerBotHuntRuntime
 		void applyCandidateSuitability(PlayerBotHuntRegion& region, const PlayerBotHuntRuntimeScoreObservation& observation) const;
 		void activate(PlayerBotHuntRegion region, const PlayerBotHuntRuntimePlayerObservation& player,
 		              std::chrono::steady_clock::time_point now);
+		void attributeOutcome(PlayerBotHuntRuntimeOutcome& outcome) const;
+		void invalidatePlanning(PlayerBotHuntRuntimeOutcome& outcome, const char* cancellationReason,
+		                        bool staleRevision = true);
+		const char* planningInvalidationReason(const PlayerBotHuntPlanningSnapshot& current) const;
 
 		std::optional<PlayerBotHuntPlanningSession> planning;
 		PlayerBotHuntPolicy policy;
@@ -266,6 +279,8 @@ class PlayerBotHuntRuntime
 		uint64_t huntStartExperience = 0;
 		uint32_t huntStartLevel = 0;
 		uint32_t plannedHuntDurationSeconds = 0;
+		uint64_t nextPlanningPass = 0;
+		uint64_t currentPlanningPass = 0;
 		std::vector<size_t> pendingTransportOffers;
 		std::vector<size_t> pendingScoreCandidates;
 };

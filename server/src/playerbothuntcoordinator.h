@@ -108,7 +108,7 @@ class PlayerBotHuntCoordinator
 		}
 		void clearTransitMovementFallback() { transitCombat.clearFallback(); }
 
-		void cancelPlanning();
+		PlayerBotHuntRuntimeOutcome cancelPlanning();
 		void setSupplyRecovery(bool degraded) { huntRuntime.setSupplyRecovery(degraded); }
 		bool planningStartRequired(std::chrono::steady_clock::time_point now) const;
 		bool planningActive() const;

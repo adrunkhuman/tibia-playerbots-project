@@ -2,6 +2,7 @@
 #include <cassert>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <iostream>
 
 #include "playerbot.h"
@@ -209,7 +210,12 @@ void mixedSustainedYield()
 	assert(playerBotSustainedHuntYield(points, viability, 1200).clearExperiencePerMinute == 3);
 }
 
-PlayerBotHuntRuntimeOutcome planRuntimeHunts(const std::vector<PlayerBotHuntRegion>& candidates)
+struct RuntimeHuntPlan {
+	PlayerBotHuntRuntimeOutcome scored;
+	PlayerBotHuntRuntimeOutcome selection;
+};
+
+RuntimeHuntPlan planRuntimeHunts(const std::vector<PlayerBotHuntRegion>& candidates)
 {
 	PlayerBotHuntRuntime runtime({});
 	PlayerBotHuntRuntimePlanningInput input;
@@ -223,15 +229,17 @@ PlayerBotHuntRuntimeOutcome planRuntimeHunts(const std::vector<PlayerBotHuntRegi
 	assert(runtime.advancePlanning(input, now).scoreWork.size() == candidates.size());
 	std::vector<PlayerBotHuntRuntimeScoreObservation> observations;
 	for (size_t i = 0; i < candidates.size(); ++i) observations.push_back({i, true, true, true, candidates[i]});
-	assert(runtime.completeScoreWork(observations, 0).command == PlayerBotHuntRuntimeCommand::PlanningScored);
-	const auto selection = runtime.advancePlanning(input, now);
-	assert(selection.command == PlayerBotHuntRuntimeCommand::RegionSelected && selection.selectedRegion);
-	return selection;
+	RuntimeHuntPlan plan;
+	plan.scored = runtime.completeScoreWork(observations, 0);
+	assert(plan.scored.command == PlayerBotHuntRuntimeCommand::PlanningScored && plan.scored.candidateSnapshot);
+	plan.selection = runtime.advancePlanning(input, now);
+	assert(plan.selection.command == PlayerBotHuntRuntimeCommand::RegionSelected && plan.selection.selectedRegion);
+	return plan;
 }
 
 PlayerBotHuntRegion selectRuntimeHunt(const std::vector<PlayerBotHuntRegion>& candidates)
 {
-	return *planRuntimeHunts(candidates).selectedRegion;
+	return *planRuntimeHunts(candidates).selection.selectedRegion;
 }
 
 void huntCandidateTelemetryCompleteness()
@@ -246,9 +254,104 @@ void huntCandidateTelemetryCompleteness()
 		candidates[index].supplyBudget.fits = true;
 		candidates[index].score = static_cast<double>(candidates.size() - index);
 	}
-	const PlayerBotHuntRuntimeOutcome outcome = planRuntimeHunts(candidates);
-	assert(outcome.candidates.size() == candidates.size());
-	assert(outcome.candidates.back().atlasVariantId == candidates.size());
+	const RuntimeHuntPlan plan = planRuntimeHunts(candidates);
+	assert(plan.scored.candidates.size() == candidates.size());
+	assert(plan.scored.candidates.back().atlasVariantId == candidates.size());
+	assert(plan.selection.candidates.empty());
+}
+
+void huntCandidateTelemetryDeltas()
+{
+	auto inputFor = [](uint64_t revision, size_t count) {
+		PlayerBotHuntRuntimePlanningInput input;
+		input.cacheRevision = revision;
+		input.start.emplace();
+		input.start->scan.revision = revision;
+		input.start->scan.candidateCount = count;
+		for (size_t index = 0; index < count; ++index) input.start->scan.candidateIndices.push_back(index);
+		return input;
+	};
+	auto observationsFor = [](const std::vector<PlayerBotHuntRuntimeScoreWork>& work) {
+		std::vector<PlayerBotHuntRuntimeScoreObservation> observations;
+		observations.reserve(work.size());
+		for (const PlayerBotHuntRuntimeScoreWork& candidate : work) {
+			PlayerBotHuntRegion region;
+			region.atlasVariantId = candidate.candidateIndex + 1;
+			region.suitable = region.reachable = true;
+			region.score = static_cast<double>(300 - candidate.candidateIndex);
+			observations.push_back({candidate.candidateIndex, true, true, true, region});
+		}
+		return observations;
+	};
+
+	const auto now = std::chrono::steady_clock::time_point{};
+	PlayerBotHuntRuntime runtime({});
+	auto input = inputFor(11, 300);
+	const auto started = runtime.advancePlanning(input, now);
+	assert(started.command == PlayerBotHuntRuntimeCommand::PlanningStarted && started.planningPass == 1 &&
+	       started.scoringRevision == 11);
+	const auto firstWork = runtime.advancePlanning(input, now);
+	assert(firstWork.scoreWork.size() == 256);
+	const auto firstScored = runtime.completeScoreWork(observationsFor(firstWork.scoreWork), 0);
+	assert(firstScored.command == PlayerBotHuntRuntimeCommand::PlanningYield && !firstScored.candidateSnapshot &&
+	       firstScored.candidates.empty() && firstScored.planningPass == started.planningPass);
+	const auto secondWork = runtime.advancePlanning(input, now);
+	assert(secondWork.scoreWork.size() == 44);
+	const auto scored = runtime.completeScoreWork(observationsFor(secondWork.scoreWork), 0);
+	assert(scored.command == PlayerBotHuntRuntimeCommand::PlanningScored && scored.candidateSnapshot &&
+	       scored.candidates.size() == 300 && scored.routeCandidates.size() == 300 &&
+	       scored.planningPass == started.planningPass && scored.scoringRevision == 11);
+	const auto validationTurn = runtime.advancePlanning(input, now);
+	assert(validationTurn.command == PlayerBotHuntRuntimeCommand::RegionSelected && validationTurn.selectedRegion &&
+	       !validationTurn.candidateSnapshot && validationTurn.candidates.empty() && validationTurn.routeCandidates.empty() &&
+	       validationTurn.planningPass == started.planningPass);
+	PlayerBotHuntPlanningObservation unavailable;
+	unavailable.candidatesAvailable = false;
+	const auto exhausted = runtime.advancePlanning(input, now, unavailable);
+	assert(exhausted.command == PlayerBotHuntRuntimeCommand::ScopeExhausted && exhausted.candidates.empty() &&
+	       exhausted.planningPass == started.planningPass && exhausted.scoringRevision == 11);
+
+	PlayerBotHuntRuntime cancelledRuntime({});
+	auto cancelledInput = inputFor(21, 1);
+	const auto cancelledStart = cancelledRuntime.advancePlanning(cancelledInput, now);
+	PlayerBotHuntPlanningObservation cancel;
+	cancel.cancelAtScoreBarrier = true;
+	const auto cancelled = cancelledRuntime.advancePlanning(cancelledInput, now, cancel);
+	assert(cancelled.command == PlayerBotHuntRuntimeCommand::PlanningCancelled &&
+	       cancelled.planningPass == cancelledStart.planningPass && cancelled.scoringRevision == 21);
+	const auto restarted = cancelledRuntime.advancePlanning(cancelledInput, now);
+	assert(restarted.command == PlayerBotHuntRuntimeCommand::PlanningStarted &&
+	       restarted.planningPass == cancelledStart.planningPass + 1);
+	const auto explicitlyCancelled = cancelledRuntime.cancelPlanning();
+	assert(explicitlyCancelled.command == PlayerBotHuntRuntimeCommand::PlanningCancelled &&
+	       explicitlyCancelled.planningCancelled && explicitlyCancelled.planningPass == restarted.planningPass &&
+	       explicitlyCancelled.scoringRevision == restarted.scoringRevision &&
+	       std::strcmp(explicitlyCancelled.cancellationReason, "planning_cancelled") == 0);
+
+	PlayerBotHuntRuntime invalidatedRuntime({});
+	auto oldInput = inputFor(31, 1);
+	const auto oldStart = invalidatedRuntime.advancePlanning(oldInput, now);
+	auto refreshedInput = inputFor(32, 1);
+	const auto refreshedStart = invalidatedRuntime.advancePlanning(refreshedInput, now);
+	assert(refreshedStart.command == PlayerBotHuntRuntimeCommand::PlanningStarted && refreshedStart.planningCancelled &&
+	       refreshedStart.staleRevision && std::strcmp(refreshedStart.cancellationReason, "cache_revision_changed") == 0 &&
+	       refreshedStart.invalidatedPlanningPass == oldStart.planningPass &&
+	       refreshedStart.invalidatedScoringRevision == oldStart.scoringRevision &&
+	       refreshedStart.planningPass == oldStart.planningPass + 1 && refreshedStart.scoringRevision == 32);
+
+	PlayerBotHuntRuntime healthInvalidatedRuntime({});
+	auto healthyInput = inputFor(41, 1);
+	healthyInput.player.health = 100;
+	const auto healthyStart = healthInvalidatedRuntime.advancePlanning(healthyInput, now);
+	auto injuredInput = healthyInput;
+	injuredInput.player.health = 99;
+	const auto injuredRestart = healthInvalidatedRuntime.advancePlanning(injuredInput, now);
+	assert(injuredRestart.command == PlayerBotHuntRuntimeCommand::PlanningStarted &&
+	       injuredRestart.planningCancelled && !injuredRestart.staleRevision &&
+	       std::strcmp(injuredRestart.cancellationReason, "health_decreased") == 0 &&
+	       injuredRestart.invalidatedPlanningPass == healthyStart.planningPass &&
+	       injuredRestart.invalidatedScoringRevision == healthyStart.scoringRevision &&
+	       injuredRestart.planningPass == healthyStart.planningPass + 1);
 }
 
 void raisedHuntRecoveryReserve()
@@ -307,19 +410,19 @@ void incrementalHuntValidationPipeline()
 		region.optimisticProjectedExperience = 100 - index;
 		region.topologyReachable = index % 2 == 0;
 	}
-	const auto planned = planRuntimeHunts(candidates);
-	assert(planned.routeCandidates.size() == candidates.size());
+	const RuntimeHuntPlan planned = planRuntimeHunts(candidates);
+	assert(planned.scored.routeCandidates.size() == candidates.size());
 	for (size_t index = 0; index < candidates.size(); ++index) {
-		assert(planned.routeCandidates[index].atlasVariantId == index + 1);
+		assert(planned.scored.routeCandidates[index].atlasVariantId == index + 1);
 	}
 	// There is no fixed-eight, local/remote, observed/unobserved, or income slot.
-	assert(std::count_if(planned.routeCandidates.begin(), planned.routeCandidates.end(),
+	assert(std::count_if(planned.scored.routeCandidates.begin(), planned.scored.routeCandidates.end(),
 	    [](const auto& region) { return region.topologyReachable; }) == 5);
 
 	// Nine route failures still leave the tenth candidate available to win.
 	size_t validated = 0;
 	std::optional<PlayerBotHuntRegion> winner;
-	for (const PlayerBotHuntRegion& candidate : planned.routeCandidates) {
+	for (const PlayerBotHuntRegion& candidate : planned.scored.routeCandidates) {
 		++validated;
 		if (candidate.atlasVariantId == 10) winner = candidate;
 	}
@@ -1602,6 +1705,7 @@ int main()
 	mixedSustainedYield();
 	raisedHuntRecoveryReserve();
 	huntCandidateTelemetryCompleteness();
+	huntCandidateTelemetryDeltas();
 	incrementalHuntValidationPipeline();
 	lootArithmeticMemo();
 	modeledPatrolFailure();

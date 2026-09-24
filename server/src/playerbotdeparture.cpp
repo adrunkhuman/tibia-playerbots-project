@@ -101,7 +101,7 @@ bool PlayerBotController::forceOracleDeparture(Player& player, const Position& p
 		g_game.playerCancelAttackAndFollow(playerId);
 	}
 	clearTraversalTarget(position, "level_eight_interrupt");
-	huntCoordinator.cancelPlanning();
+	cancelHuntPlanning("level_eight_interrupt", position);
 	resetNavigation();
 	huntCoordinator.resetLoot();
 	player.closeContainer(corpseContainerId);

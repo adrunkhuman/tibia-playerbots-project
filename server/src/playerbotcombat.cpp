@@ -295,7 +295,7 @@ bool PlayerBotController::handleHealing(Player* player, const Position& currentP
 		}
 		return false;
 	}
-	huntCoordinator.cancelPlanning();
+	cancelHuntPlanning("survival_action", currentPosition);
 	Item* potion = g_game.findItemOfType(player, command.itemId, true);
 	if (!potion) {
 		return true;
@@ -741,11 +741,16 @@ void PlayerBotController::emitChallengeFrontier(const PlayerBotHuntChallengeUpda
 	emit("hunt_challenge_frontier", position, fields.str());
 }
 
-void PlayerBotController::emitHuntRegionCandidate(const PlayerBotHuntRegion& region, const Position& position) const
+void PlayerBotController::emitHuntRegionCandidate(const PlayerBotHuntRegion& region, const Position& position,
+                                                   uint64_t planningPass, uint64_t scoringRevision,
+                                                   const char* candidatePhase) const
 {
 	std::ostringstream fields;
 	fields << std::fixed << std::setprecision(2)
-	       << "\"region_id\":" << region.id
+	       << "\"planning_pass\":" << planningPass
+	       << ",\"scoring_revision\":" << scoringRevision
+	       << ",\"candidate_phase\":" << jsonString(candidatePhase)
+	       << ",\"region_id\":" << region.id
 	       << ",\"atlas_site_id\":" << region.atlasSiteId
 	       << ",\"atlas_variant_id\":" << region.atlasVariantId
 	       << ",\"atlas_revision\":" << region.atlasRevision
@@ -856,11 +861,14 @@ void PlayerBotController::emitHuntRegionCandidate(const PlayerBotHuntRegion& reg
 
 
 void PlayerBotController::emitHuntRegionPlanning(const PlayerBotHuntPlanningSession& planning, const Position& position,
-                                                  const char* phase) const
+                                                  const char* phase, uint64_t planningPass,
+                                                  uint64_t scoringRevision) const
 {
 	const auto latencyUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - planning.started()).count();
 	std::ostringstream fields;
-	fields << "\"phase\":" << jsonString(phase) << ",\"cache\":" << jsonString(planning.cacheHit() ? "hit" : "build")
+	fields << "\"phase\":" << jsonString(phase) << ",\"planning_pass\":" << planningPass
+	       << ",\"scoring_revision\":" << scoringRevision
+	       << ",\"cache\":" << jsonString(planning.cacheHit() ? "hit" : "build")
 	       << ",\"snapshot_time_us\":" << planning.snapshotTimeUs() << ",\"clustering_time_us\":" << planning.clusteringTimeUs()
 	       << ",\"topology_time_us\":" << planning.topologyTimeUs()
 	       << ",\"transport_offer_count\":" << planning.transportOfferCount()
@@ -961,11 +969,19 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 	};
 	PlayerBotHuntRuntimeOutcome outcome = huntCoordinator.advancePlanning(planningInput(), now, fixtureObservation);
 	if (outcome.invalidateCache) {
+		const uint64_t invalidatedPlanningPass = outcome.planningPass;
+		const uint64_t invalidatedScoringRevision = outcome.scoringRevision;
+		const bool planningCancelled = outcome.planningCancelled;
+		const char* cancellationReason = outcome.cancellationReason;
 		PlayerBotHuntRegionPlanner::invalidateCache();
 		PlayerBotHuntPlanningObservation refreshedObservation = fixtureObservation;
 		refreshedObservation.invalidateCacheRevision = false;
 		outcome = huntCoordinator.advancePlanning(planningInput(), now, refreshedObservation);
+		outcome.planningCancelled = planningCancelled;
+		outcome.cancellationReason = cancellationReason;
 		outcome.staleRevision = true;
+		outcome.invalidatedPlanningPass = invalidatedPlanningPass;
+		outcome.invalidatedScoringRevision = invalidatedScoringRevision;
 	}
 	if (!outcome.transportWork.empty()) {
 		std::vector<PlayerBotHuntRuntimeTransportObservation> observations;
@@ -1023,17 +1039,42 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 		huntRouteBestCandidate.reset();
 		huntRouteRejectedVariants.clear();
 		huntRouteFailureCounts.clear();
+		huntScoredCandidates.clear();
+		huntRouteCandidates.clear();
 	}
+	if (outcome.planningPass != 0) {
+		huntPlanningPass = outcome.planningPass;
+		huntPlanningScoringRevision = outcome.scoringRevision;
+	}
+	if (outcome.candidateSnapshot) {
+		huntScoredCandidates = std::move(outcome.candidates);
+		huntRouteCandidates = std::move(outcome.routeCandidates);
+	}
+	const auto planningAttribution = [](uint64_t planningPass, uint64_t scoringRevision) {
+		return "\"planning_pass\":" + std::to_string(planningPass) + ",\"scoring_revision\":" +
+		       std::to_string(scoringRevision);
+	};
 	fixtureDriver.observeHuntPlanning(outcome);
-	if (outcome.command == PlayerBotHuntRuntimeCommand::PlanningCancelled) {
-		emit("hunt_region_scan", position, "\"phase\":\"cancelled\"");
+	if (outcome.planningCancelled && !outcome.staleRevision) {
+		const uint64_t planningPass = outcome.invalidatedPlanningPass != 0 ?
+		    outcome.invalidatedPlanningPass : outcome.planningPass;
+		const uint64_t scoringRevision = outcome.invalidatedPlanningPass != 0 ?
+		    outcome.invalidatedScoringRevision : outcome.scoringRevision;
+		emit("hunt_region_scan", position, "\"phase\":\"cancelled\",\"reason\":" +
+		     jsonString(outcome.cancellationReason) + "," + planningAttribution(planningPass, scoringRevision));
 	}
 	if (outcome.command == PlayerBotHuntRuntimeCommand::ScopeReevaluationPending) {
 		if (retryAfter) *retryAfter = outcome.retryAfter;
 		return false;
 	}
 	if (outcome.staleRevision) {
-		emit("hunt_region_scan", position, "\"phase\":\"stale_revision\"");
+		const uint64_t planningPass = outcome.invalidatedPlanningPass != 0 ?
+		    outcome.invalidatedPlanningPass : outcome.planningPass;
+		const uint64_t scoringRevision = outcome.invalidatedPlanningPass != 0 ?
+		    outcome.invalidatedScoringRevision : outcome.scoringRevision;
+		emit("hunt_region_scan", position, "\"phase\":\"stale_revision\",\"reason\":" +
+		     jsonString(outcome.cancellationReason ? outcome.cancellationReason : "cache_revision_changed") + "," +
+		     planningAttribution(planningPass, scoringRevision));
 	}
 	if (const auto planning = huntCoordinator.planningSession();
 	    planning && outcome.command != PlayerBotHuntRuntimeCommand::RegionSelected) {
@@ -1041,24 +1082,32 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 		                    planning->transportPlanning() ? "transport_yield" :
 		                    outcome.command == PlayerBotHuntRuntimeCommand::PlanningYield ? "scoring_yield" :
 		                    outcome.command == PlayerBotHuntRuntimeCommand::PlanningScored ? "scored" : "planning_yield";
-		emitHuntRegionPlanning(*planning, position, phase);
+		emitHuntRegionPlanning(*planning, position, phase, outcome.planningPass, outcome.scoringRevision);
 	}
-	for (const PlayerBotHuntRegion& candidate : outcome.candidates) {
-		emitHuntRegionCandidate(candidate, position);
+	if (outcome.candidateSnapshot) {
+		for (const PlayerBotHuntRegion& candidate : huntScoredCandidates) {
+			emitHuntRegionCandidate(candidate, position, outcome.planningPass, outcome.scoringRevision, "scored");
+		}
 	}
 	if (outcome.command == PlayerBotHuntRuntimeCommand::ScopeExhausted) {
-		emit("hunt_region_selection", position, "\"result\":\"failed\",\"reason\":\"no_suitable_reachable_region\"");
-		emit("hunt_scope_exhausted", position, "\"reason\":\"local_scope_exhausted\",\"attempt\":" + std::to_string(outcome.scopeExhaustionAttempt) + ",\"maximum_attempts\":" + (supplyRecovery.active() ? "null" : "3") + ",\"retry_delay_ms\":" + std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(outcome.retryAfter).count()));
+		const std::string attribution = planningAttribution(outcome.planningPass, outcome.scoringRevision);
+		emit("hunt_region_selection", position, "\"result\":\"failed\",\"reason\":\"no_suitable_reachable_region\"," + attribution);
+		emit("hunt_scope_exhausted", position, "\"reason\":\"local_scope_exhausted\"," + attribution +
+		     ",\"attempt\":" + std::to_string(outcome.scopeExhaustionAttempt) + ",\"maximum_attempts\":" +
+		     (supplyRecovery.active() ? "null" : "3") + ",\"retry_delay_ms\":" +
+		     std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(outcome.retryAfter).count()));
+		huntScoredCandidates.clear();
+		huntRouteCandidates.clear();
 		if (outcome.stopForScopeExhaustion) stop("hunt_scope_exhausted", position);
 		return false;
 	}
 	if (!outcome.selectedRegion) return false;
 	std::vector<PlayerBotHuntRegion> fixtureRouteCandidates;
-	const std::vector<PlayerBotHuntRegion>* routeCandidateSource = &outcome.routeCandidates;
+	const std::vector<PlayerBotHuntRegion>* routeCandidateSource = &huntRouteCandidates;
 	if (fixtureDriver.remoteHuntScenario()) {
 		// Fixture-only: force the real Carlin-to-Darashia transport path without
 		// changing production scoring or encoding a service-base mapping.
-		for (const PlayerBotHuntRegion& candidate : outcome.candidates) {
+		for (const PlayerBotHuntRegion& candidate : huntScoredCandidates) {
 			const bool darashiaFixtureArea = candidate.center.x >= 33100 && candidate.center.x <= 33350 &&
 			                                candidate.center.y >= 32300 && candidate.center.y <= 32650;
 			if (!candidate.suitable || !candidate.reachable || candidate.topologyReachable || !darashiaFixtureArea) continue;
@@ -1069,7 +1118,7 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 	const auto& routeCandidates = *routeCandidateSource;
 	const PlayerBotNavigationRiskProfile risk;
 	auto rejectRouteCandidate = [&](PlayerBotHuntRegion& candidate) {
-		emitHuntRegionCandidate(candidate, position);
+		emitHuntRegionCandidate(candidate, position, huntPlanningPass, huntPlanningScoringRevision, "route_validation");
 		++huntRouteFailureCounts[candidate.rejectionReason.empty() ? "unspecified" : candidate.rejectionReason];
 		huntRouteRejectedVariants.push_back(candidate.atlasVariantId);
 		++huntRouteCandidateIndex;
@@ -1235,7 +1284,7 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 			if (retryAfter) *retryAfter = std::chrono::milliseconds(SCHEDULER_MINTICKS);
 			return false;
 		}
-		emitHuntRegionCandidate(routed, position);
+		emitHuntRegionCandidate(routed, position, huntPlanningPass, huntPlanningScoringRevision, "route_validation");
 		if (!huntRouteBestCandidate || playerBotPreferHuntRegion(routed, *huntRouteBestCandidate)) {
 			huntRouteBestCandidate = std::move(routed);
 		}
@@ -1271,8 +1320,10 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 		huntRouteCandidateIndex = 0;
 		emit("hunt_region_selection", position,
 		     "\"result\":\"failed\",\"reason\":\"no_safe_route_candidate\",\"route_rejection_counts\":" +
-		         routeFailureCounts());
-		huntCoordinator.cancelPlanning();
+		         routeFailureCounts() + "," + planningAttribution(huntPlanningPass, huntPlanningScoringRevision));
+		huntScoredCandidates.clear();
+		huntRouteCandidates.clear();
+		huntCoordinator.completePlanningSelection();
 		if (retryAfter) *retryAfter = std::chrono::seconds(1);
 		return false;
 	}
@@ -1309,14 +1360,19 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 	huntCoordinator.selectPlanningRegion(selected, huntPlayerObservation(player), now);
 	emit("hunt_region_selection", position, "\"result\":\"selected\",\"region_id\":" + std::to_string(selected.id) +
 		",\"selection_rule\":" + jsonString(playerBotHuntSelectionRule(selected)) +
-		",\"route_rejection_counts\":" + routeFailureCounts() +
+		",\"route_rejection_counts\":" + routeFailureCounts() + "," +
+		planningAttribution(huntPlanningPass, huntPlanningScoringRevision) +
 		",\"atlas_site_id\":" + std::to_string(selected.atlasSiteId) + ",\"atlas_variant_id\":" +
 		std::to_string(selected.atlasVariantId) + ",\"atlas_pockets\":" + std::to_string(selected.atlasPocketCount) +
 		",\"atlas_spawns\":" + std::to_string(selected.atlasSpawnCount) + ",\"atlas_floors\":" +
 		std::to_string(selected.atlasFloorCount) + ",\"reason\":" + jsonString(reason) + ",\"center\":{\"x\":" +
 		std::to_string(selected.center.x) + ",\"y\":" + std::to_string(selected.center.y) + ",\"z\":" +
 		std::to_string(selected.center.z) + "}");
-	if (const auto planning = huntCoordinator.planningSession()) emitHuntRegionPlanning(*planning, position, "selected");
+	if (const auto planning = huntCoordinator.planningSession()) {
+		emitHuntRegionPlanning(*planning, position, "selected", huntPlanningPass, huntPlanningScoringRevision);
+	}
+	huntScoredCandidates.clear();
+	huntRouteCandidates.clear();
 	std::ostringstream speech;
 	speech << "Going hunting to " << selected.destination.x << ',' << selected.destination.y << ','
 	       << static_cast<uint16_t>(selected.destination.z) << ". Expecting: ";
