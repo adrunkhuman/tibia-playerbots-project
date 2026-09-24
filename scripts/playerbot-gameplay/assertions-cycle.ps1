@@ -387,6 +387,58 @@ function Assert-HealingResupplyEvents {
     }
 }
 
+function Assert-CargoLootEvents {
+    param([string]$Logs, [string]$Case)
+
+    $events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
+    $loot = @($events | Where-Object { $_.event -eq "action_result" -and $_.action -eq "loot" })
+    $replacement = @($events | Where-Object { $_.event -eq "action_result" -and $_.action -eq "loot_replace" })
+    $failures = @($events | Where-Object {
+        $_.event -eq "action_result" -and $_.result -eq "failed" -and
+        $_.action -in @("loot", "loot_replace", "loot_replace_recovery")
+    })
+    $capacityExit = @($events | Where-Object { $_.reason -eq "capacity" -and $_.action -eq "hunt_cycle" })
+    if ($failures.Count -ne 0 -or $capacityExit.Count -ne 0 -or
+        @($events | Where-Object { $_.event -eq "terminal" }).Count -ne 0) {
+        throw "Cargo case '$Case' produced a move failure, capacity exit, or terminal event."
+    }
+    switch ($Case) {
+        "currency" {
+            $discard = @($replacement | Where-Object {
+                $_.result -eq "success" -and $_.discarded_item_id -eq 2389 -and
+                $_.discarded_count -eq 1 -and $_.incoming_item_id -eq 2148
+            })
+            $coin = @($loot | Where-Object { $_.result -eq "success" -and $_.item_id -eq 2148 -and $_.count -eq 1 })
+            if ($discard.Count -ne 1 -or $coin.Count -ne 1) {
+                throw "One gold coin did not replace the full 3 gp/20 oz spear slot."
+            }
+        }
+        "partial" {
+            $partial = @($loot | Where-Object { $_.result -eq "success" -and $_.item_id -eq 2148 -and $_.count -eq 3 })
+            $remainder = @($loot | Where-Object { $_.result -eq "skipped" -and $_.reason -eq "no_capacity" -and $_.count -eq 7 })
+            if ($partial.Count -ne 1 -or $remainder.Count -ne 1 -or $replacement.Count -ne 0) {
+                throw "Weight-limited cargo did not retain the exact three-coin partial pickup."
+            }
+        }
+        "nested" {
+            $nested = @($loot | Where-Object {
+                $_.result -eq "success" -and $_.item_id -eq 2148 -and $_.count -eq 1 -and
+                $_.destination_container_item_id -eq 1987
+            })
+            if ($nested.Count -ne 1 -or $replacement.Count -ne 0) {
+                throw "Loot did not use the normally opened nested bag destination."
+            }
+        }
+        "protected" {
+            $noSlot = @($loot | Where-Object { $_.result -eq "skipped" -and $_.reason -eq "no_slot" })
+            if ($noSlot.Count -ne 1 -or $replacement.Count -ne 0 -or
+                @($loot | Where-Object { $_.result -eq "success" }).Count -ne 0) {
+                throw "Protected full-slot cargo was discarded or did not report no_slot."
+            }
+        }
+    }
+}
+
 function Assert-ValueLootEvents {
     param([string]$Logs)
 

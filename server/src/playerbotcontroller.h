@@ -110,8 +110,6 @@ namespace playerbot {
 	inline constexpr int32_t missingPotionUtility = 15;
 	inline constexpr int32_t foodPreferenceUtility = 20;
 	inline constexpr uint32_t returnCapacityThreshold = 30 * 100;
-	inline constexpr std::chrono::minutes huntCapacityPressureGrace(5);
-	inline constexpr std::chrono::minutes huntCapacityPressureMinimum(30);
 	inline constexpr uint32_t maximumServiceAttempts = 3;
 	// Prevent a rejected slotted-item move from blocking the service/depot loop.
 	inline constexpr std::chrono::seconds unavailableDispositionCooldown(60);
@@ -192,7 +190,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 			telemetry.logActionFailure(action, reason, position);
 		}
 
-		void logLootSuccess(uint16_t itemId, uint32_t count, uint32_t inventoryCount, const Position& position);
+		void logLootSuccess(const PlayerBotLootMoveVerification& verification, const Position& position);
 
 		uint32_t getSaleItemCount(const Player& player, uint16_t itemId) const;
 		Item* findActionableSlottedItem(const Player& player, uint16_t itemId, slots_t& slot) const;

@@ -30,6 +30,7 @@ F.levelEightMonsterName = "Playerbot Level Eight Target"
 F.deathMonsterName = "Playerbot Death Threat"
 F.spellTargetMonsterName = "Playerbot Spell Target"
 F.valueMonsterName = "Playerbot Food Value Corpse"
+F.cargoCoinStackMonsterName = "Playerbot Cargo Coin Stack"
 F.healingPotionCount = 3
 F.seedArmorId = 2464
 F.seedShieldId = 2530

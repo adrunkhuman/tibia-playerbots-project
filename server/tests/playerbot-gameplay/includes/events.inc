@@ -47,6 +47,23 @@ end
 
 F.inaccessibleCorpseDeath:register()
 
+F.cargoCorpseDeath = CreatureEvent("PlayerbotCargoCorpseDeath")
+
+function F.cargoCorpseDeath.onDeath(creature, corpse)
+    if os.getenv("PLAYERBOT_GAMEPLAY_MODE") ~= "cargo_partial" or
+        creature:getName() ~= F.cargoCoinStackMonsterName then
+        return true
+    end
+    assert(corpse, "partial cargo fixture lost its corpse")
+    for _, item in ipairs(corpse:getItems() or {}) do
+        assert(item:remove(), "partial cargo fixture could not normalize corpse contents")
+    end
+    assert(corpse:addItem(ITEM_GOLD_COIN, 10), "partial cargo fixture could not add ten coins")
+    return true
+end
+
+F.cargoCorpseDeath:register()
+
 F.supplyRecoveryCorpseDeath = CreatureEvent("PlayerbotSupplyRecoveryCorpseDeath")
 
 function F.supplyRecoveryCorpseDeath.onDeath(creature, corpse)

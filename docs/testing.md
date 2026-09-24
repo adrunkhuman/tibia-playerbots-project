@@ -13,7 +13,7 @@ For persistence checks, restart or recreate only the server with `--no-deps`. Re
 | Change | Run | Passing establishes | Does not establish |
 | --- | --- | --- | --- |
 | Documentation only | Check local links and command targets; run `git diff --check` | References and examples match the worktree | Runtime behavior |
-| Pure playerbot policy or telemetry parsing | `sh server/tests/playerbot_contracts.sh` and affected `scripts/test-playerbot-*-assertions.ps1` | Deterministic contracts and captured-log assertions | Loaded-world integration |
+| Pure playerbot policy or telemetry parsing | `sh server/tests/playerbot_contracts.sh`, `sh server/tests/playerbot_loot_contracts.sh` for cargo changes, and affected `scripts/test-playerbot-*-assertions.ps1` | Deterministic contracts and captured-log assertions | Loaded-world integration |
 | Fixtures or scenario isolation | `lua scripts/test-playerbot-fixture-isolation.lua` plus the affected Lua fixture check | Fixture setup is isolated and expected state is seeded | Ordinary autonomous behavior |
 | Server, Compose, or cross-stack behavior | Server smoke test below | Fresh provisioning, startup, lifecycle output, and ports | Gameplay or client compatibility |
 | Navigation or corpse looting | `pwsh -File scripts/test-playerbot-gameplay.ps1 -Focused -FullNavigation -CorpseLoot` | Integrated movement, recovery, corpse opening, and bounded loot failure paths | Whole-map routing or a progression soak |
@@ -22,7 +22,7 @@ For persistence checks, restart or recreate only the server with `--no-deps`. Re
 | One regression | `pwsh -File scripts/test-playerbot-gameplay.ps1 -Scenario <name>` | That catalog scenario only | Neighboring modes |
 | Protocol or gameplay-facing client | Smoke test plus manual client checklist below | Tested server/client interaction surface | Compatibility from login alone |
 
-Useful subsystem switches include `-Healing`, `-ValueLoot`, `-DeathTelemetry`, `-GoalArbitration`, `-CombatReadiness`, `-HuntRegionPlanning`, `-AdaptiveChallenge`, `-EquipmentPurchases` (including rope/shovel replenishment and nested-inventory duplicate protection), `-MainlandRewards`, `-OracleDeparture`, `-Depot`, `-SellLoot`, `-SpellTraining`, `-SpellUse`, `-SpellCalibration`, `-MagicTraining`, and `-MainlandLoop`. The accepted switches and scenario catalog are authoritative in [`scripts/test-playerbot-gameplay.ps1`](../scripts/test-playerbot-gameplay.ps1).
+Useful subsystem switches include `-Healing`, `-ValueLoot` (value replacement plus currency, partial-weight, nested-slot, and protected full-slot cargo), `-DeathTelemetry`, `-GoalArbitration`, `-CombatReadiness`, `-HuntRegionPlanning`, `-AdaptiveChallenge`, `-EquipmentPurchases` (including rope/shovel replenishment and nested-inventory duplicate protection), `-MainlandRewards`, `-OracleDeparture`, `-Depot`, `-SellLoot`, `-SpellTraining`, `-SpellUse`, `-SpellCalibration`, `-MagicTraining`, and `-MainlandLoop`. The accepted switches and scenario catalog are authoritative in [`scripts/test-playerbot-gameplay.ps1`](../scripts/test-playerbot-gameplay.ps1).
 
 `-SkipBuild` requires a known-current `angelion-server:latest` image and does not prove it matches the worktree. `-KeepStack` preserves the final stack for debugging. `-TimeoutSeconds` accepts 30–3600 seconds. Most focused scenarios use controlled state or destinations; map-derived planning modes improve integration evidence but still do not prove long-running progression.
 
@@ -53,6 +53,7 @@ On Linux, the C++ contract checks require a C++17 compiler. Lua fixture checks r
 
 ```sh
 sh server/tests/playerbot_contracts.sh
+sh server/tests/playerbot_loot_contracts.sh
 sh server/tests/playerbot_equipment_purchase_contracts.sh
 lua server/tests/playerbot_door_passages_contracts.lua
 lua scripts/test-playerbot-fixture-isolation.lua

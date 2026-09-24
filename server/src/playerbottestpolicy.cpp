@@ -72,7 +72,8 @@ const playerbot::PlayerBotTestPolicy& playerbot::playerBotTestPolicyFromEnvironm
 			 (std::strcmp(gameplayMode, "target_approach") == 0 || std::strcmp(gameplayMode, "target_approach_unreachable") == 0 ||
 			  std::strcmp(gameplayMode, "target_attacker_priority") == 0) ||
 			 std::strcmp(gameplayMode, "healing") == 0 || std::strcmp(gameplayMode, "healing_resupply") == 0 ||
-			 std::strcmp(gameplayMode, "value") == 0 || std::strcmp(gameplayMode, "departure_interrupt") == 0 ||
+			 std::strcmp(gameplayMode, "value") == 0 || std::strncmp(gameplayMode, "cargo_", 6) == 0 ||
+			 std::strcmp(gameplayMode, "departure_interrupt") == 0 ||
 			 std::strcmp(gameplayMode, "stamina_bonus") == 0 || std::strcmp(gameplayMode, "stamina_boundary") == 0 ||
 			 std::strcmp(gameplayMode, "stamina_normal") == 0 || std::strcmp(gameplayMode, "hunt_planning") == 0 || huntAreaArrivalFixture || remoteHuntFixture ||
 			 std::strcmp(gameplayMode, "adaptive_challenge") == 0 ||

@@ -38,7 +38,8 @@ function F.login.onLogin(player)
     end
 	F.selectHealthPotion(player)
     assert(mode == "transit_return" or mode == "mainland" or mode == "carlin_local_service" or mode == "cycle" or mode == "depot" or mode == "depot_risk_fallback" or mode == "slotted_loot_seller" or mode == "slotted_loot_no_seller" or mode == "sell_loot" or mode == "sell_loot_remote_depot" or mode == "navigation" or mode == "navigation_recovery" or mode == "carlin_service_route" or mode == "mutable_portal_route" or mode == "patrol_recovery" or mode == "target_approach" or mode == "target_approach_unreachable" or mode == "target_attacker_priority" or mode == "hunt_area_arrival" or mode == "remote_hunt" or mode == "corpse" or mode == "corpse_detour" or mode == "corpse_inaccessible" or mode == "death" or mode == "healing" or mode == "spell_use" or
-        mode == "healing_resupply" or mode == "value" or mode == "progression" or mode == "progression_bundle" or
+        mode == "healing_resupply" or mode == "value" or mode == "cargo_currency" or mode == "cargo_partial" or
+        mode == "cargo_nested" or mode == "cargo_protected" or mode == "progression" or mode == "progression_bundle" or
         mode == "progression_nested" or mode == "progression_resume" or mode == "progression_nested_resume" or
         mode == "progression_space" or mode == "arbitration" or mode == "arbitration_interrupt" or mode == "departure" or
         mode == "departure_interrupt" or mode == "departure_recovery" or mode == "spell_training" or
@@ -955,6 +956,35 @@ function F.login.onLogin(player)
     if mode == "corpse_detour" or mode == "corpse_inaccessible" then
         F.suppressNearbyMonsters(player:getId())
         F.PlayerbotSpawnInaccessibleCorpseMonster(player:getId())
+        return true
+    end
+    if mode == "cargo_currency" or mode == "cargo_partial" or mode == "cargo_nested" or mode == "cargo_protected" then
+        local backpack = player:getSlotItem(CONST_SLOT_BACKPACK)
+        assert(backpack and backpack:getId() == ITEM_BACKPACK, "cargo fixture requires the seeded backpack")
+        F.clearBackpack(backpack)
+        F.removeAll(player, ITEM_GOLD_COIN)
+        F.removeAll(player, 2389)
+        assert(player:setCapacity(100000), "cargo fixture could not provide setup carrying capacity")
+        if mode == "cargo_currency" then
+            F.seedProtectedCargo(backpack, 1, false)
+            assert(backpack:addItem(2389, 1), "currency cargo fixture could not add its 3 gp spear")
+            assert(backpack:getSize() == backpack:getCapacity(), "currency cargo fixture did not fill all slots")
+        elseif mode == "cargo_partial" then
+            F.seedProtectedCargo(backpack, 10, false)
+            local usedCapacity = player:getCapacity() - player:getFreeCapacity()
+            assert(player:setCapacity(usedCapacity + ItemType(ITEM_GOLD_COIN):getWeight() * 3),
+                "partial cargo fixture could not limit free capacity")
+        elseif mode == "cargo_nested" then
+            F.seedProtectedCargo(backpack, 0, true)
+            assert(backpack:getSize() == backpack:getCapacity(), "nested cargo fixture did not fill the root backpack")
+        else
+            F.seedProtectedCargo(backpack, 1, false)
+            assert(backpack:addItem(1949, 1), "protected cargo fixture could not add its unknown scroll")
+            assert(backpack:getSize() == backpack:getCapacity(), "protected cargo fixture did not fill all slots")
+        end
+        F.suppressNearbyMonsters(player:getId())
+        F.spawnCorpseMonster(player:getId(), mode == "cargo_partial" and F.cargoCoinStackMonsterName or F.lootMonsterName)
+        print("PLAYERBOT_GAMEPLAY_TEST " .. string.upper(mode) .. "_START")
         return true
     end
     if mode == "value" then
