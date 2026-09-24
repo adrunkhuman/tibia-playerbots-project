@@ -384,7 +384,8 @@ function F.login.onLogin(player)
         print("PLAYERBOT_GAMEPLAY_TEST " .. string.upper(mode) .. "_START")
         return true
     end
-    if mode ~= "hunt_planning" and mode ~= "hunt_area_arrival" and mode ~= "remote_hunt" and mode ~= "supply_recovery" then
+    if mode ~= "hunt_planning" and mode ~= "hunt_area_arrival" and mode ~= "remote_hunt" and mode ~= "supply_recovery" and
+        mode ~= "stamina_bonus" and mode ~= "stamina_boundary" and mode ~= "stamina_normal" then
         F.restoreRookgaardBaseline(player, mode ~= "cycle")
     end
 	F.selectHealthPotion(player)
@@ -453,7 +454,8 @@ function F.login.onLogin(player)
         print("PLAYERBOT_GAMEPLAY_TEST READINESS_" .. string.upper(mode:gsub("readiness_", "")) .. "_START")
         return true
     end
-    if mode == "hunt_planning" or mode == "hunt_area_arrival" or mode == "remote_hunt" or mode == "supply_recovery" then
+    if mode == "hunt_planning" or mode == "hunt_area_arrival" or mode == "remote_hunt" or mode == "supply_recovery" or
+        mode == "stamina_bonus" or mode == "stamina_boundary" or mode == "stamina_normal" then
         local carlin = Town(F.carlinTownId)
         assert(carlin and player:setTown(carlin) and player:setVocation(4),
             "hunt planning fixture could not select the Carlin Knight")
@@ -494,6 +496,13 @@ function F.login.onLogin(player)
             end
             addEvent(verifyIncome, 1000, player:getId(), 300)
             print("PLAYERBOT_GAMEPLAY_TEST SUPPLY_RECOVERY_START")
+            return true
+        end
+        if mode == "stamina_bonus" or mode == "stamina_boundary" or mode == "stamina_normal" then
+            local staminaMinutes = mode == "stamina_bonus" and 2520 or mode == "stamina_boundary" and 2401 or 2400
+            assert(player:setStamina(staminaMinutes), "stamina projection fixture could not set stamina")
+            F.suppressNearbyMonsters(player:getId())
+            print("PLAYERBOT_GAMEPLAY_TEST STAMINA_PROJECTION_START " .. staminaMinutes)
             return true
         end
         if mode == "hunt_planning" then F.suppressNearbyMonsters(player:getId()) end
@@ -629,13 +638,6 @@ function F.login.onLogin(player)
         F.suppressNearbyMonsters(player:getId())
         addEvent(F.verifyRemoteSellLoot, 500, player:getId(), 1200)
         print("PLAYERBOT_GAMEPLAY_TEST SELL_LOOT_REMOTE_DEPOT_START")
-        return true
-    end
-    if mode == "stamina_bonus" or mode == "stamina_boundary" or mode == "stamina_normal" then
-        local staminaMinutes = mode == "stamina_bonus" and 2520 or mode == "stamina_boundary" and 2401 or 2400
-        assert(player:setStamina(staminaMinutes), "stamina projection fixture could not set stamina")
-        F.suppressNearbyMonsters(player:getId())
-        print("PLAYERBOT_GAMEPLAY_TEST STAMINA_PROJECTION_START " .. staminaMinutes)
         return true
     end
     if mode == "death" then

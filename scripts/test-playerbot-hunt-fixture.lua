@@ -101,6 +101,11 @@ local function login(selectedMode, fault, starter)
         getCapacity = function() return seeded.cap * 100 end,
         getMoney = function() return 17 end, -- no money mutation API: fixture must preserve funds
         getBankBalance = function() return seeded.balance end,
+        setStamina = function(_, minutes)
+            assert(minutes == ({stamina_bonus = 2520, stamina_boundary = 2401, stamina_normal = 2400})[mode])
+            if fault == 'stamina_write' then return false end
+            return true
+        end,
     }
     local ok, reason = pcall(F.login.onLogin, player)
     if fault then assert(not ok, fault .. ' was accepted'); return tostring(reason) end
@@ -113,19 +118,25 @@ local function login(selectedMode, fault, starter)
     assert(health == seeded.health and position.x == seeded.posx and position.y == seeded.posy and position.z == seeded.posz)
     assert(level == (mode == 'remote_hunt' and 15 or 8))
     assert(inventory[7618] == 10 and inventory[8704] == 0)
-    assert(suppressed == (mode == 'hunt_planning' and 1 or 0))
+    local stamina = ({stamina_bonus = 2520, stamina_boundary = 2401, stamina_normal = 2400})[mode]
+    assert(suppressed == ((mode == 'hunt_planning' or stamina) and 1 or 0))
     assert(output[1]:find('HUNT_MAINLAND_LOADOUT_PASS ' .. mode, 1, true))
-    local start = mode == 'hunt_planning' and 'HUNT_PLANNING_START' or
+    local start = stamina and 'STAMINA_PROJECTION_START ' .. stamina or
+        mode == 'hunt_planning' and 'HUNT_PLANNING_START' or
         mode == 'hunt_area_arrival' and 'HUNT_AREA_ARRIVAL_START' or 'REMOTE_HUNT_START'
     assert(output[2] == 'PLAYERBOT_GAMEPLAY_TEST ' .. start)
 end
-for _, selectedMode in ipairs({'hunt_planning', 'hunt_area_arrival', 'remote_hunt'}) do
+for _, selectedMode in ipairs({'hunt_planning', 'hunt_area_arrival', 'remote_hunt',
+    'stamina_bonus', 'stamina_boundary', 'stamina_normal'}) do
     login(selectedMode, nil, false)
     login(selectedMode, nil, true)
     assert(login(selectedMode, 'unequipped'):find('did not equip seeded item', 1, true))
     assert(login(selectedMode, 'skill_write'):find('could not restore seeded skill', 1, true))
     assert(login(selectedMode, 'skill_verification'):find('wrong seeded skill', 1, true))
     assert(login(selectedMode, 'tool'):find('seeded backpack or tools', 1, true))
+    if selectedMode:find('stamina_', 1, true) then
+        assert(login(selectedMode, 'stamina_write'):find('could not set stamina', 1, true))
+    end
 end
 print = originalPrint
-print('Hunt fixture seeded mainland loadout/skills, funds/supplies, suppression and failure contracts passed.')
+print('Hunt and stamina fixtures seeded mainland loadout/skills, funds/supplies, suppression and failure contracts passed.')
