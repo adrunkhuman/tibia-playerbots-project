@@ -13,6 +13,8 @@ local modeValues = {
 
 local function pass(mode)
     print("PLAYERBOT_CONNECTIONLESS_TEST PASS mode=" .. mode)
+    -- Removal can leave no controller to flush subsequent server output.
+    io.flush()
 end
 
 local function getBot(playerId)
@@ -78,10 +80,10 @@ function login.onLogin(player)
         assert(player:teleportTo(Position(32097, 32219, 7)), "test position could not be restored")
         local backpack = player:getSlotItem(CONST_SLOT_BACKPACK)
         assert(backpack and backpack:getId() == ITEM_BACKPACK, "seeded backpack is missing")
-        assert(player:getSlotItem(CONST_SLOT_ARMOR):getId() == 2650, "seeded starter jacket is missing")
-        assert(not player:getSlotItem(CONST_SLOT_RIGHT), "starter shield slot is not empty")
-        assert(player:getSlotItem(CONST_SLOT_LEFT):getId() == 2382, "seeded starter club is missing")
-        assert(not player:getSlotItem(CONST_SLOT_FEET), "starter feet slot is not empty")
+        assert(player:getSlotItem(CONST_SLOT_ARMOR):getId() == 2464, "seeded chain armor is missing")
+        assert(player:getSlotItem(CONST_SLOT_RIGHT):getId() == 2530, "seeded copper shield is missing")
+        assert(player:getSlotItem(CONST_SLOT_LEFT):getId() == 2395, "seeded carlin sword is missing")
+        assert(player:getSlotItem(CONST_SLOT_FEET):getId() == 2643, "seeded leather boots are missing")
         assert(player:getItemCount(2120) == 1, "seeded rope is missing")
         assert(player:getItemCount(2554) == 1, "seeded shovel is missing")
         player:removeCondition(CONDITION_REGENERATION, CONDITIONID_DEFAULT)

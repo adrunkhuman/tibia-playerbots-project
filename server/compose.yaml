@@ -28,24 +28,46 @@ services:
         condition: service_healthy
     environment:
       MYSQL_PWD: angelion
+      PLAYERBOT_SEED_BOT_TWO: "true"
     command:
       - sh
       - -c
       - |
+        set -eu
+        verify_bot() {
+          count="$$(mariadb --host=database --user=angelion --batch --skip-column-names angelion -e "
+            SELECT COUNT(*) FROM player_bots
+            JOIN players ON players.id = player_bots.player_id
+            JOIN accounts ON accounts.id = players.account_id
+            WHERE players.name = '$$1' AND accounts.name = '$$2' AND players.deletion = 0;
+          ")"
+          if [ "$$count" != "1" ]; then
+            echo "$$1 identity collision or deletion prevents playerbot provisioning." >&2
+            exit 1
+          fi
+        }
+        case "$$PLAYERBOT_SEED_BOT_TWO" in
+          true|false) ;;
+          *) echo "Invalid PLAYERBOT_SEED_BOT_TWO value." >&2; exit 1 ;;
+        esac
         mariadb --host=database --user=angelion angelion < /schema/insertPlayerbots.sql
-        count="$$(mariadb --host=database --user=angelion --skip-column-names angelion -e "
-          SELECT COUNT(*) FROM player_bots
-          JOIN players ON players.id = player_bots.player_id
-          JOIN accounts ON accounts.id = players.account_id
-          WHERE players.name = 'Bot One' AND accounts.name = 'bot-one' AND players.deletion = 0;
-        ")"
-        if [ "$$count" != "1" ]; then
-          echo "Bot One identity collision or deletion prevents playerbot provisioning." >&2
-          exit 1
+        verify_bot 'Bot One' 'bot-one'
+        if [ "$$PLAYERBOT_SEED_BOT_TWO" = true ]; then
+          mariadb --host=database --user=angelion angelion < /schema/insertBotTwo.sql
+          verify_bot 'Bot Two' 'bot-two'
+        else
+          roster_count="$$(mariadb --host=database --user=angelion --batch --skip-column-names angelion -e '
+            SELECT COUNT(*) FROM player_bots;
+          ')"
+          if [ "$$roster_count" != "1" ]; then
+            echo "Single-bot fixture requires only Bot One registered; use a fresh disposable database volume." >&2
+            exit 1
+          fi
         fi
     restart: "no"
     volumes:
       - ./schema/insertPlayerbots.sql:/schema/insertPlayerbots.sql:ro
+      - ./schema/insertBotTwo.sql:/schema/insertBotTwo.sql:ro
 
   server:
     build: .

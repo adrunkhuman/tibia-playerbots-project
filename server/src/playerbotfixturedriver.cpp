@@ -9,6 +9,7 @@
 
 #include "actions.h"
 #include "condition.h"
+#include "database.h"
 #include "depotchest.h"
 #include "game.h"
 #include "house.h"
@@ -22,6 +23,8 @@
 #include "playerbothuntruntime.h"
 #include "playerbotserviceworkflow.h"
 #include "playerbotsurvivalruntime.h"
+#include "scheduler.h"
+#include "stats.h"
 #include "playerbotspellcalibration.h"
 
 extern Actions* g_actions;
@@ -394,6 +397,91 @@ std::vector<playerbot::PlayerBotFixtureEvent> playerbot::PlayerBotFixtureDriver:
 		events.push_back({"supply_budget_fixture", supply.str()});
 	}
 	return events;
+}
+
+void playerbot::PlayerBotFixtureDriver::runMultibotLifecycleProbe(Player& player, bool recovered,
+                                                                   std::function<bool()> queuedTurn)
+{
+	// Only the mounted two-bot fixture enables dispatcher-side manager intervention.
+	const char* mode = std::getenv("PLAYERBOT_MULTIBOT_CASE");
+	if (!mode || player.getName() != "Bot One") return;
+	const bool queuedDeath = std::strcmp(mode, "queued_death") == 0;
+	const bool pvpRemoval = std::strcmp(mode, "pvp_remove") == 0;
+	if ((queuedDeath || pvpRemoval) && !recovered) {
+		const uint32_t guid = player.getGUID();
+		std::cout << "PLAYERBOT_MULTIBOT " << (pvpRemoval ? "PVP_REMOVE" : "QUEUED_DEATH") << "_ARMED" << std::endl;
+		g_scheduler.addEvent(createSchedulerTask(3500, ([guid, pvpRemoval, turn = std::move(queuedTurn)] {
+			Player* victim = g_game.getPlayerByGUID(guid);
+			Player* attacker = g_game.getPlayerByName("Bot Two");
+			if (!victim || !victim->isPlayerBot() || !attacker || !attacker->isPlayerBot() || victim->isDead()) {
+				std::cout << "PLAYERBOT_MULTIBOT DEATH_PROBE_FAILED" << std::endl;
+				return;
+			}
+			Tile* tile = victim->getTile();
+			const Position position = victim->getPosition();
+			const bool protectedZone = tile->hasFlag(TILESTATE_PROTECTIONZONE);
+			const bool noPvpZone = tile->hasFlag(TILESTATE_NOPVPZONE);
+			const bool originalPvpZone = tile->hasFlag(TILESTATE_PVPZONE);
+			if (pvpRemoval) {
+				tile->resetFlag(TILESTATE_PROTECTIONZONE);
+				tile->resetFlag(TILESTATE_NOPVPZONE);
+				tile->setFlag(TILESTATE_PVPZONE);
+			}
+			// A dispatcher task already waiting before executeDeath reproduces the
+			// fatal-health/engine-death gap without changing production scheduling.
+			g_dispatcher.addTask(createTask(([guid, turn] {
+				Player* pending = g_game.getPlayerByGUID(guid);
+				std::cout << "PLAYERBOT_MULTIBOT "
+				          << (pending && pending->isDead() && turn() ? "DEAD_TURN_PASS" : "DEAD_TURN_FAIL") << std::endl;
+			})));
+			victim->drainHealth(attacker, victim->getHealth());
+			if (!pvpRemoval) return;
+			// executeDeath was enqueued by drainHealth; this cleanup runs after it.
+			g_dispatcher.addTask(createTask(([guid, position, protectedZone, noPvpZone, originalPvpZone] {
+				if (Tile* original = g_game.map.getTile(position)) {
+					if (!originalPvpZone) original->resetFlag(TILESTATE_PVPZONE);
+					if (protectedZone) original->setFlag(TILESTATE_PROTECTIONZONE);
+					if (noPvpZone) original->setFlag(TILESTATE_NOPVPZONE);
+				}
+				Player* restored = g_game.getPlayerByGUID(guid);
+				if (!restored || restored->isRemoved() || restored->isDead()) {
+					std::cout << "PLAYERBOT_MULTIBOT PVP_RESTORED_FAIL" << std::endl;
+					return;
+				}
+				std::cout << "PLAYERBOT_MULTIBOT PVP_RESTORED_PASS" << std::endl;
+				g_scheduler.addEvent(createSchedulerTask(1000, ([guid] {
+					Player* bot = g_game.getPlayerByGUID(guid);
+					const bool removed = bot && g_game.removeCreature(bot);
+					std::cout << "PLAYERBOT_MULTIBOT " << (removed ? "PVP_REMOVE_PASS" : "PVP_REMOVE_FAIL") << std::endl;
+				})));
+			})));
+		})));
+		return;
+	}
+	const bool pending = std::strcmp(mode, "cancel_pending") == 0;
+	const bool recovering = std::strcmp(mode, "cancel_recovery") == 0;
+	if (!pending && !recovering && std::strcmp(mode, "remove_manager") != 0) return;
+
+	uint32_t guid = player.getGUID();
+	if (pending) {
+		DBResult_ptr result = Database::getInstance().storeQuery(
+			"SELECT `players`.`id` FROM `player_bots` JOIN `players` ON `players`.`id` = `player_bots`.`player_id` "
+			"WHERE `players`.`name` = 'Bot Two' AND `players`.`deletion` = 0 LIMIT 1");
+		if (!result) {
+			std::cout << "PLAYERBOT_MULTIBOT CANCEL_PENDING_LOOKUP_FAILED" << std::endl;
+			return;
+		}
+		guid = result->getNumber<uint32_t>("id");
+	}
+	const char* label = pending ? "CANCEL_PENDING" : recovering ? "CANCEL_RECOVERY" : "REMOVE_MANAGER";
+	std::cout << "PLAYERBOT_MULTIBOT " << label << "_ARMED " << guid << std::endl;
+	auto removeFixture = [guid, label] {
+		const bool removed = g_playerBots.remove(guid);
+		const bool absent = !g_playerBots.remove(guid);
+		std::cout << "PLAYERBOT_MULTIBOT " << label
+		          << (removed && absent ? "_PASS " : "_FAIL ") << guid << std::endl;
+	};
+	g_scheduler.addEvent(createSchedulerTask(pending ? 100 : recovering ? 5000 : 3500, std::move(removeFixture)));
 }
 
 std::vector<playerbot::PlayerBotFixtureEvent> playerbot::PlayerBotFixtureDriver::runDoorPassagesContract(Player& player)

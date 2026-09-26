@@ -55,6 +55,7 @@ On Linux, the C++ contract checks require a C++17 compiler. Lua fixture checks r
 
 ```sh
 sh server/tests/playerbot_contracts.sh
+sh server/tests/playerbotlifecycle_contracts.sh
 sh server/tests/playerbothunttiming_contracts.sh
 sh server/tests/playerbotrouting_contracts.sh
 sh server/tests/playerbotshortcutheuristic_contracts.sh
@@ -128,13 +129,36 @@ docker compose -f server/compose.yaml up --build --detach
 docker compose -f server/compose.yaml logs --tail 200 playerbot-setup server
 ```
 
-Confirm MariaDB is healthy, the map loads, the server reports online, and `127.0.0.1:7171` and `127.0.0.1:7172` accept connections. `playerbot-setup` must exit successfully, exactly one valid `Bot One` registration must exist, and server JSONL must contain a playerbot `lifecycle` event with `status="online"`.
+Confirm MariaDB is healthy, the map loads, the server reports online, and `127.0.0.1:7171` and `127.0.0.1:7172` accept connections. `playerbot-setup` must exit successfully, one valid registration must exist for each of `Bot One` and `Bot Two`, and server JSONL must contain an `online` playerbot lifecycle event for each distinct GUID/controller in the same server run. Activation is staggered, so the server-online banner can precede Bot Two's online event.
 
 The [`Server CI`](../.github/workflows/server-ci.yml) workflow's `server-smoke` job performs this fresh-stack check for `server/**` and workflow changes. It does not execute gameplay actions.
 
+## Two-bot lifecycle and provisioning
+
+```powershell
+pwsh -File scripts/test-playerbot-provisioning.ps1
+pwsh -File scripts/test-playerbot-multibot.ps1
+```
+
+The provisioning check uses an isolated, disposable database-only Compose project. It checks the seeds, idempotence, and rejection of SQL errors or conflicting identities.
+
+The multibot check covers independent lifecycle, interactions, login protection, and persistence. It requires Python 3 and OpenSSL, owns the disposable `angelion` stack, and refuses existing containers. Persistence restarts use `--no-deps` to avoid provisioning changes.
+
+Use `-Case shared_npc` or another listed case for a targeted check, `-SkipBuild` with a current image, and `-KeepStack` to retain the final case. Logs go to `artifacts/playerbot-multibot/` or `-ArtifactsPath`.
+
+For the non-destructive network check against an already-running normal stack:
+
+```sh
+python scripts/test-playerbot-login.py
+```
+
+This checks human login/logout and bot takeover rejection with the local defaults, not graphical-client gameplay. `--self-test` checks the packet codec and local public-key extraction without connecting.
+
+For observations, group telemetry by server run and controller. Summary counters are cumulative: use differences within each controller segment, not a sum of every summary.
+
 ## Gameplay suite
 
-The driver builds or reuses the server image, starts disposable MariaDB, restores the ordered schema and development characters before each scenario, recreates the server, and asserts against streamed JSONL telemetry:
+Existing gameplay and connectionless overlays require a single-bot database and seed only Bot One. The gameplay driver restores that baseline before each scenario, recreates the server, and asserts against streamed JSONL telemetry:
 
 ```powershell
 pwsh -File scripts/test-playerbot-gameplay.ps1
@@ -160,4 +184,4 @@ For protocol or gameplay-facing client changes, manually test:
 - combat and death;
 - logout and persistence.
 
-Watch both logs for parser errors, unknown opcodes, restart loops, and runaway memory use. A successful login alone proves nothing beyond login. Use a human-controlled character on `admin` / `admin` for manual checks; do not attempt to take control of `Bot One`.
+Watch both logs for parser errors, unknown opcodes, restart loops, and runaway memory use. A successful login alone proves nothing beyond login. Use a human-controlled character on `admin` / `admin` for manual checks; do not attempt to take control of either registered bot.

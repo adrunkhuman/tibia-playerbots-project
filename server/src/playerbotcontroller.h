@@ -141,7 +141,6 @@ namespace playerbot {
 		Position(32117, 32090, 9),
 		Position(32103, 32124, 8),
 	}};
-	inline constexpr const char* botAccountName = "bot-one";
 
 	void emitPlayerbotEvent(const std::string& playerName, uint32_t playerGuid, const std::string& controllerId,
 	                        const char* event, const Position& position, const std::string& fields = {});

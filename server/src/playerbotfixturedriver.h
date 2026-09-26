@@ -5,6 +5,7 @@
 #include "playerbottestpolicy.h"
 #include "position.h"
 
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -98,6 +99,7 @@ namespace playerbot {
 			uint64_t observedMagicTrainingMana(uint64_t engineObservation) const;
 			std::vector<PlayerBotFixtureEvent> runAdaptiveChallenge(Player& player);
 			std::vector<PlayerBotFixtureEvent> runDepotRiskFallbackContract() const;
+			void runMultibotLifecycleProbe(Player& player, bool recovered, std::function<bool()> queuedTurn);
 			std::vector<PlayerBotFixtureEvent> runDoorPassagesContract(Player& player);
 			std::vector<PlayerBotFixtureEvent> runShovelPassagesContract(Player& player);
 			std::vector<PlayerBotFixtureEvent> runSpellCalibration(Player& player);

@@ -326,8 +326,8 @@ void mainLoader(int, char*[], ServiceManager* services)
 		std::cout << ">> Built hunt atlas with " << atlas.spawnCount << " hostile spawns, "
 		          << atlas.pocketCount << " pockets, " << atlas.siteCount << " sites, and "
 		          << atlas.variantCount << " variants (" << atlas.buildTimeUs / 1000 << " ms)" << std::endl;
-		if (!g_playerBots.spawn("Bot One")) {
-			std::cout << "[Warning - mainLoader] Unable to log in playerbot Bot One; continuing without it." << std::endl;
+		if (!g_playerBots.start()) {
+			std::cout << "[Warning - mainLoader] Unable to load playerbot roster; continuing without bots." << std::endl;
 		}
 	}
 

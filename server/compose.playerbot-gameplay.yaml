@@ -1,4 +1,8 @@
 services:
+  playerbot-setup:
+    environment:
+      PLAYERBOT_SEED_BOT_TWO: "false"
+
   database:
     volumes:
       - ./schema/insertPlayerbots.sql:/test-schema/04-playerbots.sql:ro
