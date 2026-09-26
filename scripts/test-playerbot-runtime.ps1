@@ -86,6 +86,81 @@ try {
         throw 'Completed output from an exited log follower was discarded.'
     }
 
+    # An always-completed reader must not keep a wait inside one poll past its deadline.
+    Reset-ServerLogCollection
+    $reader = [pscustomobject]@{ Calls = 0 }
+    $reader | Add-Member -MemberType ScriptMethod -Name ReadLineAsync -Value {
+        $this.Calls++
+        return [System.Threading.Tasks.Task]::FromResult('hot producer line')
+    }
+    $serverLogProcess = [pscustomobject]@{ HasExited = $true; StandardOutput = $reader; StandardError = $reader }
+    $serverLogOutputTask = $reader.ReadLineAsync()
+    $serverLogErrorTask = $null
+    Update-ServerLogs
+    if ($reader.Calls -gt ($serverLogPollMaxLines + 1)) {
+        throw 'A single poll consumed more than the configured line limit.'
+    }
+    $currentScenarioDeadline = [DateTime]::UtcNow.AddMilliseconds(250)
+    $clock = [System.Diagnostics.Stopwatch]::StartNew()
+    $timedOut = $false
+    try { Wait-ForLog -Pattern 'never matches' | Out-Null } catch { $timedOut = $_.Exception -is [System.TimeoutException] }
+    if (-not $timedOut -or $clock.Elapsed.TotalSeconds -gt 2 -or $reader.Calls -lt 2) {
+        throw 'An always-completed follower prevented the wait deadline from being enforced.'
+    }
+    $serverLogProcess = $null
+    $serverLogOutputTask = $null
+    Reset-ServerLogCollection
+    $serverLogMaxBytes = 180
+    Add-ServerLogLine '{"component":"playerbot","event":"hunt_region_scan","phase":"candidate","candidate":{"name":"test"}}'
+    if ($serverPlayerbotEvents.Count -ne 0 -or $serverLogLines.Count -ne 1) {
+        throw 'Verbose candidate evidence was not retained only as raw logs.'
+    }
+    $budgetFailed = $false
+    try { Add-ServerLogLine ('x' * 180) } catch { $budgetFailed = $_.Exception.Message -match 'capture exceeded' }
+    if (-not $budgetFailed -or $serverLogLines.Count -ne 1 -or -not $serverLogLimitExceeded) {
+        throw 'The log capture budget did not reject a line before retaining it.'
+    }
+    $budgetDirectory = Save-ScenarioFailureArtifacts -Name 'log budget' -Status 'fail' -Exception ([InvalidOperationException]::new('log budget')) -StartedAt ([DateTime]::UtcNow)
+    if ((Get-Content (Join-Path $budgetDirectory 'server-stream.log') -Raw) -notmatch '"phase":"candidate"') {
+        throw 'Partial raw diagnostics were lost after a log budget failure.'
+    }
+    $oldBuffer = $serverLogBuffer
+    $oldLines = $serverLogLines
+    $oldEvents = $serverPlayerbotEvents
+    Reset-ServerLogCollection
+    $serverLogMaxBytes = 128MB
+    if ([object]::ReferenceEquals($oldBuffer, $serverLogBuffer) -or
+        [object]::ReferenceEquals($oldLines, $serverLogLines) -or
+        [object]::ReferenceEquals($oldEvents, $serverPlayerbotEvents) -or
+        $serverLogBytes -ne 0 -or $serverLogLimitExceeded -or $serverLogLines.Count -ne 0 -or $serverLogBuffer.Length -ne 0) {
+        throw 'Reset did not release the capture and clear its budget state.'
+    }
+    $oldBuffer = $oldLines = $oldEvents = $null
+    Add-ServerLogLine '{"component":"playerbot","event":"hunt_region_scan","phase":"candidate","candidate":{"name":"test"}}'
+    foreach ($eventName in @('hunt_region_candidate', 'hunt_planning_slice', 'hunt_planning_budget', 'hunt_route_connection')) {
+        Add-ServerLogLine ('{"component":"playerbot","event":"' + $eventName + '","candidate_phase":"scored"}')
+    }
+    if ($serverPlayerbotEvents.Count -ne 0 -or $serverLogLines.Count -ne 5) {
+        throw 'Current verbose hunt event families were retained as parsed objects or lost from raw evidence.'
+    }
+    $serverLogProcess = [pscustomobject]@{ HasExited = $true }
+    $currentScenarioDeadline = [DateTime]::UtcNow.AddSeconds(2)
+    $currentCandidateLogs = Wait-ForPlayerbotEvent { $_.event -eq 'hunt_region_candidate' }
+    if ($currentCandidateLogs -notmatch '"event":"hunt_region_candidate"') {
+        throw 'A generic wait could not find current raw-only hunt candidates.'
+    }
+    $candidateLogs = Wait-ForPlayerbotEvent { $_.candidate.name -eq 'test' }
+    if ($candidateLogs -notmatch '"phase":"candidate"') {
+        throw 'A generic event wait could not find verbose raw-only evidence.'
+    }
+    Reset-ServerLogCollection
+    Add-ServerLogLine '{"component":"playerbot","event":"action_result","action":"hunt_waypoint","result":"reached"}'
+    $countLogs = Wait-ForPlayerbotEventCount -Action 'hunt_waypoint' -Count 1
+    if ($countLogs -notmatch '"result":"reached"') {
+        throw 'Event-count waits did not inspect captured raw events.'
+    }
+    $serverLogProcess = $null
+
     Reset-ServerLogCollection
     Add-ServerLogLine '{"component":"playerbot","server_run_id":"prior","sequence":1,"bot":"Bot One","event":"lifecycle","status":"online"}'
     Add-ServerLogLine '{"component":"playerbot","server_run_id":"current","sequence":1,"bot":"Bot One","event":"lifecycle","status":"online"}'
