@@ -42,6 +42,7 @@ PlayerBotTelemetry::DecisionTimer PlayerBotTelemetry::recordDecision()
 
 void PlayerBotTelemetry::emit(const char* event, const Position& position, const std::string& fields) const
 {
+	if (terminal) return;
 	emitPlayerbotEvent(playerName, playerGuid, controllerId, event, position, fields);
 }
 

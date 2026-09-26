@@ -276,6 +276,14 @@ void PlayerBotController::start(const Position& position, bool recovered, uint32
 		emitFixtureEvents(fixtureDriver.runSpellCalibration(*controlledPlayer), position);
 		emitFixtureEvents(fixtureDriver.runAdaptiveChallenge(*controlledPlayer), position);
 		emitFixtureEvents(fixtureDriver.runDepotRiskFallbackContract(), position);
+		std::weak_ptr<PlayerBotController> weakController = weak_from_this();
+		fixtureDriver.runMultibotLifecycleProbe(*controlledPlayer, recovered, [weakController] {
+			if (auto controller = weakController.lock()) {
+				controller->navigate();
+				return true;
+			}
+			return false;
+		});
 		emitFixtureEvents(fixtureDriver.runDoorPassagesContract(*controlledPlayer), position);
 		emitFixtureEvents(fixtureDriver.runShovelPassagesContract(*controlledPlayer), position);
 	}
@@ -1689,8 +1697,8 @@ void PlayerBotController::navigate()
 		return;
 	}
 	if (player->isDead()) {
-		onDeath(*player, nullptr, nullptr);
-		stop("controlled_player_dead", player->getPosition());
+		// changeHealth queues executeDeath on the dispatcher. That authoritative
+		// hook still has the killer and must own death telemetry and recovery.
 		return;
 	}
 

@@ -149,7 +149,9 @@ pwsh -File scripts/bootstrap-client.ps1
   at the cost of a simpler reset, rebuild, or restart. Use a clean volume when
   useful unless the task explicitly requires persistence testing.
 - Preserve the seeded development characters after database resets:
-  `GOD Admin`, `Rook Tester`, and the server-controlled `Bot One`.
+  `GOD Admin`, `Rook Tester`, and the server-controlled `Bot One` and `Bot Two`.
+  Normal seeds are level 8 Knights in Carlin and Thais respectively; existing
+  single-bot fixture overlays deliberately seed only Bot One.
 - Keep `playerbot-setup` ahead of the server in the Compose dependency chain.
   It owns idempotent bot provisioning and the `player_bots` registry, and must
   fail rather than take over an unrelated same-named or deleted character.
@@ -162,9 +164,13 @@ pwsh -File scripts/bootstrap-client.ps1
 
 ## Playerbots
 
-- `Bot One` is the current database-backed, server-controlled `Player`. It has
-  no client connection or external bot API, and a human client must not take
-  control while the server owns it.
+- `Bot One` and `Bot Two` are database-backed, server-controlled `Player`s. They
+  have no client connection or external bot API. The manager reads `player_bots`
+  at startup and reserves identities through activation, recovery, startup failure,
+  and terminal stop; a human client must not take control of a reserved identity.
+- Keep controllers, recovery callbacks, announcement preferences, and hunt cooldowns
+  independent. Share world topology, the hunt atlas, validated route caches, and
+  the existing cooperative planning budget.
 - Preserve normal player persistence for bots. A clean shutdown must save them
   through the existing player save path rather than a parallel persistence
   mechanism.
@@ -224,9 +230,10 @@ docker compose -f server/compose.yaml logs playerbot-setup server
 
 Confirm that MariaDB is healthy, the map loads, the server reports online, and
 ports `7171` and `7172` accept local connections. Confirm that
-`playerbot-setup` exits successfully, exactly one valid `Bot One` registration
-exists, and the server emits a valid JSONL `playerbot` `lifecycle` event with
-status `online` for `Bot One`.
+`playerbot-setup` exits successfully, one valid registration exists for each of
+`Bot One` and `Bot Two`, and the server emits distinct valid JSONL `playerbot`
+`lifecycle` events with status `online` for both in the same server run.
+Single-bot fixture overlays instead require exactly the Bot One registration.
 
 For playerbot navigation or looting changes, also run the focused checks:
 

@@ -739,6 +739,9 @@ void Creature::onDeath()
 	if (droppedCorpse) {
 		g_game.removeCreature(this, false);
 	}
+	if (Player* player = getPlayer(); player && player->isPlayerBot()) {
+		g_playerBots.onDeathComplete(*player);
+	}
 }
 
 bool Creature::dropCorpse(Creature* lastHitCreature, Creature* mostDamageCreature, bool lastHitUnjustified, bool mostDamageUnjustified)

@@ -1,0 +1,9 @@
+# Disposable two-character integration fixture. Never combine with the single-bot gameplay override.
+services:
+  server:
+    environment:
+      PLAYERBOT_GAMEPLAY_MODE: ""
+      PLAYERBOT_MULTIBOT_CASE: "${PLAYERBOT_MULTIBOT_CASE:-startup}"
+      PLAYERBOT_RELOG_DELAY_SECONDS: "${PLAYERBOT_RELOG_DELAY_SECONDS:-1}"
+    volumes:
+      - ./tests/playerbot_multibot.lua:/app/data/scripts/creaturescripts/player_login_logout_message.lua:ro

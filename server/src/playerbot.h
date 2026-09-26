@@ -12,6 +12,7 @@
 #define FS_PLAYERBOT_H
 
 #include "position.h"
+#include "playerbotlifecycle.h"
 
 #include <cstdint>
 #include <chrono>
@@ -60,11 +61,16 @@ class PlayerBotManager
 	public:
 		~PlayerBotManager();
 
-		bool spawn(const std::string& name);
+		// Called on the dispatcher. Reserve the entire database roster before activating anyone.
+		bool start();
+		bool remove(uint32_t guid);
+		void shutdown();
+		void onPlayerRemoved(const Player& player);
 		bool owns(const std::string& name) const;
 		bool handleLogControl(Player& sender, const std::string& receiver, const std::string& text);
 		bool announcementsEnabled(uint32_t playerGuid) const;
 		void onDeath(const Player& player, const Creature* killer, const Creature* mostDamageKiller);
+		void onDeathComplete(const Player& player);
 		void onHealthDrain(const Player& player, uint32_t damage);
 		void onLevelRestoration(const Player& player, uint32_t health, uint32_t mana);
 		void onCombatDamage(Creature* attacker, const Creature& target, uint32_t damage);
@@ -72,25 +78,41 @@ class PlayerBotManager
 		void onNpcReply(uint32_t playerId, uint32_t npcId, uint8_t type, const std::string& text);
 
 	private:
-		bool load(const std::string& name, bool recovered);
-		void emitLifecycle(const char* status, const Position& position, const std::string& fields = {}) const;
+		struct Record {
+			uint32_t guid = 0;
+			uint32_t accountId = 0;
+			std::string name;
+			std::shared_ptr<PlayerBotController> controller;
+			uint32_t lifecycleEventId = 0;
+			uint64_t lifecycleGeneration = 0;
+			uint32_t consecutiveDeaths = 0;
+			std::string activeControllerId;
+			PlayerBotLifecycleState state;
+			bool awaitingDeathRemoval = false;
+			bool removingForRecovery = false;
+			std::map<uint64_t, std::chrono::steady_clock::time_point> huntRegionCooldowns;
+			std::chrono::steady_clock::time_point lastSpawnedAt;
+		};
+		using RecordPtr = std::shared_ptr<Record>;
+		RecordPtr byName(const std::string& name) const;
+		RecordPtr byPlayerId(uint32_t id) const;
+		bool registered(const Record& record) const;
+		bool load(const RecordPtr& record, bool recovered);
+		void activate(uint32_t guid, uint64_t generation);
+		void cancelEvent(Record& record);
 		void emitLifecycleFor(const std::string& name, uint32_t playerGuid, const std::string& relatedControllerId,
 		                      const char* status, const Position& position, const std::string& fields = {}) const;
-		void scheduleRecovery(uint32_t delay, uint32_t relogAttempt);
-		void recover(uint32_t generation, uint32_t relogAttempt);
-		void finalizeAbandonedDeath(uint32_t generation);
+		void scheduleRecovery(const RecordPtr& record, uint32_t delay, uint32_t relogAttempt);
+		void recover(uint32_t guid, uint64_t generation, uint32_t relogAttempt);
+		void finalizeAbandonedDeath(uint32_t guid, uint64_t generation);
+		void emitLifecycle(const Record& record, const char* status, const Position& position,
+		                   const std::string& fields = {}) const;
 
-		std::shared_ptr<PlayerBotController> controller;
-		std::string controlledName;
-		uint32_t controlledGuid = 0;
-		uint32_t recoveryEventId = 0;
-		uint32_t recoveryGeneration = 0;
-		uint32_t consecutiveDeaths = 0;
-		uint64_t controllerGeneration = 0;
-		std::string activeControllerId;
+		std::map<uint32_t, RecordPtr> records;
 		playerbot::PlayerBotAnnouncementSettings announcementSettings;
-		std::map<uint64_t, std::chrono::steady_clock::time_point> huntRegionCooldowns;
-		std::chrono::steady_clock::time_point lastSpawnedAt;
+		PlayerBotLifecycleClock lifecycleClock;
+		uint64_t nextControllerGeneration = 0;
+		bool stopping = false;
 };
 
 extern PlayerBotManager g_playerBots;

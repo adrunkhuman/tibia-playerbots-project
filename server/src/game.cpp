@@ -124,6 +124,8 @@ void Game::setGameState(GameState_t newState)
 
 		case GAME_STATE_SHUTDOWN: {
 			g_globalEvents->execute(GLOBALEVENT_SHUTDOWN);
+			// Save bots via their normal logout path before stopping the dispatcher.
+			g_playerBots.shutdown();
 
 			//kick all players that are still online
 			auto it = players.begin();
@@ -557,6 +559,9 @@ bool Game::removeCreature(Creature* creature, bool isLogout/* = true*/)
 {
 	if (creature->isRemoved()) {
 		return false;
+	}
+	if (Player* player = creature->getPlayer(); player && player->isPlayerBot()) {
+		g_playerBots.onPlayerRemoved(*player);
 	}
 
 	Tile* tile = creature->getTile();
@@ -4517,6 +4522,7 @@ void Game::updateWorldTime()
 void Game::shutdown()
 {
 	std::cout << "Shutting down..." << std::flush;
+	g_playerBots.shutdown();
 
 	g_scheduler.shutdown();
 	g_databaseTasks.shutdown();
