@@ -18,6 +18,7 @@
  */
 
 #include "otpch.h"
+#include "playerbotroutechanges.h"
 
 #include "items.h"
 #include "spells.h"
@@ -235,6 +236,7 @@ void Items::clear()
 
 bool Items::reload()
 {
+	PlayerBotRouteChanges::invalidate();
 	clear();
 	loadFromOtb("data/items/items.otb");
 

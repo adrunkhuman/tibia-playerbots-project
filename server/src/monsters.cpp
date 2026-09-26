@@ -18,6 +18,7 @@
  */
 
 #include "otpch.h"
+#include "playerbotroutechanges.h"
 
 #include "monsters.h"
 #include "monster.h"
@@ -87,6 +88,7 @@ bool Monsters::loadFromXml(bool reloading /*= false*/)
 
 bool Monsters::reload()
 {
+	PlayerBotRouteChanges::invalidate();
 	loaded = false;
 
 	scriptInterface.reset();

@@ -97,7 +97,7 @@ PlayerBotHuntRuntimeOutcome PlayerBotHuntCoordinator::completeTransportWork(
 }
 PlayerBotHuntRuntimeOutcome PlayerBotHuntCoordinator::completeScoreWork(const std::vector<PlayerBotHuntRuntimeScoreObservation>& observations,
 	uint64_t elapsedUs) { return huntRuntime.completeScoreWork(observations, elapsedUs); }
-std::optional<PlayerBotHuntPlanningSession> PlayerBotHuntCoordinator::planningSession() const { return huntRuntime.planningSession(); }
+const PlayerBotHuntPlanningSession* PlayerBotHuntCoordinator::planningSession() const { return huntRuntime.planningSession(); }
 void PlayerBotHuntCoordinator::completePlanningSelection() { huntRuntime.completePlanningSelection(); }
 bool PlayerBotHuntCoordinator::beginRouteSelection(uint64_t pass, uint64_t revision,
     const std::vector<PlayerBotHuntRegion>& candidates)

@@ -20,6 +20,8 @@
 #ifndef FS_ITEM_H
 #define FS_ITEM_H
 
+#include "playerbotroutechanges.h"
+
 #include "cylinder.h"
 #include "thing.h"
 #include "items.h"
@@ -606,13 +608,16 @@ class Item : virtual public Thing
 			return attributes->getIntAttr(type);
 		}
 		void setIntAttr(itemAttrTypes type, int64_t value) {
+			if (type == ITEM_ATTRIBUTE_ACTIONID || type == ITEM_ATTRIBUTE_UNIQUEID) PlayerBotRouteChanges::changed(getPosition(), PlayerBotRouteChanges::Cause::Attribute);
 			getAttributes()->setIntAttr(type, value);
 		}
 		void increaseIntAttr(itemAttrTypes type, int64_t value) {
+			if (type == ITEM_ATTRIBUTE_ACTIONID || type == ITEM_ATTRIBUTE_UNIQUEID) PlayerBotRouteChanges::changed(getPosition(), PlayerBotRouteChanges::Cause::Attribute);
 			getAttributes()->increaseIntAttr(type, value);
 		}
 
 		void removeAttribute(itemAttrTypes type) {
+			if (type == ITEM_ATTRIBUTE_ACTIONID || type == ITEM_ATTRIBUTE_UNIQUEID) PlayerBotRouteChanges::changed(getPosition(), PlayerBotRouteChanges::Cause::Attribute);
 			if (attributes) {
 				attributes->removeAttribute(type);
 			}

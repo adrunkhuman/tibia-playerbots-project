@@ -414,6 +414,12 @@ function Assert-HuntRegionPlanningEvents {
 		$expectedThreshold = [Math]::Max(1, [Math]::Ceiling($expectedHealthLoss / $reserve.minimum_potion_healing))
 		$reserveFormulaValid = $reserve.return_threshold -eq $expectedThreshold
 	}
+	# A valid paid/free NPC journey may beat every walking-only candidate.
+	# Topology reachability describes walking, not the whole transport graph.
+	$selectedAccessValid = $selectedCandidate.Count -eq 1 -and (
+		($selectedCandidate[0].topology_reachable -and $selectedCandidate[0].topology_travel_steps -ge 1) -or
+		($selectedCandidate[0].outbound_npc_travel -and $null -ne $selectedCandidate[0].outbound_fare -and
+		 $selectedCandidate[0].outbound_fare -ge 0 -and $selectedCandidate[0].estimated_travel_seconds -gt 0))
 	if (-not $buildLifecycleValid -or -not $cacheReuseValid -or $transportYields.Count -lt 1 -or $scoringYields.Count -lt 1 -or
 		$cancelled.Count -ne 1 -or $staleRevision.Count -ne 1 -or -not $snapshotAttributionValid -or
 		-not $terminalAttributionValid -or $topologyScans.Count -lt 1 -or $routeValidations.Count -lt 1 -or
@@ -423,7 +429,7 @@ function Assert-HuntRegionPlanningEvents {
 		-not $selectedCandidate[0].route_validated -or
 		($budgetCandidates.Count -gt 0 -and -not $selectedCandidate[0].supply_budget_fits) -or
 		($budgetCandidates.Count -eq 0 -and $selectedCandidate[0].supply_expected_potions -ne $minimumPotions) -or
-		-not $selectedCandidate[0].topology_reachable -or $selectedCandidate[0].topology_travel_steps -lt 1 -or
+		-not $selectedAccessValid -or
 		-not $selectedCandidate[0].reachable -or $selectedCandidate[0].route_danger_cost -lt 0 -or
 		$outsideLocalFixture.Count -lt 1 -or $completedTopology.Count -lt 1 -or
 		-not $reserveFormulaValid) {

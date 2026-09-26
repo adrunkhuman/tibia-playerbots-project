@@ -15,10 +15,24 @@
 #include <vector>
 
 #include "position.h"
+#include "playerbotshortcutheuristic.h"
 
 class Map;
 struct PlayerBotNavigationGoal;
 struct PlayerBotNavigationCostPolicy;
+
+// A snapshot owns only values. valid()/estimate() synchronize pending map
+// notifications; ordinary changes retain validity. After a shortcut change,
+// restart the search with a fresh snapshot (including its queued priorities).
+class PlayerBotTopologyHeuristic {
+	friend class PlayerBotTopology;
+public:
+	bool valid() const;
+	uint32_t estimate(Position position) const;
+private:
+	std::shared_ptr<const PlayerBotShortcutHeuristic> potential;
+	uint64_t generation = 0, shortcutRevision = 0;
+};
 
 class PlayerBotTopologyDistances {
 	friend class PlayerBotTopology;
@@ -60,6 +74,20 @@ struct PlayerBotTopologyRoute {
 	std::optional<PlayerBotTopologyPortal> portal;
 	uint32_t dangerCost = 0;
 	double maximumHealthLossPerSecond = 0;
+};
+
+struct PlayerBotTopologyItinerary {
+	Position destination;
+	std::vector<PlayerBotTopologyPortal> portals;
+	uint32_t dangerCost = 0;
+	double maximumHealthLossPerSecond = 0;
+	// Includes the start and destination nodes, even for a zero-crossing route.
+	std::vector<uint32_t> nodes;
+};
+
+struct PlayerBotTopologyEdge {
+	uint32_t destinationNode = 0;
+	PlayerBotTopologyPortal portal;
 };
 
 struct PlayerBotTopologyComponentArc {
@@ -108,6 +136,11 @@ class PlayerBotTopology
 
 		void build(const Map& map);
 		void invalidate();
+		PlayerBotTopologyHeuristic heuristicTo(const std::vector<Position>& exactGoals) const;
+		std::optional<uint32_t> walkNode(const Position& position) const;
+		// Directed adjacency for graph-hop corridor expansion. References and
+		// node IDs remain valid only until the next topology build/invalidation.
+		const std::vector<PlayerBotTopologyEdge>& outgoing(uint32_t node) const;
 		std::optional<uint32_t> walkComponent(const Position& position) const;
 		bool sameWalkComponent(const Position& left, const Position& right) const;
 		bool sameWalkNode(const Position& left, const Position& right) const;
@@ -115,10 +148,20 @@ class PlayerBotTopology
 		                                                const std::set<Position>& blockedPositions,
 		                                                bool canUseRope = true, bool canUseShovel = true,
 		                                                uint32_t playerLevel = std::numeric_limits<uint32_t>::max(),
-		                                                const PlayerBotNavigationCostPolicy* costPolicy = nullptr) const;
+		                                                const PlayerBotNavigationCostPolicy* costPolicy = nullptr,
+		                                                uint64_t* expandedNodes = nullptr) const;
+		// Retain the full sequence of crossings; an empty sequence means the
+		// selected destination is in the starting walk piece.
+		std::optional<PlayerBotTopologyItinerary> routeToAny(
+		    const Position& start, const std::vector<Position>& destinations,
+		    const std::set<Position>& blockedPositions, bool canUseRope = true, bool canUseShovel = true,
+		    uint32_t playerLevel = std::numeric_limits<uint32_t>::max(),
+		    const PlayerBotNavigationCostPolicy* costPolicy = nullptr, uint64_t* expandedNodes = nullptr,
+		    const std::set<std::pair<uint32_t, uint32_t>>* excludedArcs = nullptr) const;
 		PlayerBotTopologyDistances distancesFrom(const Position& start, bool canUseRope = true,
 		                                               bool canUseShovel = true,
-		                                               uint32_t playerLevel = std::numeric_limits<uint32_t>::max()) const;
+		                                               uint32_t playerLevel = std::numeric_limits<uint32_t>::max(),
+		                                               uint64_t* expandedNodes = nullptr) const;
 		std::optional<uint32_t> distanceTo(const PlayerBotTopologyDistances& distances,
 		                                   const Position& destination) const;
 		std::optional<uint32_t> distanceTo(const PlayerBotTopologyDistances& distances,
@@ -134,10 +177,11 @@ class PlayerBotTopology
 		uint64_t generation() const { return topologyGeneration; }
 
 	private:
-		struct Edge {
-			uint32_t destinationNode = 0;
-			PlayerBotTopologyPortal portal;
-		};
+		friend class PlayerBotTopologyHeuristic;
+		using Edge = PlayerBotTopologyEdge;
+		void synchronizeShortcuts() const;
+		mutable PlayerBotShortcutIndex shortcutIndex;
+		Position minimumPosition, maximumPosition;
 		struct ComponentEdge {
 			uint32_t destination = 0;
 			PlayerBotTopologyPortal portal;

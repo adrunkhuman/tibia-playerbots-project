@@ -49,6 +49,7 @@ void PlayerBotHuntRouteSelection::advanceCandidate()
 	depotIndex = 0;
 	suppliers.clear();
 	supplierIndex = 0;
+	searchIncomplete = false;
 	stage = PlayerBotHuntRouteStage::Outbound;
 }
 
@@ -56,7 +57,9 @@ PlayerBotHuntRouteResult PlayerBotHuntRouteSelection::reject(PlayerBotHuntRegion
 {
 	candidate.suitable = false;
 	++failureCounts[candidate.rejectionReason.empty() ? "unspecified" : candidate.rejectionReason];
-	rejectedVariants.push_back(candidate.atlasVariantId);
+	// An exhausted search can be retried on the next planning pass. Do not
+	// turn missing evidence into the ordinary unreachable-region cooldown.
+	if (!searchIncomplete) rejectedVariants.push_back(candidate.atlasVariantId);
 	PlayerBotHuntRouteResult result;
 	result.accepted = result.yield = true;
 	result.completedCandidate = std::move(candidate);
@@ -106,6 +109,7 @@ PlayerBotHuntRouteResult PlayerBotHuntRouteSelection::observe(const PlayerBotHun
 		return result;
 	};
 	PlayerBotHuntRegion routed = *current;
+	searchIncomplete = searchIncomplete || observation.searchIncomplete;
 	const PlayerBotNavigationRiskProfile risk;
 	const bool safe = observation.reached &&
 	    playerBotNavigationRiskAccepts(risk, observation.dangerCost, observation.peakDanger);
@@ -119,7 +123,7 @@ PlayerBotHuntRouteResult PlayerBotHuntRouteSelection::observe(const PlayerBotHun
 		if (observation.travelSeconds > 0)
 			routed.reconcileTravel(observation.huntDurationSeconds, observation.travelSeconds,
 		        observation.staminaMultiplier);
-		if (!observation.reached) routed.rejectionReason = "route_unreachable";
+		if (!observation.reached) routed.rejectionReason = searchIncomplete ? "route_search_incomplete" : "route_unreachable";
 		else if (!safe) routed.rejectionReason = observation.dangerCost >
 		    static_cast<uint32_t>(risk.maximumRouteHealthLoss * risk.healthLossCost) ?
 		    "route_danger_above_tolerance" : "route_peak_danger_above_tolerance";
@@ -135,7 +139,7 @@ PlayerBotHuntRouteResult PlayerBotHuntRouteSelection::observe(const PlayerBotHun
 		}
 		if (!safe) {
 			if (++depotIndex == depots.size()) {
-				routed.rejectionReason = "safe_depot_exit_unavailable";
+				routed.rejectionReason = searchIncomplete ? "depot_route_search_incomplete" : "safe_depot_exit_unavailable";
 				return reject(std::move(routed));
 			}
 			return continuation(true);
@@ -177,7 +181,7 @@ PlayerBotHuntRouteResult PlayerBotHuntRouteSelection::observe(const PlayerBotHun
 		stage = PlayerBotHuntRouteStage::Final;
 		return continuation(false);
 	case PlayerBotHuntRouteStage::RejectSupply:
-		routed.rejectionReason = "recovery_supply_route_unavailable";
+		routed.rejectionReason = searchIncomplete ? "supply_route_search_incomplete" : "recovery_supply_route_unavailable";
 		return reject(std::move(routed));
 	case PlayerBotHuntRouteStage::Final:
 		routed.supplyProfile = observation.supplyProfile;

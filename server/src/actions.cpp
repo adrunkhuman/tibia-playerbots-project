@@ -18,6 +18,7 @@
  */
 
 #include "otpch.h"
+#include "playerbotroutechanges.h"
 
 #include "actions.h"
 #include "bed.h"
@@ -58,6 +59,7 @@ void Actions::clearMap(ActionUseMap& map, bool fromLua)
 
 void Actions::clear(bool fromLua)
 {
+	PlayerBotRouteChanges::invalidate();
 	clearMap(useItemMap, fromLua);
 	clearMap(uniqueItemMap, fromLua);
 	clearMap(actionItemMap, fromLua);

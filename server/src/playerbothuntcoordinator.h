@@ -119,7 +119,7 @@ class PlayerBotHuntCoordinator
 		    const std::vector<PlayerBotHuntRuntimeTransportObservation>& observations);
 		PlayerBotHuntRuntimeOutcome completeScoreWork(const std::vector<PlayerBotHuntRuntimeScoreObservation>& observations,
 		                                             uint64_t elapsedUs);
-		std::optional<PlayerBotHuntPlanningSession> planningSession() const;
+		const PlayerBotHuntPlanningSession* planningSession() const;
 		void completePlanningSelection();
 		bool beginRouteSelection(uint64_t pass, uint64_t revision, const std::vector<PlayerBotHuntRegion>& candidates);
 		std::optional<PlayerBotHuntRouteRequest> nextRouteRequest();

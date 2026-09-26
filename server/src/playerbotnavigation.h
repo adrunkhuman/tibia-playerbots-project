@@ -24,6 +24,9 @@
 #include "position.h"
 
 class Player;
+class PlayerBotPathSearch;
+class PlayerBotTopologyHeuristic;
+class PlayerBotRouteCorridor;
 class Item;
 class Tile;
 
@@ -84,6 +87,27 @@ struct PlayerBotNavigationGoal {
 	}
 	bool operator!=(const PlayerBotNavigationGoal& other) const { return !(*this == other); }
 };
+
+// Lower bound only for same-floor ordinary walking (cardinal 10, diagonal 30,
+// door 20, nonnegative danger). Never use it for unrestricted redirect edges.
+inline uint32_t playerBotOrdinaryRemainingCost(const Position& from, const PlayerBotNavigationGoal& goal)
+{
+	if (goal.type == PlayerBotNavigationGoalType::AnyOf) {
+		uint32_t lowest = UINT32_MAX;
+		for (const Position& candidate : goal.positions) {
+			if (candidate.z == from.z) {
+				lowest = std::min(lowest, (Position::getDistanceX(from, candidate) +
+				    Position::getDistanceY(from, candidate)) * 10u);
+			}
+		}
+		return lowest == UINT32_MAX ? 0 : lowest;
+	}
+	if (Position::getDistanceZ(from, goal.position) > goal.rangeZ) return 0;
+	const uint32_t dx = Position::getDistanceX(from, goal.position);
+	const uint32_t dy = Position::getDistanceY(from, goal.position);
+	return ((dx > goal.rangeX ? dx - goal.rangeX : 0) +
+	        (dy > goal.rangeY ? dy - goal.rangeY : 0)) * 10u;
+}
 
 inline bool playerBotNpcTravelUsesLocalApproach(const Position& current, const Position& provider,
                                                  int32_t maximumDistance)
@@ -256,6 +280,14 @@ class PlayerBotNavigator
 		                                   const PlayerBotNavigationCostPolicy* costPolicy = nullptr,
 		                                   PlayerBotNavigationCostSummary* costSummary = nullptr,
 		                                   bool sameFloorOnly = false) const;
+		std::optional<PlayerBotNavigationResult> advance(Player& player, PlayerBotPathSearch& search,
+		    const std::set<Position>& blockedPositions, uint64_t slice,
+		    const PlayerBotNavigationCostPolicy* costPolicy = nullptr, bool sameFloorOnly = false,
+		    const PlayerBotTopologyHeuristic* heuristic = nullptr,
+		    const PlayerBotRouteCorridor* corridor = nullptr) const;
+		// Recheck a retained portal against live tiles without changing the recorded step.
+		bool validateStep(Player& player, Position from, const PlayerBotNavigationStep& step,
+		                  const std::set<Position>& blockedPositions) const;
 		bool resolveMove(Player& player, const Position& from, Direction direction,
 		                 const std::set<Position>& blockedPositions, PlayerBotNavigationStep& step) const;
 		bool resolveShovelPassage(Player& player, const Position& from,

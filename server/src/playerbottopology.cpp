@@ -4,6 +4,7 @@
 #include "playerbottopology.h"
 
 #include "playerbotnavigation.h"
+#include "playerbotroutechanges.h"
 
 #include "housetile.h"
 #include "item.h"
@@ -101,6 +102,7 @@ PlayerBotTopology& PlayerBotTopology::instance()
 void PlayerBotTopology::invalidate()
 {
 	++topologyGeneration;
+	shortcutIndex.invalidate();
 	liveMap = nullptr;
 	walkNodes.clear();
 	nodeComponents.clear();
@@ -115,8 +117,20 @@ void PlayerBotTopology::build(const Map& map)
 {
 	invalidate();
 	liveMap = &map;
+	PlayerBotRouteChanges::setGeometryObserver([](Position position, bool all) {
+		auto& index = PlayerBotTopology::instance().shortcutIndex;
+		if (all) index.invalidate();
+		else index.changed(position);
+	});
+	minimumPosition = Position(UINT16_MAX, UINT16_MAX, 0);
+	maximumPosition = Position(0, 0, 0);
 	size_t walkableTiles = 0;
-	map.forEachTile([&walkableTiles](const Tile& tile) {
+	map.forEachTile([this, &walkableTiles](const Tile& tile) {
+		const Position& p = tile.getPosition();
+		minimumPosition.x = std::min(minimumPosition.x, p.x);
+		minimumPosition.y = std::min(minimumPosition.y, p.y);
+		maximumPosition.x = std::max(maximumPosition.x, p.x);
+		maximumPosition.y = std::max(maximumPosition.y, p.y);
 		if (isStaticWalkTile(tile)) ++walkableTiles;
 	});
 	std::unordered_set<uint64_t> redirectedDestinations;
@@ -333,6 +347,74 @@ void PlayerBotTopology::build(const Map& map)
 			componentEdges[sourceComponent].push_back({destinationComponent, edge.portal});
 		}
 	}
+	synchronizeShortcuts();
+}
+
+void PlayerBotTopology::synchronizeShortcuts() const
+{
+	if (!liveMap) return;
+	// This global relaxation is revision-checked separately. Its refresh must
+	// not add unrelated map tiles to an enclosing detailed-search dependency watch.
+	PlayerBotRouteChanges::IgnoreReads ignoreReads;
+	shortcutIndex.refresh([&](auto visit) {
+		liveMap->forEachTile([&](const Tile& tile) { visit(tile.getPosition()); });
+	}, [&](Position p) {
+		std::vector<PlayerBotShortcut> result;
+		const Tile* tile = liveMap->getTile(p);
+		if (!tile) return result;
+		if (tile->hasFlag(TILESTATE_FLOORCHANGE)) {
+			const int32_t dx = int32_t(tile->hasFlag(TILESTATE_FLOORCHANGE_EAST)) -
+			    int32_t(tile->hasFlag(TILESTATE_FLOORCHANGE_WEST)) +
+			    2 * int32_t(tile->hasFlag(TILESTATE_FLOORCHANGE_EAST_ALT));
+			const int32_t dy = int32_t(tile->hasFlag(TILESTATE_FLOORCHANGE_SOUTH)) -
+			    int32_t(tile->hasFlag(TILESTATE_FLOORCHANGE_NORTH)) +
+			    2 * int32_t(tile->hasFlag(TILESTATE_FLOORCHANGE_SOUTH_ALT));
+			result = playerBotFloorShortcuts(p, tile->hasFlag(TILESTATE_FLOORCHANGE_DOWN), dx, dy);
+		}
+		if (const Teleport* teleport = tile->getTeleportItem()) {
+			result.push_back({p, teleport->getDestPos()});
+		}
+		return result;
+	});
+}
+
+PlayerBotTopologyHeuristic PlayerBotTopology::heuristicTo(const std::vector<Position>& exactGoals) const
+{
+	synchronizeShortcuts();
+	PlayerBotTopologyHeuristic result;
+	result.generation = topologyGeneration;
+	if (!liveMap) return result; // A stable zero potential still permits live fallback.
+	result.shortcutRevision = shortcutIndex.revision();
+	result.potential = std::make_shared<const PlayerBotShortcutHeuristic>(
+	    exactGoals, shortcutIndex.shortcuts(), minimumPosition, maximumPosition);
+	return result;
+}
+
+bool PlayerBotTopologyHeuristic::valid() const
+{
+	const auto& topology = PlayerBotTopology::instance();
+	topology.synchronizeShortcuts();
+	if (generation != topology.topologyGeneration) return false;
+	if (!potential) return !topology.liveMap;
+	return topology.liveMap && shortcutRevision == topology.shortcutIndex.revision();
+}
+
+uint32_t PlayerBotTopologyHeuristic::estimate(Position position) const
+{
+	return potential && valid() ? potential->estimate(position) : 0;
+}
+
+std::optional<uint32_t> PlayerBotTopology::walkNode(const Position& position) const
+{
+	const auto node = walkNodes.find(positionKey(position));
+	if (node == walkNodes.end()) return std::nullopt;
+	return node->second;
+}
+
+const std::vector<PlayerBotTopologyEdge>& PlayerBotTopology::outgoing(uint32_t node) const
+{
+	static const std::vector<PlayerBotTopologyEdge> empty;
+	return node < edges.size() ? edges[node] : empty;
 }
 
 std::optional<uint32_t> PlayerBotTopology::walkComponent(const Position& position) const
@@ -357,7 +439,8 @@ bool PlayerBotTopology::sameWalkNode(const Position& left, const Position& right
 }
 
 PlayerBotTopologyDistances PlayerBotTopology::distancesFrom(const Position& start, bool canUseRope,
-	                                                         bool canUseShovel, uint32_t playerLevel) const
+	                                                         bool canUseShovel, uint32_t playerLevel,
+	                                                         uint64_t* expandedNodes) const
 {
 	PlayerBotTopologyDistances result;
 	result.generation = topologyGeneration;
@@ -370,6 +453,7 @@ PlayerBotTopologyDistances PlayerBotTopology::distancesFrom(const Position& star
 	while (!open.empty()) {
 		const uint32_t current = open.front();
 		open.pop();
+		if (expandedNodes) ++*expandedNodes;
 		for (const Edge& edge : edges[current]) {
 			if (!canTraversePortal(liveMap, edge.portal, canUseRope, canUseShovel) ||
 			    edge.portal.minimumLevel > playerLevel) continue;
@@ -477,7 +561,7 @@ bool PlayerBotTopology::reachable(
 std::optional<PlayerBotTopologyRoute> PlayerBotTopology::route(
 	const Position& start, const Position& destination, const std::set<Position>& blockedPositions,
 	bool canUseRope, bool canUseShovel, uint32_t playerLevel,
-	const PlayerBotNavigationCostPolicy* costPolicy) const
+	const PlayerBotNavigationCostPolicy* costPolicy, uint64_t* expandedNodes) const
 {
 	const auto startEntry = walkNodes.find(positionKey(start));
 	const auto destinationEntry = walkNodes.find(positionKey(destination));
@@ -505,6 +589,7 @@ std::optional<PlayerBotTopologyRoute> PlayerBotTopology::route(
 		const QueueEntry currentEntry = open.top();
 		open.pop();
 		if (currentEntry.cost != costs[currentEntry.node]) continue;
+		if (expandedNodes) ++*expandedNodes;
 		const uint32_t current = currentEntry.node;
 		if (current == destinationNode) break;
 		for (const Edge& edge : edges[current]) {
@@ -538,4 +623,83 @@ std::optional<PlayerBotTopologyRoute> PlayerBotTopology::route(
 	    static_cast<uint32_t>(std::min<uint64_t>(static_cast<uint64_t>(dangerCosts[destinationNode]) +
 	        (costPolicy ? costPolicy->dangerCost(destination, 1000) : 0), std::numeric_limits<uint32_t>::max())),
 	    std::max(maximumDangers[destinationNode], destinationDanger)};
+}
+
+std::optional<PlayerBotTopologyItinerary> PlayerBotTopology::routeToAny(
+	const Position& start, const std::vector<Position>& destinations, const std::set<Position>& blockedPositions,
+	bool canUseRope, bool canUseShovel, uint32_t playerLevel,
+	const PlayerBotNavigationCostPolicy* costPolicy, uint64_t* expandedNodes,
+	const std::set<std::pair<uint32_t, uint32_t>>* excludedArcs) const
+{
+	const auto startEntry = walkNodes.find(positionKey(start));
+	if (startEntry == walkNodes.end()) return std::nullopt;
+	std::map<uint32_t, Position> goals;
+	for (const Position& destination : destinations) {
+		if (const auto entry = walkNodes.find(positionKey(destination)); entry != walkNodes.end()) {
+			goals.emplace(entry->second, destination);
+		}
+	}
+	if (goals.empty()) return std::nullopt;
+	const uint32_t startNode = startEntry->second;
+	if (auto same = goals.find(startNode); same != goals.end()) {
+		const double danger = costPolicy ? costPolicy->dangerAt(same->second) : 0;
+		return PlayerBotTopologyItinerary{same->second, {}, 0, danger, {startNode}};
+	}
+	using QueueEntry = std::pair<uint64_t, uint32_t>;
+	std::priority_queue<QueueEntry, std::vector<QueueEntry>, std::greater<QueueEntry>> open;
+	std::vector<uint64_t> costs(edges.size(), UINT64_MAX);
+	std::vector<uint32_t> dangerCosts(edges.size(), 0);
+	std::vector<double> maximumDangers(edges.size(), 0);
+	struct Parent { uint32_t node; PlayerBotTopologyPortal portal; };
+	std::vector<std::optional<Parent>> parents(edges.size());
+	costs[startNode] = 0;
+	open.emplace(0, startNode);
+	while (!open.empty()) {
+		const auto [cost, current] = open.top();
+		open.pop();
+		if (cost != costs[current]) continue;
+		if (expandedNodes) ++*expandedNodes;
+		if (auto goal = goals.find(current); goal != goals.end()) {
+			std::vector<PlayerBotTopologyPortal> portals;
+			std::vector<uint32_t> nodes{current};
+			for (uint32_t node = current; node != startNode; node = parents[node]->node) {
+				portals.push_back(parents[node]->portal);
+				nodes.push_back(parents[node]->node);
+			}
+			std::reverse(portals.begin(), portals.end());
+			std::reverse(nodes.begin(), nodes.end());
+			const Position destination = goal->second;
+			const uint64_t finalDanger = uint64_t(dangerCosts[current]) +
+			    (costPolicy ? costPolicy->dangerCost(destination, 1000) : 0);
+			return PlayerBotTopologyItinerary{destination, std::move(portals),
+			    static_cast<uint32_t>(std::min<uint64_t>(finalDanger, UINT32_MAX)),
+			    std::max(maximumDangers[current], costPolicy ? costPolicy->dangerAt(destination) : 0), std::move(nodes)};
+		}
+		for (const Edge& edge : edges[current]) {
+			if (excludedArcs && excludedArcs->count({current, edge.destinationNode})) continue;
+			const auto& portal = edge.portal;
+			if (blockedPositions.count(portal.approach) || blockedPositions.count(portal.target) ||
+			    blockedPositions.count(portal.destination) ||
+			    !canTraversePortal(liveMap, portal, canUseRope, canUseShovel) ||
+			    portal.minimumLevel > playerLevel) continue;
+			// These endpoints must actually be visited. Their peak danger is a
+			// necessary safety test, unlike estimated exposure over a whole sector.
+			if (costPolicy && (costPolicy->dangerAt(portal.approach) > costPolicy->risk.maximumHealthLossPerSecond ||
+			    costPolicy->dangerAt(portal.destination) > costPolicy->risk.maximumHealthLossPerSecond)) continue;
+			const uint64_t edgeDanger = costPolicy ?
+			    uint64_t(costPolicy->dangerCost(portal.approach, costPolicy->topologyExposureMs)) +
+			        costPolicy->dangerCost(portal.destination, costPolicy->topologyExposureMs) : 0;
+			const uint32_t danger = static_cast<uint32_t>(std::min<uint64_t>(edgeDanger, UINT32_MAX));
+			const uint64_t next = cost + topologyEdgeMovementCost + danger;
+			if (next >= costs[edge.destinationNode]) continue;
+			costs[edge.destinationNode] = next;
+			dangerCosts[edge.destinationNode] = static_cast<uint32_t>(std::min<uint64_t>(
+			    uint64_t(dangerCosts[current]) + danger, UINT32_MAX));
+			maximumDangers[edge.destinationNode] = std::max(maximumDangers[current], costPolicy ?
+			    std::max(costPolicy->dangerAt(portal.approach), costPolicy->dangerAt(portal.destination)) : 0);
+			parents[edge.destinationNode] = Parent{current, portal};
+			open.emplace(next, edge.destinationNode);
+		}
+	}
+	return std::nullopt;
 }

@@ -20,6 +20,8 @@
 #ifndef FS_TILE_H
 #define FS_TILE_H
 
+#include "playerbotroutechanges.h"
+
 #include "cylinder.h"
 #include "item.h"
 #include "tools.h"
@@ -210,9 +212,11 @@ class Tile : public Cylinder
 			return hasBitSet(flag, this->flags);
 		}
 		void setFlag(uint32_t flag) {
+			if ((this->flags & flag) != flag) PlayerBotRouteChanges::changed(getPosition(), PlayerBotRouteChanges::Cause::TileFlag);
 			this->flags |= flag;
 		}
 		void resetFlag(uint32_t flag) {
+			if (this->flags & flag) PlayerBotRouteChanges::changed(getPosition(), PlayerBotRouteChanges::Cause::TileFlag);
 			this->flags &= ~flag;
 		}
 

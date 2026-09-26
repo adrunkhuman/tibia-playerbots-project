@@ -218,10 +218,11 @@ class PlayerBotHuntRuntime
 		                         std::chrono::steady_clock::time_point now) { activate(std::move(region), player, now); }
 		PlayerBotHuntRuntimeOutcome cancelPlanning();
 		bool planningActive() const { return planning.has_value(); }
-		std::optional<PlayerBotHuntPlanningSession> planningSession() const
+		// Borrow only within the current dispatcher call; cancellation or completion
+		// destroys the session. Telemetry must not copy thousands of scored regions.
+		const PlayerBotHuntPlanningSession* planningSession() const
 		{
-			if (planning) return *planning;
-			return std::nullopt;
+			return planning ? &*planning : nullptr;
 		}
 
 		void beginCycle(std::chrono::steady_clock::time_point now, uint32_t durationSeconds);
