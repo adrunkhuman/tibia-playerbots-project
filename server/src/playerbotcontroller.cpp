@@ -11,9 +11,12 @@
 #include "otpch.h"
 
 #include "playerbotcontroller.h"
+#include "playerbotdangersamplekey.h"
+#include "playerbotplanningbudget.h"
 #include "playerbothuntregionadapter.h"
 #include "playerbotnpccapabilities.h"
 #include "playerbottopology.h"
+#include "playerbotroutecache.h"
 
 #include <tuple>
 
@@ -43,14 +46,50 @@ PlayerBotNavigationCostPolicy PlayerBotController::navigationCostPolicy(const Pl
 	const PlayerBotEquipmentPlayerSnapshot playerFacts = PlayerBotEquipmentAdapter::player(player);
 	const PlayerBotEquipmentLoadout loadout = PlayerBotEquipmentAdapter::loadout(player);
 	const PlayerBotCombatProfile combat = equipmentPolicy.combatProfile(playerFacts, loadout);
-	auto cache = std::make_shared<std::map<Position, double>>();
+	struct LocalSample {
+		double danger;
+		PlayerBotRouteChanges::Watch watch;
+	};
+	struct LocalSamples {
+		uint64_t revision = 0;
+		std::map<Position, LocalSample> samples;
+	};
+	auto local = std::make_shared<LocalSamples>();
 	PlayerBotNavigationCostPolicy policy;
 	policy.topologyExposureMs = static_cast<uint32_t>(std::min<uint64_t>(
 	    static_cast<uint64_t>(player.getStepDuration()) * 16, std::numeric_limits<uint32_t>::max()));
-	policy.expectedHealthLossPerSecond = [combat, cache](const Position& position) {
-		if (const auto found = cache->find(position); found != cache->end()) return found->second;
-		const double danger = PlayerBotHuntRegionAdapter::travelDanger(combat, position);
-		cache->emplace(position, danger);
+	policy.expectedHealthLossPerSecond = [combat, local](const Position& position) {
+		// The shared LRU belongs to serialized game/dispatcher execution.
+		static PlayerBotRouteCache<PlayerBotDangerSampleKey, double, PlayerBotDangerSampleKeyHash> samples(
+		    128 * 1024 * 1024, 262144);
+		const uint64_t revision = PlayerBotHuntRegionAdapter::getCacheRevision();
+		if (local->revision != revision) {
+			local->samples.clear();
+			local->revision = revision;
+		}
+		if (revision == 0) return PlayerBotHuntRegionAdapter::travelDanger(combat, position);
+		if (auto found = local->samples.find(position); found != local->samples.end()) {
+			if (found->second.watch.valid()) {
+				PlayerBotRouteChanges::absorb(found->second.watch);
+				return found->second.danger;
+			}
+			local->samples.erase(found);
+		}
+		const PlayerBotDangerSampleKey key(revision, position, combat);
+		PlayerBotRouteChanges::Watch watch;
+		double danger;
+		bool sharedHit = false;
+		{
+			// A shared hit must also populate the local watch, so later local
+			// hits preserve LOS dependencies of each enclosing route segment.
+			PlayerBotRouteChanges::Scope scope(watch);
+			if (const double* cached = samples.lookup(key)) {
+				danger = *cached;
+				sharedHit = true;
+			} else danger = PlayerBotHuntRegionAdapter::travelDanger(combat, position);
+		}
+		if (!sharedHit) samples.insert(key, danger, watch, 0);
+		local->samples.emplace(position, LocalSample{danger, std::move(watch)});
 		return danger;
 	};
 	return policy;
@@ -273,11 +312,15 @@ void PlayerBotController::schedule(uint32_t interval)
 	const uint64_t generation = ++scheduledTurnGeneration;
 	scheduledTurnDeadline = deadline;
 	std::weak_ptr<PlayerBotController> weakController = shared_from_this();
-	scheduledTurnEvent = g_scheduler.addEvent(createSchedulerTask(interval, ([weakController, generation]() {
+	scheduledTurnEvent = g_scheduler.addEvent(createSchedulerTask(interval, ([weakController, generation, interval]() {
 		if (std::shared_ptr<PlayerBotController> controller = weakController.lock()) {
 			if (controller->scheduledTurnGeneration != generation) return;
 			controller->scheduledTurnEvent = 0;
+			controller->executingTurnDelayMs = interval;
+			controller->executingTurnLateUs = PlayerBotHuntSliceTiming::latenessUs(controller->scheduledTurnDeadline,
+			    std::chrono::steady_clock::now());
 			controller->navigate();
+			controller->executingTurnDelayMs.reset();
 		}
 	})));
 }
@@ -383,6 +426,11 @@ void PlayerBotController::emitFixtureEvents(const std::vector<playerbot::PlayerB
 
 void PlayerBotController::cancelHuntPlanning(const char* reason, const Position& position)
 {
+	// An in-flight selection is charged by its scope guard after the call ends.
+	// Queued requests must not retain a place after planning is abandoned.
+	PlayerBotPlanningBudget& budget = playerBotHuntPlanningBudget();
+	if (!budget.isActive(playerId)) budget.cancel(playerId, PlayerBotPlanningBudget::Clock::now());
+	huntTravelWork.reset();
 	const PlayerBotHuntRuntimeOutcome outcome = huntCoordinator.cancelPlanning();
 	if (telemetry.terminalLogged() || outcome.planningPass == 0) return;
 	telemetry.emit("hunt_region_scan", position, "\"phase\":\"cancelled\",\"reason\":" +
@@ -419,6 +467,8 @@ void PlayerBotController::stop(const char* reason, const Position& position)
 void PlayerBotController::pause(const Position& position)
 {
 	if (!turnRouter.running()) return;
+	PlayerBotPlanningBudget& budget = playerBotHuntPlanningBudget();
+	if (!budget.isActive(playerId)) budget.cancel(playerId, PlayerBotPlanningBudget::Clock::now());
 	const char* previous = turnRouter.stateName();
 	turnRouter.pause();
 	telemetry.emit("state_transition", position, std::string("\"from\":") + jsonString(previous) +
@@ -1234,11 +1284,25 @@ PlayerBotHuntReturnCoverageContext PlayerBotController::huntReturnCoverageContex
 
 PlayerBotNavigationRoutePlan PlayerBotController::planHuntTravelRoute(
 	Player& player, const Position& source, const Position& destination,
-	const std::set<Position>& blockedPositions, bool estimateOnly) const
+	const std::set<Position>& blockedPositions, bool estimateOnly, PlayerBotHuntRouteTiming* timing) const
 {
+	const auto walkingStarted = std::chrono::steady_clock::now();
 	PlayerBotNavigationRoutePlan walking = planCompleteNavigationRoute(player, source, destination, blockedPositions);
+	const auto npcStarted = std::chrono::steady_clock::now();
 	auto paid = planNpcTravelRoute(player, source, destination, blockedPositions,
 	                              playerBotNavigationMaximumExpandedNodes, estimateOnly);
+	if (timing) {
+		++timing->attempts;
+		timing->walkingTime += npcStarted - walkingStarted;
+		timing->npcTime += std::chrono::steady_clock::now() - npcStarted;
+		timing->walkingExpandedNodes += walking.metrics.expandedNodes;
+		timing->walkingReached += walking.metrics.result == PlayerBotNavigationResult::Reached;
+		if (paid) {
+			++timing->npcReturned;
+			timing->npcReturnedExpandedNodes += paid->metrics.expandedNodes;
+			timing->npcReached += paid->metrics.result == PlayerBotNavigationResult::Reached;
+		}
+	}
 	const PlayerBotNavigationRiskProfile risk;
 	auto safe = [&risk](const PlayerBotNavigationRoutePlan& route) {
 		return route.metrics.result == PlayerBotNavigationResult::Reached &&

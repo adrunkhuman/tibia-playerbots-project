@@ -32,25 +32,38 @@ function Invoke-RawCompose {
 }
 
 function Stop-ServerLogFollower {
-    if ($script:serverLogProcess) {
-        Update-ServerLogs
-        if (-not $script:serverLogProcess.HasExited) {
-            $script:serverLogProcess.Kill($true)
-            $script:serverLogProcess.WaitForExit()
+    try {
+        if ($script:serverLogProcess) {
+            try {
+                if (-not $script:serverLogLimitExceeded) { Update-ServerLogs }
+            } finally {
+                if (-not $script:serverLogProcess.HasExited) {
+                    $script:serverLogProcess.Kill($true)
+                    $script:serverLogProcess.WaitForExit()
+                }
+                # Drain completed lines after exit, but not indefinitely or beyond budget.
+                $drainClock = [System.Diagnostics.Stopwatch]::StartNew()
+                while (-not $script:serverLogLimitExceeded -and $drainClock.ElapsedMilliseconds -lt 2000 -and
+                    (($script:serverLogOutputTask -and $script:serverLogOutputTask.IsCompleted) -or
+                     ($script:serverLogErrorTask -and $script:serverLogErrorTask.IsCompleted))) {
+                    Update-ServerLogs
+                }
+            }
         }
-        # ReadLineAsync can complete as the process exits. Drain those final lines
-        # before releasing the tasks, including when the follower exited itself.
-        Update-ServerLogs
+    } finally {
+        $script:serverLogProcess = $null
+        $script:serverLogOutputTask = $null
+        $script:serverLogErrorTask = $null
     }
-    $script:serverLogProcess = $null
-    $script:serverLogOutputTask = $null
-    $script:serverLogErrorTask = $null
 }
 
 function Reset-ServerLogCollection {
-    $script:serverLogBuffer.Clear() | Out-Null
-    $script:serverLogLines.Clear()
-    $script:serverPlayerbotEvents.Clear()
+    # Replace rather than Clear: StringBuilder and List retain their peak capacity.
+    $script:serverLogBuffer = [System.Text.StringBuilder]::new()
+    $script:serverLogLines = [System.Collections.Generic.List[string]]::new()
+    $script:serverPlayerbotEvents = [System.Collections.Generic.List[object]]::new()
+    $script:serverLogBytes = 0L
+    $script:serverLogLimitExceeded = $false
 }
 
 function Start-ServerLogFollower {
@@ -79,12 +92,31 @@ function Start-ServerLogFollower {
     $script:serverLogErrorTask = $script:serverLogProcess.StandardError.ReadLineAsync()
 }
 
+# Bound both retained UTF-8 log data and each poll. The buffer and line index
+# share text with assertions; neither a hot producer nor a long wait may grow forever.
+$script:serverLogMaxBytes = 128MB
+$script:serverLogPollMaxLines = 256
+$script:serverLogPollMaxMilliseconds = 50
+
 function Add-ServerLogLine {
     param([string]$Line)
 
+    if ($script:serverLogLimitExceeded) {
+        throw "Server log capture exceeded $($script:serverLogMaxBytes / 1MB) MiB; partial logs are in failure artifacts."
+    }
+    $lineBytes = [System.Text.Encoding]::UTF8.GetByteCount($Line) + 1
+    if ($script:serverLogBytes + $lineBytes -gt $script:serverLogMaxBytes) {
+        $script:serverLogLimitExceeded = $true
+        throw "Server log capture exceeded $($script:serverLogMaxBytes / 1MB) MiB; partial logs are in failure artifacts."
+    }
+    $script:serverLogBytes += $lineBytes
     [void]$script:serverLogBuffer.AppendLine($Line)
     [void]$script:serverLogLines.Add($Line)
-    if (-not $Line.StartsWith('{')) {
+    if (-not $Line.StartsWith('{') -or
+        $Line -match '"event"\s*:\s*"(hunt_region_candidate|hunt_planning_slice|hunt_planning_budget|hunt_route_connection)"' -or
+        ($Line -match '"event"\s*:\s*"hunt_region_scan"' -and $Line -match '"phase"\s*:\s*"(candidate|slice)"')) {
+        # Verbose events remain in the raw logs and are parsed by generic waits
+        # on demand, but need not be retained as thousands of PSCustomObjects.
         return
     }
     try {
@@ -99,23 +131,30 @@ function Add-ServerLogLine {
 }
 
 function Update-ServerLogs {
-    while ($script:serverLogOutputTask -and $script:serverLogOutputTask.IsCompleted) {
-        $line = $script:serverLogOutputTask.GetAwaiter().GetResult()
-        if ($null -eq $line) {
-            $script:serverLogOutputTask = $null
-            break
-        }
-        Add-ServerLogLine -Line $line
-        $script:serverLogOutputTask = $script:serverLogProcess.StandardOutput.ReadLineAsync()
+    if ($script:serverLogLimitExceeded) {
+        throw "Server log capture exceeded $($script:serverLogMaxBytes / 1MB) MiB; partial logs are in failure artifacts."
     }
-    while ($script:serverLogErrorTask -and $script:serverLogErrorTask.IsCompleted) {
-        $line = $script:serverLogErrorTask.GetAwaiter().GetResult()
-        if ($null -eq $line) {
-            $script:serverLogErrorTask = $null
+    $clock = [System.Diagnostics.Stopwatch]::StartNew()
+    $lines = 0
+    while ($lines -lt $script:serverLogPollMaxLines -and $clock.ElapsedMilliseconds -lt $script:serverLogPollMaxMilliseconds) {
+        $stream = if ($script:serverLogOutputTask -and $script:serverLogOutputTask.IsCompleted) {
+            'Output'
+        } elseif ($script:serverLogErrorTask -and $script:serverLogErrorTask.IsCompleted) {
+            'Error'
+        } else {
             break
         }
-        Add-ServerLogLine -Line $line
-        $script:serverLogErrorTask = $script:serverLogProcess.StandardError.ReadLineAsync()
+        $task = if ($stream -eq 'Output') { $script:serverLogOutputTask } else { $script:serverLogErrorTask }
+        $line = $task.GetAwaiter().GetResult()
+        if ($stream -eq 'Output') {
+            $script:serverLogOutputTask = if ($null -eq $line) { $null } else { $script:serverLogProcess.StandardOutput.ReadLineAsync() }
+        } else {
+            $script:serverLogErrorTask = if ($null -eq $line) { $null } else { $script:serverLogProcess.StandardError.ReadLineAsync() }
+        }
+        if ($null -ne $line) {
+            Add-ServerLogLine -Line $line
+            ++$lines
+        }
     }
 }
 
@@ -248,8 +287,9 @@ function Throw-WaitTimeout {
 	param([string]$Message)
 
 	$status = & docker @composeArguments ps --all 2>&1
-	$logs = try { Get-ServerLogs } catch { "Server logs unavailable: $($_.Exception.Message)" }
-	$tail = (($logs -split "`r?`n") | Select-Object -Last 80) -join "`n"
+	$tail = if ($script:serverLogLines.Count) {
+		($script:serverLogLines[[Math]::Max(0, $script:serverLogLines.Count - 80)..($script:serverLogLines.Count - 1)]) -join "`n"
+	} else { "Server logs unavailable." }
 	throw [System.TimeoutException]::new("$Message`nScenario: $currentScenario`n--- compose status ---`n$($status -join "`n")`n--- server log tail ---`n$tail")
 }
 
@@ -270,7 +310,7 @@ function Wait-ForLog {
             Start-Sleep -Milliseconds 100
             continue
         }
-        while ($nextLine -lt $script:serverLogLines.Count) {
+        while ($nextLine -lt $script:serverLogLines.Count -and [DateTime]::UtcNow -lt $deadline) {
             if ($script:serverLogLines[$nextLine++] -match $Pattern) {
                 return Get-ServerLogs
             }
@@ -305,9 +345,11 @@ function Wait-ForPlayerbotEvent {
             Start-ServerLogFollower
         }
         Update-ServerLogs
-        while ($nextEvent -lt $script:serverPlayerbotEvents.Count) {
-            $event = $script:serverPlayerbotEvents[$nextEvent++]
-            if (@($event | Where-Object $Predicate).Count -gt 0) {
+        while ($nextEvent -lt $script:serverLogLines.Count -and [DateTime]::UtcNow -lt $deadline) {
+            $line = $script:serverLogLines[$nextEvent++]
+            if (-not $line.StartsWith('{')) { continue }
+            try { $event = $line | ConvertFrom-Json } catch { continue }
+            if ($event.component -eq 'playerbot' -and @($event | Where-Object $Predicate).Count -gt 0) {
                 return Get-ServerLogs
             }
         }
@@ -330,9 +372,11 @@ function Wait-ForPlayerbotEventCount {
             Start-ServerLogFollower
         }
         Update-ServerLogs
-        while ($nextEvent -lt $script:serverPlayerbotEvents.Count) {
-            $event = $script:serverPlayerbotEvents[$nextEvent++]
-            if ($event.event -eq "action_result" -and $event.action -eq $Action -and $event.result -eq "reached") {
+        while ($nextEvent -lt $script:serverLogLines.Count -and [DateTime]::UtcNow -lt $deadline) {
+            $line = $script:serverLogLines[$nextEvent++]
+            if (-not $line.StartsWith('{')) { continue }
+            try { $event = $line | ConvertFrom-Json } catch { continue }
+            if ($event.component -eq 'playerbot' -and $event.event -eq "action_result" -and $event.action -eq $Action -and $event.result -eq "reached") {
                 ++$matchingEvents
             }
         }
@@ -379,32 +423,39 @@ function Add-ScenarioResult {
 	})
 }
 
-function Merge-PlayerbotFailureEvents {
-	param(
-		[string]$StreamedLogs,
-		[string]$FetchedLogs
-	)
+function Write-PlayerbotFailureEvents {
+    param([string]$Path, [string]$StreamedLogs, [string]$FetchedLogs, [bool]$Fetched)
 
-	$streamedEvents = @(ConvertFrom-PlayerbotLogs -Logs $StreamedLogs)
-	$fetchedEvents = @(ConvertFrom-PlayerbotLogs -Logs $FetchedLogs)
-	$fetchedIdentities = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
-	foreach ($event in $fetchedEvents) {
-		if ($event.server_run_id -and $null -ne $event.sequence) {
-			[void]$fetchedIdentities.Add("$($event.server_run_id):$($event.sequence)")
-		}
-	}
-
-	foreach ($event in $streamedEvents) {
-		$identity = if ($event.server_run_id -and $null -ne $event.sequence) {
-			"$($event.server_run_id):$($event.sequence)"
-		} else {
-			$null
-		}
-		if (-not $identity -or -not $fetchedIdentities.Contains($identity)) {
-			$event
-		}
-	}
-	$fetchedEvents
+    $fetchedIdentities = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+    if ($Fetched) {
+        $reader = [System.IO.StringReader]::new($FetchedLogs)
+        try {
+            while ($null -ne ($line = $reader.ReadLine())) {
+                if (-not $line.StartsWith('{')) { continue }
+                try { $event = $line | ConvertFrom-Json } catch { continue }
+                if ($event.component -eq 'playerbot' -and $event.server_run_id -and $null -ne $event.sequence) {
+                    [void]$fetchedIdentities.Add("$($event.server_run_id):$($event.sequence)")
+                }
+            }
+        } finally { $reader.Dispose() }
+    }
+    $writer = [System.IO.StreamWriter]::new($Path, $false, [System.Text.UTF8Encoding]::new($false))
+    try {
+        $sources = if ($Fetched) { @($StreamedLogs, $FetchedLogs) } else { @($StreamedLogs) }
+        for ($sourceIndex = 0; $sourceIndex -lt $sources.Count; ++$sourceIndex) {
+            $reader = [System.IO.StringReader]::new($sources[$sourceIndex])
+            try {
+                while ($null -ne ($line = $reader.ReadLine())) {
+                    if (-not $line.StartsWith('{')) { continue }
+                    try { $event = $line | ConvertFrom-Json } catch { continue }
+                    if ($event.component -ne 'playerbot') { continue }
+                    if ($sourceIndex -eq 0 -and $Fetched -and $event.server_run_id -and $null -ne $event.sequence -and
+                        $fetchedIdentities.Contains("$($event.server_run_id):$($event.sequence)")) { continue }
+                    $writer.WriteLine($line)
+                }
+            } finally { $reader.Dispose() }
+        }
+    } finally { $writer.Dispose() }
 }
 
 function Save-ScenarioFailureArtifacts {
@@ -431,7 +482,7 @@ function Save-ScenarioFailureArtifacts {
 	$streamedServerLogs = ""
 	$serverLogsFetched = $false
 	try {
-		Update-ServerLogs
+		if (-not $script:serverLogLimitExceeded) { Update-ServerLogs }
 		$streamedServerLogs = $script:serverLogBuffer.ToString().TrimEnd("`r", "`n")
 		[System.IO.File]::WriteAllText((Join-Path $directory "server-stream.log"), $streamedServerLogs)
 	}
@@ -439,10 +490,22 @@ function Save-ScenarioFailureArtifacts {
 		[void]$collectionErrors.Add("server-stream.log: $($_.Exception.Message)")
 	}
 	try {
-		$serverLogs = ((& docker @composeArguments logs --no-log-prefix server 2>&1) -join "`n")
+		# Fetch only a bounded tail. A failed fixture may have emitted unlimited
+		# telemetry before the follower started; never materialize that output.
+		$fetchedBuffer = [System.Text.StringBuilder]::new()
+		$fetchedBytes = 0L
+		& docker @composeArguments logs --no-log-prefix --tail 10000 server 2>&1 | ForEach-Object {
+			$line = "$_"
+			$fetchedBytes += [System.Text.Encoding]::UTF8.GetByteCount($line) + 1
+			if ($fetchedBytes -gt $script:serverLogMaxBytes) {
+				throw "Fetched server log tail exceeded $($script:serverLogMaxBytes / 1MB) MiB"
+			}
+			[void]$fetchedBuffer.AppendLine($line)
+		}
 		if ($LASTEXITCODE -ne 0) {
 			throw "docker compose logs exited with code $LASTEXITCODE"
 		}
+		$serverLogs = $fetchedBuffer.ToString().TrimEnd("`r", "`n")
 		$serverLogsFetched = $true
 		[System.IO.File]::WriteAllText((Join-Path $directory "server.log"), $serverLogs)
 	}
@@ -486,16 +549,8 @@ function Save-ScenarioFailureArtifacts {
 	}
 
 	try {
-		$events = if ($serverLogsFetched) {
-			Merge-PlayerbotFailureEvents -StreamedLogs $streamedServerLogs -FetchedLogs $serverLogs
-		} else {
-			ConvertFrom-PlayerbotLogs -Logs $streamedServerLogs
-		}
-		$eventLines = foreach ($event in $events) {
-			# Keep every playerbot event. Assertions and candidate detail are evidence, not console filtering targets.
-			$event | ConvertTo-Json -Compress -Depth 20
-		}
-		[System.IO.File]::WriteAllText((Join-Path $directory "playerbot-events.jsonl"), ($eventLines -join "`n"))
+		# Preserve every captured playerbot event without building another event array.
+		Write-PlayerbotFailureEvents -Path (Join-Path $directory "playerbot-events.jsonl") -StreamedLogs $streamedServerLogs -FetchedLogs $serverLogs -Fetched $serverLogsFetched
 	}
 	catch {
 		[void]$collectionErrors.Add("playerbot-events.jsonl: $($_.Exception.Message)")

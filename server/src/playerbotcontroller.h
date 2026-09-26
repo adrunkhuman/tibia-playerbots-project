@@ -15,6 +15,7 @@
 
 #include "playerbot.h"
 #include "playerbothuntcoordinator.h"
+#include "playerbothunttiming.h"
 #include "playerbotdepotworkflow.h"
 #include "playerboteconomy.h"
 #include "playerbotequipmentpolicy.h"
@@ -49,6 +50,8 @@
 #include <ctime>
 #include <optional>
 #include <set>
+
+struct PlayerBotHuntTravelWork;
 
 extern Game g_game;
 extern ConfigManager g_config;
@@ -404,10 +407,13 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		                                                               const std::set<Position>& blockedPositions,
 		                                                               uint64_t maximumExpandedNodes,
 		                                                               bool estimateOnly = false) const;
+		std::optional<PlayerBotNavigationRoutePlan> advanceHuntTravelRoute(Player& player,
+		    const PlayerBotHuntRouteRequest& request, const Position& source, PlayerBotHuntRouteTiming& timing);
 		PlayerBotNavigationRoutePlan planHuntTravelRoute(Player& player, const Position& source,
 		                                                 const Position& destination,
 		                                                 const std::set<Position>& blockedPositions = {},
-		                                                 bool estimateOnly = true) const;
+		                                                 bool estimateOnly = true,
+		                                                 PlayerBotHuntRouteTiming* timing = nullptr) const;
 		std::vector<Position> huntDepotExitCandidates(Player& player, const Position& source) const;
 		std::vector<Position> huntSupplyExitCandidates(Player& player, const Position& source) const;
 		uint64_t huntTravelReturnFareReserve(HuntTravelBudgetPhase phase) const;
@@ -493,6 +499,8 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		uint32_t scheduledTurnEvent = 0;
 		uint64_t scheduledTurnGeneration = 0;
 		std::chrono::steady_clock::time_point scheduledTurnDeadline;
+		std::optional<uint32_t> executingTurnDelayMs;
+		int64_t executingTurnLateUs = 0;
 		playerbot::PlayerBotFixtureDriver fixtureDriver;
 		playerbot::PlayerBotTelemetry telemetry;
 		Position lastPosition;
@@ -504,6 +512,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		PlayerBotSupplyRecoveryState supplyRecovery;
 		PlayerBotDepotWorkflow depotWorkflow;
 		PlayerBotHuntCoordinator huntCoordinator;
+		std::shared_ptr<PlayerBotHuntTravelWork> huntTravelWork;
 		PlayerBotProgressionRuntime progressionRuntime;
 		std::string pendingHuntCompletionReason;
 		PlayerBotRewardPlanner rewardPlanner;

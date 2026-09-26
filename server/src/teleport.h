@@ -21,6 +21,7 @@
 #define FS_TELEPORT_H
 
 #include "tile.h"
+#include "playerbotroutechanges.h"
 
 class Teleport final : public Item, public Cylinder
 {
@@ -42,6 +43,7 @@ class Teleport final : public Item, public Cylinder
 			return destPos;
 		}
 		void setDestPos(const Position& pos) {
+			PlayerBotRouteChanges::changed(getPosition(), PlayerBotRouteChanges::Cause::Teleport);
 			destPos = pos;
 		}
 

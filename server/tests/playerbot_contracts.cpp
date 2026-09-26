@@ -18,6 +18,7 @@
 #include "playerbottopology.h"
 #include "playerbothuntregions.h"
 #include "playerbothuntruntime.h"
+#include "playerbothunttravelpolicy.h"
 #include "playerbotinventorypolicy.h"
 #include "playerbotsupplyrecovery.h"
 #include "playerbottelemetry.h"
@@ -312,6 +313,8 @@ void huntCandidateTelemetryDeltas()
 	assert(scored.command == PlayerBotHuntRuntimeCommand::PlanningScored && scored.candidateSnapshot &&
 	       scored.candidates.size() == 300 && scored.routeCandidates.size() == 300 &&
 	       scored.planningPass == started.planningPass && scored.scoringRevision == 11);
+	const PlayerBotHuntPlanningSession* session = runtime.planningSession();
+	assert(session && session->ready() && session->scoredCandidates() == 300);
 	const auto validationTurn = runtime.advancePlanning(input, now);
 	assert(validationTurn.command == PlayerBotHuntRuntimeCommand::RegionSelected && validationTurn.selectedRegion &&
 	       !validationTurn.candidateSnapshot && validationTurn.candidates.empty() && validationTurn.routeCandidates.empty() &&
@@ -334,6 +337,7 @@ void huntCandidateTelemetryDeltas()
 	assert(restarted.command == PlayerBotHuntRuntimeCommand::PlanningStarted &&
 	       restarted.planningPass == cancelledStart.planningPass + 1);
 	const auto explicitlyCancelled = cancelledRuntime.cancelPlanning();
+	assert(cancelledRuntime.planningSession() == nullptr);
 	assert(explicitlyCancelled.command == PlayerBotHuntRuntimeCommand::PlanningCancelled &&
 	       explicitlyCancelled.planningCancelled && explicitlyCancelled.planningPass == restarted.planningPass &&
 	       explicitlyCancelled.scoringRevision == restarted.scoringRevision &&
@@ -438,6 +442,25 @@ PlayerBotHuntRouteObservation routeFacts(bool reached = true)
 void routeSelectionContracts()
 {
 	const Position depot(200, 100, 7), nextDepot(201, 100, 7), supplier(300, 100, 7);
+	for (const bool returnLeg : {false, true}) {
+		PlayerBotHuntRouteSelection incomplete({routeFixture(99)});
+		if (returnLeg) {
+			auto outbound = routeFacts(); outbound.approaches = {depot, nextDepot};
+			incomplete.observe(incomplete.next(), outbound);
+		}
+		// Exercise the adapter's aggregation policy, not merely a manually set
+		// selector flag: an unsafe reached walk plus exhausted NPC work is unknown.
+		const auto aggregate = playerBotHuntAggregateRouteResult(PlayerBotNavigationResult::Reached, 1000, 0, true);
+		auto unknown = routeFacts(aggregate == PlayerBotNavigationResult::Reached);
+		unknown.dangerCost = 1000;
+		unknown.searchIncomplete = aggregate == PlayerBotNavigationResult::NodeLimit;
+		auto result = incomplete.observe(incomplete.next(), unknown);
+		if (returnLeg) result = incomplete.observe(incomplete.next(), routeFacts(false));
+		assert(result.completedCandidate && result.completedCandidate->rejectionReason ==
+		    (returnLeg ? "depot_route_search_incomplete" : "route_search_incomplete"));
+		result = incomplete.observe(incomplete.next(), {});
+		assert(result.terminal && result.rejectedVariants.empty());
+	}
 	// Outbound failures remain distinct; a later candidate can still win.
 	PlayerBotHuntRouteSelection selection({routeFixture(1), routeFixture(2), routeFixture(3), routeFixture(4)});
 	auto request = selection.next();

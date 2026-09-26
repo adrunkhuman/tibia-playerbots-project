@@ -42,6 +42,7 @@ struct PlayerBotHuntRouteObservation {
 	uint64_t funds = 0;
 	uint64_t recoverySpendingReserve = 0;
 	double recoveryRouteHealthLoss = 0;
+	bool searchIncomplete = false; // Total allowance exhausted, not proven unreachable.
 };
 
 struct PlayerBotHuntRouteResult {
@@ -82,6 +83,7 @@ class PlayerBotHuntRouteSelection
 		std::vector<uint64_t> rejectedVariants;
 		PlayerBotHuntRouteStage stage = PlayerBotHuntRouteStage::Outbound;
 		bool finished = false;
+		bool searchIncomplete = false;
 		uint64_t sequence = 0;
 		std::optional<PlayerBotHuntRouteRequest> pending;
 };

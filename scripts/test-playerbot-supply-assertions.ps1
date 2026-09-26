@@ -122,6 +122,34 @@ $huntPlanning += @(
 )
 $checkHuntPlanning = { param($logs) Assert-HuntRegionPlanningEvents -Logs $logs }
 Test-Evidence $huntPlanning $checkHuntPlanning
+$selectedRoute = @($huntPlanning | Where-Object {
+    $_.event -eq 'hunt_region_candidate' -and $_.candidate_phase -eq 'route_validation' -and $_.region_id -eq 1
+})[0]
+$selectedRoute.topology_reachable = $false
+$selectedRoute.topology_travel_steps = 0
+Test-Evidence $huntPlanning $checkHuntPlanning $true
+$selectedRoute.outbound_npc_travel = $true
+$selectedRoute.outbound_fare = 110
+$selectedRoute.estimated_travel_seconds = 86.6
+Test-Evidence $huntPlanning $checkHuntPlanning
+$selectedRoute.outbound_fare = 0
+Test-Evidence $huntPlanning $checkHuntPlanning
+$selectedRoute.outbound_fare = -1
+Test-Evidence $huntPlanning $checkHuntPlanning $true
+$selectedRoute.Remove('outbound_fare')
+Test-Evidence $huntPlanning $checkHuntPlanning $true
+$selectedRoute.outbound_fare = 110
+$selectedRoute.estimated_travel_seconds = 0
+Test-Evidence $huntPlanning $checkHuntPlanning $true
+$selectedRoute.estimated_travel_seconds = 86.6
+$selectedRoute.route_validated = $false
+Test-Evidence $huntPlanning $checkHuntPlanning $true
+$selectedRoute.route_validated = $true
+$selectedRoute.topology_reachable = $true
+$selectedRoute.topology_travel_steps = 10
+$selectedRoute.Remove('outbound_npc_travel')
+$selectedRoute.Remove('outbound_fare')
+$selectedRoute.Remove('estimated_travel_seconds')
 $originalSelectedScan = $huntPlanning[$huntPlanning.Count - 1]
 $huntPlanning[$huntPlanning.Count - 1] = $originalSelectedScan.Clone()
 $huntPlanning[$huntPlanning.Count - 1].route_candidate_count = 8

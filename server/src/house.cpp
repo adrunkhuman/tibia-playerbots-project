@@ -18,6 +18,7 @@
  */
 
 #include "otpch.h"
+#include "playerbotroutechanges.h"
 
 #include "pugicast.h"
 
@@ -42,6 +43,7 @@ void House::addTile(HouseTile* tile)
 
 void House::setOwner(uint32_t guid, bool updateDatabase/* = true*/, Player* player/* = nullptr*/)
 {
+	PlayerBotRouteChanges::invalidate();
 	if (updateDatabase && owner != guid) {
 		Database& db = Database::getInstance();
 		db.executeQuery(fmt::format("UPDATE `houses` SET `owner` = {:d}, `bid` = 0, `bid_end` = 0, `last_bid` = 0, `highest_bidder` = 0  WHERE `id` = {:d}", guid, id));
@@ -181,6 +183,7 @@ bool House::kickPlayer(Player* player, Player* target)
 
 void House::setAccessList(uint32_t listId, const std::string& textlist)
 {
+	PlayerBotRouteChanges::invalidate();
 	if (listId == GUEST_LIST) {
 		guestList.parseList(textlist);
 	} else if (listId == SUBOWNER_LIST) {
@@ -564,6 +567,7 @@ bool Door::canUse(const Player* player) const
 
 void Door::setAccessList(const std::string& textlist)
 {
+	PlayerBotRouteChanges::invalidate();
 	if (!accessList) {
 		accessList.reset(new AccessList());
 	}

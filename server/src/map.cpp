@@ -18,6 +18,7 @@
  */
 
 #include "otpch.h"
+#include "playerbotroutechanges.h"
 
 #include "iomap.h"
 #include "iomapserialize.h"
@@ -93,6 +94,7 @@ bool Map::save()
 
 Tile* Map::getTile(uint16_t x, uint16_t y, uint8_t z) const
 {
+	PlayerBotRouteChanges::read(Position(x, y, z));
 	if (z >= MAP_MAX_LAYERS) {
 		return nullptr;
 	}
@@ -118,6 +120,7 @@ const std::vector<Position>& Map::getDepotLockerPositions(uint16_t depotId) cons
 
 void Map::setTile(uint16_t x, uint16_t y, uint8_t z, Tile* newTile)
 {
+	PlayerBotRouteChanges::changed(Position(x, y, z), PlayerBotRouteChanges::Cause::TileReplace);
 	if (z >= MAP_MAX_LAYERS) {
 		std::cout << "ERROR: Attempt to set tile on invalid coordinate " << Position(x, y, z) << "!" << std::endl;
 		return;

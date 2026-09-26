@@ -6,6 +6,8 @@ Run commands from the repository root with PowerShell 7+ (`pwsh`). Windows uses 
 
 The gameplay suite owns the disposable Compose project `angelion`: it resets the database and removes the stack unless `-KeepStack` is used. Do not run it beside a development session whose state you need. If Docker requires elevation on Linux, run Docker commands and the gameplay driver from an explicitly authorized elevated shell; scripts do not elevate themselves or change socket permissions. Elevated failures can leave root-owned artifacts.
 
+The [log follower](../scripts/playerbot-gameplay/runtime.ps1) bounds each poll and retained log data. A capture-limit failure preserves partial diagnostics rather than collecting indefinitely; verbose hunt records remain in raw evidence and are parsed on demand. These are log limits, not a process-RAM guarantee. On Linux, a systemd scope with `MemoryMax=3G` and `MemorySwapMax=0` can additionally protect the host during log-heavy tests; it limits the test process and its CLI children, not Docker-managed server containers.
+
 For persistence checks, restart or recreate only the server with `--no-deps`. Rerunning `playerbot-setup` can refill equipment slots and invalidate saved-state evidence. A failed Docker-access preflight does not clean the stack. Commands using `$env:` or `Remove-Item` must run inside PowerShell.
 
 ## Choose checks by change
@@ -53,6 +55,14 @@ On Linux, the C++ contract checks require a C++17 compiler. Lua fixture checks r
 
 ```sh
 sh server/tests/playerbot_contracts.sh
+sh server/tests/playerbothunttiming_contracts.sh
+sh server/tests/playerbotrouting_contracts.sh
+sh server/tests/playerbotshortcutheuristic_contracts.sh
+sh server/tests/playerbotroutecorridor_contracts.sh
+sh server/tests/playerbotguidedtree_contracts.sh
+sh server/tests/playerbotroutecache_contracts.sh
+sh server/tests/playerbotdangersamplekey_contracts.sh
+sh server/tests/playerbotplanningbudget_contracts.sh
 sh server/tests/playerbot_loot_contracts.sh
 sh server/tests/playerbot_equipment_purchase_contracts.sh
 lua server/tests/playerbot_door_passages_contracts.lua
@@ -66,6 +76,47 @@ lua scripts/test-playerbot-coin-estimation.lua
 ```
 
 A zero exit status and each script's explicit pass marker are the pass signal. These checks prove policy, arithmetic, parsing, and fixture contracts; they do not execute an ordinary live world.
+
+### Hunt-selection timing
+
+Capture a normal selection and group `hunt_planning_slice` events by `server_run_id`, `controller_id`, and `planning_pass`. Each admitted `selectHuntRegion` call emits one slice, including yields, failures, stale revisions and final selection. Budget-denied calls instead emit `hunt_planning_budget` with the requested retry delay, credit/debt, cumulative consumed time and queue depth. `invalidated_planning_pass`/`invalidated_scoring_revision` identify a replaced pass.
+
+| Fields | Meaning |
+| --- | --- |
+| `elapsed_us`, `over_10ms` | Synchronous elapsed time inside `selectHuntRegion`; the 10 ms marker is observational, not a work cap. |
+| `setup_us` | Player observation, scan, topology and runtime work construction. |
+| `transport_us` | Transport work and completion. |
+| `score_us`, `score_completion_us` | Scoring batch; then applying scores, sorting, shortlist and snapshot copies. |
+| `evidence_us` | Fixture callbacks, scan/candidate serialization and output, and fixture shortlist work. Planning-session telemetry borrows the session instead of copying its candidate vectors. |
+| `route_checks_us`, `route_bookkeeping_us` | Route checks, discovery and observations; then selector setup/final selection, including final selection output. |
+| `outbound_route_us`, `depot_route_us`, `supplier_route_us` | Whole route-planner calls, including both walking and NPC alternatives. |
+| `walking_us`, `npc_us` | Time spent attempting each alternative, including unsuccessful alternatives. |
+| `depot_discovery_us`, `supplier_discovery_us` | Candidate lookup for the corresponding service. |
+| `*_checks`, `route_attempts` | Handled route-request turns, including continuations; newly initialized route searches. `depot_unavailable_checks` counts depot requests with no route available to attempt. |
+| `route_request_sequence`, `route_yields` | Pending selector request and search continuations. A request keeps its sequence across turns. |
+| `route_local_searches`, `route_local_expanded_nodes`, `route_node_limits` | Detailed walking searches, expanded nodes this slice, and exhausted total allowances. A yield is not a node-limit result. |
+| `route_topology_queries`, `route_topology_expanded_nodes`, `route_topology_cache_hits` | Coarse topology work and shared source-connectivity reuse. |
+| `route_local_connections`, `route_connection_cache_hits` | Detailed transport connection evaluation and reuse within one route request. The legacy `route_coarse_connections` field is zero: discarded coarse estimates are no longer computed. |
+| `route_bound_rejects`, `route_risk_rejects`, `route_unknown_connections` | Safe cost/fare-bound pruning, detailed prefixes whose accumulated/peak danger disqualifies every extension, and connections whose reachability remains unknown. `route_local_bound_stops` is retained but unused by hierarchical connections. |
+| `route_ordinary_searches`, `route_hierarchy_fallbacks` | Destination-guided ordinary tile searches and failed preferred itineraries entering refinement. |
+| `route_alternate_itineraries`, `route_corridor_searches`, `route_corridor_widenings` | Alternative coarse itineraries found; connected-piece corridor attempts and attempts beyond the initial width. Restricted failures do not establish unreachability. |
+| `route_guided_searches`, `route_heuristic_builds`, `route_heuristic_restarts` | Whole-graph target-directed searches/retargets; shortcut-potential acquisitions and restarts caused by changed shortcut geometry. |
+| `route_shared_cache_hits`, `route_shared_cache_misses`, `route_source_tree_hits`, `route_incomplete_cache_hits` | Shared successful-segment reuse, segment misses, reusable fallback source trees, and unresolved targets reused without further expansions. A new target does not refill its source tree's allowance; a larger allowance can extend it. Incomplete evidence remains unknown, not proof of unreachability. |
+| `route_transport_spendable_gold` | Funds remaining above the minimum final recovery reserve for a handled route turn. This is a snapshot, not an additive counter. Free transport remains eligible below the reserve. |
+| `route_invalidations`, `route_transport_restarts`, `route_transport_restart_limits`, `route_request_restart_limits` | Invalidated request facts, dependent transport rebuilds, and exhausted provider/request-change retries. |
+| `route_invalidation_reason`, `route_invalidation_cause`, `route_invalidation_tile_key`, `route_invalidation_journal_delta`, `route_invalidation_watched_tiles` | Which request dependency changed and the bounded world-change journal evidence. Cosmetic/count-only item updates with unchanged navigation semantics are ignored. |
+| `walking_expanded_nodes`, `npc_returned_expanded_nodes` | Reported plan metrics. NPC counts exclude failed/null attempts and unreported segment searches. |
+| `schedule_delay_ms`, `schedule_late_us` | Requested delay before this callback; elapsed time from the controller's due time to callback execution. Both are null outside scheduled callbacks. |
+
+Sum slice `elapsed_us` and compare it with `hunt_region_scan.decision_latency_us`. The difference is **not** all scheduler lag: it includes requested waits and other work between calls. Scheduler lateness includes posting/queueing and earlier dispatcher tasks, but not pre-selection work in the current callback. Fallback retries request `SCHEDULER_MINTICKS` (50 ms). Unfinished route computation uses a shorter continuation delay because it already yields bounded work; this is not a movement or item-use cooldown. The scheduler does not clamp the delay and starts its timer after processing the posted event.
+
+Route-alternative, route-stage and discovery timings are **nested within** `route_checks_us`; do not add them to the phase totals. Sum continuation slices for complete route costs. `route_attempts` is no longer the number of calls to the resumable adapter: most calls resume an existing request. Transport-label connection caches remain request-local; ordinary segment and danger-sample caches are shared and bounded. Timings measure elapsed time, not CPU time. `elapsed_us` excludes its own slice serialization/output and any subsequent terminal stop, and does not measure the full `navigate` task. Microsecond rounding can slightly reduce summed phase totals. Existing `hunt_region_scan.scoring_time_us` retains its narrower meaning. Focused fixtures do not establish normal live-world timing.
+
+Candidate `topology_reachable` and `topology_travel_steps` describe coarse walking reachability, not NPC transport. A selected hunt may have `false`/zero there if its outbound NPC route is validated; assertions must not require a walking-only winner.
+
+`hunt_route_connection` records one completed walking/NPC connection: requested targets, source, last reached position (`to`), result, expanded nodes, successful-segment cache hits, incomplete-result reuse, fallback reason and accumulated active time. Use it to distinguish expensive successes from exhausted alternatives. `alternate_itineraries`, `corridor_searches`, `corridor_radius`, `unrestricted_fallback` and `heuristic_restarts` identify the refinement stages used by that connection. It excludes scheduling waits and is nested in slice timings.
+
+The planning-budget contract runs ten synthetic concurrent requesters under a virtual clock and checks fairness and aggregate debt accounting. It is not a live ten-bot benchmark. For live comparisons, keep the same seeded character and compare candidate identities/eligibility, route outcomes, expanded nodes, active work, end-to-end latency and scheduler lateness. Do not interpret a faster run caused by fewer resolved candidates as an unconditional improvement.
 
 ## Server smoke test
 

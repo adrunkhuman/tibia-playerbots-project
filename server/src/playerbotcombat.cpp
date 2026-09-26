@@ -11,6 +11,7 @@
 #include "otpch.h"
 
 #include "playerbotcontroller.h"
+#include "playerbotplanningbudget.h"
 #include "playerbothuntregionadapter.h"
 #include "playerbotnpccapabilities.h"
 #include "playerbottopology.h"
@@ -1066,6 +1067,41 @@ void PlayerBotController::finishHuntRegion(const Player& player, const Position&
 bool PlayerBotController::selectHuntRegion(Player& player, const Position& position, const char* reason,
                                            std::chrono::steady_clock::duration* retryAfter)
 {
+	PlayerBotPlanningBudget& budget = playerBotHuntPlanningBudget();
+	const uint64_t budgetId = playerId;
+	const PlayerBotPlanningBudget::Result admission = budget.request(budgetId, PlayerBotPlanningBudget::Clock::now());
+	if (!admission.admitted) {
+		// Callers schedule in whole milliseconds; round up rather than retrying
+		// before the head has earned enough credit.
+		const auto delay = std::chrono::duration_cast<std::chrono::milliseconds>(
+		    admission.wait + std::chrono::microseconds(999));
+		if (retryAfter) *retryAfter = delay;
+		if (!telemetry.terminalLogged()) {
+			emit("hunt_planning_budget", position,
+			     "\"requested_delay_ms\":" + std::to_string(delay.count()) +
+			     ",\"debt_us\":" + std::to_string(admission.debtUs) +
+			     ",\"consumed_us\":" + std::to_string(admission.consumedUs) +
+			     ",\"credit_us\":" + std::to_string(admission.creditUs) +
+			     ",\"queued\":" + (admission.queued ? "true" : "false") +
+			     ",\"queue_depth\":" + std::to_string(admission.waiting));
+		}
+		return false;
+	}
+	PlayerBotPlanningBudget::Charge budgetCharge(budget, budgetId);
+	PlayerBotHuntSliceTiming timing;
+	PlayerBotHuntRouteTiming routes;
+	PlayerBotHuntSliceAttribution attribution;
+	const char* slicePhase = "setup";
+	const char* sliceResult = "pending";
+	bool stopForScopeExhaustion = false;
+	uint32_t transportWorkCount = 0, scoreWorkCount = 0, candidateEmissions = 0;
+	uint32_t outboundChecks = 0, depotChecks = 0, supplierChecks = 0, discoveryChecks = 0;
+	uint32_t depotUnavailableChecks = 0, depotDiscoveryCalls = 0, supplierDiscoveryCalls = 0;
+	std::chrono::steady_clock::duration outboundRouteTime{}, depotRouteTime{}, supplierRouteTime{};
+	std::chrono::steady_clock::duration depotDiscoveryTime{}, supplierDiscoveryTime{};
+	const auto scheduleDelay = executingTurnDelayMs;
+	const int64_t scheduleLateUs = executingTurnLateUs;
+	auto run = [&]() -> bool {
 	updateSupplyRecovery(player, position);
 	const auto now = std::chrono::steady_clock::now();
 	const PlayerBotHuntPlanningObservation fixtureObservation = fixtureDriver.huntPlanningObservation();
@@ -1118,6 +1154,10 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 		outcome.invalidatedPlanningPass = invalidatedPlanningPass;
 		outcome.invalidatedScoringRevision = invalidatedScoringRevision;
 	}
+	attribution.update(outcome.planningPass, outcome.scoringRevision,
+	                   outcome.invalidatedPlanningPass, outcome.invalidatedScoringRevision);
+	timing.mark(PlayerBotHuntSlicePart::Transport);
+	transportWorkCount = static_cast<uint32_t>(outcome.transportWork.size());
 	if (!outcome.transportWork.empty()) {
 		std::vector<PlayerBotHuntRuntimeTransportObservation> observations;
 		observations.reserve(outcome.transportWork.size());
@@ -1149,6 +1189,8 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 		}
 		outcome = huntCoordinator.completeTransportWork(observations);
 	}
+	timing.mark(PlayerBotHuntSlicePart::Score);
+	scoreWorkCount = static_cast<uint32_t>(outcome.scoreWork.size());
 	if (!outcome.scoreWork.empty()) {
 		const auto started = std::chrono::steady_clock::now();
 		std::vector<PlayerBotHuntRuntimeScoreObservation> scores;
@@ -1161,9 +1203,25 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 			scores.push_back({work.candidateIndex, score.valid, score.candidateFactsAvailable,
 			                  score.withinPlanningScope, std::move(score.region)});
 		}
-		outcome = huntCoordinator.completeScoreWork(scores,
-			std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count());
+		const auto scoringElapsedUs = std::chrono::duration_cast<std::chrono::microseconds>(
+		    std::chrono::steady_clock::now() - started).count();
+		timing.mark(PlayerBotHuntSlicePart::ScoreCompletion);
+		outcome = huntCoordinator.completeScoreWork(scores, scoringElapsedUs);
 	}
+	attribution.update(outcome.planningPass, outcome.scoringRevision,
+	                   outcome.invalidatedPlanningPass, outcome.invalidatedScoringRevision);
+	if (outcome.planningCancelled || outcome.staleRevision) huntTravelWork.reset();
+	if (outcome.planningCancelled) {
+		sliceResult = attribution.invalidatedPass && attribution.planningPass != attribution.invalidatedPass ?
+		    "restarted" : "cancelled";
+	}
+	slicePhase = outcome.staleRevision ? "stale_revision" : outcome.planningCancelled ? "cancelled" :
+	             outcome.command == PlayerBotHuntRuntimeCommand::ScopeReevaluationPending ? "scope_wait" :
+	             outcome.command == PlayerBotHuntRuntimeCommand::PlanningStarted ? "planning_started" :
+	             outcome.command == PlayerBotHuntRuntimeCommand::PlanningScored ? "scored" :
+	             outcome.command == PlayerBotHuntRuntimeCommand::PlanningYield ?
+	                 (transportWorkCount ? "transport_yield" : "scoring_yield") : "route_selection";
+	timing.mark(PlayerBotHuntSlicePart::Evidence);
 	const auto planningAttribution = [](uint64_t planningPass, uint64_t scoringRevision) {
 		return "\"planning_pass\":" + std::to_string(planningPass) + ",\"scoring_revision\":" +
 		       std::to_string(scoringRevision);
@@ -1178,6 +1236,7 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 		     jsonString(outcome.cancellationReason) + "," + planningAttribution(planningPass, scoringRevision));
 	}
 	if (outcome.command == PlayerBotHuntRuntimeCommand::ScopeReevaluationPending) {
+		sliceResult = "waiting";
 		if (retryAfter) *retryAfter = outcome.retryAfter;
 		return false;
 	}
@@ -1200,6 +1259,7 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 	}
 	if (outcome.candidateSnapshot) {
 		for (const PlayerBotHuntRegion& candidate : outcome.candidates) {
+			++candidateEmissions;
 			emitHuntRegionCandidate(candidate, position, outcome.planningPass, outcome.scoringRevision, "scored");
 		}
 		std::vector<PlayerBotHuntRegion> fixtureRouteCandidates;
@@ -1214,20 +1274,33 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 			}
 			routeCandidates = &fixtureRouteCandidates;
 		}
+		timing.mark(PlayerBotHuntSlicePart::RouteBookkeeping);
 		if (!huntCoordinator.beginRouteSelection(outcome.planningPass, outcome.scoringRevision,
-		                                         *routeCandidates)) return false;
+		                                         *routeCandidates)) { sliceResult = "route_selection_rejected"; return false; }
 	}
+	timing.mark(PlayerBotHuntSlicePart::RouteBookkeeping);
 	if (outcome.command == PlayerBotHuntRuntimeCommand::ScopeExhausted) {
+		slicePhase = "scope_exhausted";
+		sliceResult = "failed";
 		const std::string attribution = planningAttribution(outcome.planningPass, outcome.scoringRevision);
 		emit("hunt_region_selection", position, "\"result\":\"failed\",\"reason\":\"no_suitable_reachable_region\"," + attribution);
 		emit("hunt_scope_exhausted", position, "\"reason\":\"local_scope_exhausted\"," + attribution +
 		     ",\"attempt\":" + std::to_string(outcome.scopeExhaustionAttempt) + ",\"maximum_attempts\":" +
 		     (supplyRecovery.active() ? "null" : "3") + ",\"retry_delay_ms\":" +
 		     std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(outcome.retryAfter).count()));
-		if (outcome.stopForScopeExhaustion) stop("hunt_scope_exhausted", position);
+		stopForScopeExhaustion = outcome.stopForScopeExhaustion;
 		return false;
 	}
-	if (!outcome.selectedRegion) return false;
+	if (!outcome.selectedRegion) {
+		// Scoring and transport discovery are computation, not game actions.
+		// The shared admission budget controls load; a legacy movement-sized
+		// sleep after every small batch adds seconds without protecting gameplay.
+		if (retryAfter && (outcome.command == PlayerBotHuntRuntimeCommand::PlanningStarted ||
+		    outcome.command == PlayerBotHuntRuntimeCommand::PlanningYield ||
+		    outcome.command == PlayerBotHuntRuntimeCommand::PlanningScored))
+			*retryAfter = std::chrono::milliseconds(1);
+		return false;
+	}
 	const PlayerBotNavigationRiskProfile risk;
 	const auto routePotionReserve = [&](uint32_t outboundDanger, uint32_t returnDanger) {
 		const uint32_t returning = recoveryPotionRouteReserve(player.getVocationId(), player.getMaxHealth(),
@@ -1242,22 +1315,43 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 	bool routedThisTurn = false;
 	// At most depot + discovery + final in one turn; never issue two route plans.
 	for (uint32_t step = 0; step < 4; ++step) {
+		timing.mark(PlayerBotHuntSlicePart::RouteChecks);
 		const auto request = huntCoordinator.nextRouteRequest();
-		if (!request) return false;
+		if (!request) { sliceResult = "route_request_missing"; return false; }
 		PlayerBotHuntRouteObservation observation;
 		if (request->stage == PlayerBotHuntRouteStage::Outbound ||
 		    request->stage == PlayerBotHuntRouteStage::Depot ||
 		    request->stage == PlayerBotHuntRouteStage::Supplier) {
 			if (routedThisTurn) {
-				if (retryAfter) *retryAfter = std::chrono::milliseconds(SCHEDULER_MINTICKS);
+				sliceResult = "yield";
+				if (retryAfter) *retryAfter = std::chrono::milliseconds(1);
 				return false;
+			}
+			auto& routeTime = request->stage == PlayerBotHuntRouteStage::Outbound ? outboundRouteTime :
+			                  request->stage == PlayerBotHuntRouteStage::Depot ? depotRouteTime : supplierRouteTime;
+			switch (request->stage) {
+			case PlayerBotHuntRouteStage::Outbound: ++outboundChecks; break;
+			case PlayerBotHuntRouteStage::Depot: ++depotChecks; break;
+			case PlayerBotHuntRouteStage::Supplier: ++supplierChecks; break;
+			default: break;
 			}
 			// Empty depot lists are rejected without invoking the route planner.
 			if (request->routeAvailable) {
-				const PlayerBotNavigationRoutePlan plan = planHuntTravelRoute(player,
-				    request->stage == PlayerBotHuntRouteStage::Outbound ? position : request->from, request->to);
+				const auto routeStarted = std::chrono::steady_clock::now();
+				const auto pendingPlan = advanceHuntTravelRoute(player, *request,
+				    request->stage == PlayerBotHuntRouteStage::Outbound ? position : request->from, routes);
+				routeTime += std::chrono::steady_clock::now() - routeStarted;
 				routedThisTurn = true;
+				if (!pendingPlan) {
+					sliceResult = "route_pending";
+					// This is computation, not a player action cooldown. The search
+					// already bounds each turn; resume through the dispatcher promptly.
+					if (retryAfter) *retryAfter = std::chrono::milliseconds(1);
+					return false;
+				}
+				const auto& plan = *pendingPlan;
 				observation.reached = plan.metrics.result == PlayerBotNavigationResult::Reached;
+				observation.searchIncomplete = plan.metrics.result == PlayerBotNavigationResult::NodeLimit;
 				observation.steps = static_cast<uint32_t>(plan.metrics.steps);
 				observation.fare = plan.metrics.fare;
 				observation.dangerCost = plan.metrics.dangerCost;
@@ -1271,8 +1365,15 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 					if (observation.travelSeconds > 0) observation.staminaMultiplier = projectedHuntStaminaMultiplier(
 					    player, std::max(0.0, duration - observation.travelSeconds));
 					if (observation.reached && playerBotNavigationRiskAccepts(risk, observation.dangerCost,
-					    observation.peakDanger)) observation.approaches = huntDepotExitCandidates(player, request->to);
+					    observation.peakDanger)) {
+						const auto discoveryStarted = std::chrono::steady_clock::now();
+						observation.approaches = huntDepotExitCandidates(player, request->to);
+						depotDiscoveryTime += std::chrono::steady_clock::now() - discoveryStarted;
+						++depotDiscoveryCalls;
+					}
 				}
+			} else if (request->stage == PlayerBotHuntRouteStage::Depot) {
+				++depotUnavailableChecks;
 			}
 			if (request->stage == PlayerBotHuntRouteStage::Depot && observation.reached &&
 			    playerBotNavigationRiskAccepts(risk, observation.dangerCost, observation.peakDanger)) {
@@ -1281,7 +1382,11 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 				observation.funds = player.getMoney() + player.getBankBalance();
 			}
 		} else if (request->stage == PlayerBotHuntRouteStage::DiscoverSupply) {
+			++discoveryChecks;
+			const auto discoveryStarted = std::chrono::steady_clock::now();
 			observation.approaches = huntSupplyExitCandidates(player, request->from);
+			supplierDiscoveryTime += std::chrono::steady_clock::now() - discoveryStarted;
+			++supplierDiscoveryCalls;
 		} else if (request->stage == PlayerBotHuntRouteStage::Final) {
 			observation.potionReserve = routePotionReserve(
 			    request->outboundDangerCost, request->returnDangerCost);
@@ -1295,16 +1400,22 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 		}
 		routeResult = huntCoordinator.observeRoute(*request, observation);
 		if (!routeResult.accepted) {
+			sliceResult = "route_observation_rejected";
 			if (retryAfter) *retryAfter = std::chrono::milliseconds(SCHEDULER_MINTICKS);
 			return false;
 		}
 		if (routeResult.completedCandidate) {
+			timing.mark(PlayerBotHuntSlicePart::Evidence);
+			++candidateEmissions;
 			emitHuntRegionCandidate(*routeResult.completedCandidate, position,
 			    routeResult.planningPass, routeResult.scoringRevision, "route_validation");
+			timing.mark(PlayerBotHuntSlicePart::RouteChecks);
 		}
 		if (routeResult.terminal || routeResult.yield) break;
 	}
+	timing.mark(PlayerBotHuntSlicePart::RouteBookkeeping);
 	if (!routeResult.terminal) {
+		sliceResult = "yield";
 		if (retryAfter) *retryAfter = std::chrono::milliseconds(SCHEDULER_MINTICKS);
 		return false;
 	}
@@ -1325,6 +1436,7 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 	};
 	std::optional<PlayerBotHuntRegion> safeSelection = std::move(routeResult.selectedRouteRegion);
 	if (!safeSelection) {
+		sliceResult = "failed";
 		emit("hunt_region_selection", position,
 		     "\"result\":\"failed\",\"reason\":\"no_safe_route_candidate\",\"route_rejection_counts\":" +
 		         routeFailureCounts() + "," + planningAttribution(routeResult.planningPass, routeResult.scoringRevision));
@@ -1382,7 +1494,96 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 	speech << ". Projected " << std::fixed << std::setprecision(0) << selected.projectedExperience << " experience after " << selected.estimatedTravelSeconds << " seconds travel.";
 	say(player, speech.str());
 	huntCoordinator.completePlanningSelection();
+	sliceResult = "selected";
 	return true;
+	};
+	const bool selected = run();
+	timing.mark(PlayerBotHuntSlicePart::Other);
+	const int64_t totalUs = timing.elapsedUs(); // Excludes this final summary's serialization and emission.
+	if (!telemetry.terminalLogged()) {
+		std::ostringstream fields;
+		fields << "\"phase\":" << jsonString(slicePhase) << ",\"result\":" << jsonString(sliceResult)
+		       << ",\"reason\":" << jsonString(reason) << ",\"planning_pass\":" << attribution.planningPass
+		       << ",\"scoring_revision\":" << attribution.scoringRevision
+		       << ",\"invalidated_planning_pass\":" << attribution.invalidatedPass
+		       << ",\"invalidated_scoring_revision\":" << attribution.invalidatedRevision
+		       << ",\"elapsed_us\":" << totalUs
+		       << ",\"over_10ms\":" << (totalUs >= PlayerBotHuntSliceTiming::overrunThresholdUs ? "true" : "false")
+		       << ",\"schedule_delay_ms\":";
+		if (scheduleDelay) fields << *scheduleDelay;
+		else fields << "null";
+		fields << ",\"schedule_late_us\":";
+		if (scheduleDelay) fields << scheduleLateUs;
+		else fields << "null";
+		fields << ",\"setup_us\":" << timing.us(PlayerBotHuntSlicePart::Setup)
+		       << ",\"transport_us\":" << timing.us(PlayerBotHuntSlicePart::Transport)
+		       << ",\"score_us\":" << timing.us(PlayerBotHuntSlicePart::Score)
+		       << ",\"score_completion_us\":" << timing.us(PlayerBotHuntSlicePart::ScoreCompletion)
+		       << ",\"evidence_us\":" << timing.us(PlayerBotHuntSlicePart::Evidence)
+		       << ",\"route_bookkeeping_us\":" << timing.us(PlayerBotHuntSlicePart::RouteBookkeeping)
+		       << ",\"route_checks_us\":" << timing.us(PlayerBotHuntSlicePart::RouteChecks)
+		       << ",\"transport_work_count\":" << transportWorkCount
+		       << ",\"score_work_count\":" << scoreWorkCount
+		       << ",\"candidate_emissions\":" << candidateEmissions
+		       << ",\"outbound_checks\":" << outboundChecks << ",\"depot_checks\":" << depotChecks
+		       << ",\"depot_unavailable_checks\":" << depotUnavailableChecks
+		       << ",\"supplier_checks\":" << supplierChecks << ",\"discovery_checks\":" << discoveryChecks
+		       << ",\"depot_discovery_calls\":" << depotDiscoveryCalls
+		       << ",\"supplier_discovery_calls\":" << supplierDiscoveryCalls
+		       << ",\"route_attempts\":" << routes.attempts << ",\"walking_reached\":" << routes.walkingReached
+		       << ",\"npc_plan_returned\":" << routes.npcReturned << ",\"npc_reached\":" << routes.npcReached
+		       << ",\"walking_expanded_nodes\":" << routes.walkingExpandedNodes
+		       << ",\"npc_returned_expanded_nodes\":" << routes.npcReturnedExpandedNodes
+		       << ",\"route_request_sequence\":" << routes.requestSequence
+		       << ",\"route_transport_spendable_gold\":" << routes.transportSpendableFunds
+		       << ",\"route_local_searches\":" << routes.localSearches
+		       << ",\"route_local_expanded_nodes\":" << routes.localExpandedNodes
+		       << ",\"route_node_limits\":" << routes.nodeLimits
+		       << ",\"route_local_bound_stops\":" << routes.localBoundStops
+		       << ",\"route_topology_queries\":" << routes.topologyQueries
+		       << ",\"route_topology_expanded_nodes\":" << routes.topologyExpandedNodes
+		       << ",\"route_topology_cache_hits\":" << routes.topologyCacheHits
+		       << ",\"route_coarse_connections\":" << routes.coarseConnections
+		       << ",\"route_local_connections\":" << routes.localConnections
+		       << ",\"route_connection_cache_hits\":" << routes.connectionCacheHits
+		       << ",\"route_unknown_connections\":" << routes.unknownConnections
+		       << ",\"route_bound_rejects\":" << routes.boundRejects
+		       << ",\"route_risk_rejects\":" << routes.riskRejects
+		       << ",\"route_graph_labels\":" << routes.graphLabels
+		       << ",\"route_shared_cache_hits\":" << routes.sharedCacheHits
+		       << ",\"route_shared_cache_misses\":" << routes.sharedCacheMisses
+		       << ",\"route_incomplete_cache_hits\":" << routes.incompleteCacheHits
+		       << ",\"route_source_tree_hits\":" << routes.sourceTreeHits
+		       << ",\"route_hierarchy_fallbacks\":" << routes.hierarchyFallbacks
+		       << ",\"route_alternate_itineraries\":" << routes.alternateItineraries
+		       << ",\"route_corridor_searches\":" << routes.corridorSearches
+		       << ",\"route_corridor_widenings\":" << routes.corridorWidenings
+		       << ",\"route_guided_searches\":" << routes.guidedSearches
+		       << ",\"route_heuristic_builds\":" << routes.heuristicBuilds
+		       << ",\"route_heuristic_restarts\":" << routes.heuristicRestarts
+		       << ",\"route_ordinary_searches\":" << routes.ordinarySearches
+		       << ",\"route_yields\":" << routes.yields
+		       << ",\"route_invalidations\":" << routes.invalidations
+		       << ",\"route_invalidation_reason\":\"" << routes.invalidationReason << "\""
+		       << ",\"route_invalidation_cause\":\"" << routes.invalidationCause << "\""
+		       << ",\"route_invalidation_tile_key\":" << routes.invalidationChangedTile
+		       << ",\"route_invalidation_journal_delta\":" << routes.invalidationJournalDelta
+		       << ",\"route_invalidation_watched_tiles\":" << routes.invalidationWatchedTiles
+		       << ",\"route_request_restart_limits\":" << routes.requestRestartLimits
+		       << ",\"route_transport_restarts\":" << routes.transportRestarts
+		       << ",\"route_transport_restart_limits\":" << routes.transportRestartLimits
+		       << ",\"outbound_route_us\":" << std::chrono::duration_cast<std::chrono::microseconds>(outboundRouteTime).count()
+		       << ",\"depot_route_us\":" << std::chrono::duration_cast<std::chrono::microseconds>(depotRouteTime).count()
+		       << ",\"supplier_route_us\":" << std::chrono::duration_cast<std::chrono::microseconds>(supplierRouteTime).count()
+		       << ",\"depot_discovery_us\":" << std::chrono::duration_cast<std::chrono::microseconds>(depotDiscoveryTime).count()
+		       << ",\"supplier_discovery_us\":" << std::chrono::duration_cast<std::chrono::microseconds>(supplierDiscoveryTime).count()
+		       << ",\"walking_us\":" << std::chrono::duration_cast<std::chrono::microseconds>(routes.walkingTime).count()
+		       << ",\"npc_us\":" << std::chrono::duration_cast<std::chrono::microseconds>(routes.npcTime).count();
+		emit("hunt_planning_slice", position, fields.str());
+	}
+	budgetCharge.finish(); // Include slice telemetry in actual charged service.
+	if (stopForScopeExhaustion) stop("hunt_scope_exhausted", position);
+	return selected;
 }
 
 void PlayerBotController::beginHuntCycle(Player* player, const Position& position, const char* reason)

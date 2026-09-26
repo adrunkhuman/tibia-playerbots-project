@@ -18,6 +18,8 @@
  */
 
 #include "otpch.h"
+#include "playerbotroutechanges.h"
+#include "playerbotrouteitemchange.h"
 
 #include "tile.h"
 
@@ -34,6 +36,54 @@
 extern Game g_game;
 extern MoveEvents* g_moveEvents;
 extern ConfigManager g_config;
+
+namespace {
+	bool playerBotRoutePassageIdentity(uint16_t id)
+	{
+		// Explicit item-use transitions in PlayerBotNavigator; doors and
+		// grounds are handled by their ItemType below.
+		switch (id) {
+			case 1386: case 3678: case 5543: case 430: // ladders, down-use
+			case 384: case 418: case 8278: case 8592: // rope spots
+			case 468: case 469: case 481: case 482: case 483: case 484:
+			case 7932: case 7933: // shovel passages
+				return true;
+			default: return false;
+		}
+	}
+
+	PlayerBotRouteItemSignature routeItemSignature(const ItemType& type, const Item* item)
+	{
+		PlayerBotRouteItemSignature s;
+		s.ground = type.isGroundTile();
+		s.door = type.isDoor();
+		s.magicField = type.isMagicField();
+		s.teleport = type.isTeleport();
+		s.passageId = s.ground || s.door || s.teleport || type.floorChange != 0 || type.useable || type.forceUse ||
+		    playerBotRoutePassageIdentity(type.id) ? type.id : 0;
+		s.groundSpeed = s.ground ? type.speed : 0;
+		s.actionId = item ? item->getActionId() : 0;
+		s.uniqueId = item ? item->getUniqueId() : 0;
+		s.floorChange = type.floorChange;
+		s.combatType = type.combatType;
+		s.blockSolid = type.blockSolid;
+		s.blockPath = type.blockPathFind;
+		s.blockProjectile = type.blockProjectile;
+		s.hasHeight = type.hasHeight;
+		s.moveable = type.moveable;
+		s.pickupable = type.pickupable;
+		s.ignoreBlocking = type.ignoreBlocking;
+		s.lookThrough = type.lookThrough;
+		s.useable = type.useable;
+		s.forceUse = type.forceUse;
+		s.alwaysOnTop = type.alwaysOnTop;
+		s.blockPickupable = type.blockPickupable;
+		s.vertical = type.isVertical;
+		s.horizontal = type.isHorizontal;
+		s.hangable = type.isHangable;
+		return s;
+	}
+}
 
 StaticTile real_nullptr_tile(0xFFFF, 0xFFFF, 0xFF);
 Tile& Tile::nullptr_tile = real_nullptr_tile;
@@ -362,6 +412,7 @@ Thing* Tile::getTopVisibleThing(const Creature* creature)
 
 void Tile::onAddTileItem(Item* item)
 {
+	PlayerBotRouteChanges::changed(getPosition(), PlayerBotRouteChanges::Cause::ItemAdd);
 	setTileFlags(item);
 
 	const Position& cylinderMapPos = getPosition();
@@ -390,6 +441,11 @@ void Tile::onAddTileItem(Item* item)
 
 void Tile::onUpdateTileItem(Item* oldItem, const ItemType& oldType, Item* newItem, const ItemType& newType)
 {
+	if ((oldItem != newItem && (oldType.isTeleport() || newType.isTeleport())) ||
+	    playerBotRouteItemUpdateAffectsNavigation(routeItemSignature(oldType, oldItem),
+	    routeItemSignature(newType, newItem))) {
+		PlayerBotRouteChanges::changed(getPosition(), PlayerBotRouteChanges::Cause::ItemUpdate);
+	}
 	const Position& cylinderMapPos = getPosition();
 
 	SpectatorVec spectators;
@@ -410,6 +466,7 @@ void Tile::onUpdateTileItem(Item* oldItem, const ItemType& oldType, Item* newIte
 
 void Tile::onRemoveTileItem(const SpectatorVec& spectators, const std::vector<int32_t>& oldStackPosVector, Item* item)
 {
+	PlayerBotRouteChanges::changed(getPosition(), PlayerBotRouteChanges::Cause::ItemRemove);
 	resetTileFlags(item);
 
 	const Position& cylinderMapPos = getPosition();
@@ -852,8 +909,13 @@ void Tile::addThing(int32_t, Thing* thing)
 				ground->setParent(nullptr);
 				g_game.ReleaseItem(ground);
 				ground = item;
-				resetTileFlags(oldGround);
-				setTileFlags(item);
+				const uint32_t previousFlags = flags;
+				{
+					PlayerBotRouteChanges::Suppress notifications;
+					resetTileFlags(oldGround);
+					setTileFlags(item);
+				}
+				if (flags != previousFlags) PlayerBotRouteChanges::changed(getPosition(), PlayerBotRouteChanges::Cause::TileFlag);
 				onUpdateTileItem(oldGround, oldType, item, itemType);
 				postRemoveNotification(oldGround, nullptr, 0);
 			}
@@ -941,10 +1003,17 @@ void Tile::updateThing(Thing* thing, uint16_t itemId, uint32_t count)
 
 	const ItemType& oldType = Item::items[item->getID()];
 	const ItemType& newType = Item::items[itemId];
-	resetTileFlags(item);
-	item->setID(itemId);
-	item->setSubType(count);
-	setTileFlags(item);
+	const uint32_t previousFlags = flags;
+	{
+		// Reset/reapply is one update, not two changes to the world. A
+		// harmless count/visual transform can transiently toggle tile flags.
+		PlayerBotRouteChanges::Suppress notifications;
+		resetTileFlags(item);
+		item->setID(itemId);
+		item->setSubType(count);
+		setTileFlags(item);
+	}
+	if (flags != previousFlags) PlayerBotRouteChanges::changed(getPosition(), PlayerBotRouteChanges::Cause::TileFlag);
 	onUpdateTileItem(item, oldType, item, newType);
 }
 
@@ -1009,8 +1078,13 @@ void Tile::replaceThing(uint32_t index, Thing* thing)
 	if (isInserted) {
 		item->setParent(this);
 
-		resetTileFlags(oldItem);
-		setTileFlags(item);
+		const uint32_t previousFlags = flags;
+		{
+			PlayerBotRouteChanges::Suppress notifications;
+			resetTileFlags(oldItem);
+			setTileFlags(item);
+		}
+		if (flags != previousFlags) PlayerBotRouteChanges::changed(getPosition(), PlayerBotRouteChanges::Cause::TileFlag);
 		const ItemType& oldType = Item::items[oldItem->getID()];
 		const ItemType& newType = Item::items[item->getID()];
 		onUpdateTileItem(oldItem, oldType, item, newType);
@@ -1412,6 +1486,9 @@ void Tile::internalAddThing(uint32_t, Thing* thing)
 			return;
 		}
 
+		// A new teleport can replace the selected redirect without changing
+		// TILESTATE_TELEPORT. Internal insertion must notify by coordinate too.
+		PlayerBotRouteChanges::changed(getPosition(), PlayerBotRouteChanges::Cause::ItemAdd);
 		const ItemType& itemType = Item::items[item->getID()];
 		if (itemType.isGroundTile()) {
 			if (ground == nullptr) {
