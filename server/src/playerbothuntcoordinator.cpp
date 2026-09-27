@@ -20,10 +20,10 @@ std::optional<PlayerBotCombatDecision> PlayerBotHuntCoordinator::selectTraversal
 }
 
 std::optional<PlayerBotCombatDecision> PlayerBotHuntCoordinator::selectDefensiveAttack(
-	std::vector<PlayerBotDefensiveTarget> candidates, const Position& currentPosition) const
+	std::vector<PlayerBotDefensiveTarget> candidates, const Position& currentPosition, bool planningDefense) const
 {
-	candidates.erase(std::remove_if(candidates.begin(), candidates.end(), [this](const PlayerBotDefensiveTarget& target) {
-		return !transitCombat.allowsDefense(target.id, target.routeCritical);
+	candidates.erase(std::remove_if(candidates.begin(), candidates.end(), [this, planningDefense](const PlayerBotDefensiveTarget& target) {
+		return !transitCombat.allowsDefense(target.id, target.routeCritical, planningDefense);
 	}), candidates.end());
 	return combatRuntime.selectDefensiveAttack(std::move(candidates), currentPosition);
 }

@@ -55,10 +55,13 @@ class PlayerBotTransitCombat
 		bool movementFallbackRequired() const { return stalled; }
 		std::optional<Position> intendedStep() const { return intendedMovementStep; }
 
-		bool allowsDefense(uint32_t blockerId, bool routeCritical) const
+		bool allowsDefense(uint32_t blockerId, bool routeCritical, bool planningDefense = false) const
 		{
-			return (!travelling && !routeCritical) || (routeCritical && movementFallbackRequired() &&
-			       (defensiveBlockerId == 0 || defensiveBlockerId == blockerId));
+			// No movement route exists yet while selecting a hunt region. An adjacent attacker
+			// can be fought without turning ordinary transit into a hunting opportunity.
+			return (planningDefense && !routeCritical) || (!travelling && !routeCritical) ||
+			       (routeCritical && movementFallbackRequired() &&
+			        (defensiveBlockerId == 0 || defensiveBlockerId == blockerId));
 		}
 		void beginDefense(uint32_t blockerId, bool selectedIntendedStep)
 		{
