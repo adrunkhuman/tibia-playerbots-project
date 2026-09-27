@@ -1183,6 +1183,11 @@ void transitCombat()
 	episode.observePosition(Position(101, 100, 7));
 	assert(!episode.movementFallbackRequired()); // ordinary movement does not create evidence either
 	assert(!episode.allowsDefense(42, true));
+	// Hunt planning has no route yet: an attacker may be defended against during
+	// transit, but ordinary transit and route-critical targets remain excluded.
+	assert(!episode.allowsDefense(42, false));
+	assert(episode.allowsDefense(42, false, true));
+	assert(!episode.allowsDefense(42, true, true));
 	episode.observeMovementFailure(stalled); // failed NPC/depot planning has no adjacent waypoint
 	assert(episode.movementFallbackRequired() && !episode.intendedStep());
 	assert(episode.allowsDefense(42, true));

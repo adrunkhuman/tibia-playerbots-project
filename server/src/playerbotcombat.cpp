@@ -456,11 +456,13 @@ bool PlayerBotController::attackDefensiveThreat(Player* player, const Position& 
 	SpectatorVec spectators;
 	g_game.map.getSpectators(spectators, currentPosition);
 	const bool movementFallback = huntCoordinator.transitMovementFallbackRequired();
+	const bool planningDefense = turnRouter.cyclePhase() == CyclePhase::Hunt &&
+	                             fixtureDriver.huntObservation().selectRegion && !huntCoordinator.huntActive();
 	const std::optional<Position> intendedStep = huntCoordinator.transitIntendedStep();
 	std::vector<Creature*> adjacentAttackers;
 	for (Creature* creature : spectators) {
 		if (!creature->getMonster() || creature->isRemoved() || creature->isDead() ||
-		    creature->getAttackedCreature() != player || !player->canSee(creature->getPosition()) ||
+		    creature->getAttackedCreature() != player || !player->canSeeCreature(creature) ||
 		    !Position::areInRange<1, 1, 0>(currentPosition, creature->getPosition())) continue;
 		adjacentAttackers.push_back(creature);
 	}
@@ -480,12 +482,12 @@ bool PlayerBotController::attackDefensiveThreat(Player* player, const Position& 
 			candidate.predictedFightSeconds = risk->second;
 			candidates.push_back(std::move(candidate));
 		}
-	} else if (!huntCoordinator.inTransit()) {
+	} else if (!huntCoordinator.inTransit() || planningDefense) {
 		for (Creature* creature : adjacentAttackers) {
 			candidates.push_back({creature->getID(), creature->getPosition(), creature->getName()});
 		}
 	}
-	const auto command = huntCoordinator.selectDefensiveAttack(std::move(candidates), currentPosition);
+	const auto command = huntCoordinator.selectDefensiveAttack(std::move(candidates), currentPosition, planningDefense);
 	if (!command) return false;
 	Creature* target = g_game.getCreatureByID(command->target.id);
 	if (!target) return false;
@@ -498,6 +500,7 @@ bool PlayerBotController::attackDefensiveThreat(Player* player, const Position& 
 		logActionFailure("defensive_combat", "target_rejected", currentPosition);
 		return false;
 	}
+	if (planningDefense) cancelHuntPlanning("defensive_attacker", currentPosition);
 	resetNavigation();
 	std::ostringstream targetFields;
 	targetFields << "\"previous_target_id\":null,\"target_id\":" << started.target.id
@@ -1612,6 +1615,10 @@ void PlayerBotController::startHunt(Player* player, const Position& position, co
 	progressionRuntime.enterHunt();
 	setCyclePhase(CyclePhase::Hunt, position, reason);
 	if (fixtureDriver.huntObservation().selectRegion && !huntCoordinator.huntActive()) {
+		if (attackDefensiveThreat(player, position)) {
+			schedule(navigationInterval);
+			return;
+		}
 		std::chrono::steady_clock::duration retryAfter{};
 		if (!selectHuntRegion(*player, position, "hunt_started", &retryAfter)) {
 			const int64_t delay = std::chrono::duration_cast<std::chrono::milliseconds>(retryAfter).count();

@@ -41,7 +41,7 @@ class PlayerBotHuntCoordinator
 		                                                            const Position& currentPosition,
 		                                                            std::chrono::steady_clock::time_point now);
 		std::optional<PlayerBotCombatDecision> selectDefensiveAttack(std::vector<PlayerBotDefensiveTarget> candidates,
-		                                                           const Position& currentPosition) const;
+		                                                           const Position& currentPosition, bool planningDefense = false) const;
 		PlayerBotCombatDecision confirmCombatAttack(const PlayerBotCombatDecision& command, bool accepted,
 		                                           std::chrono::steady_clock::time_point now);
 		PlayerBotCombatDecision advanceCombat(const PlayerBotCombatSnapshot& snapshot);

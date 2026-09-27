@@ -105,7 +105,8 @@ PlayerBotCombatDecision PlayerBotCombatRuntime::advance(const PlayerBotCombatSna
 		if (const auto completion = playerBotDefensiveLifetimeCompletion(*defensive, target)) {
 			return *completion;
 		}
-		if ((!defensive->routeCritical && !target.attacksPlayer) || !target.visible || !target.adjacent) {
+		if ((!defensive->routeCritical && !target.attacksPlayer) || !target.visible ||
+		    !target.visibleCreature || !target.adjacent) {
 			return {PlayerBotCombatCommand::CompleteDefensiveCombat, {defensive->id, defensive->position, defensive->name}, {}, {},
 			        defensive->routeCritical, "skipped", "threat_disengaged"};
 		}
