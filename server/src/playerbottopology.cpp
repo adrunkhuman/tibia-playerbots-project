@@ -6,7 +6,6 @@
 #include "playerbotnavigation.h"
 #include "playerbotroutechanges.h"
 
-#include "actions.h"
 #include "housetile.h"
 #include "item.h"
 #include "map.h"
@@ -16,8 +15,6 @@
 #include <array>
 #include <queue>
 #include <unordered_set>
-
-extern Actions* g_actions;
 
 namespace {
 	constexpr uint16_t sectorSize = 32;
