@@ -667,9 +667,13 @@ std::vector<playerbot::PlayerBotFixtureEvent> playerbot::PlayerBotFixtureDriver:
 	bool openResolvesMove = false;
 	bool blockedRejected = false;
 	bool invalidRejected = false;
+	bool graphCurrentBeforeChange = false;
+	bool graphStaleAfterChange = false;
+	bool graphCurrentAfterRebuild = false;
 	if (mapReady) {
 		PlayerBotTopology& topology = PlayerBotTopology::instance();
 		topology.build(g_game.map);
+		graphCurrentBeforeChange = topology.connectivityUnchanged();
 		Tile* passageTile = g_game.map.getTile(target);
 		itemOpenLookup = passageTile && passageTile->getGround() != passage &&
 		                 playerBotShovelPassageItem(*passageTile, closedItemId) == passage;
@@ -688,6 +692,7 @@ std::vector<playerbot::PlayerBotFixtureEvent> playerbot::PlayerBotFixtureDriver:
 
 		// Keep the topology built from the open item while the live item closes.
 		passage = g_game.transformItem(passage, closedItemId);
+		graphStaleAfterChange = !topology.connectivityUnchanged();
 		passageTile = g_game.map.getTile(target);
 		itemClosedLookup = passage && passageTile && passageTile->getGround() != passage &&
 		                   playerBotShovelPassageItem(*passageTile, closedItemId) == passage;
@@ -711,6 +716,7 @@ std::vector<playerbot::PlayerBotFixtureEvent> playerbot::PlayerBotFixtureDriver:
 
 			// Exercise the reverse case with topology actually built while closed.
 			topology.build(g_game.map);
+			graphCurrentAfterRebuild = topology.connectivityUnchanged();
 			passage = g_game.transformItem(passage, openItemId);
 			openResolvesMove = passage &&
 			    topology.route(approach, destination, {}, false, false, player.getLevel()).has_value() &&
@@ -734,7 +740,10 @@ std::vector<playerbot::PlayerBotFixtureEvent> playerbot::PlayerBotFixtureDriver:
 	       << ",\"normal_open_semantic\":" << boolField(normalOpenSemantic)
 	       << ",\"open_resolves_move\":" << boolField(openResolvesMove)
 	       << ",\"blocked_rejected\":" << boolField(blockedRejected)
-	       << ",\"invalid_rejected\":" << boolField(invalidRejected);
+	       << ",\"invalid_rejected\":" << boolField(invalidRejected)
+	       << ",\"graph_current_before_change\":" << boolField(graphCurrentBeforeChange)
+	       << ",\"graph_stale_after_change\":" << boolField(graphStaleAfterChange)
+	       << ",\"graph_current_after_rebuild\":" << boolField(graphCurrentAfterRebuild);
 	return {{"shovel_passages_contract", fields.str()}};
 }
 

@@ -74,7 +74,7 @@ struct PlayerBotHuntRouteTiming {
 	uint64_t requestSequence = 0;
 	uint64_t transportSpendableFunds = 0;
 	uint64_t localSearches = 0, localExpandedNodes = 0, nodeLimits = 0, localBoundStops = 0;
-	uint64_t topologyQueries = 0, topologyCacheHits = 0, topologyExpandedNodes = 0;
+	uint64_t topologyQueries = 0, topologyCacheHits = 0, topologyExpandedNodes = 0, coarseRejects = 0;
 	uint64_t coarseConnections = 0, localConnections = 0, connectionCacheHits = 0;
 	uint64_t unknownConnections = 0, boundRejects = 0, riskRejects = 0, graphLabels = 0;
 	uint64_t yields = 0, invalidations = 0;

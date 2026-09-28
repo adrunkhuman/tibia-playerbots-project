@@ -34,6 +34,7 @@ namespace {
 // Destroying this value cancels it; there is no callback, event, or live pointer.
 struct PlayerBotHuntTravelWork {
 	uint64_t pass = 0, revision = 0, sequence = 0, topologyGeneration = 0, riskRevision = 0;
+	std::optional<std::pair<uint64_t, uint64_t>> coarseRejectionRevision;
 	Position source, destination;
 	ActorFact actor;
 	std::vector<OfferFact> offers;
@@ -137,14 +138,17 @@ std::optional<PlayerBotNavigationRoutePlan> PlayerBotController::advanceHuntTrav
 	const uint64_t riskRevision = PlayerBotHuntRegionPlanner::getCacheRevision();
 	const bool sameRequest = huntTravelWork && huntTravelWork->sameRequest(request, source, transportReserve, sellEconomy);
 	const auto journalReason = sameRequest ? huntTravelWork->watch.check() : PlayerBotRouteChanges::Reason::None;
+	const bool staleCoarseRejection = sameRequest && playerBotHuntCoarseEvidenceStale(
+	    huntTravelWork->coarseRejectionRevision,
+	    PlayerBotRouteChanges::currentConnectivityRevision(), PlayerBotRouteChanges::currentEpoch());
 	const char* invalidationReason = !sameRequest ? "request" :
 	    huntTravelWork->actor != actor ? "actor" :
 	    huntTravelWork->topologyGeneration != generation ? "topology" :
 	    huntTravelWork->riskRevision != riskRevision ? "risk" :
-	    PlayerBotRouteChanges::reasonName(journalReason);
+	    staleCoarseRejection ? "coarse_connectivity_changed" : PlayerBotRouteChanges::reasonName(journalReason);
 	const bool reuse = sameRequest && huntTravelWork->actor == actor &&
 	    huntTravelWork->topologyGeneration == generation && huntTravelWork->riskRevision == riskRevision &&
-	    journalReason == PlayerBotRouteChanges::Reason::None;
+	    !staleCoarseRejection && journalReason == PlayerBotRouteChanges::Reason::None;
 	if (!reuse) {
 		PlayerBotHuntRequestRestartBudget restartBudget;
 		if (sameRequest) {
@@ -251,6 +255,8 @@ std::optional<PlayerBotNavigationRoutePlan> PlayerBotController::advanceHuntTrav
 		if (!w.local) w.local = std::make_unique<PlayerBotHuntWalkSearch>(source, std::vector<Position>{w.destination}, playerBotNavigationMaximumExpandedNodes);
 		const auto before = w.local->expanded;
 		const auto result = w.local->advance(player, policy, rope, shovel, w.profile, riskRevision, timing, localBudget, w.pass);
+		if (timing.coarseRejects) w.coarseRejectionRevision = std::make_pair(
+		    PlayerBotRouteChanges::currentConnectivityRevision(), PlayerBotRouteChanges::currentEpoch());
 		timing.walkingExpandedNodes += w.local->expanded - before;
 		const auto elapsed = std::chrono::steady_clock::now() - began;
 		w.connectionTime += elapsed;
@@ -300,6 +306,8 @@ std::optional<PlayerBotNavigationRoutePlan> PlayerBotController::advanceHuntTrav
 		const auto connectionBegan = std::chrono::steady_clock::now();
 		const auto before = w.local->expanded;
 		const auto result = w.local->advance(player, policy, rope, shovel, w.profile, riskRevision, timing, localBudget, w.pass);
+		if (timing.coarseRejects) w.coarseRejectionRevision = std::make_pair(
+		    PlayerBotRouteChanges::currentConnectivityRevision(), PlayerBotRouteChanges::currentEpoch());
 		w.npcNodes += w.local->expanded - before;
 		w.connectionTime += std::chrono::steady_clock::now() - connectionBegan;
 		if (!result) return pending();

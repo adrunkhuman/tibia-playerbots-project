@@ -412,7 +412,8 @@ Thing* Tile::getTopVisibleThing(const Creature* creature)
 
 void Tile::onAddTileItem(Item* item)
 {
-	PlayerBotRouteChanges::changed(getPosition(), PlayerBotRouteChanges::Cause::ItemAdd);
+	PlayerBotRouteChanges::changed(getPosition(), PlayerBotRouteChanges::Cause::ItemAdd,
+	    playerBotRouteItemMayOpenConnectivity(routeItemSignature(Item::items[item->getID()], item), false));
 	setTileFlags(item);
 
 	const Position& cylinderMapPos = getPosition();
@@ -444,7 +445,9 @@ void Tile::onUpdateTileItem(Item* oldItem, const ItemType& oldType, Item* newIte
 	if ((oldItem != newItem && (oldType.isTeleport() || newType.isTeleport())) ||
 	    playerBotRouteItemUpdateAffectsNavigation(routeItemSignature(oldType, oldItem),
 	    routeItemSignature(newType, newItem))) {
-		PlayerBotRouteChanges::changed(getPosition(), PlayerBotRouteChanges::Cause::ItemUpdate);
+		PlayerBotRouteChanges::changed(getPosition(), PlayerBotRouteChanges::Cause::ItemUpdate,
+		    playerBotRouteItemUpdateMayOpenConnectivity(routeItemSignature(oldType, oldItem),
+		    routeItemSignature(newType, newItem)));
 	}
 	const Position& cylinderMapPos = getPosition();
 
@@ -466,7 +469,8 @@ void Tile::onUpdateTileItem(Item* oldItem, const ItemType& oldType, Item* newIte
 
 void Tile::onRemoveTileItem(const SpectatorVec& spectators, const std::vector<int32_t>& oldStackPosVector, Item* item)
 {
-	PlayerBotRouteChanges::changed(getPosition(), PlayerBotRouteChanges::Cause::ItemRemove);
+	PlayerBotRouteChanges::changed(getPosition(), PlayerBotRouteChanges::Cause::ItemRemove,
+	    playerBotRouteItemMayOpenConnectivity(routeItemSignature(Item::items[item->getID()], item), true));
 	resetTileFlags(item);
 
 	const Position& cylinderMapPos = getPosition();
@@ -915,7 +919,8 @@ void Tile::addThing(int32_t, Thing* thing)
 					resetTileFlags(oldGround);
 					setTileFlags(item);
 				}
-				if (flags != previousFlags) PlayerBotRouteChanges::changed(getPosition(), PlayerBotRouteChanges::Cause::TileFlag);
+				if (flags != previousFlags) PlayerBotRouteChanges::changed(getPosition(), PlayerBotRouteChanges::Cause::TileFlag,
+				    ((flags ^ previousFlags) & playerBotConnectivityFlags) != 0);
 				onUpdateTileItem(oldGround, oldType, item, itemType);
 				postRemoveNotification(oldGround, nullptr, 0);
 			}
@@ -1013,7 +1018,8 @@ void Tile::updateThing(Thing* thing, uint16_t itemId, uint32_t count)
 		item->setSubType(count);
 		setTileFlags(item);
 	}
-	if (flags != previousFlags) PlayerBotRouteChanges::changed(getPosition(), PlayerBotRouteChanges::Cause::TileFlag);
+	if (flags != previousFlags) PlayerBotRouteChanges::changed(getPosition(), PlayerBotRouteChanges::Cause::TileFlag,
+	    ((flags ^ previousFlags) & playerBotConnectivityFlags) != 0);
 	onUpdateTileItem(item, oldType, item, newType);
 }
 
@@ -1084,7 +1090,8 @@ void Tile::replaceThing(uint32_t index, Thing* thing)
 			resetTileFlags(oldItem);
 			setTileFlags(item);
 		}
-		if (flags != previousFlags) PlayerBotRouteChanges::changed(getPosition(), PlayerBotRouteChanges::Cause::TileFlag);
+		if (flags != previousFlags) PlayerBotRouteChanges::changed(getPosition(), PlayerBotRouteChanges::Cause::TileFlag,
+		    ((flags ^ previousFlags) & playerBotConnectivityFlags) != 0);
 		const ItemType& oldType = Item::items[oldItem->getID()];
 		const ItemType& newType = Item::items[item->getID()];
 		onUpdateTileItem(oldItem, oldType, item, newType);
@@ -1488,7 +1495,8 @@ void Tile::internalAddThing(uint32_t, Thing* thing)
 
 		// A new teleport can replace the selected redirect without changing
 		// TILESTATE_TELEPORT. Internal insertion must notify by coordinate too.
-		PlayerBotRouteChanges::changed(getPosition(), PlayerBotRouteChanges::Cause::ItemAdd);
+		PlayerBotRouteChanges::changed(getPosition(), PlayerBotRouteChanges::Cause::ItemAdd,
+		    playerBotRouteItemMayOpenConnectivity(routeItemSignature(Item::items[item->getID()], item), false));
 		const ItemType& itemType = Item::items[item->getID()];
 		if (itemType.isGroundTile()) {
 			if (ground == nullptr) {

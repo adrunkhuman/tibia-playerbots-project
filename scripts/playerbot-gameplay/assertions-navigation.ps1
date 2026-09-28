@@ -218,7 +218,9 @@ function Assert-MutablePortalRouteEvents {
 		$_.closed_resolves_use -eq $_.shovel_available -and
 		$_.item_open_lookup -eq $true -and $_.open_without_shovel -eq $true -and
 		$_.normal_open_semantic -eq $true -and $_.open_resolves_move -eq $true -and
-		$_.blocked_rejected -eq $true -and $_.invalid_rejected -eq $true
+		$_.blocked_rejected -eq $true -and $_.invalid_rejected -eq $true -and
+		$_.graph_current_before_change -eq $true -and $_.graph_stale_after_change -eq $true -and
+		$_.graph_current_after_rebuild -eq $true
 	})
 	$reached = @($events | Where-Object {
 		$_.event -eq "action_result" -and $_.action -eq "hunt_waypoint" -and $_.result -eq "reached" -and

@@ -1552,6 +1552,7 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 		       << ",\"route_topology_queries\":" << routes.topologyQueries
 		       << ",\"route_topology_expanded_nodes\":" << routes.topologyExpandedNodes
 		       << ",\"route_topology_cache_hits\":" << routes.topologyCacheHits
+		       << ",\"route_coarse_rejects\":" << routes.coarseRejects
 		       << ",\"route_coarse_connections\":" << routes.coarseConnections
 		       << ",\"route_local_connections\":" << routes.localConnections
 		       << ",\"route_connection_cache_hits\":" << routes.connectionCacheHits

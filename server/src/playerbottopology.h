@@ -175,6 +175,8 @@ class PlayerBotTopology
 		uint32_t componentCount() const { return components; }
 		uint32_t nodeCount() const { return static_cast<uint32_t>(edges.size()); }
 		uint64_t generation() const { return topologyGeneration; }
+		// Static connectivity cannot prove a negative after a live map change.
+		bool connectivityUnchanged() const;
 
 	private:
 		friend class PlayerBotTopologyHeuristic;
@@ -197,6 +199,8 @@ class PlayerBotTopology
 		std::vector<PlayerBotTopologyPortal> topologyPortals;
 		uint32_t components = 0;
 		uint64_t topologyGeneration = 0;
+		uint64_t connectivityRevision = 0;
+		uint64_t connectivityEpoch = 0;
 };
 
 #endif

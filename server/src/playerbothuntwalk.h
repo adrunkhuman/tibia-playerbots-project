@@ -3,6 +3,7 @@
 
 #include "player.h"
 #include "playerbotnavigation.h"
+#include "playerbothuntcoarsepolicy.h"
 #include "playerbotpathsearch.h"
 #include "playerbottopology.h"
 #include "playerbotroutecache.h"
@@ -47,13 +48,23 @@ public:
 				geometry().insert(geometryKey, distances, std::move(geometryWatch),
 				    topology.nodeCount() * sizeof(uint32_t) + geometryKey.size() * 2);
 			}
-			// This only avoids a redundant coarse search. A missing coarse path
-			// still gets the live unrestricted fallback, never a rejection.
-			if (std::any_of(goals.begin(), goals.end(), [&](Position goal) { return bool(topology.distanceTo(*distances, goal)); })) {
+			const auto coarse = playerBotHuntCoarseVerdict(topology.connectivityUnchanged(), source, goals,
+			    [&](Position position) { return topology.walkNode(position).has_value(); },
+			    [&](Position position) { return topology.distanceTo(*distances, position).has_value(); });
+			if (coarse == PlayerBotHuntCoarseVerdict::Disconnected) {
+				// The loaded topology models supported movement and tools. After any
+				// map change, its static connectivity cannot prove a negative.
+				fallbackReason = "coarse_unreachable";
+				++timing.coarseRejects;
+				return result = PlayerBotNavigationResult::Unreachable;
+			}
+			if (coarse == PlayerBotHuntCoarseVerdict::Reachable) {
 				++timing.topologyQueries;
 				itinerary = topology.routeToAny(source, goals, {}, rope, shovel, player.getLevel(), &policy,
 				                               &timing.topologyExpandedNodes);
 			}
+			// Off-graph endpoints and restricted itinerary failures retain live
+			// validation; only a complete graph rejection is definitive.
 			if (!itinerary) fallback(timing, "coarse_unavailable");
 		}
 		if (refining) return advanceRefinement(player, policy, rope, shovel, timing, budget);

@@ -97,6 +97,9 @@ public:
 	// writes, so the observer records coordinates and inspects them lazily.
 	using GeometryObserver = void (*)(Position, bool);
 	static void setGeometryObserver(GeometryObserver callback) { geometryObserver = callback; }
+	static uint64_t currentRevision() { return revision; }
+	static uint64_t currentConnectivityRevision() { return connectivityRevision; }
+	static uint64_t currentEpoch() { return epoch; }
 	class IgnoreReads {
 	public:
 		IgnoreReads() { ++ignoredReads; }
@@ -127,9 +130,10 @@ public:
 			destination.tiles.insert(watch.tiles.begin(), watch.tiles.end());
 		}
 	}
-	static void changed(Position position, Cause cause = Cause::Other) {
+	static void changed(Position position, Cause cause = Cause::Other, bool mayOpenConnectivity = true) {
 		if (suppressChanges) return;
 		if (geometryObserver) geometryObserver(position, false);
+		if (mayOpenConnectivity) ++connectivityRevision;
 		changes.push_back({++revision, key(position), cause});
 		if (changes.size() > 4096) changes.pop_front();
 	}
@@ -137,6 +141,7 @@ private:
 	static uint64_t key(Position p) { return (uint64_t(p.z) << 32) | (uint64_t(p.x) << 16) | p.y; }
 	inline static uint64_t nextWatchIdentity = 0;
 	inline static uint64_t revision = 0;
+	inline static uint64_t connectivityRevision = 0;
 	inline static uint64_t epoch = 0;
 	inline static uint32_t suppressChanges = 0;
 	inline static uint32_t ignoredReads = 0;
