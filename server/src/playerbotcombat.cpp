@@ -794,6 +794,11 @@ void PlayerBotController::emitHuntRegionCandidate(const PlayerBotHuntRegion& reg
                                                    uint64_t planningPass, uint64_t scoringRevision,
                                                    const char* candidatePhase) const
 {
+	uint32_t unstablePatrolPoints = 0;
+	for (const Position& point : region.patrolPoints) {
+		const Tile* tile = g_game.map.getTile(point);
+		if (!tile || tile->hasFlag(TILESTATE_FLOORCHANGE | TILESTATE_TELEPORT)) ++unstablePatrolPoints;
+	}
 	std::ostringstream fields;
 	fields << std::fixed << std::setprecision(2)
 	       << "\"planning_pass\":" << planningPass
@@ -812,6 +817,7 @@ void PlayerBotController::emitHuntRegionCandidate(const PlayerBotHuntRegion& reg
 	       << ",\"destination\":{\"x\":" << region.destination.x << ",\"y\":" << region.destination.y
 	       << ",\"z\":" << static_cast<uint16_t>(region.destination.z) << '}'
 	       << ",\"patrol_points\":" << region.patrolPoints.size()
+	       << ",\"unstable_patrol_points\":" << unstablePatrolPoints
 	       << ",\"experience_per_minute\":" << region.experiencePerMinute
 	       << ",\"coin_estimate_source\":\"static_loaded_loot_gross\""
 	       << ",\"expected_coin_gold_per_minute\":" << region.coinGoldPerMinute
