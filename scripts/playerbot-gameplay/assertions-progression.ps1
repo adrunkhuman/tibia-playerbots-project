@@ -359,6 +359,9 @@ function Assert-HuntRegionPlanningEvents {
     $selection = if ($selections.Count -gt 0) { $selections[$selections.Count - 1] } else { $null }
     $candidates = @($events | Where-Object { $_.event -eq "hunt_region_candidate" })
 	$scoredCandidateRecords = @($candidates | Where-Object { $_.candidate_phase -eq 'scored' })
+	$unstablePatrolCandidates = @($scoredCandidateRecords | Where-Object {
+		$null -eq $_.unstable_patrol_points -or $_.unstable_patrol_points -ne 0
+	})
 	$routeValidationRecords = @($candidates | Where-Object { $_.candidate_phase -eq 'route_validation' })
 	$snapshotAttributionValid = $completedScoring.Count -ge 1 -and @($completedScoring | Where-Object {
 		$completion = $_
@@ -423,6 +426,7 @@ function Assert-HuntRegionPlanningEvents {
 	if (-not $buildLifecycleValid -or -not $cacheReuseValid -or $transportYields.Count -lt 1 -or $scoringYields.Count -lt 1 -or
 		$cancelled.Count -ne 1 -or $staleRevision.Count -ne 1 -or -not $snapshotAttributionValid -or
 		-not $terminalAttributionValid -or $topologyScans.Count -lt 1 -or $routeValidations.Count -lt 1 -or
+		$unstablePatrolCandidates.Count -ne 0 -or
 		-not $selection -or $selectedCandidate.Count -ne 1 -or
 		$bestScore -eq $null -or [Math]::Abs($selectedCandidate[0].score - $bestScore) -gt 0.01 -or
 		-not $finiteRouteQueue -or $selection.selection_rule -ne $selectionRule -or
