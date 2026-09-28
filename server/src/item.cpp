@@ -308,11 +308,6 @@ const Cylinder* Item::getTopParent() const
 	return aux;
 }
 
-bool Item::isDirectlyOnTile() const
-{
-	return dynamic_cast<const Tile*>(getParent()) != nullptr;
-}
-
 Tile* Item::getTile()
 {
 	Cylinder* cylinder = getTopParent();

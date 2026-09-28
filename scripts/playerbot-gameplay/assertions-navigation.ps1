@@ -165,8 +165,7 @@ function Assert-DoorPassageEvents {
 	$event = $events[0]
 	foreach ($field in @("reloaded", "ordinary_descriptor", "window_rejected", "unregistered_aid_fallback",
 		"ordinary_aid_denied", "uid_precedence", "level_denied", "house_denied", "static_aid_denied", "navigator_used_door",
-		"graph_current_after_door_cycle", "graph_current_after_temporary_block", "movable_height_excluded",
-		"fixed_height_door_alternatives", "fixed_height_teleport_alternative", "graph_stale_after_barrier_removal")) {
+		"movable_height_excluded", "fixed_height_door_alternatives", "fixed_height_teleport_alternative")) {
 		if ($event.$field -ne $true) {
 			throw "Door passage fixture failed $field."
 		}
@@ -221,9 +220,7 @@ function Assert-MutablePortalRouteEvents {
 		$_.item_open_lookup -eq $true -and $_.open_without_shovel -eq $true -and
 		$_.closed_walk_represented -eq $true -and $_.closed_walk_executable -eq $true -and
 		$_.normal_open_semantic -eq $true -and $_.open_resolves_move -eq $true -and
-		$_.blocked_rejected -eq $true -and $_.invalid_rejected -eq $true -and
-		$_.graph_current_before_change -eq $true -and $_.graph_current_after_known_change -eq $true -and
-		$_.graph_current_after_rebuild -eq $true
+		$_.blocked_rejected -eq $true -and $_.invalid_rejected -eq $true
 	})
 	$reached = @($events | Where-Object {
 		$_.event -eq "action_result" -and $_.action -eq "hunt_waypoint" -and $_.result -eq "reached" -and

@@ -127,39 +127,12 @@ PlayerBotTopology& PlayerBotTopology::instance()
 	return topology;
 }
 
-bool PlayerBotTopology::connectivityUnchanged() const
-{
-	return liveMap && connectivityRevision == PlayerBotRouteChanges::currentConnectivityRevision() &&
-	       connectivityEpoch == PlayerBotRouteChanges::currentEpoch();
-}
-
-bool PlayerBotTopology::wasWalkableAtBuild(Position position) const
-{
-	const uint64_t key = positionKey(position);
-	return liveMap && walkNodes.count(key) && !redirectedNonWalkableNodes.count(key);
-}
-
-bool PlayerBotTopology::stableDoorAtBuild(Position position) const
-{
-	return liveMap && stableDoorTiles.count(positionKey(position));
-}
-
-bool PlayerBotTopology::stableShovelAtBuild(Position position) const
-{
-	return liveMap && stableShovelTiles.count(positionKey(position));
-}
-
 void PlayerBotTopology::invalidate()
 {
 	++topologyGeneration;
-	connectivityRevision = 0;
-	connectivityEpoch = 0;
 	shortcutIndex.invalidate();
 	liveMap = nullptr;
 	walkNodes.clear();
-	redirectedNonWalkableNodes.clear();
-	stableDoorTiles.clear();
-	stableShovelTiles.clear();
 	nodeComponents.clear();
 	edges.clear();
 	componentEdges.clear();
@@ -176,9 +149,6 @@ void PlayerBotTopology::build(const Map& map)
 		auto& index = PlayerBotTopology::instance().shortcutIndex;
 		if (all) index.invalidate();
 		else index.changed(position);
-	});
-	PlayerBotRouteChanges::setWalkableObserver([](Position position) {
-		return PlayerBotTopology::instance().wasWalkableAtBuild(position);
 	});
 	minimumPosition = Position(UINT16_MAX, UINT16_MAX, 0);
 	maximumPosition = Position(0, 0, 0);
@@ -214,19 +184,6 @@ void PlayerBotTopology::build(const Map& map)
 		    redirectedDestinations.find(positionKey(tile.getPosition())) == redirectedDestinations.end()) return;
 		const uint32_t index = static_cast<uint32_t>(parents.size());
 		walkNodes.emplace(positionKey(tile.getPosition()), index);
-		if (!isStaticWalkTile(tile)) redirectedNonWalkableNodes.insert(positionKey(tile.getPosition()));
-		if (isStaticWalkTile(tile)) {
-			if (const Item* door = staticDoor(tile)) {
-				const auto descriptor = g_actions ? g_actions->getPassageDescriptor(door) : std::nullopt;
-				if (descriptor && descriptor->access == ActionPassageAccess::Ordinary && door->getActionId() == 0)
-					stableDoorTiles.insert(positionKey(tile.getPosition()));
-			} else if (const TileItemVector* items = tile.getItemList()) {
-				for (const Item* item : *items) {
-					if (Item::items[item->getID()].isDoor() && !Item::items[item->getID()].blockSolid)
-						stableDoorTiles.insert(positionKey(tile.getPosition()));
-				}
-			}
-		}
 		parents.push_back(index);
 		ranks.push_back(0);
 	});
@@ -295,8 +252,6 @@ void PlayerBotTopology::build(const Map& map)
 
 	auto addEdge = [this](uint32_t from, uint32_t to, const PlayerBotTopologyPortal& portal) {
 		auto& outgoing = edges[from];
-		if (portal.action == PlayerBotTopologyPortalAction::UseShovel)
-			stableShovelTiles.insert(positionKey(portal.target));
 		if (std::none_of(outgoing.begin(), outgoing.end(), [to, &portal](const Edge& edge) {
 			return edge.destinationNode == to && edge.portal.target == portal.target &&
 			       edge.portal.destination == portal.destination && edge.portal.action == portal.action &&
@@ -440,8 +395,6 @@ void PlayerBotTopology::build(const Map& map)
 		}
 	}
 	synchronizeShortcuts();
-	connectivityRevision = PlayerBotRouteChanges::currentConnectivityRevision();
-	connectivityEpoch = PlayerBotRouteChanges::currentEpoch();
 }
 
 void PlayerBotTopology::synchronizeShortcuts() const

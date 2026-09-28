@@ -69,15 +69,6 @@ enum tileflags_t : uint32_t {
 	TILESTATE_FLOORCHANGE = TILESTATE_FLOORCHANGE_DOWN | TILESTATE_FLOORCHANGE_NORTH | TILESTATE_FLOORCHANGE_SOUTH | TILESTATE_FLOORCHANGE_EAST | TILESTATE_FLOORCHANGE_WEST | TILESTATE_FLOORCHANGE_SOUTH_ALT | TILESTATE_FLOORCHANGE_EAST_ALT,
 };
 
-constexpr uint32_t playerBotConnectivityFlags = TILESTATE_FLOORCHANGE | TILESTATE_TELEPORT;
-
-inline bool playerBotTileFlagMayOpenConnectivity(Position position, uint32_t flag, bool adding)
-{
-	if (flag & playerBotConnectivityFlags) return true;
-	return !adding && (flag & TILESTATE_IMMOVABLEBLOCKSOLID) &&
-	       !PlayerBotRouteChanges::wasWalkableAtBuild(position);
-}
-
 enum ZoneType_t {
 	ZONE_PROTECTION,
 	ZONE_NOPVP,
@@ -221,13 +212,11 @@ class Tile : public Cylinder
 			return hasBitSet(flag, this->flags);
 		}
 		void setFlag(uint32_t flag) {
-			if ((this->flags & flag) != flag) PlayerBotRouteChanges::changed(getPosition(), PlayerBotRouteChanges::Cause::TileFlag,
-			    playerBotTileFlagMayOpenConnectivity(getPosition(), flag, true));
+			if ((this->flags & flag) != flag) PlayerBotRouteChanges::changed(getPosition(), PlayerBotRouteChanges::Cause::TileFlag);
 			this->flags |= flag;
 		}
 		void resetFlag(uint32_t flag) {
-			if (this->flags & flag) PlayerBotRouteChanges::changed(getPosition(), PlayerBotRouteChanges::Cause::TileFlag,
-			    playerBotTileFlagMayOpenConnectivity(getPosition(), flag, false));
+			if (this->flags & flag) PlayerBotRouteChanges::changed(getPosition(), PlayerBotRouteChanges::Cause::TileFlag);
 			this->flags &= ~flag;
 		}
 

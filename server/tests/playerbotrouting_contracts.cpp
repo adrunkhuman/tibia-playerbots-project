@@ -86,8 +86,7 @@ void huntCoarseVerdictContracts()
 	// Directed graph: 0 -> 1 is free; 1 -> 2/3/4 requires rope/shovel/level 20.
 	// Node 5 is represented but isolated; 6 is outside the graph.
 	const auto known = [](int node) { return node >= 0 && node < 6; };
-	const auto check = [&](int source, std::vector<int> goals, bool rope, bool shovel, unsigned level,
-	                       bool unchanged = true) {
+	const auto check = [&](int source, std::vector<int> goals, bool rope, bool shovel, unsigned level) {
 		auto reachable = [&](int goal) {
 			assert(known(goal));
 			bool visited[6] = {};
@@ -107,11 +106,10 @@ void huntCoarseVerdictContracts()
 			}
 			return false;
 		};
-		return playerBotHuntCoarseVerdict(unchanged, source, goals, known, reachable);
+		return playerBotHuntCoarseVerdict(source, goals, known, reachable);
 	};
 	assert(check(0, {2, 3, 4, 5}, false, false, 8) == Verdict::Disconnected);
-	assert(check(0, {5}, false, false, 8, false) == Verdict::Unknown); // Map changed after build.
-	assert(check(0, {1}, false, false, 8, false) == Verdict::Reachable); // Hints remain usable.
+	assert(check(0, {5}, false, false, 8) == Verdict::Disconnected); // Known isolated goal is definitive.
 	assert(check(2, {0}, true, true, 20) == Verdict::Disconnected); // Edges are not reversible.
 	assert(check(6, {1}, false, false, 8) == Verdict::Unknown);
 	assert(check(0, {5, 6}, false, false, 8) == Verdict::Unknown);
@@ -126,11 +124,6 @@ void huntCoarseVerdictContracts()
 	assert(check(0, {4}, true, true, 19) == Verdict::Disconnected);
 	assert(check(0, {4}, false, false, 20) == Verdict::Reachable);
 	assert(check(0, {2, 3, 4}, false, true, 8) == Verdict::Reachable);
-	const std::optional<std::pair<uint64_t, uint64_t>> rejectedAt{{7, 3}};
-	assert(!playerBotHuntCoarseEvidenceStale({}, 8, 3));
-	assert(!playerBotHuntCoarseEvidenceStale(rejectedAt, 7, 3));
-	assert(playerBotHuntCoarseEvidenceStale(rejectedAt, 8, 3)); // A tile changed while the route yielded.
-	assert(playerBotHuntCoarseEvidenceStale(rejectedAt, 7, 4)); // Global invalidation.
 }
 
 void ordinaryWalkingContracts()
@@ -800,78 +793,6 @@ void providerMovementPolicy()
 	assert(playerBotHuntAggregateRouteResult(Result::Reached, 1000, 0, false) == Result::Reached);
 }
 
-void cosmeticConnectivityContracts()
-{
-	PlayerBotRouteItemSignature cosmetic;
-	cosmetic.moveable = cosmetic.pickupable = cosmetic.useable = true;
-	cosmetic.passageId = 3058; // A useable corpse does not add a passage.
-	assert(!playerBotRouteItemMayOpenConnectivity(cosmetic, false));
-	assert(!playerBotRouteItemMayOpenConnectivity(cosmetic, true));
-	cosmetic.passageId = 1386;
-	assert(playerBotRouteItemMayOpenConnectivity(cosmetic, false));
-	cosmetic.passageId = 0;
-	cosmetic.blockSolid = true;
-	assert(!playerBotRouteItemMayOpenConnectivity(cosmetic, false));
-	assert(!playerBotRouteItemMayOpenConnectivity(cosmetic, true)); // movable blocker
-	cosmetic.moveable = false;
-	assert(playerBotRouteItemMayOpenConnectivity(cosmetic, true)); // previously blocked tile
-	assert(!playerBotRouteItemMayOpenConnectivity(cosmetic, true, true)); // graph already includes tile
-	cosmetic.blockSolid = false;
-	cosmetic.hasHeight = true;
-	assert(playerBotRouteItemMayOpenConnectivity(cosmetic, false)); // fixed height
-	assert(playerBotRouteItemMayOpenConnectivity(cosmetic, true, true)); // height removal can restore same-floor walking
-	cosmetic.moveable = true;
-	assert(!playerBotRouteItemMayOpenConnectivity(cosmetic, false)); // parcel-only climb
-	PlayerBotRouteItemSignature ground;
-	ground.ground = true;
-	ground.passageId = 6594;
-	assert(!playerBotRouteItemUpdateMayOpenConnectivity(ground, ground)); // visual ground decay
-	PlayerBotRouteItemSignature pitfall;
-	pitfall.passageId = 3311;
-	pitfall.floorChange = 1;
-	auto decayedPitfall = pitfall;
-	decayedPitfall.passageId = 3310;
-	assert(!playerBotRouteItemUpdateMayOpenConnectivity(pitfall, decayedPitfall, true));
-	const PlayerBotRouteItemSignature empty;
-	assert(playerBotRouteItemUpdateMayOpenConnectivity(empty, ground)); // new floor
-	ground.passageId = 384;
-	assert(playerBotRouteItemUpdateMayOpenConnectivity(ground, empty)); // rope spot
-	ground.passageId = 6594;
-	ground.blockSolid = true;
-	assert(playerBotRouteItemUpdateMayOpenConnectivity(ground, empty)); // opens a blocked tile
-	PlayerBotRouteItemSignature door;
-	door.door = door.blockSolid = true;
-	door.passageId = 1223;
-	PlayerBotRouteItemSignature openDoor = door;
-	openDoor.blockSolid = false;
-	openDoor.passageId = 1224;
-	assert(playerBotRouteItemUpdateMayOpenConnectivity(door, openDoor, true));
-	assert(!playerBotRouteItemUpdateMayOpenConnectivity(door, openDoor, true, true));
-	PlayerBotRouteItemSignature hole;
-	hole.passageId = 7932;
-	auto openHole = hole;
-	openHole.passageId = 7933;
-	openHole.floorChange = 1;
-	assert(playerBotRouteItemUpdateMayOpenConnectivity(hole, openHole, true));
-	assert(!playerBotRouteItemUpdateMayOpenConnectivity(hole, openHole, true, false, true));
-	for (const auto [closedId, openId] : {std::pair<uint16_t, uint16_t>{468, 469},
-	                                   {481, 482}, {483, 484}}) {
-		hole.passageId = closedId;
-		openHole.passageId = openId;
-		assert(!playerBotRouteItemUpdateMayOpenConnectivity(hole, openHole, true, false, true));
-	}
-
-	const Position location(101, 201, 7);
-	const auto before = PlayerBotRouteChanges::currentConnectivityRevision();
-	PlayerBotRouteChanges::Watch watch;
-	{ PlayerBotRouteChanges::Scope scope(watch); PlayerBotRouteChanges::read(location); }
-	PlayerBotRouteChanges::changed(location, PlayerBotRouteChanges::Cause::ItemAdd, false);
-	assert(watch.check() == PlayerBotRouteChanges::Reason::ChangedTile);
-	assert(PlayerBotRouteChanges::currentConnectivityRevision() == before);
-	PlayerBotRouteChanges::changed(location, PlayerBotRouteChanges::Cause::ItemRemove);
-	assert(PlayerBotRouteChanges::currentConnectivityRevision() == before + 1);
-}
-
 void itemUpdateDependencies()
 {
 	PlayerBotRouteItemSignature harmless;
@@ -881,7 +802,6 @@ void itemUpdateDependencies()
 	// Different visual IDs with identical non-passage semantics do not affect a route.
 	const auto cosmetic = harmless;
 	assert(!playerBotRouteItemUpdateAffectsNavigation(harmless, cosmetic));
-	cosmeticConnectivityContracts();
 	const Position location(100, 200, 7);
 	PlayerBotRouteChanges::Watch watch;
 	{ PlayerBotRouteChanges::Scope scope(watch); PlayerBotRouteChanges::read(location); }

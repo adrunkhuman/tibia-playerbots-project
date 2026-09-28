@@ -48,12 +48,12 @@ public:
 				geometry().insert(geometryKey, distances, std::move(geometryWatch),
 				    topology.nodeCount() * sizeof(uint32_t) + geometryKey.size() * 2);
 			}
-			const auto coarse = playerBotHuntCoarseVerdict(topology.connectivityUnchanged(), source, goals,
+			const auto coarse = playerBotHuntCoarseVerdict(source, goals,
 			    [&](Position position) { return topology.walkNode(position).has_value(); },
 			    [&](Position position) { return topology.distanceTo(*distances, position).has_value(); });
 			if (coarse == PlayerBotHuntCoarseVerdict::Disconnected) {
-				// The loaded topology models supported movement and tools. After any
-				// map change, its static connectivity cannot prove a negative.
+				// The loaded topology models supported movement and tools. Map edits
+				// that change connectivity require a topology rebuild (/reload).
 				fallbackReason = "coarse_unreachable";
 				++timing.coarseRejects;
 				return result = PlayerBotNavigationResult::Unreachable;

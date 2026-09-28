@@ -176,11 +176,6 @@ class PlayerBotTopology
 		uint32_t componentCount() const { return components; }
 		uint32_t nodeCount() const { return static_cast<uint32_t>(edges.size()); }
 		uint64_t generation() const { return topologyGeneration; }
-		// Static connectivity cannot prove a negative after a live map change.
-		bool connectivityUnchanged() const;
-		bool wasWalkableAtBuild(Position position) const;
-		bool stableDoorAtBuild(Position position) const;
-		bool stableShovelAtBuild(Position position) const;
 
 	private:
 		friend class PlayerBotTopologyHeuristic;
@@ -195,9 +190,6 @@ class PlayerBotTopology
 
 		const Map* liveMap = nullptr;
 		std::unordered_map<uint64_t, uint32_t> walkNodes;
-		std::unordered_set<uint64_t> redirectedNonWalkableNodes;
-		std::unordered_set<uint64_t> stableDoorTiles;
-		std::unordered_set<uint64_t> stableShovelTiles;
 		std::vector<uint32_t> nodeComponents;
 		std::vector<std::vector<Edge>> edges;
 		std::vector<std::vector<ComponentEdge>> componentEdges;
@@ -206,8 +198,6 @@ class PlayerBotTopology
 		std::vector<PlayerBotTopologyPortal> topologyPortals;
 		uint32_t components = 0;
 		uint64_t topologyGeneration = 0;
-		uint64_t connectivityRevision = 0;
-		uint64_t connectivityEpoch = 0;
 };
 
 #endif
