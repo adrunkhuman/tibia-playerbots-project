@@ -6,6 +6,7 @@
 #include "playerbotnavigation.h"
 #include "playerbotroutechanges.h"
 
+#include "actions.h"
 #include "housetile.h"
 #include "item.h"
 #include "map.h"
@@ -15,6 +16,8 @@
 #include <array>
 #include <queue>
 #include <unordered_set>
+
+extern Actions* g_actions;
 
 namespace {
 	constexpr uint16_t sectorSize = 32;
@@ -78,9 +81,32 @@ namespace {
 	bool isStaticWalkTile(const Tile& tile)
 	{
 		if (!tile.getGround() || tile.hasFlag(TILESTATE_TELEPORT) || dynamic_cast<const HouseTile*>(&tile)) return false;
-		// Height moves can ignore movable blocking items. Keep those tiles in
-		// the coarse superset even when ordinary walking cannot enter them.
-		return !tile.hasFlag(TILESTATE_IMMOVABLEBLOCKSOLID) || staticDoor(tile);
+		// Height moves can ignore movable blocking items. A known shovel hole
+		// can also be walked across while closed, even if its open state blocks.
+		return !tile.hasFlag(TILESTATE_IMMOVABLEBLOCKSOLID) || staticDoor(tile) ||
+		       playerBotShovelPassageItem(tile);
+	}
+
+	std::optional<PlayerBotWalkTransition> alternateWalk(const Map& map, Position from, Direction direction,
+	                                                     const PlayerBotWalkTransition& transition)
+	{
+		if (transition.entry != transition.target) {
+			// Blocking the height landing restores the move into the original
+			// neighbor, which may itself redirect through a teleport or stair.
+			PlayerBotWalkTransition withoutHeight;
+			if (playerBotResolveWalkTransition(from, direction, withoutHeight, true, true, true))
+				return withoutHeight;
+			return std::nullopt;
+		}
+		if (transition.destination == transition.entry) return std::nullopt;
+		const Tile* tile = map.getTile(transition.entry);
+		const Item* item = tile ? playerBotShovelPassageItem(*tile) : nullptr;
+		const auto passage = item ? playerBotShovelPassage(item->getID()) : std::nullopt;
+		if (!passage || item->getID() != passage->openItemId || !isStaticWalkTile(*tile)) return std::nullopt;
+		// The currently open hole can later close, allowing a walk across it.
+		PlayerBotWalkTransition closed = transition;
+		closed.destination = closed.entry;
+		return closed;
 	}
 
 	bool canTraversePortal(const Map* map, const PlayerBotTopologyPortal& portal,
@@ -107,6 +133,22 @@ bool PlayerBotTopology::connectivityUnchanged() const
 	       connectivityEpoch == PlayerBotRouteChanges::currentEpoch();
 }
 
+bool PlayerBotTopology::wasWalkableAtBuild(Position position) const
+{
+	const uint64_t key = positionKey(position);
+	return liveMap && walkNodes.count(key) && !redirectedNonWalkableNodes.count(key);
+}
+
+bool PlayerBotTopology::stableDoorAtBuild(Position position) const
+{
+	return liveMap && stableDoorTiles.count(positionKey(position));
+}
+
+bool PlayerBotTopology::stableShovelAtBuild(Position position) const
+{
+	return liveMap && stableShovelTiles.count(positionKey(position));
+}
+
 void PlayerBotTopology::invalidate()
 {
 	++topologyGeneration;
@@ -115,6 +157,9 @@ void PlayerBotTopology::invalidate()
 	shortcutIndex.invalidate();
 	liveMap = nullptr;
 	walkNodes.clear();
+	redirectedNonWalkableNodes.clear();
+	stableDoorTiles.clear();
+	stableShovelTiles.clear();
 	nodeComponents.clear();
 	edges.clear();
 	componentEdges.clear();
@@ -132,6 +177,9 @@ void PlayerBotTopology::build(const Map& map)
 		if (all) index.invalidate();
 		else index.changed(position);
 	});
+	PlayerBotRouteChanges::setWalkableObserver([](Position position) {
+		return PlayerBotTopology::instance().wasWalkableAtBuild(position);
+	});
 	minimumPosition = Position(UINT16_MAX, UINT16_MAX, 0);
 	maximumPosition = Position(0, 0, 0);
 	size_t walkableTiles = 0;
@@ -148,9 +196,12 @@ void PlayerBotTopology::build(const Map& map)
 		if (!isStaticWalkTile(tile)) return;
 		for (Direction direction : directions) {
 			PlayerBotWalkTransition transition;
-			if (!playerBotResolveWalkTransition(tile.getPosition(), direction, transition) ||
-			    transition.destination == transition.entry || !map.getTile(transition.destination)) continue;
-			redirectedDestinations.insert(positionKey(transition.destination));
+			if (!playerBotResolveWalkTransition(tile.getPosition(), direction, transition, true, true)) continue;
+			if (transition.destination != transition.entry && map.getTile(transition.destination))
+				redirectedDestinations.insert(positionKey(transition.destination));
+			const auto alternate = alternateWalk(map, tile.getPosition(), direction, transition);
+			if (alternate && alternate->destination != alternate->entry && map.getTile(alternate->destination))
+				redirectedDestinations.insert(positionKey(alternate->destination));
 		}
 	});
 	walkNodes.reserve(walkableTiles + redirectedDestinations.size());
@@ -163,6 +214,19 @@ void PlayerBotTopology::build(const Map& map)
 		    redirectedDestinations.find(positionKey(tile.getPosition())) == redirectedDestinations.end()) return;
 		const uint32_t index = static_cast<uint32_t>(parents.size());
 		walkNodes.emplace(positionKey(tile.getPosition()), index);
+		if (!isStaticWalkTile(tile)) redirectedNonWalkableNodes.insert(positionKey(tile.getPosition()));
+		if (isStaticWalkTile(tile)) {
+			if (const Item* door = staticDoor(tile)) {
+				const auto descriptor = g_actions ? g_actions->getPassageDescriptor(door) : std::nullopt;
+				if (descriptor && descriptor->access == ActionPassageAccess::Ordinary && door->getActionId() == 0)
+					stableDoorTiles.insert(positionKey(tile.getPosition()));
+			} else if (const TileItemVector* items = tile.getItemList()) {
+				for (const Item* item : *items) {
+					if (Item::items[item->getID()].isDoor() && !Item::items[item->getID()].blockSolid)
+						stableDoorTiles.insert(positionKey(tile.getPosition()));
+				}
+			}
+		}
 		parents.push_back(index);
 		ranks.push_back(0);
 	});
@@ -204,12 +268,15 @@ void PlayerBotTopology::build(const Map& map)
 				if (!neighborTile || !isStaticWalkTile(*neighborTile) || staticDoor(*neighborTile)) continue;
 				const auto entry = walkNodes.find(positionKey(neighbor));
 				if (entry == walkNodes.end()) continue;
-				PlayerBotWalkTransition forward;
-				PlayerBotWalkTransition reverse;
-				if (playerBotResolveWalkTransition(position, getDirectionTo(position, neighbor), forward) &&
-				    forward.destination == neighbor &&
-				    playerBotResolveWalkTransition(neighbor, reverseDirection(getDirectionTo(position, neighbor)), reverse) &&
-				    reverse.destination == position) join(current->second, entry->second);
+				const Direction direction = getDirectionTo(position, neighbor);
+				PlayerBotWalkTransition forward, reverse;
+				if (!playerBotResolveWalkTransition(position, direction, forward, true, true) ||
+				    !playerBotResolveWalkTransition(neighbor, reverseDirection(direction), reverse, true, true)) continue;
+				const auto forwardAlternate = alternateWalk(map, position, direction, forward);
+				const auto reverseAlternate = alternateWalk(map, neighbor, reverseDirection(direction), reverse);
+				if ((forward.destination == neighbor || (forwardAlternate && forwardAlternate->destination == neighbor)) &&
+				    (reverse.destination == position || (reverseAlternate && reverseAlternate->destination == position)))
+					join(current->second, entry->second);
 			}
 		}
 	});
@@ -228,6 +295,8 @@ void PlayerBotTopology::build(const Map& map)
 
 	auto addEdge = [this](uint32_t from, uint32_t to, const PlayerBotTopologyPortal& portal) {
 		auto& outgoing = edges[from];
+		if (portal.action == PlayerBotTopologyPortalAction::UseShovel)
+			stableShovelTiles.insert(positionKey(portal.target));
 		if (std::none_of(outgoing.begin(), outgoing.end(), [to, &portal](const Edge& edge) {
 			return edge.destinationNode == to && edge.portal.target == portal.target &&
 			       edge.portal.destination == portal.destination && edge.portal.action == portal.action &&
@@ -244,7 +313,16 @@ void PlayerBotTopology::build(const Map& map)
 		const uint32_t from = current->second;
 		for (Direction direction : directions) {
 			PlayerBotWalkTransition transition;
-			if (!playerBotResolveWalkTransition(position, direction, transition)) continue;
+			if (!playerBotResolveWalkTransition(position, direction, transition, true, true)) continue;
+			if (const auto alternate = alternateWalk(map, position, direction, transition)) {
+				const Tile* alternateTile = map.getTile(alternate->destination);
+				if (alternateTile && (alternate->destination != alternate->entry || isStaticWalkTile(*alternateTile))) {
+					const auto alternativeNode = walkNodes.find(positionKey(alternate->destination));
+					if (alternativeNode != walkNodes.end() && alternativeNode->second != from)
+						addEdge(from, alternativeNode->second,
+						    {position, alternate->target, alternate->destination, direction});
+				}
+			}
 			const Tile* destinationTile = map.getTile(transition.destination);
 			if (transition.destination == transition.entry &&
 			    (!destinationTile || !isStaticWalkTile(*destinationTile))) continue;

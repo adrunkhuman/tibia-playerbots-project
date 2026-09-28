@@ -93,6 +93,13 @@ namespace {
 		if (!playerBotResolveWalkTransition(from, direction, transition) ||
 		    blockedPositions.find(transition.target) != blockedPositions.end() ||
 		    blockedPositions.find(transition.destination) != blockedPositions.end()) return false;
+		if (transition.entry.z != from.z) {
+			// Ignore climbs enabled only by movable height. Ordinary moves do
+			// not need a second transition lookup.
+			PlayerBotWalkTransition supported;
+			if (!playerBotResolveWalkTransition(from, direction, supported, true) ||
+			    transition.entry != supported.entry || transition.destination != supported.destination) return false;
+		}
 		uint32_t flags = FLAG_IGNOREBLOCKCREATURE;
 		if (transition.ignoreBlockItem) flags |= FLAG_IGNOREBLOCKITEM;
 		Tile* tile = g_game.map.getTile(transition.entry);
@@ -197,22 +204,42 @@ uint32_t PlayerBotNavigationCostPolicy::dangerCost(const Position& position, uin
 	                                                std::ceil(expectedHealthLoss * risk.healthLossCost)));
 }
 
-bool playerBotResolveWalkTransition(const Position& from, Direction direction, PlayerBotWalkTransition& transition)
+bool playerBotResolveWalkTransition(const Position& from, Direction direction, PlayerBotWalkTransition& transition,
+                                    bool fixedHeightOnly, bool assumeOpenDoors, bool ignoreHeight)
 {
+	auto hasHeight = [fixedHeightOnly](const Tile* tile) {
+		if (!tile) return false;
+		if (!fixedHeightOnly) return tile->hasHeight(3);
+		uint32_t height = 0;
+		if (const Item* ground = tile->getGround(); ground && ground->hasProperty(CONST_PROP_HASHEIGHT)) ++height;
+		if (const TileItemVector* items = tile->getItemList()) {
+			for (const Item* item : *items) {
+				if (!item->isMoveable() && item->hasProperty(CONST_PROP_HASHEIGHT)) ++height;
+			}
+		}
+		return height >= 3;
+	};
+	auto canLand = [assumeOpenDoors](const Tile* tile) {
+		if (!tile->hasFlag(TILESTATE_IMMOVABLEBLOCKSOLID)) return true;
+		if (!assumeOpenDoors) return false;
+		const TileItemVector* items = tile->getItemList();
+		return items && std::any_of(items->begin(), items->end(), [](const Item* item) {
+			return item && playerBotIsTraversableDoor(*item);
+		});
+	};
 	Tile* fromTile = g_game.map.getTile(from);
 	if (!fromTile) return false;
 	transition = {};
 	transition.target = getNextPosition(direction, from);
 	transition.entry = transition.target;
 	const bool diagonal = (direction & DIRECTION_DIAGONAL_MASK) != 0;
-	if (!diagonal) {
-		if (from.z != 8 && fromTile->hasHeight(3)) {
+	if (!diagonal && !ignoreHeight) {
+		if (from.z != 8 && hasHeight(fromTile)) {
 			Tile* upperCurrent = g_game.map.getTile(from.x, from.y, from.z - 1);
 			if (!upperCurrent || (!upperCurrent->getGround() && !upperCurrent->hasFlag(TILESTATE_BLOCKSOLID))) {
 				Tile* upperDestination = g_game.map.getTile(transition.entry.x, transition.entry.y, transition.entry.z - 1);
 				if (upperDestination && upperDestination->getGround() &&
-				    !upperDestination->hasFlag(TILESTATE_IMMOVABLEBLOCKSOLID) &&
-				    !upperDestination->hasFlag(TILESTATE_FLOORCHANGE)) {
+				    canLand(upperDestination) && !upperDestination->hasFlag(TILESTATE_FLOORCHANGE)) {
 					transition.entry.z--;
 					transition.ignoreBlockItem = true;
 				}
@@ -222,8 +249,8 @@ bool playerBotResolveWalkTransition(const Position& from, Direction direction, P
 			Tile* sameFloor = g_game.map.getTile(transition.entry);
 			if (!sameFloor || (!sameFloor->getGround() && !sameFloor->hasFlag(TILESTATE_BLOCKSOLID))) {
 				Tile* lowerDestination = g_game.map.getTile(transition.entry.x, transition.entry.y, transition.entry.z + 1);
-				if (lowerDestination && lowerDestination->hasHeight(3) &&
-				    !lowerDestination->hasFlag(TILESTATE_IMMOVABLEBLOCKSOLID)) {
+				if (lowerDestination && hasHeight(lowerDestination) &&
+				    canLand(lowerDestination)) {
 					transition.entry.z++;
 					transition.ignoreBlockItem = true;
 				}

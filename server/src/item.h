@@ -608,16 +608,16 @@ class Item : virtual public Thing
 			return attributes->getIntAttr(type);
 		}
 		void setIntAttr(itemAttrTypes type, int64_t value) {
-			if (type == ITEM_ATTRIBUTE_ACTIONID || type == ITEM_ATTRIBUTE_UNIQUEID) PlayerBotRouteChanges::changed(getPosition(), PlayerBotRouteChanges::Cause::Attribute);
+			if (type == ITEM_ATTRIBUTE_ACTIONID || type == ITEM_ATTRIBUTE_UNIQUEID) PlayerBotRouteChanges::changed(getPosition(), PlayerBotRouteChanges::Cause::Attribute, isDirectlyOnTile());
 			getAttributes()->setIntAttr(type, value);
 		}
 		void increaseIntAttr(itemAttrTypes type, int64_t value) {
-			if (type == ITEM_ATTRIBUTE_ACTIONID || type == ITEM_ATTRIBUTE_UNIQUEID) PlayerBotRouteChanges::changed(getPosition(), PlayerBotRouteChanges::Cause::Attribute);
+			if (type == ITEM_ATTRIBUTE_ACTIONID || type == ITEM_ATTRIBUTE_UNIQUEID) PlayerBotRouteChanges::changed(getPosition(), PlayerBotRouteChanges::Cause::Attribute, isDirectlyOnTile());
 			getAttributes()->increaseIntAttr(type, value);
 		}
 
 		void removeAttribute(itemAttrTypes type) {
-			if (type == ITEM_ATTRIBUTE_ACTIONID || type == ITEM_ATTRIBUTE_UNIQUEID) PlayerBotRouteChanges::changed(getPosition(), PlayerBotRouteChanges::Cause::Attribute);
+			if (type == ITEM_ATTRIBUTE_ACTIONID || type == ITEM_ATTRIBUTE_UNIQUEID) PlayerBotRouteChanges::changed(getPosition(), PlayerBotRouteChanges::Cause::Attribute, isDirectlyOnTile());
 			if (attributes) {
 				attributes->removeAttribute(type);
 			}
@@ -1033,6 +1033,7 @@ class Item : virtual public Thing
 		}
 		Cylinder* getTopParent();
 		const Cylinder* getTopParent() const;
+		bool isDirectlyOnTile() const;
 		Tile* getTile() override;
 		const Tile* getTile() const override;
 		bool isRemoved() const override {

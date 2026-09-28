@@ -812,14 +812,26 @@ void cosmeticConnectivityContracts()
 	cosmetic.passageId = 0;
 	cosmetic.blockSolid = true;
 	assert(!playerBotRouteItemMayOpenConnectivity(cosmetic, false));
-	assert(playerBotRouteItemMayOpenConnectivity(cosmetic, true));
+	assert(!playerBotRouteItemMayOpenConnectivity(cosmetic, true)); // movable blocker
+	cosmetic.moveable = false;
+	assert(playerBotRouteItemMayOpenConnectivity(cosmetic, true)); // previously blocked tile
+	assert(!playerBotRouteItemMayOpenConnectivity(cosmetic, true, true)); // graph already includes tile
 	cosmetic.blockSolid = false;
 	cosmetic.hasHeight = true;
-	assert(playerBotRouteItemMayOpenConnectivity(cosmetic, false));
+	assert(playerBotRouteItemMayOpenConnectivity(cosmetic, false)); // fixed height
+	assert(playerBotRouteItemMayOpenConnectivity(cosmetic, true, true)); // height removal can restore same-floor walking
+	cosmetic.moveable = true;
+	assert(!playerBotRouteItemMayOpenConnectivity(cosmetic, false)); // parcel-only climb
 	PlayerBotRouteItemSignature ground;
 	ground.ground = true;
 	ground.passageId = 6594;
 	assert(!playerBotRouteItemUpdateMayOpenConnectivity(ground, ground)); // visual ground decay
+	PlayerBotRouteItemSignature pitfall;
+	pitfall.passageId = 3311;
+	pitfall.floorChange = 1;
+	auto decayedPitfall = pitfall;
+	decayedPitfall.passageId = 3310;
+	assert(!playerBotRouteItemUpdateMayOpenConnectivity(pitfall, decayedPitfall, true));
 	const PlayerBotRouteItemSignature empty;
 	assert(playerBotRouteItemUpdateMayOpenConnectivity(empty, ground)); // new floor
 	ground.passageId = 384;
@@ -827,6 +839,27 @@ void cosmeticConnectivityContracts()
 	ground.passageId = 6594;
 	ground.blockSolid = true;
 	assert(playerBotRouteItemUpdateMayOpenConnectivity(ground, empty)); // opens a blocked tile
+	PlayerBotRouteItemSignature door;
+	door.door = door.blockSolid = true;
+	door.passageId = 1223;
+	PlayerBotRouteItemSignature openDoor = door;
+	openDoor.blockSolid = false;
+	openDoor.passageId = 1224;
+	assert(playerBotRouteItemUpdateMayOpenConnectivity(door, openDoor, true));
+	assert(!playerBotRouteItemUpdateMayOpenConnectivity(door, openDoor, true, true));
+	PlayerBotRouteItemSignature hole;
+	hole.passageId = 7932;
+	auto openHole = hole;
+	openHole.passageId = 7933;
+	openHole.floorChange = 1;
+	assert(playerBotRouteItemUpdateMayOpenConnectivity(hole, openHole, true));
+	assert(!playerBotRouteItemUpdateMayOpenConnectivity(hole, openHole, true, false, true));
+	for (const auto [closedId, openId] : {std::pair<uint16_t, uint16_t>{468, 469},
+	                                   {481, 482}, {483, 484}}) {
+		hole.passageId = closedId;
+		openHole.passageId = openId;
+		assert(!playerBotRouteItemUpdateMayOpenConnectivity(hole, openHole, true, false, true));
+	}
 
 	const Position location(101, 201, 7);
 	const auto before = PlayerBotRouteChanges::currentConnectivityRevision();

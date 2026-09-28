@@ -97,6 +97,11 @@ public:
 	// writes, so the observer records coordinates and inspects them lazily.
 	using GeometryObserver = void (*)(Position, bool);
 	static void setGeometryObserver(GeometryObserver callback) { geometryObserver = callback; }
+	using WalkableObserver = bool (*)(Position);
+	static void setWalkableObserver(WalkableObserver callback) { walkableObserver = callback; }
+	static bool wasWalkableAtBuild(Position position) {
+		return walkableObserver && walkableObserver(position);
+	}
 	static uint64_t currentRevision() { return revision; }
 	static uint64_t currentConnectivityRevision() { return connectivityRevision; }
 	static uint64_t currentEpoch() { return epoch; }
@@ -146,6 +151,7 @@ private:
 	inline static uint32_t suppressChanges = 0;
 	inline static uint32_t ignoredReads = 0;
 	inline static GeometryObserver geometryObserver = nullptr;
+	inline static WalkableObserver walkableObserver = nullptr;
 	struct Change { uint64_t revision, tile; Cause cause; };
 	inline static std::deque<Change> changes;
 	inline static Scope* observer = nullptr;

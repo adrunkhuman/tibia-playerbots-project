@@ -58,7 +58,8 @@ struct PlayerBotWalkTransition {
 	bool ignoreBlockItem = false;
 };
 
-bool playerBotResolveWalkTransition(const Position& from, Direction direction, PlayerBotWalkTransition& transition);
+bool playerBotResolveWalkTransition(const Position& from, Direction direction, PlayerBotWalkTransition& transition,
+                                    bool fixedHeightOnly = false, bool assumeOpenDoors = false, bool ignoreHeight = false);
 
 enum class PlayerBotNavigationGoalType : uint8_t {
 	Exact,

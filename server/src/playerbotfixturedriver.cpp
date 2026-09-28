@@ -16,6 +16,7 @@
 #include "item.h"
 #include "player.h"
 #include "tile.h"
+#include "teleport.h"
 #include "playerbot.h"
 #include "playerbotcombatruntime.h"
 #include "playerbotinventorypolicy.h"
@@ -527,6 +528,73 @@ std::vector<playerbot::PlayerBotFixtureEvent> playerbot::PlayerBotFixtureDriver:
 		}
 	}
 
+	const Position upperLanding(origin.x + 1, origin.y + 1, origin.z - 1);
+	if (mapReady && !g_game.map.getTile(upperLanding)) {
+		auto* tile = new DynamicTile(upperLanding.x, upperLanding.y, upperLanding.z);
+		tile->internalAddThing(Item::CreateItem(groundId));
+		g_game.map.setTile(upperLanding, tile);
+		fixtureTiles.push_back(upperLanding);
+	} else {
+		mapReady = false;
+	}
+
+	const Position fixedSource(origin.x + 6, origin.y + 1, origin.z);
+	const Position fixedNeighbor(origin.x + 7, origin.y + 1, origin.z);
+	const Position fixedUpper(origin.x + 7, origin.y + 1, origin.z - 1);
+	uint16_t fixedHeightId = 0;
+	for (size_t index = 1; index < Item::items.size(); ++index) {
+		const ItemType& type = Item::items[index];
+		if (type.hasHeight && !type.moveable && !type.blockSolid && !type.isGroundTile()) {
+			fixedHeightId = static_cast<uint16_t>(index);
+			break;
+		}
+	}
+	Item* upperDoor = nullptr;
+	for (const Position& position : {fixedSource, fixedNeighbor, fixedUpper}) {
+		if (!mapReady || !fixedHeightId || g_game.map.getTile(position)) { mapReady = false; break; }
+		auto* tile = new DynamicTile(position.x, position.y, position.z);
+		tile->internalAddThing(Item::CreateItem(groundId));
+		g_game.map.setTile(position, tile);
+		fixtureTiles.push_back(position);
+	}
+	if (mapReady) {
+		for (int count = 0; count < 3; ++count)
+			g_game.map.getTile(fixedSource)->internalAddThing(Item::CreateItem(fixedHeightId));
+		upperDoor = Item::CreateItem(ordinaryDoorId);
+		if (upperDoor) g_game.map.getTile(fixedUpper)->internalAddThing(upperDoor);
+		else mapReady = false;
+	}
+
+	const Position teleportSource(origin.x + 9, origin.y + 1, origin.z);
+	const Position teleportEntry(origin.x + 10, origin.y + 1, origin.z);
+	const Position teleportUpper(origin.x + 10, origin.y + 1, origin.z - 1);
+	const Position teleportExit(origin.x + 12, origin.y + 1, origin.z);
+	for (const Position& position : {teleportSource, teleportEntry, teleportUpper, teleportExit}) {
+		if (!mapReady || g_game.map.getTile(position)) { mapReady = false; break; }
+		auto* tile = new DynamicTile(position.x, position.y, position.z);
+		tile->internalAddThing(Item::CreateItem(groundId));
+		g_game.map.setTile(position, tile);
+		fixtureTiles.push_back(position);
+	}
+	uint16_t teleportId = 0;
+	for (size_t index = 1; index < Item::items.size(); ++index) {
+		if (Item::items[index].isTeleport()) { teleportId = static_cast<uint16_t>(index); break; }
+	}
+	if (mapReady && teleportId) {
+		for (int count = 0; count < 3; ++count)
+			g_game.map.getTile(teleportSource)->internalAddThing(Item::CreateItem(fixedHeightId));
+		Item* teleport = Item::CreateItem(teleportId);
+		if (Teleport* portal = teleport ? teleport->getTeleport() : nullptr) {
+			portal->setDestPos(teleportExit);
+			g_game.map.getTile(teleportEntry)->internalAddThing(portal);
+		} else {
+			mapReady = false;
+			if (teleport) g_game.ReleaseItem(teleport);
+		}
+	} else {
+		mapReady = false;
+	}
+
 	Item* window = nullptr;
 	Item* ordinaryDoor = nullptr;
 	Item* actionDoor = nullptr;
@@ -581,6 +649,12 @@ std::vector<playerbot::PlayerBotFixtureEvent> playerbot::PlayerBotFixtureDriver:
 
 	bool staticActionDenied = false;
 	bool navigatorUsedDoor = false;
+	bool graphCurrentAfterDoorCycle = false;
+	bool graphCurrentAfterTemporaryBlock = false;
+	bool movableHeightExcluded = false;
+	bool fixedHeightDoorAlternatives = false;
+	bool fixedHeightTeleportAlternative = false;
+	bool graphStaleAfterBarrierRemoval = false;
 	if (reloaded) {
 		staticActionDenied = std::none_of(PlayerBotTopology::instance().portals().begin(),
 		                                  PlayerBotTopology::instance().portals().end(), [&](const PlayerBotTopologyPortal& portal) {
@@ -599,6 +673,69 @@ std::vector<playerbot::PlayerBotFixtureEvent> playerbot::PlayerBotFixtureDriver:
 		                   std::none_of(steps.begin(), steps.end(), [&](const PlayerBotNavigationStep& step) {
 			                   return step.itemId == windowId;
 			                   });
+		PlayerBotTopology& topology = PlayerBotTopology::instance();
+		const bool graphCurrentBeforeDoor = topology.connectivityUnchanged();
+		ordinaryDoor = g_game.transformItem(ordinaryDoor, ordinaryDoorId + 1);
+		const bool graphCurrentWhileOpen = topology.connectivityUnchanged();
+		ordinaryDoor = ordinaryDoor ? g_game.transformItem(ordinaryDoor, ordinaryDoorId) : nullptr;
+		graphCurrentAfterDoorCycle = graphCurrentBeforeDoor && graphCurrentWhileOpen &&
+		                             ordinaryDoor && topology.connectivityUnchanged();
+		PlayerBotNavigationStep fixedStep;
+		fixedHeightDoorAlternatives = upperDoor &&
+		    topology.route(fixedSource, fixedNeighbor, {}, false, false, player.getLevel()).has_value() &&
+		    topology.route(fixedSource, fixedUpper, {}, false, false, player.getLevel()).has_value() &&
+		    PlayerBotNavigator().resolveMove(player, fixedSource, DIRECTION_EAST, {}, fixedStep) &&
+		    fixedStep.expectedPosition == fixedNeighbor;
+		upperDoor = upperDoor ? g_game.transformItem(upperDoor, ordinaryDoorId + 1) : nullptr;
+		fixedHeightDoorAlternatives = fixedHeightDoorAlternatives && upperDoor &&
+		    topology.connectivityUnchanged() &&
+		    PlayerBotNavigator().resolveMove(player, fixedSource, DIRECTION_EAST, {}, fixedStep) &&
+		    fixedStep.expectedPosition == fixedUpper;
+		Tile* upperTeleportTile = g_game.map.getTile(teleportUpper);
+		if (upperTeleportTile) {
+			fixedHeightTeleportAlternative = topology.route(teleportSource, teleportExit, {}, false, false,
+			    player.getLevel()).has_value();
+			upperTeleportTile->setFlag(TILESTATE_IMMOVABLEBLOCKSOLID);
+			PlayerBotNavigationStep teleportStep;
+			fixedHeightTeleportAlternative = fixedHeightTeleportAlternative && topology.connectivityUnchanged() &&
+			    PlayerBotNavigator().resolveMove(player, teleportSource, DIRECTION_EAST, {}, teleportStep) &&
+			    teleportStep.expectedPosition == teleportExit;
+			upperTeleportTile->resetFlag(TILESTATE_IMMOVABLEBLOCKSOLID);
+			fixedHeightTeleportAlternative = fixedHeightTeleportAlternative && topology.connectivityUnchanged();
+		}
+		Tile* heightTile = g_game.map.getTile(Position(origin.x, origin.y + 1, origin.z));
+		uint16_t heightItemId = 0;
+		for (size_t index = 1; index < Item::items.size(); ++index) {
+			const ItemType& type = Item::items[index];
+			if (type.hasHeight && type.moveable && !type.isGroundTile()) {
+				heightItemId = static_cast<uint16_t>(index);
+				break;
+			}
+		}
+		if (heightTile && heightItemId) {
+			for (int count = 0; count < 3; ++count) heightTile->addThing(Item::CreateItem(heightItemId));
+			PlayerBotWalkTransition live, supported;
+			PlayerBotNavigationStep step;
+			const Position source = heightTile->getPosition();
+			movableHeightExcluded = heightTile->hasHeight(3) && topology.connectivityUnchanged() &&
+			    playerBotResolveWalkTransition(source, DIRECTION_EAST, live) && live.entry.z == upperLanding.z &&
+			    playerBotResolveWalkTransition(source, DIRECTION_EAST, supported, true) &&
+			    supported.entry.z == source.z &&
+			    !PlayerBotNavigator().resolveMove(player, source, DIRECTION_EAST, {}, step);
+		}
+		Tile* temporaryTile = g_game.map.getTile(Position(origin.x + 1, origin.y + 1, origin.z));
+		Item* temporaryBlock = Item::CreateItem(ITEM_WILDGROWTH);
+		if (temporaryTile && temporaryBlock) {
+			temporaryTile->addThing(temporaryBlock);
+			const bool graphCurrentWhileBlocked = topology.connectivityUnchanged();
+			g_game.internalRemoveItem(temporaryBlock);
+			graphCurrentAfterTemporaryBlock = graphCurrentWhileBlocked && topology.connectivityUnchanged();
+		}
+		const Position barrier(origin.x + 2, origin.y, origin.z);
+		if (!topology.wasWalkableAtBuild(barrier) && window) {
+			g_game.internalRemoveItem(window);
+			graphStaleAfterBarrierRemoval = !topology.connectivityUnchanged();
+		}
 	}
 	cleanup();
 
@@ -612,7 +749,13 @@ std::vector<playerbot::PlayerBotFixtureEvent> playerbot::PlayerBotFixtureDriver:
 	       << ",\"level_denied\":" << boolField(levelDenied)
 	       << ",\"house_denied\":" << boolField(houseDenied)
 	       << ",\"static_aid_denied\":" << boolField(staticActionDenied)
-	       << ",\"navigator_used_door\":" << boolField(navigatorUsedDoor);
+	       << ",\"navigator_used_door\":" << boolField(navigatorUsedDoor)
+	       << ",\"graph_current_after_door_cycle\":" << boolField(graphCurrentAfterDoorCycle)
+	       << ",\"graph_current_after_temporary_block\":" << boolField(graphCurrentAfterTemporaryBlock)
+	       << ",\"movable_height_excluded\":" << boolField(movableHeightExcluded)
+	       << ",\"fixed_height_door_alternatives\":" << boolField(fixedHeightDoorAlternatives)
+	       << ",\"fixed_height_teleport_alternative\":" << boolField(fixedHeightTeleportAlternative)
+	       << ",\"graph_stale_after_barrier_removal\":" << boolField(graphStaleAfterBarrierRemoval);
 	return {{"door_passages_contract", fields.str()}};
 }
 
@@ -622,6 +765,7 @@ std::vector<playerbot::PlayerBotFixtureEvent> playerbot::PlayerBotFixtureDriver:
 
 	constexpr Position approach(64990, 64990, 7);
 	constexpr Position target(64991, 64990, 7);
+	constexpr Position beyond(64992, 64990, 7);
 	constexpr Position destination(64991, 64990, 8);
 	constexpr uint16_t closedItemId = 7932;
 	constexpr uint16_t openItemId = 7933;
@@ -643,7 +787,7 @@ std::vector<playerbot::PlayerBotFixtureEvent> playerbot::PlayerBotFixtureDriver:
 		}
 	}
 	bool mapReady = groundId != 0;
-	for (const Position& position : {approach, target, destination}) {
+	for (const Position& position : {approach, target, beyond, destination}) {
 		if (!mapReady || g_game.map.getTile(position)) {
 			mapReady = false;
 			break;
@@ -663,12 +807,14 @@ std::vector<playerbot::PlayerBotFixtureEvent> playerbot::PlayerBotFixtureDriver:
 	bool closedResolvesUse = false;
 	bool itemOpenLookup = false;
 	bool openWithoutShovel = false;
+	bool closedWalkRepresented = false;
+	bool closedWalkExecutable = false;
 	bool normalOpenSemantic = false;
 	bool openResolvesMove = false;
 	bool blockedRejected = false;
 	bool invalidRejected = false;
 	bool graphCurrentBeforeChange = false;
-	bool graphStaleAfterChange = false;
+	bool graphCurrentAfterKnownChange = false;
 	bool graphCurrentAfterRebuild = false;
 	if (mapReady) {
 		PlayerBotTopology& topology = PlayerBotTopology::instance();
@@ -680,6 +826,7 @@ std::vector<playerbot::PlayerBotFixtureEvent> playerbot::PlayerBotFixtureDriver:
 		const auto openRoute = topology.route(approach, destination, {}, false, false, player.getLevel());
 		openWithoutShovel = openRoute && openRoute->portal &&
 		                    openRoute->portal->action == PlayerBotTopologyPortalAction::UseShovel;
+		closedWalkRepresented = topology.route(approach, beyond, {}, false, false, player.getLevel()).has_value();
 		std::deque<PlayerBotNavigationStep> steps;
 		uint64_t expandedNodes = 0;
 		normalOpenSemantic = PlayerBotNavigator().planFrom(
@@ -692,7 +839,11 @@ std::vector<playerbot::PlayerBotFixtureEvent> playerbot::PlayerBotFixtureDriver:
 
 		// Keep the topology built from the open item while the live item closes.
 		passage = g_game.transformItem(passage, closedItemId);
-		graphStaleAfterChange = !topology.connectivityUnchanged();
+		graphCurrentAfterKnownChange = topology.connectivityUnchanged();
+		std::deque<PlayerBotNavigationStep> closedSteps;
+		uint64_t closedExpanded = 0;
+		closedWalkExecutable = PlayerBotNavigator().planFrom(player, approach, beyond, {}, closedSteps,
+		    closedExpanded, playerBotNavigationMaximumExpandedNodes) == PlayerBotNavigationResult::Reached;
 		passageTile = g_game.map.getTile(target);
 		itemClosedLookup = passage && passageTile && passageTile->getGround() != passage &&
 		                   playerBotShovelPassageItem(*passageTile, closedItemId) == passage;
@@ -737,12 +888,14 @@ std::vector<playerbot::PlayerBotFixtureEvent> playerbot::PlayerBotFixtureDriver:
 	       << ",\"closed_resolves_use\":" << boolField(closedResolvesUse)
 	       << ",\"item_open_lookup\":" << boolField(itemOpenLookup)
 	       << ",\"open_without_shovel\":" << boolField(openWithoutShovel)
+	       << ",\"closed_walk_represented\":" << boolField(closedWalkRepresented)
+	       << ",\"closed_walk_executable\":" << boolField(closedWalkExecutable)
 	       << ",\"normal_open_semantic\":" << boolField(normalOpenSemantic)
 	       << ",\"open_resolves_move\":" << boolField(openResolvesMove)
 	       << ",\"blocked_rejected\":" << boolField(blockedRejected)
 	       << ",\"invalid_rejected\":" << boolField(invalidRejected)
 	       << ",\"graph_current_before_change\":" << boolField(graphCurrentBeforeChange)
-	       << ",\"graph_stale_after_change\":" << boolField(graphStaleAfterChange)
+	       << ",\"graph_current_after_known_change\":" << boolField(graphCurrentAfterKnownChange)
 	       << ",\"graph_current_after_rebuild\":" << boolField(graphCurrentAfterRebuild);
 	return {{"shovel_passages_contract", fields.str()}};
 }
