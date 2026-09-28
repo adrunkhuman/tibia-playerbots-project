@@ -304,6 +304,7 @@ function New-MutablePortalFixture {
         @{ event = "shovel_passages_contract"; item_closed_lookup = $true; closed_requires_shovel = $true;
            shovel_available = $ShovelAvailable; closed_resolves_use = $ShovelAvailable;
            item_open_lookup = $true; open_without_shovel = $true; normal_open_semantic = $true;
+           closed_walk_represented = $true; closed_walk_executable = $true;
            open_resolves_move = $true; blocked_rejected = $true; invalid_rejected = $true }
         @{ event = "action_result"; action = "hunt_waypoint"; result = "reached";
            position = @{ x = 32181; y = 31794; z = 8 } }

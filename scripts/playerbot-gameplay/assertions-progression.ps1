@@ -359,8 +359,18 @@ function Assert-HuntRegionPlanningEvents {
     $selection = if ($selections.Count -gt 0) { $selections[$selections.Count - 1] } else { $null }
     $candidates = @($events | Where-Object { $_.event -eq "hunt_region_candidate" })
 	$scoredCandidateRecords = @($candidates | Where-Object { $_.candidate_phase -eq 'scored' })
+	$cavePatrolCandidates = @($scoredCandidateRecords | Where-Object {
+		$_.center.x -eq 32682 -and $_.center.y -eq 31934 -and $_.center.z -eq 8
+	})
 	$unstablePatrolCandidates = @($scoredCandidateRecords | Where-Object {
 		$null -eq $_.unstable_patrol_points -or $_.unstable_patrol_points -ne 0
+	})
+	$coarseRejects = @($events | Where-Object {
+		$_.event -eq 'hunt_route_connection' -and $_.result -eq 'unreachable' -and
+		$_.fallback_reason -eq 'coarse_unreachable' -and $_.expanded_nodes -eq 0
+	})
+	$coarseRejectSlices = @($events | Where-Object {
+		$_.event -eq 'hunt_planning_slice' -and $_.route_coarse_rejects -gt 0
 	})
 	$routeValidationRecords = @($candidates | Where-Object { $_.candidate_phase -eq 'route_validation' })
 	$snapshotAttributionValid = $completedScoring.Count -ge 1 -and @($completedScoring | Where-Object {
@@ -426,7 +436,9 @@ function Assert-HuntRegionPlanningEvents {
 	if (-not $buildLifecycleValid -or -not $cacheReuseValid -or $transportYields.Count -lt 1 -or $scoringYields.Count -lt 1 -or
 		$cancelled.Count -ne 1 -or $staleRevision.Count -ne 1 -or -not $snapshotAttributionValid -or
 		-not $terminalAttributionValid -or $topologyScans.Count -lt 1 -or $routeValidations.Count -lt 1 -or
-		$unstablePatrolCandidates.Count -ne 0 -or
+		$cavePatrolCandidates.Count -lt 1 -or $unstablePatrolCandidates.Count -ne 0 -or
+		$coarseRejects.Count -lt 1 -or
+		$coarseRejectSlices.Count -lt 1 -or
 		-not $selection -or $selectedCandidate.Count -ne 1 -or
 		$bestScore -eq $null -or [Math]::Abs($selectedCandidate[0].score - $bestScore) -gt 0.01 -or
 		-not $finiteRouteQueue -or $selection.selection_rule -ne $selectionRule -or

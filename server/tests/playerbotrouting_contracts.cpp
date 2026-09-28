@@ -1,4 +1,5 @@
 #include "playerbotpathsearch.h"
+#include "playerbothuntcoarsepolicy.h"
 #include "playerbothunttravelpolicy.h"
 #include "playerbothuntregions.h"
 #include "playerbotroutechanges.h"
@@ -77,6 +78,52 @@ PlayerBotPathSearch gridPath(const PlayerBotNavigationGoal& goal, bool guided, u
 	}, [&](const Position& p) { return playerBotOrdinaryRemainingCost(p, goal); }, 0,
 	    [&](const Position& p) { return guided ? playerBotOrdinaryRemainingCost(p, goal) : 0; })) {}
 	return search;
+}
+
+void huntCoarseVerdictContracts()
+{
+	using Verdict = PlayerBotHuntCoarseVerdict;
+	// Directed graph: 0 -> 1 is free; 1 -> 2/3/4 requires rope/shovel/level 20.
+	// Node 5 is represented but isolated; 6 is outside the graph.
+	const auto known = [](int node) { return node >= 0 && node < 6; };
+	const auto check = [&](int source, std::vector<int> goals, bool rope, bool shovel, unsigned level) {
+		auto reachable = [&](int goal) {
+			assert(known(goal));
+			bool visited[6] = {};
+			std::vector<int> pending{source};
+			while (!pending.empty()) {
+				const int node = pending.back();
+				pending.pop_back();
+				if (visited[node]) continue;
+				visited[node] = true;
+				if (node == goal) return true;
+				if (node == 0) pending.push_back(1);
+				if (node == 1) {
+					if (rope) pending.push_back(2);
+					if (shovel) pending.push_back(3);
+					if (level >= 20) pending.push_back(4);
+				}
+			}
+			return false;
+		};
+		return playerBotHuntCoarseVerdict(source, goals, known, reachable);
+	};
+	assert(check(0, {2, 3, 4, 5}, false, false, 8) == Verdict::Disconnected);
+	assert(check(0, {5}, false, false, 8) == Verdict::Disconnected); // Known isolated goal is definitive.
+	assert(check(2, {0}, true, true, 20) == Verdict::Disconnected); // Edges are not reversible.
+	assert(check(6, {1}, false, false, 8) == Verdict::Unknown);
+	assert(check(0, {5, 6}, false, false, 8) == Verdict::Unknown);
+	assert(check(0, {}, false, false, 8) == Verdict::Unknown);
+	assert(check(0, {5, 1}, false, false, 8) == Verdict::Reachable);
+	assert(check(0, {6, 1}, false, false, 8) == Verdict::Reachable);
+	assert(check(0, {1, 6}, false, false, 8) == Verdict::Reachable);
+	assert(check(0, {2}, false, false, 20) == Verdict::Disconnected);
+	assert(check(0, {2}, true, false, 8) == Verdict::Reachable);
+	assert(check(0, {3}, false, true, 8) == Verdict::Reachable);
+	assert(check(0, {3}, true, false, 20) == Verdict::Disconnected);
+	assert(check(0, {4}, true, true, 19) == Verdict::Disconnected);
+	assert(check(0, {4}, false, false, 20) == Verdict::Reachable);
+	assert(check(0, {2, 3, 4}, false, true, 8) == Verdict::Reachable);
 }
 
 void ordinaryWalkingContracts()
@@ -838,6 +885,7 @@ void invalidationAndCancellation()
 int main()
 {
 	resumedPaths();
+	huntCoarseVerdictContracts();
 	ordinaryWalkingContracts();
 	peakDangerPathContracts();
 	reusableSourceTreeContracts();
