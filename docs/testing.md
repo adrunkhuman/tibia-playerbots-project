@@ -58,6 +58,9 @@ sh server/tests/playerbot_contracts.sh
 sh server/tests/playerbotlifecycle_contracts.sh
 sh server/tests/playerbothunttiming_contracts.sh
 sh server/tests/playerbotrouting_contracts.sh
+sh server/tests/playerbotselllootapproach_contracts.sh
+sh server/tests/playerbotselllootbasket_contracts.sh
+sh server/tests/playerbotselllootfilter_contracts.sh
 sh server/tests/playerbotshortcutheuristic_contracts.sh
 sh server/tests/playerbotroutecorridor_contracts.sh
 sh server/tests/playerbotguidedtree_contracts.sh
@@ -77,6 +80,10 @@ lua scripts/test-playerbot-coin-estimation.lua
 ```
 
 A zero exit status and each script's explicit pass marker are the pass signal. These checks prove policy, arithmetic, parsing, and fixture contracts; they do not execute an ordinary live world.
+
+### Depot liquidation timing
+
+Follow one bot's depot visit across `sell_loot_plan` records: route work can span several turns. `snapshot_us` measures synchronous candidate construction; `walking_us` and `npc_us` are nested within `elapsed_us`, so do not add them. A budget denial reports `budget_wait_us` instead. `sell_loot_approach` and `sell_loot_candidate` show approach retries and rejections; `action_result` with `action: "sell_loot_provider_route"` shows the execution route, quote, and rejection reason. `sell_loot_defer` marks an abandoned trip. The planning budget does not impose a hard latency bound on synchronous work.
 
 ### Hunt-selection timing
 
