@@ -14,9 +14,11 @@
 #include "playerbotdangersamplekey.h"
 #include "playerbotplanningbudget.h"
 #include "playerbothuntregionadapter.h"
+#include "playerbothunttravelpolicy.h"
 #include "playerbotnpccapabilities.h"
 #include "playerbottopology.h"
 #include "playerbotroutecache.h"
+#include "playerbottransportsearch.h"
 
 #include <tuple>
 
@@ -940,7 +942,7 @@ std::optional<PlayerBotNavigationRoutePlan> PlayerBotController::planNpcTravelRo
 
 std::optional<PlayerBotNavigationRoutePlan> PlayerBotController::planNpcTravelRoute(
 	Player& player, const Position& source, const Position& destination, const std::set<Position>& blockedPositions,
-	uint64_t maximumExpandedNodes, bool estimateOnly) const
+	uint64_t maximumExpandedNodes, bool estimateOnly, uint64_t transportReserve, bool sellEconomy) const
 {
 	if (player.isPzLocked()) return std::nullopt;
 
@@ -952,7 +954,7 @@ std::optional<PlayerBotNavigationRoutePlan> PlayerBotController::planNpcTravelRo
 	std::vector<Position> states{source};
 	std::map<Position, size_t> stateIndices{{source, 0}};
 	const Position currentPosition = source;
-	const uint64_t availableMoney = player.getMoney() + player.getBankBalance();
+	const uint64_t availableMoney = playerBotHuntTransportFunds(player.getMoney() + player.getBankBalance(), transportReserve);
 	for (Npc* npc : playerBotNpcProviders(g_game.getNpcs(), PlayerBotNpcCapability::Travel, currentPosition)) {
 		for (const NpcTravelOffer& offer : npc->getTravelOffers()) {
 			if (!playerBotNpcTravelOfferEligible(player.getLevel(), player.isPremium(), availableMoney,
@@ -972,7 +974,7 @@ std::optional<PlayerBotNavigationRoutePlan> PlayerBotController::planNpcTravelRo
 	if (edges.empty()) return std::nullopt;
 
 	struct QueueEntry {
-		uint64_t cost = 0;
+		double cost = 0;
 		uint64_t fare = 0;
 		uint32_t dangerCost = 0;
 		double maximumDanger = 0;
@@ -993,7 +995,7 @@ std::optional<PlayerBotNavigationRoutePlan> PlayerBotController::planNpcTravelRo
 	};
 	auto worse = [](const QueueEntry& left, const QueueEntry& right) { return left.cost > right.cost; };
 	std::priority_queue<QueueEntry, std::vector<QueueEntry>, decltype(worse)> queue(worse);
-	std::vector<std::vector<std::pair<uint64_t, uint64_t>>> labels(states.size());
+	std::vector<std::vector<std::pair<double, uint64_t>>> labels(states.size());
 	labels[0].push_back({0, 0});
 	queue.push({0, 0, 0, 0, 0, 0, 0, std::numeric_limits<size_t>::max()});
 	const PlayerBotNavigator navigator;
@@ -1076,7 +1078,7 @@ std::optional<PlayerBotNavigationRoutePlan> PlayerBotController::planNpcTravelRo
 		return std::nullopt;
 	};
 	size_t selectedEdge = std::numeric_limits<size_t>::max();
-	uint64_t selectedCost = std::numeric_limits<uint64_t>::max();
+	double selectedCost = std::numeric_limits<double>::infinity();
 	uint32_t selectedDangerCost = 0;
 	double selectedMaximumDanger = 0;
 	uint32_t selectedRouteSteps = 0;
@@ -1106,7 +1108,9 @@ std::optional<PlayerBotNavigationRoutePlan> PlayerBotController::planNpcTravelRo
 				if (!topologyRoute) continue;
 				const uint32_t finalSteps = std::max(playerBotNavigationDistance(states[current.state], destination),
 				                                     *destinationPortals * 32);
-				const uint64_t totalCost = current.cost + finalSteps + topologyRoute->dangerCost / 10;
+				const double totalCost = current.cost + (sellEconomy ?
+					playerBotTransportRouteCost(finalSteps * player.getStepDuration() / 1000.0,
+						0, topologyRoute->dangerCost, true) : double(finalSteps + topologyRoute->dangerCost / 10));
 				if (totalCost < selectedCost) {
 					selectedCost = totalCost;
 					selectedEdge = current.firstEdge;
@@ -1130,7 +1134,9 @@ std::optional<PlayerBotNavigationRoutePlan> PlayerBotController::planNpcTravelRo
 				std::min(segmentNodeBudget, graphNodeBudget - graphExpandedNodes), nullptr, &costPolicy, &finalCost);
 			graphExpandedNodes += expandedNodes;
 			if (result == PlayerBotNavigationResult::Reached) {
-				const uint64_t totalCost = current.cost + movementCost(finalSteps) + finalCost.dangerCost / 10;
+				const double totalCost = current.cost + (sellEconomy ?
+					playerBotTransportRouteCost(travelSeconds(finalSteps), 0, finalCost.dangerCost, true) :
+					double(movementCost(finalSteps) + finalCost.dangerCost / 10));
 				if (totalCost < selectedCost) {
 					selectedCost = totalCost;
 					selectedEdge = current.firstEdge;
@@ -1157,8 +1163,9 @@ std::optional<PlayerBotNavigationRoutePlan> PlayerBotController::planNpcTravelRo
 			const size_t nextState = stateIndices.at(edge.offer->destination);
 			const uint64_t nextFare = current.fare + edge.offer->price;
 			if (nextFare > availableMoney) continue;
-			const uint64_t nextCost = current.cost + approach->movementCost + approach->dangerCost / 10 +
-			                          50 + edge.offer->price / 10;
+			const double nextCost = current.cost + (sellEconomy ?
+				playerBotTransportRouteCost(approach->travelSeconds + 1.0, edge.offer->price, approach->dangerCost, true) :
+				double(approach->movementCost + approach->dangerCost / 10 + 50 + edge.offer->price / 10));
 			const uint32_t nextDangerCost = static_cast<uint32_t>(std::min<uint64_t>(
 			    static_cast<uint64_t>(current.dangerCost) + approach->dangerCost,
 			    std::numeric_limits<uint32_t>::max()));

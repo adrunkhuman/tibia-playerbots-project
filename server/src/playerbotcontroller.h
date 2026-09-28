@@ -32,6 +32,7 @@
 #include "playerbottelemetry.h"
 #include "playerbotserviceworkflow.h"
 #include "playerbotturnrouter.h"
+#include "playerbotroutechanges.h"
 
 #include "container.h"
 #include "condition.h"
@@ -405,9 +406,11 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		                                                               const Position& destination,
 		                                                               const std::set<Position>& blockedPositions,
 		                                                               uint64_t maximumExpandedNodes,
-		                                                               bool estimateOnly = false) const;
+		                                                               bool estimateOnly = false, uint64_t transportReserve = 0,
+		                                                               bool sellEconomy = false) const;
 		std::optional<PlayerBotNavigationRoutePlan> advanceHuntTravelRoute(Player& player,
-		    const PlayerBotHuntRouteRequest& request, const Position& source, PlayerBotHuntRouteTiming& timing);
+		    const PlayerBotHuntRouteRequest& request, const Position& source, PlayerBotHuntRouteTiming& timing,
+		    uint64_t transportReserve, bool sellEconomy, PlayerBotNavigationRoutePlan* walkingAlternative = nullptr);
 		PlayerBotNavigationRoutePlan planHuntTravelRoute(Player& player, const Position& source,
 		                                                 const Position& destination,
 		                                                 const std::set<Position>& blockedPositions = {},
@@ -533,6 +536,8 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 			uint8_t subType = 0;
 			uint32_t withdrawn = 0;
 		};
+		bool sellLootManifestFits(Player& player, const Container& chest, const Container& backpack,
+		                          const std::vector<SellLootBatch>& batches);
 		struct SellLootPlan {
 			uint16_t sourceDepotId = 0;
 			uint32_t providerId = 0;
@@ -559,11 +564,33 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 			uint32_t withdrawalDepotBefore = 0;
 			uint8_t withdrawalRequested = 0;
 		};
+		struct SellLootCandidate {
+			uint16_t sourceDepotId = 0;
+			uint32_t providerId = 0;
+			Position sourceApproach, providerPosition, providerApproach;
+			std::vector<Position> providerApproaches;
+			size_t approachIndex = 0;
+			std::vector<SellLootBatch> batches;
+			uint64_t revenue = 0, roughCost = 0;
+		};
+		struct SellLootSearch {
+			Position origin;
+			uint16_t depotId = 0;
+			std::vector<SellLootCandidate> candidates;
+			size_t next = 0;
+			uint32_t scannedItems = 0;
+			uint64_t pass = 0;
+			uint64_t sequence = 0;
+			uint32_t invalidationRetries = 0;
+			std::optional<PlayerBotNavigationRoutePlan> sourceRoute;
+			std::optional<PlayerBotNavigationRoutePlan> sourceWalkingRoute;
+			std::shared_ptr<PlayerBotHuntTravelWork> routeWork;
+			PlayerBotRouteChanges::Watch routeWatch;
+			std::string routeFacts, sourceTravelPositions;
+		};
 		std::optional<SellLootPlan> sellLootPlan;
-		size_t sellLootItemScanOffset = 0;
-		size_t sellLootItemScanRemaining = 0;
-		size_t sellLootRouteScanOffset = 0;
-		size_t sellLootRouteScanRemaining = 0;
+		std::optional<SellLootSearch> sellLootSearch;
+		bool depotCompletionAnnounced = false;
 		bool sellLootSearchPending = false;
 		bool sellLootSurvivalFallback = false;
 		std::optional<PlayerBotTopologyDistances> serviceTopologyDistances;

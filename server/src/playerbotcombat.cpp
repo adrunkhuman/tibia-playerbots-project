@@ -1342,7 +1342,7 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 			if (request->routeAvailable) {
 				const auto routeStarted = std::chrono::steady_clock::now();
 				const auto pendingPlan = advanceHuntTravelRoute(player, *request,
-				    request->stage == PlayerBotHuntRouteStage::Outbound ? position : request->from, routes);
+				    request->stage == PlayerBotHuntRouteStage::Outbound ? position : request->from, routes, carriedGoldReserve, false);
 				routeTime += std::chrono::steady_clock::now() - routeStarted;
 				routedThisTurn = true;
 				if (!pendingPlan) {

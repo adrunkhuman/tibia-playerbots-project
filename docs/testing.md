@@ -58,6 +58,9 @@ sh server/tests/playerbot_contracts.sh
 sh server/tests/playerbotlifecycle_contracts.sh
 sh server/tests/playerbothunttiming_contracts.sh
 sh server/tests/playerbotrouting_contracts.sh
+sh server/tests/playerbotselllootapproach_contracts.sh
+sh server/tests/playerbotselllootbasket_contracts.sh
+sh server/tests/playerbotselllootfilter_contracts.sh
 sh server/tests/playerbotshortcutheuristic_contracts.sh
 sh server/tests/playerbotroutecorridor_contracts.sh
 sh server/tests/playerbotguidedtree_contracts.sh
@@ -77,6 +80,10 @@ lua scripts/test-playerbot-coin-estimation.lua
 ```
 
 A zero exit status and each script's explicit pass marker are the pass signal. These checks prove policy, arithmetic, parsing, and fixture contracts; they do not execute an ordinary live world.
+
+### Depot liquidation timing
+
+`sell_loot_plan` reports `snapshot_rebuilt`, `snapshot_us`, candidate count/index, `walking_us`, `npc_us`, `route_expanded_nodes`, `route_yields`, `route_invalidations`, and `elapsed_us`. A route may take several turns; compare all slices for one controller and depot pass. `snapshot_us` is synchronous candidate construction; walking and NPC timings are nested inside `elapsed_us`. A planning-budget denial reports `budget_wait_us` instead. `sell_loot_approach` reports when a seller's route failed and the planner tries the next conversation tile; `sell_loot_candidate.provider_approach_index` identifies the final rejected tile. For a selected sale, each `action_result` with `action: "sell_loot_provider_route"` records the actual seller-approach destination, route outcome, fare, risk acceptance, quoted fare and steps, the workflow's next command, and a specific rejection reason. Compare these with the preceding `sell_loot_plan` and the eventual `sell_loot_defer`; `fare_unaffordable` is distinct from `fare_exceeds_quote`. These fields help distinguish search work from scheduler waits; they do not impose a hard wall-clock deadline on atomic topology work.
 
 ### Hunt-selection timing
 

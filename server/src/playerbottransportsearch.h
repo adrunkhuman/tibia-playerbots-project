@@ -17,7 +17,14 @@ struct PlayerBotTransportSegment {
 	bool boundRejected = false; // Not unreachable, not a node-limit result.
 };
 
-// All costs use seconds + fare/10 + danger/10, including incumbents.
+// Keep fractional time throughout the search: rounding each leg breaks
+// additive bounds. Sell-loot callers round only the final economic score.
+inline double playerBotTransportRouteCost(double seconds, uint64_t fare, uint32_t danger, bool sellEconomy = false)
+{
+	return (sellEconomy ? seconds / 6.0 + fare : seconds + fare / 10.0) + danger / 10.0;
+}
+
+// Bounds, labels and incumbents must use the same request objective.
 // Geometry is NEVER a lower bound: a single portal can cross the whole map.
 inline bool playerBotTransportBoundRejects(double lowerCost, uint64_t minimumFare,
                                           double incumbentCost, uint64_t incumbentFare, bool incumbentSafe)
@@ -29,9 +36,11 @@ inline bool playerBotTransportBoundRejects(double lowerCost, uint64_t minimumFar
 // move through an open shovel passage carries 30 units but is represented as
 // a one-second use step. Danger is already in cost units. This deliberately
 // weak conversion covers all mixtures; never apply it to geometric distance.
-inline double playerBotLocalRouteCostLowerBound(uint32_t frontierCost, double cardinalMs, double diagonalMs)
+inline double playerBotLocalRouteCostLowerBound(uint32_t frontierCost, double cardinalMs, double diagonalMs,
+                                               bool sellEconomy = false)
 {
-	return frontierCost * std::min({1.0 / 30.0, cardinalMs / 10000.0, diagonalMs / 30000.0});
+	const double timeScale = sellEconomy ? 1.0 / 6.0 : 1.0;
+	return frontierCost * std::min({timeScale / 30.0, timeScale * cardinalMs / 10000.0, timeScale * diagonalMs / 30000.0});
 }
 
 // Pure lazy transport graph. IDs index copied request facts, never live NPCs.
@@ -61,8 +70,9 @@ public:
 
 	PlayerBotTransportSearch(size_t states, std::vector<Offer> offers, uint64_t money,
 	                         std::optional<Label> walking = std::nullopt, std::vector<double> stateRanks = {},
-	                         std::vector<Position> statePositions = {}, std::vector<Position> connectionPositions = {})
-	    : offers(std::move(offers)), money(money), labels(states), incumbent(walking), stateRanks(std::move(stateRanks)),
+	                         std::vector<Position> statePositions = {}, std::vector<Position> connectionPositions = {},
+	                         bool sellEconomy = false)
+	    : offers(std::move(offers)), money(money), sellEconomy(sellEconomy), labels(states), incumbent(walking), stateRanks(std::move(stateRanks)),
 	      statePositions(std::move(statePositions)), connectionPositions(std::move(connectionPositions))
 	{
 		labels[0].push_back({});
@@ -99,7 +109,7 @@ public:
 			    task.label.lowerCost + 2 * stateRank(task.label.state)});
 			for (size_t i = 0; i < offers.size(); ++i) {
 				if (offers[i].fare > money - task.label.fare) continue;
-				const double bound = task.label.lowerCost + 1.0 + offers[i].fare / 10.0;
+				const double bound = task.label.lowerCost + playerBotTransportRouteCost(1.0, offers[i].fare, 0, sellEconomy);
 				queue.push({task.label, i, bound, bound + offers[i].rank + approachRank(task.label.state, offers[i].connection)});
 			}
 			return false;
@@ -130,20 +140,20 @@ public:
 		active.reset();
 		if (segment.result != PlayerBotNavigationResult::Reached) return false;
 		Label next = task.label;
-		next.lowerCost += segment.seconds + segment.danger / 10.0;
+		next.lowerCost += playerBotTransportRouteCost(segment.seconds, 0, segment.danger, sellEconomy);
 		next.seconds += segment.seconds;
 		next.steps += segment.steps;
 		next.danger = static_cast<uint32_t>(std::min<uint64_t>(UINT32_MAX, uint64_t(next.danger) + segment.danger));
 		next.peak = std::max(next.peak, segment.peak);
 		if (!final) {
 			next.fare += offers[task.offer].fare;
-			next.lowerCost += 1.0 + offers[task.offer].fare / 10.0;
+			next.lowerCost += playerBotTransportRouteCost(1.0, offers[task.offer].fare, 0, sellEconomy);
 			next.seconds += 1.0;
 			++next.steps;
 			next.state = offers[task.offer].destination;
 			if (next.firstOffer == SIZE_MAX) next.firstOffer = task.offer;
 		}
-		next.cost = next.seconds + next.fare / 10.0 + next.danger / 10.0;
+		next.cost = playerBotTransportRouteCost(next.seconds, next.fare, next.danger, sellEconomy);
 		// Both accumulated danger and peak danger are monotone. No extension
 		// of this prefix can satisfy the same route safety limits.
 		if (!safe(next)) {
@@ -205,6 +215,7 @@ private:
 	}
 	std::vector<Offer> offers;
 	uint64_t money;
+	bool sellEconomy;
 	std::vector<std::vector<Label>> labels;
 	std::optional<Label> incumbent;
 	std::vector<double> stateRanks;

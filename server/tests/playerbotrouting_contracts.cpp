@@ -448,6 +448,19 @@ void boundsAndRisk()
 			assert((fare <= spendable) == playerBotHuntTravelAffordable(funds, 100, fare, 0, 0));
 		}
 	}
+	// A sale sourced at a depot must plan against the same supply reserve
+	// enforced when its seller route is executed, including both fare legs.
+	const uint64_t saleFunds = 263, saleReserve = 220;
+	const uint64_t saleFare = playerBotHuntTransportFunds(saleFunds, saleReserve);
+	assert(saleFare == 43);
+	assert(!playerBotHuntTravelPaymentAffordable(saleFunds, saleReserve, 60, 0,
+	    PlayerBotHuntTravelBudgetPhase::Supply));
+	assert(playerBotHuntTravelPaymentAffordable(saleFunds, saleReserve, 0, 0,
+	    PlayerBotHuntTravelBudgetPhase::Supply));
+	assert(playerBotHuntTravelPaymentAffordable(saleFunds, saleReserve, 20 + 23, 0,
+	    PlayerBotHuntTravelBudgetPhase::Supply));
+	assert(!playerBotHuntTravelPaymentAffordable(saleFunds, saleReserve, 20 + 24, 0,
+	    PlayerBotHuntTravelBudgetPhase::Supply));
 	// Even a broke bot can use free transport; paid alternatives cannot spend
 	// gold that final hunt acceptance already reserves for recovery.
 	Transport freeTrip(2, {{0, 1, 0}, {1, 1, 1}}, playerBotHuntTransportFunds(100, 100));
@@ -556,6 +569,9 @@ void remoteConnectionsAndBounds()
 			const unsigned units = moves * 10 + moves * 30 + uses * 20 + danger;
 			const double actual = moves * cardinal / 1000 + moves * cardinal * 3 / 1000 + uses + danger / 10.0;
 			assert(playerBotLocalRouteCostLowerBound(units, cardinal, cardinal * 3) <= actual + 1e-9);
+			const double sellActual = playerBotTransportRouteCost(
+			    moves * cardinal / 1000 + moves * cardinal * 3 / 1000 + uses, 0, danger, true);
+			assert(playerBotLocalRouteCostLowerBound(units, cardinal, cardinal * 3, true) <= sellActual + 1e-9);
 		}
 	}
 	assert(playerBotLocalRouteCostLowerBound(30, 1000, 3000) <= 1.0); // Open diagonal shovel passage.
@@ -583,6 +599,91 @@ void unknownAndCache()
 		return Segment{Result::Reached, 1, 1, 0, 0};
 	});
 	assert(nextRequest.bestPaid && !nextRequest.incomplete);
+}
+
+void transportObjectives()
+{
+	assert(playerBotTransportRouteCost(120, 0, 0, true) == 20);
+	assert(playerBotTransportRouteCost(10, 30, 0) == 13);
+	assert(playerBotTransportRouteCost(6, 3, 20, true) == 6);
+	for (const bool sell : {false, true}) {
+		Transport::Label walking;
+		walking.seconds = 120;
+		walking.cost = playerBotTransportRouteCost(walking.seconds, 0, 0, sell);
+		Transport route(2, {{0, 1, 30}}, 100, walking, {}, {}, {}, sell);
+		unsigned queries = 0;
+		finish(route, [&](size_t state, size_t connection, bool) -> std::optional<Segment> {
+			++queries;
+			if (state == 0 && connection == 0) return Segment{Result::Reached, 9};
+			if (state == 1 && connection == SIZE_MAX) return Segment{Result::Reached};
+			return Segment{Result::Unreachable};
+		});
+		if (sell) {
+			assert(!route.bestPaid && queries == 0); // 20g walking beats 31 2/3g by boat.
+			assert(route.counters.boundRejects == 1);
+		} else {
+			assert(route.bestPaid && route.bestPaid->seconds == 10 && route.bestPaid->fare == 30);
+			assert(route.bestPaid->cost == 13 && route.bestPaid->cost < walking.cost);
+		}
+
+		// A cheap but unsafe walk must not prune a safe boat in either mode.
+		walking.seconds = walking.cost = 0;
+		walking.peak = 0.2;
+		Transport unsafeWalk(2, {{0, 1, 30}}, 100, walking, {}, {}, {}, sell);
+		finish(unsafeWalk, [](size_t state, size_t connection, bool) -> std::optional<Segment> {
+			if (state == 0 && connection == 0) return Segment{Result::Reached, 9};
+			if (state == 1 && connection == SIZE_MAX) return Segment{Result::Reached};
+			return Segment{Result::Unreachable};
+		});
+		assert(unsafeWalk.bestPaid && unsafeWalk.bestPaid->fare == 30);
+	}
+}
+
+void sellPaidAlternatives()
+{
+	// Visit the fast expensive offer first. The cheapest fare is not the best
+	// economic route either: fare 5 wins once travel time is included.
+	for (const bool sell : {false, true}) {
+		Transport route(2, {{0, 1, 30, 0}, {1, 1, 5, 1000}, {2, 1, 1, 2000}},
+		    100, std::nullopt, {}, {}, {}, sell);
+		finish(route, [](size_t state, size_t connection, bool) -> std::optional<Segment> {
+			if (state == 0 && connection < 3) {
+				const double seconds[] = {9, 59, 119};
+				return Segment{Result::Reached, seconds[connection]};
+			}
+			if (state == 1 && connection == SIZE_MAX) return Segment{Result::Reached};
+			return Segment{Result::Unreachable};
+		});
+		assert(route.bestPaid && route.bestPaid->fare == (sell ? 5 : 30));
+		assert(route.bestPaid->firstOffer == (sell ? 1u : 0u));
+		assert(route.bestPaid->cost == (sell ? 15 : 13));
+		assert(std::abs(route.bestPaid->lowerCost - route.bestPaid->cost) < 1e-9);
+	}
+
+	// Validated walking prefixes must use seconds/6 too; a hunt-cost bound
+	// here would incorrectly prune the paid route against the 20g walk.
+	Transport::Label walking;
+	walking.seconds = 120;
+	walking.cost = playerBotTransportRouteCost(120, 0, 0, true);
+	Transport cheaper(2, {{0, 1, 5}}, 100, walking, {}, {}, {}, true);
+	finish(cheaper, [](size_t state, size_t connection, bool) -> std::optional<Segment> {
+		if (state == 0 && connection == 0) return Segment{Result::Reached, 54};
+		if (state == 1 && connection == SIZE_MAX) return Segment{Result::Reached, 5};
+		return Segment{Result::Unreachable};
+	});
+	assert(cheaper.bestPaid && cheaper.bestPaid->cost == 15 && cheaper.bestPaid->fare == 5);
+
+	// Do not round each leg: two one-second rides remain below a 3g walk.
+	walking.seconds = 18;
+	walking.cost = playerBotTransportRouteCost(18, 0, 0, true);
+	Transport fractional(3, {{0, 1, 1}, {1, 2, 1}}, 2, walking, {}, {}, {}, true);
+	finish(fractional, [](size_t state, size_t connection, bool) -> std::optional<Segment> {
+		if ((state == 0 && connection == 0) || (state == 1 && connection == 1) ||
+		    (state == 2 && connection == SIZE_MAX)) return Segment{Result::Reached};
+		return Segment{Result::Unreachable};
+	});
+	assert(fractional.bestPaid && fractional.bestPaid->fare == 2 && fractional.bestPaid->seconds == 2);
+	assert(std::abs(fractional.bestPaid->cost - 7.0 / 3.0) < 1e-9);
 }
 
 void paidIncumbentPruning()
@@ -747,6 +848,8 @@ int main()
 	remoteConnectionsAndBounds();
 	unknownAndCache();
 	paidIncumbentPruning();
+	transportObjectives();
+	sellPaidAlternatives();
 	providerMovementPolicy();
 	itemUpdateDependencies();
 	invalidationAndCancellation();
