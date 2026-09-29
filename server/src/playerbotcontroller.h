@@ -23,6 +23,7 @@
 #include "playerbotequipmentadapter.h"
 #include "playerbotinventorypolicy.h"
 #include "playerbotnavigationruntime.h"
+#include "playerbotselllootfilter.h"
 #include "playerbottopology.h"
 #include "playerbotprogressionruntime.h"
 #include "playerbotprogressionplanners.h"
@@ -385,6 +386,8 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		    const std::set<Position>& blockedPositions) const;
 
 		bool executeNavigationStep(Player* player, const PlayerBotNavigationStep& step);
+		std::optional<PlayerBotNavigationStep> sidestepBlockedMove(Player& player, const Position& currentPosition,
+		                                                            const PlayerBotNavigationStep& blocked);
 		PlayerBotNavigationRoutePlan planNavigationRoute(Player& player, const Position& destination,
 		                                                const std::set<Position>& blockedPositions = {},
 		                                                uint64_t maximumExpandedNodes = playerBotNavigationMaximumExpandedNodes,
@@ -453,7 +456,10 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		bool findDepositableItem(const Player& player, Container* container, Container*& source,
 		                         Item*& depositItem, uint8_t& count) const;
 		bool findDepotLocker(const Position& position, uint16_t expectedDepotId, uint16_t& lockerItemId) const;
+		bool depotApproachOccupied(const Player& player, const Position& approach) const;
 		bool discoverDepot(Player& player, const Position& currentPosition);
+		bool depotApproachStalled(Player& player, const Position& currentPosition, const Position& approach,
+		                          const PlayerBotNavigationRuntimeOutcome* navigation);
 		bool openDepotLocker(Player& player, const PlayerBotDepotSnapshot& depot, const Position& currentPosition);
 		bool openDepotChest(Player& player, const PlayerBotDepotSnapshot& depot, const Position& currentPosition);
 		bool pauseDepotFixtureForRestart(Player& player, playerbot::DepotRestartCheckpoint checkpoint,
@@ -576,6 +582,9 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 			size_t approachIndex = 0;
 			std::vector<SellLootBatch> batches;
 			uint64_t revenue = 0, roughCost = 0;
+			// Optimistic fare plus travel time; no feasible trip costs less.
+			uint64_t tripCostBound = 0;
+			uint32_t providerMoves = 0;
 		};
 		struct SellLootSearch {
 			Position origin;
@@ -591,6 +600,21 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 			std::shared_ptr<PlayerBotHuntTravelWork> routeWork;
 			PlayerBotRouteChanges::Watch routeWatch;
 			std::string routeFacts, sourceTravelPositions;
+			// The source leg depends only on the depot, not the seller. Reject a
+			// depot's remaining sellers without repeating its transport search.
+			std::map<uint16_t, std::string> unavailableSources;
+			// Validated source-leg cost and fare per depot. The engine picks that
+			// leg by the same economy, so no other seller can share a cheaper one.
+			std::map<uint16_t, std::pair<uint64_t, uint64_t>> sourceCosts;
+			struct TravelOffer { Position provider, destination; uint64_t fare = 0; };
+			std::optional<std::vector<TravelOffer>> travelOffers;
+			playerbot::SellLootTravelGraph travelGraph;
+			// Forward movement lower bounds, one per trip leg start.
+			std::map<Position, PlayerBotTopologyHeuristic> potentials;
+			bool bounded = false;
+			size_t pruned = 0;
+			// Reachability with the topology generation that produced it.
+			std::map<Position, std::pair<uint64_t, std::shared_ptr<const PlayerBotTopologyReachability>>> reachability;
 		};
 		struct ServiceRouteSearch {
 			Position origin, destination;
@@ -601,6 +625,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 			std::shared_ptr<PlayerBotHuntTravelWork> work;
 		};
 		std::optional<ServiceRouteSearch> serviceRouteSearch;
+		uint32_t serviceBlockedRouteWaits = 0;
 		uint64_t serviceRouteSerial = 0;
 		struct DepotSourceRouteSearch {
 			Position origin, destination, locker;

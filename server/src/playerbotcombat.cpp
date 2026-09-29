@@ -44,12 +44,13 @@ namespace {
 		const auto first = std::find_if(executable.steps.begin(), executable.steps.end(), [](const auto& step) {
 			return step.action == PlayerBotNavigationAction::NpcTravel;
 		});
+		// Stairs and floor-change portals are walking moves: boat decks are often
+		// on another floor. Their exposure is covered by the zero-danger check.
 		return std::all_of(executable.steps.begin(), first, [&source](const auto& step) {
-			const bool ordinary = step.action == PlayerBotNavigationAction::Move && !step.topologyPortal &&
-			    step.target == step.expectedPosition && step.target != source &&
+			const bool walk = step.action == PlayerBotNavigationAction::Move && step.target != source &&
 			    Position::areInRange<1, 1, 0>(source, step.target);
 			source = step.expectedPosition;
-			return ordinary;
+			return walk;
 		}) && (first == executable.steps.end() ||
 		       (first + 1 == executable.steps.end() &&
 		        playerBotNpcTravelOfferMatches(*executable.metrics.firstNpcTravelOffer, *first)));
@@ -1803,16 +1804,13 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 		if (pauseDepotFixtureForRestart(*player, DepotRestartCheckpoint::Approach, currentPosition)) {
 			return;
 		}
-		if (!processNavigation(player, currentPosition, depot.selected.approachPosition)) {
-			if (navigationRuntime.fixedTargetRouteFailureCount() != 0) {
-				PlayerBotDepotObservation observation;
-				observation.currentPosition = currentPosition;
-				observation.now = std::chrono::steady_clock::now();
-				observation.routeResult = PlayerBotDepotRouteResult::Unreachable;
-				depotWorkflow.advance(observation, depotRouteValidationsPerDecision, maximumDepotDiscoveryAttempts,
-				                      depotApproachSuppression);
-				resetNavigation();
-			}
+		if (depotApproachStalled(*player, currentPosition, depot.selected.approachPosition, nullptr)) {
+			schedule(blockedRouteRetryInterval);
+			return;
+		}
+		PlayerBotNavigationRuntimeOutcome navigation;
+		if (!processNavigation(player, currentPosition, depot.selected.approachPosition, &navigation)) {
+			depotApproachStalled(*player, currentPosition, depot.selected.approachPosition, &navigation);
 			return;
 		}
 		setCyclePhase(CyclePhase::DepositLoot, currentPosition, "depot_reached");
@@ -1832,16 +1830,9 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 		if (!Position::areInRange<1, 1, 0>(currentPosition, depot.selected.approachPosition)) {
 			setCyclePhase(CyclePhase::ReturnToDepot, currentPosition, "displaced_during_deposit");
 			resetNavigation();
-			if (!processNavigation(player, currentPosition, depot.selected.approachPosition)) {
-				if (navigationRuntime.fixedTargetRouteFailureCount() != 0) {
-					PlayerBotDepotObservation observation;
-					observation.currentPosition = currentPosition;
-					observation.now = std::chrono::steady_clock::now();
-					observation.routeResult = PlayerBotDepotRouteResult::Unreachable;
-					depotWorkflow.advance(observation, depotRouteValidationsPerDecision, maximumDepotDiscoveryAttempts,
-					                      depotApproachSuppression);
-					resetNavigation();
-				}
+			PlayerBotNavigationRuntimeOutcome navigation;
+			if (!processNavigation(player, currentPosition, depot.selected.approachPosition, &navigation)) {
+				depotApproachStalled(*player, currentPosition, depot.selected.approachPosition, &navigation);
 				return;
 			}
 			setCyclePhase(CyclePhase::DepositLoot, currentPosition, "depot_reached");

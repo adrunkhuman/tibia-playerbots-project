@@ -271,6 +271,8 @@ class PlayerBotNavigationRuntime
 
 		size_t routeSize() const { return session.routeSize(); }
 		bool hasPendingWork() const { return session.hasPendingWork(); }
+		const PlayerBotNavigationStep* followingStep() const { return session.followingStep(); }
+		void sidestep(const PlayerBotNavigationStep& via, Direction onward) { session.sidestep(via, onward); }
 		std::set<Position> activeBlockedPositions(std::chrono::steady_clock::time_point now) { return session.activeBlockedPositions(now); }
 		bool hasActiveRouteBlock(std::chrono::steady_clock::time_point now) const { return session.hasActiveRouteBlock(now); }
 		bool oscillationDetected() const { return session.oscillationDetected(); }

@@ -1466,6 +1466,40 @@ bool PlayerBotController::handleFixedTargetRouteExhausted(Player*, const Positio
 	return true;
 }
 
+std::optional<PlayerBotNavigationStep> PlayerBotController::sidestepBlockedMove(Player& player, const Position& currentPosition,
+	                                                                            const PlayerBotNavigationStep& blocked)
+{
+	// Rejoin the validated route at the following plain move; anything else
+	// (a destination, portal, or floor change) keeps the normal recovery.
+	const PlayerBotNavigationStep* onward = navigationRuntime.followingStep();
+	if (blocked.topologyPortal || blocked.target != blocked.expectedPosition || !onward ||
+	    onward->action != PlayerBotNavigationAction::Move || onward->topologyPortal ||
+	    onward->target != onward->expectedPosition || onward->target.z != currentPosition.z) return std::nullopt;
+	const PlayerBotNavigator navigator;
+	const PlayerBotNavigationCostPolicy costPolicy = navigationCostPolicy(player);
+	const std::set<Position> avoid{blocked.target};
+	// Cardinal moves first: diagonal steps take longer.
+	static constexpr Direction directions[] = {DIRECTION_NORTH, DIRECTION_EAST, DIRECTION_SOUTH, DIRECTION_WEST,
+	                                           DIRECTION_NORTHEAST, DIRECTION_SOUTHEAST, DIRECTION_SOUTHWEST,
+	                                           DIRECTION_NORTHWEST};
+	for (Direction direction : directions) {
+		const Position via = getNextPosition(direction, currentPosition);
+		if (via == onward->target || !Position::areInRange<1, 1, 0>(via, onward->target)) continue;
+		const Tile* tile = g_game.map.getTile(via);
+		if (!tile || tile->getTopCreature() || costPolicy.dangerAt(via) > costPolicy.dangerAt(blocked.target)) continue;
+		PlayerBotNavigationStep first;
+		first.direction = direction;
+		first.target = first.expectedPosition = via;
+		PlayerBotNavigationStep second = *onward;
+		second.direction = getDirectionTo(via, onward->target);
+		if (!navigator.validateStep(player, currentPosition, first, avoid) ||
+		    !navigator.validateStep(player, via, second, avoid)) continue;
+		navigationRuntime.sidestep(first, second.direction);
+		return first;
+	}
+	return std::nullopt;
+}
+
 bool PlayerBotController::processNavigation(Player* player, const Position& currentPosition, const Position& destination,
 	                                            PlayerBotNavigationRuntimeOutcome* navigationOutcome,
 	                                            uint64_t maximumExpandedNodes, bool sameFloorOnly,
@@ -1705,12 +1739,24 @@ bool PlayerBotController::processNavigation(Player* player, const Position& curr
 		}
 	}
 	if (resolvedStep && resolvedStep->action == PlayerBotNavigationAction::Move) {
-		SpectatorVec spectators;
-		g_game.map.getSpectators(spectators, currentPosition);
-		const bool occupied = std::any_of(spectators.begin(), spectators.end(), [&resolvedStep](Creature* creature) {
-			return !creature->isRemoved() && !creature->isDead() && creature->getPosition() == resolvedStep->target;
-		});
-		if (!occupied) huntCoordinator.observeViableTransitMovement();
+		// Planning ignores creatures. One tile lookup per move finds a creature on
+		// the next tile; only then search for a sidestep around it.
+		const Tile* nextTile = g_game.map.getTile(resolvedStep->target);
+		const Creature* blocker = nextTile ? nextTile->getTopCreature() : nullptr;
+		if (blocker && blocker != player) {
+			if (const auto via = sidestepBlockedMove(*player, currentPosition, *resolvedStep)) {
+				telemetry.emit("navigation_progress", currentPosition,
+				     "\"result\":\"sidestep\",\"blocked_target\":{\"x\":" + std::to_string(resolvedStep->target.x) +
+				         ",\"y\":" + std::to_string(resolvedStep->target.y) + ",\"z\":" +
+				         std::to_string(static_cast<uint16_t>(resolvedStep->target.z)) + "},\"via\":{\"x\":" +
+				         std::to_string(via->target.x) + ",\"y\":" + std::to_string(via->target.y) + ",\"z\":" +
+				         std::to_string(static_cast<uint16_t>(via->target.z)) + "}");
+				step = *via;
+				resolvedStep = *via;
+				blocker = nullptr;
+			}
+		}
+		if (!blocker || blocker == player) huntCoordinator.observeViableTransitMovement();
 	}
 	if (!resolvedStep || !executeNavigationStep(player, *resolvedStep)) {
 		if ((resolvedStep && resolvedStep->action == PlayerBotNavigationAction::Move) ||

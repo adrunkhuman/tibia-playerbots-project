@@ -30,6 +30,8 @@ struct PlayerBotDepotCandidate {
 	Position lockerPosition;
 	Position approachPosition;
 	uint32_t distance = 0;
+	// Another creature stood on the approach when scanned.
+	bool occupied = false;
 };
 
 struct PlayerBotDepotMove {

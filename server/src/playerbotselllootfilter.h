@@ -3,6 +3,8 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <optional>
+#include <vector>
 
 namespace playerbot {
 
@@ -40,6 +42,45 @@ inline SellLootPrefilterResult playerBotSellLootPrefilter(const SellLootPrefilte
 		return SellLootPrefilterResult::Unprofitable;
 	}
 	return SellLootPrefilterResult::NeedsRouteValidation;
+}
+
+// Eligible NPC travel offers as a graph. Pass only offers the route engine
+// could use now: eligible, available, and affordable after reserves.
+// boardableAfter[i][j] means offer j's provider is walkable from offer i's
+// landing. Walking and map portals are free here; only fares count.
+struct SellLootTravelGraph {
+	std::vector<uint64_t> fares;
+	std::vector<std::vector<bool>> boardableAfter;
+};
+
+// Cheapest total fare over every chain of offers from a leg start to a leg
+// target, or nullopt when no chain exists. A walkable leg costs nothing.
+inline std::optional<uint64_t> playerBotSellLootMinimumFare(const SellLootTravelGraph& graph, bool walkable,
+                                                            const std::vector<bool>& boardableFromStart,
+                                                            const std::vector<bool>& landsNearTarget)
+{
+	if (walkable) return 0;
+	const size_t count = graph.fares.size();
+	std::vector<std::optional<uint64_t>> best(count);
+	std::vector<bool> done(count);
+	for (size_t i = 0; i < count; ++i) {
+		if (boardableFromStart[i]) best[i] = graph.fares[i];
+	}
+	// Dense Dijkstra: offer counts are small and edges are dense.
+	for (;;) {
+		std::optional<size_t> next;
+		for (size_t i = 0; i < count; ++i) {
+			if (!done[i] && best[i] && (!next || *best[i] < *best[*next])) next = i;
+		}
+		if (!next) return std::nullopt;
+		if (landsNearTarget[*next]) return best[*next];
+		done[*next] = true;
+		for (size_t j = 0; j < count; ++j) {
+			if (done[j] || !graph.boardableAfter[*next][j]) continue;
+			const uint64_t fare = *best[*next] + graph.fares[j];
+			if (!best[j] || fare < *best[j]) best[j] = fare;
+		}
+	}
 }
 
 } // namespace playerbot

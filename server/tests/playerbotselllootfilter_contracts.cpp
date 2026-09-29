@@ -8,7 +8,9 @@
 
 #include "playerbotselllootfilter.h"
 
+using playerbot::playerBotSellLootMinimumFare;
 using playerbot::SellLootPrefilterInput;
+using playerbot::SellLootTravelGraph;
 using playerbot::SellLootPrefilterResult;
 using playerbot::playerBotSellLootPrefilter;
 
@@ -85,5 +87,32 @@ int main()
 			}
 		}
 	}
+
+	// Offers: 0 = paid boat from the start (20), 1 = free ferry near the start
+	// that lands on an unrelated island, 2 = onward boat to the seller (70),
+	// 3 = free ferry near the seller that no chain from the start reaches.
+	SellLootTravelGraph graph{{20, 0, 70, 0}, {
+		{false, false, true, false},
+		{false, false, false, false},
+		{false, false, false, false},
+		{false, false, false, false},
+	}};
+	const std::vector<bool> fromStart{true, true, false, false};
+	const std::vector<bool> nearSeller{false, false, true, true};
+	// A walkable leg costs nothing, even when every offer is expensive.
+	assert(playerBotSellLootMinimumFare(graph, true, fromStart, nearSeller) == 0);
+	// Free boats at both ends do not connect; the real chain costs 20 + 70.
+	assert(playerBotSellLootMinimumFare(graph, false, fromStart, nearSeller) == 90);
+	// A direct boat is both the first and last leg.
+	assert(playerBotSellLootMinimumFare(graph, false, fromStart, {true, false, false, false}) == 20);
+	// No boardable offer, or no chain to a landing near the seller: unreachable.
+	assert(!playerBotSellLootMinimumFare(graph, false, {false, false, false, false}, nearSeller));
+	assert(!playerBotSellLootMinimumFare(graph, false, {false, true, false, false}, nearSeller));
+	// A free connected chain keeps the bound at zero.
+	SellLootTravelGraph free{{0, 0}, {{false, true}, {false, false}}};
+	assert(playerBotSellLootMinimumFare(free, false, {true, false}, {false, true}) == 0);
+	// Cheaper multi-hop chains beat a dear direct boat.
+	SellLootTravelGraph hops{{160, 40, 40}, {{false, false, false}, {false, false, true}, {false, false, false}}};
+	assert(playerBotSellLootMinimumFare(hops, false, {true, true, false}, {true, false, true}) == 80);
 	std::cout << "playerbotselllootfilter contracts passed\n";
 }
