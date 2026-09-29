@@ -44,6 +44,14 @@ class PlayerBotNavigationSession
 		const PlayerBotNavigationGoal& goal() const { return target; }
 		bool routeEmpty() const { return steps.empty(); }
 		const PlayerBotNavigationStep& nextStep() const { return steps.front(); }
+		const PlayerBotNavigationStep* followingStep() const { return steps.size() < 2 ? nullptr : &steps[1]; }
+		// Replace the next move with one that rejoins the route at the following
+		// step. The caller validates both moves against the live map.
+		void sidestep(const PlayerBotNavigationStep& via, Direction onward)
+		{
+			steps[0] = via;
+			steps[1].direction = onward;
+		}
 		void clearRoute() { steps.clear(); }
 		size_t routeSize() const { return steps.size(); }
 		bool hasPendingWork() const { return movementPending || worldChangePending || !steps.empty(); }

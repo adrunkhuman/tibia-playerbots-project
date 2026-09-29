@@ -49,14 +49,15 @@ std::optional<Position> PlayerBotServiceWorkflow::rejectSelectedApproach()
 	return rejected;
 }
 
-PlayerBotServiceProviderWait PlayerBotServiceWorkflow::awaitProviderAtApproach()
+PlayerBotServiceProviderWait PlayerBotServiceWorkflow::awaitProviderAtApproach(bool alternativeInRange)
 {
-	// A provider wanders every few seconds within its spawn radius. Parts of
-	// that area can be out of range of every reachable tile, so wait first.
+	// A provider wanders every few seconds within its spawn radius. Move to a
+	// reachable tile in range when one exists; otherwise the provider stands
+	// out of reach of every such tile, so wait for it to wander back.
 	constexpr uint32_t maximumProviderWaits = 15;
-	constexpr uint32_t maximumApproachReleases = 3;
+	constexpr uint32_t maximumApproachReleases = 5;
 	if (!selectedApproach) return PlayerBotServiceProviderWait::Released;
-	if (++providerWaits <= maximumProviderWaits) return PlayerBotServiceProviderWait::Wait;
+	if (!alternativeInRange && ++providerWaits <= maximumProviderWaits) return PlayerBotServiceProviderWait::Wait;
 	providerWaits = 0;
 	if (++approachReleases > maximumApproachReleases) {
 		rejectSelectedApproach();

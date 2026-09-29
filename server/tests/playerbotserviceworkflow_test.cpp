@@ -57,27 +57,32 @@ PlayerBotServiceCommand select(PlayerBotServiceWorkflow& workflow, PlayerBotServ
 
 int main()
 {
-	// The provider wandered out of range after the bot arrived. It waits on the
-	// tile first, because no reachable tile may be in range of that position.
+	// The provider wandered out of range after the bot arrived, and no other
+	// reachable tile is in range of it: wait for it to come back.
 	PlayerBotServiceWorkflow workflow = selling();
 	select(workflow, observe({northTile, secondNorthTile}), northTile);
 	for (int wait = 0; wait < 15; ++wait) {
-		assert(workflow.awaitProviderAtApproach() == PlayerBotServiceProviderWait::Wait);
+		assert(workflow.awaitProviderAtApproach(false) == PlayerBotServiceProviderWait::Wait);
 	}
 	// A release keeps the tile eligible and chooses from the live tiles, not
 	// from the list ranked around the provider's earlier position.
-	assert(workflow.awaitProviderAtApproach() == PlayerBotServiceProviderWait::Released);
+	assert(workflow.awaitProviderAtApproach(false) == PlayerBotServiceProviderWait::Released);
 	select(workflow, observe({liveTile, northTile}), liveTile);
 
-	// Repeated releases eventually reject the tile instead of waiting forever.
+	// Another reachable tile is in range now: move there without waiting.
+	PlayerBotServiceWorkflow eager = selling();
+	select(eager, observe({northTile}), northTile);
+	assert(eager.awaitProviderAtApproach(true) == PlayerBotServiceProviderWait::Released);
+	select(eager, observe({liveTile}), liveTile);
+
+	// Repeated releases eventually reject the tile instead of chasing forever.
 	PlayerBotServiceWorkflow restless = selling();
-	for (int release = 0; release < 3; ++release) {
+	for (int release = 0; release < 5; ++release) {
 		select(restless, observe({northTile}), northTile);
-		for (int wait = 0; wait <= 15; ++wait) restless.awaitProviderAtApproach();
+		assert(restless.awaitProviderAtApproach(true) == PlayerBotServiceProviderWait::Released);
 	}
 	select(restless, observe({northTile, secondNorthTile}), northTile);
-	for (int wait = 0; wait < 15; ++wait) restless.awaitProviderAtApproach();
-	assert(restless.awaitProviderAtApproach() == PlayerBotServiceProviderWait::Rejected);
+	assert(restless.awaitProviderAtApproach(true) == PlayerBotServiceProviderWait::Rejected);
 	select(restless, observe({northTile, secondNorthTile}), secondNorthTile);
 
 	std::cout << "service workflow regression tests passed\n";

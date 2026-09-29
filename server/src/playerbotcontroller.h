@@ -386,6 +386,8 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		    const std::set<Position>& blockedPositions) const;
 
 		bool executeNavigationStep(Player* player, const PlayerBotNavigationStep& step);
+		std::optional<PlayerBotNavigationStep> sidestepBlockedMove(Player& player, const Position& currentPosition,
+		                                                            const PlayerBotNavigationStep& blocked);
 		PlayerBotNavigationRoutePlan planNavigationRoute(Player& player, const Position& destination,
 		                                                const std::set<Position>& blockedPositions = {},
 		                                                uint64_t maximumExpandedNodes = playerBotNavigationMaximumExpandedNodes,
@@ -582,6 +584,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 			uint64_t revenue = 0, roughCost = 0;
 			// Optimistic fare plus travel time; no feasible trip costs less.
 			uint64_t tripCostBound = 0;
+			uint32_t providerMoves = 0;
 		};
 		struct SellLootSearch {
 			Position origin;
@@ -622,6 +625,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 			std::shared_ptr<PlayerBotHuntTravelWork> work;
 		};
 		std::optional<ServiceRouteSearch> serviceRouteSearch;
+		uint32_t serviceBlockedRouteWaits = 0;
 		uint64_t serviceRouteSerial = 0;
 		struct DepotSourceRouteSearch {
 			Position origin, destination, locker;
