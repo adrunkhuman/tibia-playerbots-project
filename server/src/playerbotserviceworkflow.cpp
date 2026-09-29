@@ -25,6 +25,8 @@ void PlayerBotServiceWorkflow::reset(PlayerBotServiceIntent intent)
 	pendingApproachRoute.reset();
 	selectedApproach.reset();
 	rejectedApproaches.clear();
+	providerWaits = 0;
+	approachReleases = 0;
 	unavailableProviderIds.clear();
 	providerRouteCosts.clear();
 	providersRequiringNpcTravel.clear();
@@ -43,7 +45,26 @@ std::optional<Position> PlayerBotServiceWorkflow::rejectSelectedApproach()
 	rejectedApproaches.insert(rejected);
 	selectedApproach.reset();
 	pendingApproachRoute.reset();
+	providerWaits = 0;
 	return rejected;
+}
+
+PlayerBotServiceProviderWait PlayerBotServiceWorkflow::awaitProviderAtApproach()
+{
+	// A provider wanders every few seconds within its spawn radius. Parts of
+	// that area can be out of range of every reachable tile, so wait first.
+	constexpr uint32_t maximumProviderWaits = 15;
+	constexpr uint32_t maximumApproachReleases = 3;
+	if (!selectedApproach) return PlayerBotServiceProviderWait::Released;
+	if (++providerWaits <= maximumProviderWaits) return PlayerBotServiceProviderWait::Wait;
+	providerWaits = 0;
+	if (++approachReleases > maximumApproachReleases) {
+		rejectSelectedApproach();
+		return PlayerBotServiceProviderWait::Rejected;
+	}
+	selectedApproach.reset();
+	pendingApproachRoute.reset();
+	return PlayerBotServiceProviderWait::Released;
 }
 
 void PlayerBotServiceWorkflow::observeProviders(std::vector<PlayerBotEconomyProvider> shops,
@@ -107,6 +128,8 @@ void PlayerBotServiceWorkflow::targetProvider(uint32_t id)
 		pendingApproachRoute.reset();
 		selectedApproach.reset();
 		rejectedApproaches.clear();
+		providerWaits = 0;
+		approachReleases = 0;
 	}
 }
 
@@ -119,6 +142,8 @@ PlayerBotServiceCommand PlayerBotServiceWorkflow::rejectCurrentProvider()
 	pendingApproachRoute.reset();
 	selectedApproach.reset();
 	rejectedApproaches.clear();
+	providerWaits = 0;
+	approachReleases = 0;
 	PlayerBotServiceCommand command{PlayerBotServiceCommandType::Wait, PlayerBotServiceOutcome::Retry, providerId};
 	command.cooldownMs = npcReplyDelay;
 	return command;
@@ -132,6 +157,7 @@ PlayerBotServiceCommand PlayerBotServiceWorkflow::approachProvider(const PlayerB
 		providersRequiringNpcTravel.erase(npcSession.targetId());
 		pendingApproachRoute.reset();
 		selectedApproach.reset();
+		providerWaits = 0;
 		return {};
 	}
 	if (npcSession.step() != PlayerBotNpcConversationStep::Greet) {
@@ -144,7 +170,9 @@ PlayerBotServiceCommand PlayerBotServiceWorkflow::approachProvider(const PlayerB
 		command.destination = *selectedApproach;
 		return command;
 	}
-	if (providerApproaches.empty()) {
+	if (!pendingApproachRoute) {
+		// Choose from tiles around the provider's live position. It wanders, so
+		// tiles ranked around an earlier position may now be out of range.
 		if (!provider.approachesObserved) {
 			return {PlayerBotServiceCommandType::Wait, PlayerBotServiceOutcome::Pending};
 		}

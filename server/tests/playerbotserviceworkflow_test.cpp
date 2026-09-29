@@ -1,0 +1,84 @@
+/* Run from the repository root with the server build dependencies installed:
+c++ -std=c++17 -Iserver/src -I/usr/include/luajit-2.1 \
+  server/tests/playerbotserviceworkflow_test.cpp server/src/playerbotserviceworkflow.cpp \
+  server/src/playerbotnpcsession.cpp server/src/playerbotservicesession.cpp server/src/playerboteconomy.cpp \
+  -o /tmp/playerbotserviceworkflow_test && /tmp/playerbotserviceworkflow_test
+*/
+#include "otpch.h"
+
+#include <cassert>
+#include <iostream>
+
+#include "playerbotserviceworkflow.h"
+
+namespace {
+constexpr uint32_t sellerId = 7;
+const Position northTile(32399, 32219, 7);
+const Position secondNorthTile(32400, 32219, 7);
+const Position liveTile(32400, 32220, 7);
+
+// Xodet's shape: customers stand north of a counter while he wanders behind it.
+PlayerBotServiceObservation observe(std::vector<Position> approaches, const Position& current = Position(32352, 32226, 7))
+{
+	PlayerBotServiceObservation observation;
+	observation.currentPosition = current;
+	observation.shops.push_back({sellerId, Position(32399, 32222, 7), {{7634, 0, 5, 0}}});
+	PlayerBotServiceProviderObservation provider{true, false, false, true};
+	for (const Position& position : approaches) provider.approaches.push_back({position, 1});
+	observation.providers[sellerId] = provider;
+	observation.maximumAttempts = 3;
+	return observation;
+}
+
+PlayerBotServiceWorkflow selling()
+{
+	PlayerBotServiceWorkflow workflow;
+	workflow.reset(PlayerBotServiceIntent::ResupplyWithLocalSale);
+	workflow.setLiquidationPlan({sellerId, {{7634, 10, 5, 0}}});
+	return workflow;
+}
+
+PlayerBotServiceCommand select(PlayerBotServiceWorkflow& workflow, PlayerBotServiceObservation observation,
+                               const Position& expected)
+{
+	const PlayerBotEconomyCatalog catalog;
+	const PlayerBotDispositionPolicy disposition;
+	PlayerBotServiceCommand command = workflow.advance(observation, catalog, disposition);
+	assert(command.type == PlayerBotServiceCommandType::ValidateProviderRoute);
+	assert(command.destination == expected);
+	observation.approachRoute = {sellerId, expected, PlayerBotServiceRouteResult::Reached, 10};
+	command = workflow.advance(observation, catalog, disposition);
+	assert(command.type == PlayerBotServiceCommandType::Wait && command.outcome == PlayerBotServiceOutcome::Success);
+	command = workflow.advance(observation, catalog, disposition);
+	assert(command.type == PlayerBotServiceCommandType::NavigateProvider && command.destination == expected);
+	return command;
+}
+}
+
+int main()
+{
+	// The provider wandered out of range after the bot arrived. It waits on the
+	// tile first, because no reachable tile may be in range of that position.
+	PlayerBotServiceWorkflow workflow = selling();
+	select(workflow, observe({northTile, secondNorthTile}), northTile);
+	for (int wait = 0; wait < 15; ++wait) {
+		assert(workflow.awaitProviderAtApproach() == PlayerBotServiceProviderWait::Wait);
+	}
+	// A release keeps the tile eligible and chooses from the live tiles, not
+	// from the list ranked around the provider's earlier position.
+	assert(workflow.awaitProviderAtApproach() == PlayerBotServiceProviderWait::Released);
+	select(workflow, observe({liveTile, northTile}), liveTile);
+
+	// Repeated releases eventually reject the tile instead of waiting forever.
+	PlayerBotServiceWorkflow restless = selling();
+	for (int release = 0; release < 3; ++release) {
+		select(restless, observe({northTile}), northTile);
+		for (int wait = 0; wait <= 15; ++wait) restless.awaitProviderAtApproach();
+	}
+	select(restless, observe({northTile, secondNorthTile}), northTile);
+	for (int wait = 0; wait < 15; ++wait) restless.awaitProviderAtApproach();
+	assert(restless.awaitProviderAtApproach() == PlayerBotServiceProviderWait::Rejected);
+	select(restless, observe({northTile, secondNorthTile}), secondNorthTile);
+
+	std::cout << "service workflow regression tests passed\n";
+}

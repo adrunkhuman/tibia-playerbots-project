@@ -126,6 +126,8 @@ struct PlayerBotServiceLiquidationPlan {
 	bool allowNpcTravel = false;
 };
 
+enum class PlayerBotServiceProviderWait : uint8_t { Wait, Released, Rejected };
+
 class PlayerBotServiceWorkflow
 {
 	public:
@@ -140,6 +142,10 @@ class PlayerBotServiceWorkflow
 		void setProviderUtilityProfile(PlayerBotProviderUtilityProfile profile) { providerUtilityProfile = profile; }
 		bool reportNpcReply(uint32_t playerId, uint32_t replyingPlayerId, uint32_t npcId, uint8_t type);
 		std::optional<Position> rejectSelectedApproach();
+		// At the selected tile while the provider has wandered out of range. Wait
+		// for it to return, then release the tile for a live reselection; reject
+		// the tile only after repeated releases.
+		PlayerBotServiceProviderWait awaitProviderAtApproach();
 		PlayerBotServiceCommand advance(const PlayerBotServiceObservation& observation,
 		                               const PlayerBotEconomyCatalog& catalog,
 		                               const PlayerBotDispositionPolicy& disposition);
@@ -182,6 +188,8 @@ class PlayerBotServiceWorkflow
 		std::optional<Position> pendingApproachRoute;
 		std::optional<Position> selectedApproach;
 		std::set<Position> rejectedApproaches;
+		uint32_t providerWaits = 0;
+		uint32_t approachReleases = 0;
 		std::set<uint32_t> unavailableProviderIds;
 		std::map<uint32_t, uint32_t> providerRouteCosts;
 		std::set<uint32_t> providersRequiringNpcTravel;

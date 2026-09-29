@@ -1369,6 +1369,9 @@ void PlayerBotController::processService(Player* player, const Position& current
 		const auto startedAt = std::chrono::steady_clock::now();
 		PlayerBotNavigationRoutePlan routePlan;
 		bool validatedNpcTravel = false;
+		// Failed steps mark their tile blocked for a while, usually a wandering
+		// NPC or animal. The planner ignores creatures, so route around them here.
+		const std::set<Position> blockedPositions = navigationRuntime.activeBlockedPositions(startedAt);
 		if (command.destination == currentPosition && serviceRouteSearch) {
 			serviceRouteSearch.reset();
 			playerBotHuntPlanningBudget().cancel(playerId, startedAt);
@@ -1380,7 +1383,7 @@ void PlayerBotController::processService(Player* player, const Position& current
 					serviceRouteSearch.reset();
 					playerBotHuntPlanningBudget().cancel(playerId, startedAt);
 				}
-				routePlan = planCompleteNavigationRoute(*player, command.destination);
+				routePlan = planCompleteNavigationRoute(*player, command.destination, blockedPositions);
 			} else {
 				const uint64_t reserve = std::max(huntTravelRecoveryFundsReserve(*player, huntTravelBudgetPhase),
 				                                  huntTravelReturnFareReserve(huntTravelBudgetPhase));
@@ -1472,12 +1475,22 @@ void PlayerBotController::processService(Player* player, const Position& current
 		const bool routeAffordable = command.destination == currentPosition ||
 		                             huntTravelFareAffordable(*player, routePlan.metrics.fare,
 		                                                      huntTravelBudgetPhase);
-		lastRouteResult = routeSafe && routeAffordable && quoteAllowed ? routePlan.metrics.result : PlayerBotNavigationResult::Unreachable;
+		// The paid-travel search cannot take blocked tiles; reject its walking
+		// prefix instead so a blocked step cannot repeat forever.
+		const auto firstTravel = std::find_if(routePlan.steps.begin(), routePlan.steps.end(), [](const auto& step) {
+			return step.action == PlayerBotNavigationAction::NpcTravel;
+		});
+		const bool routeBlocked = command.destination != currentPosition &&
+		    std::any_of(routePlan.steps.begin(), firstTravel, [&blockedPositions](const auto& step) {
+			    return blockedPositions.count(step.target) || blockedPositions.count(step.expectedPosition);
+		    });
+		lastRouteResult = routeSafe && routeAffordable && quoteAllowed && !routeBlocked ?
+		    routePlan.metrics.result : PlayerBotNavigationResult::Unreachable;
 		lastRouteExpandedNodes = routePlan.metrics.expandedNodes;
 		lastRouteSteps = routePlan.metrics.steps;
 		const bool reached = command.destination == currentPosition ||
 		                     (routePlan.metrics.result == PlayerBotNavigationResult::Reached && !routePlan.steps.empty() &&
-		                      routeSafe && routeAffordable && quoteAllowed);
+		                      routeSafe && routeAffordable && quoteAllowed && !routeBlocked);
 		const auto routeElapsed = std::chrono::duration_cast<std::chrono::microseconds>(
 		    std::chrono::steady_clock::now() - startedAt);
 		telemetry.recordPathfinding(routeElapsed, reached);
@@ -1498,7 +1511,7 @@ void PlayerBotController::processService(Player* player, const Position& current
 		const char* routeReason = !reached ?
 		    (routePlan.metrics.result == PlayerBotNavigationResult::NodeLimit ? "node_limit" :
 		     routePlan.metrics.result != PlayerBotNavigationResult::Reached ? "route_unreachable" :
-		     !routeSafe ? "route_unsafe" : !routeAffordable ? "fare_unaffordable" :
+		     routeBlocked ? "route_blocked" : !routeSafe ? "route_unsafe" : !routeAffordable ? "fare_unaffordable" :
 		     !quoteAllowed && liquidation && routePlan.metrics.fare > liquidation->maximumFare ? "fare_exceeds_quote" :
 		     !quoteAllowed ? "route_steps_exceed_quote" : "no_executable_steps") :
 		    liquidation && lastRouteRequiresNpcTravel && !liquidation->allowNpcTravel ? "npc_travel_not_quoted" :
@@ -1665,7 +1678,25 @@ void PlayerBotController::processService(Player* player, const Position& current
 			    PlayerBotNavigationGoal::exact(command.destination), &navigation,
 			    playerBotNavigationMaximumExpandedNodes, false, false, nullptr, false);
 			if (reached || navigation.routeRequest) schedule(SCHEDULER_MINTICKS);
-			if (navigation.stepFailureCount < maximumRepeatedNavigationStepFailures) return;
+			// A failed step clears the route. The next turn revalidates around the
+			// blocked tile and rejects this approach only if no route avoids it.
+			return;
+		}
+		if (currentPosition == command.destination) {
+			const PlayerBotServiceProviderWait wait = serviceWorkflow.awaitProviderAtApproach();
+			if (wait == PlayerBotServiceProviderWait::Wait) {
+				schedule(1000);
+				return;
+			}
+			emit(wait == PlayerBotServiceProviderWait::Released ? "service_provider_approach_released" :
+			         "service_provider_approach_rejected", currentPosition,
+			     "\"reason\":\"provider_out_of_range\",\"npc_id\":" + std::to_string(command.providerId) +
+			         ",\"provider_position\":{\"x\":" + std::to_string(provider->getPosition().x) +
+			         ",\"y\":" + std::to_string(provider->getPosition().y) + ",\"z\":" +
+			         std::to_string(static_cast<uint16_t>(provider->getPosition().z)) + "}");
+			resetNavigation();
+			schedule(SCHEDULER_MINTICKS);
+			return;
 		}
 		if (const std::optional<Position> rejected = serviceWorkflow.rejectSelectedApproach()) {
 			emit("service_provider_approach_rejected", currentPosition,
