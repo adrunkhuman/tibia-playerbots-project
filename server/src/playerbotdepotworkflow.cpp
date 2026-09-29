@@ -4,6 +4,8 @@
 #include "playerbotdepotworkflow.h"
 #include "playerbotnavigation.h"
 
+#include <map>
+
 void PlayerBotDepotWorkflow::reset()
 {
 	session.reset();
@@ -210,12 +212,24 @@ void PlayerBotDepotWorkflow::recordFallbackCandidate(const PlayerBotDepotObserva
 
 void PlayerBotDepotWorkflow::sortCandidates(const Position& origin)
 {
-	std::sort(discoveryCandidates.begin(), discoveryCandidates.end(), [&origin](const auto& left, const auto& right) {
+	// Rank a depot by its nearest approach, then prefer its free approaches. A
+	// locker occupied by another player usually stays occupied while that
+	// player works, and the depot normally has another locker nearby.
+	std::map<uint16_t, uint32_t> depotDistance;
+	for (const auto& candidate : discoveryCandidates) {
+		auto [entry, inserted] = depotDistance.emplace(candidate.depotId, candidate.distance);
+		if (!inserted) entry->second = std::min(entry->second, candidate.distance);
+	}
+	std::sort(discoveryCandidates.begin(), discoveryCandidates.end(), [&](const auto& left, const auto& right) {
+		const uint32_t leftDepot = depotDistance.at(left.depotId);
+		const uint32_t rightDepot = depotDistance.at(right.depotId);
 		// Topology costs collapse all approaches in a walk node. Break equal costs
 		// spatially without replacing between-node routing or validating every route.
 		const uint32_t leftLocal = playerBotNavigationDistance(origin, left.approachPosition);
 		const uint32_t rightLocal = playerBotNavigationDistance(origin, right.approachPosition);
-		return left.distance != right.distance ? left.distance < right.distance :
+		return leftDepot != rightDepot ? leftDepot < rightDepot :
+		       left.occupied != right.occupied ? !left.occupied :
+		       left.distance != right.distance ? left.distance < right.distance :
 		       leftLocal != rightLocal ? leftLocal < rightLocal :
 		       left.depotId != right.depotId ? left.depotId < right.depotId :
 		       left.lockerPosition != right.lockerPosition ? left.lockerPosition < right.lockerPosition :

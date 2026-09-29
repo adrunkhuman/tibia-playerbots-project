@@ -1803,16 +1803,13 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 		if (pauseDepotFixtureForRestart(*player, DepotRestartCheckpoint::Approach, currentPosition)) {
 			return;
 		}
-		if (!processNavigation(player, currentPosition, depot.selected.approachPosition)) {
-			if (navigationRuntime.fixedTargetRouteFailureCount() != 0) {
-				PlayerBotDepotObservation observation;
-				observation.currentPosition = currentPosition;
-				observation.now = std::chrono::steady_clock::now();
-				observation.routeResult = PlayerBotDepotRouteResult::Unreachable;
-				depotWorkflow.advance(observation, depotRouteValidationsPerDecision, maximumDepotDiscoveryAttempts,
-				                      depotApproachSuppression);
-				resetNavigation();
-			}
+		if (depotApproachStalled(*player, currentPosition, depot.selected.approachPosition, nullptr)) {
+			schedule(blockedRouteRetryInterval);
+			return;
+		}
+		PlayerBotNavigationRuntimeOutcome navigation;
+		if (!processNavigation(player, currentPosition, depot.selected.approachPosition, &navigation)) {
+			depotApproachStalled(*player, currentPosition, depot.selected.approachPosition, &navigation);
 			return;
 		}
 		setCyclePhase(CyclePhase::DepositLoot, currentPosition, "depot_reached");
@@ -1832,16 +1829,9 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 		if (!Position::areInRange<1, 1, 0>(currentPosition, depot.selected.approachPosition)) {
 			setCyclePhase(CyclePhase::ReturnToDepot, currentPosition, "displaced_during_deposit");
 			resetNavigation();
-			if (!processNavigation(player, currentPosition, depot.selected.approachPosition)) {
-				if (navigationRuntime.fixedTargetRouteFailureCount() != 0) {
-					PlayerBotDepotObservation observation;
-					observation.currentPosition = currentPosition;
-					observation.now = std::chrono::steady_clock::now();
-					observation.routeResult = PlayerBotDepotRouteResult::Unreachable;
-					depotWorkflow.advance(observation, depotRouteValidationsPerDecision, maximumDepotDiscoveryAttempts,
-					                      depotApproachSuppression);
-					resetNavigation();
-				}
+			PlayerBotNavigationRuntimeOutcome navigation;
+			if (!processNavigation(player, currentPosition, depot.selected.approachPosition, &navigation)) {
+				depotApproachStalled(*player, currentPosition, depot.selected.approachPosition, &navigation);
 				return;
 			}
 			setCyclePhase(CyclePhase::DepositLoot, currentPosition, "depot_reached");

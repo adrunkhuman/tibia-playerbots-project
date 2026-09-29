@@ -3,6 +3,8 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <optional>
+#include <vector>
 
 namespace playerbot {
 
@@ -40,6 +42,31 @@ inline SellLootPrefilterResult playerBotSellLootPrefilter(const SellLootPrefilte
 		return SellLootPrefilterResult::Unprofitable;
 	}
 	return SellLootPrefilterResult::NeedsRouteValidation;
+}
+
+// One NPC travel offer, seen from one trip leg. Pass only offers the route
+// engine could use now: eligible, available, and affordable after reserves.
+struct SellLootTravelOffer {
+	uint64_t fare = 0;
+	bool boardable = false; // The provider is reachable on foot from the leg start.
+	bool landsNearTarget = false; // The destination reaches the leg target on foot.
+};
+
+// Lower bound on the fare of one leg. When walking and map portals cannot
+// connect the leg, every route boards a boardable offer first and ends on a
+// landing offer. One offer may be both, so the bound is the larger of the two
+// minima, never their sum. nullopt means no usable route exists.
+inline std::optional<uint64_t> playerBotSellLootLegMinimumFare(bool walkable,
+                                                               const std::vector<SellLootTravelOffer>& offers)
+{
+	if (walkable) return 0;
+	std::optional<uint64_t> boarding, landing;
+	for (const SellLootTravelOffer& offer : offers) {
+		if (offer.boardable) boarding = std::min(boarding.value_or(offer.fare), offer.fare);
+		if (offer.landsNearTarget) landing = std::min(landing.value_or(offer.fare), offer.fare);
+	}
+	if (!boarding || !landing) return std::nullopt;
+	return std::max(*boarding, *landing);
 }
 
 } // namespace playerbot

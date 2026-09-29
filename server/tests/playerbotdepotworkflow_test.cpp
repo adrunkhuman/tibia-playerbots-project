@@ -71,6 +71,18 @@ int main()
 	lowerApproach.approachPosition = Position(32353, 32225, 7);
 	expectFirst({nearest, lowerApproach}, lowerApproach);
 
+	// Another player on the nearest approach: take a free locker in the same
+	// depot, even on a costlier floor, but never trade the depot for another town.
+	auto occupiedNearest = nearest;
+	occupiedNearest.occupied = true;
+	auto freeUpstairs = upstairs;
+	freeUpstairs.distance = 1;
+	expectFirst({occupiedNearest, freeUpstairs}, freeUpstairs);
+	auto freeRemote = upstairs;
+	freeRemote.depotId = 3;
+	freeRemote.distance = 1;
+	expectFirst({occupiedNearest, freeRemote}, occupiedNearest);
+
 	// Post-hunt discovery ranks from the current hunting area, not the
 	// departure city. A Darashia-area bot therefore selects its viable local
 	// depot even if the candidate list still contains Carlin.

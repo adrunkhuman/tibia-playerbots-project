@@ -8,7 +8,9 @@
 
 #include "playerbotselllootfilter.h"
 
+using playerbot::playerBotSellLootLegMinimumFare;
 using playerbot::SellLootPrefilterInput;
+using playerbot::SellLootTravelOffer;
 using playerbot::SellLootPrefilterResult;
 using playerbot::playerBotSellLootPrefilter;
 
@@ -85,5 +87,20 @@ int main()
 			}
 		}
 	}
+
+	// A walkable leg has no fare bound, even when every offer is expensive.
+	assert(playerBotSellLootLegMinimumFare(true, {{160, true, true}}) == 0);
+	// An island with no affordable boat from the start, or none landing near
+	// the seller, is unreachable without any route search.
+	assert(!playerBotSellLootLegMinimumFare(false, {}));
+	assert(!playerBotSellLootLegMinimumFare(false, {{20, true, false}}));
+	assert(!playerBotSellLootLegMinimumFare(false, {{20, false, true}}));
+	// A direct boat is both the first and last leg.
+	assert(playerBotSellLootLegMinimumFare(false, {{110, true, true}, {160, true, false}}) == 110);
+	// Two hops cost at least the dearer of the cheapest boarding and landing
+	// offers; the cheapest boarding boat alone is not a valid bound.
+	assert(playerBotSellLootLegMinimumFare(false, {{20, true, false}, {70, false, true}}) == 70);
+	// Free travel keeps the bound at zero.
+	assert(playerBotSellLootLegMinimumFare(false, {{0, true, true}}) == 0);
 	std::cout << "playerbotselllootfilter contracts passed\n";
 }

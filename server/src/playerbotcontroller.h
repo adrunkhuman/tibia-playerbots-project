@@ -453,7 +453,10 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		bool findDepositableItem(const Player& player, Container* container, Container*& source,
 		                         Item*& depositItem, uint8_t& count) const;
 		bool findDepotLocker(const Position& position, uint16_t expectedDepotId, uint16_t& lockerItemId) const;
+		bool depotApproachOccupied(const Player& player, const Position& approach) const;
 		bool discoverDepot(Player& player, const Position& currentPosition);
+		bool depotApproachStalled(Player& player, const Position& currentPosition, const Position& approach,
+		                          const PlayerBotNavigationRuntimeOutcome* navigation);
 		bool openDepotLocker(Player& player, const PlayerBotDepotSnapshot& depot, const Position& currentPosition);
 		bool openDepotChest(Player& player, const PlayerBotDepotSnapshot& depot, const Position& currentPosition);
 		bool pauseDepotFixtureForRestart(Player& player, playerbot::DepotRestartCheckpoint checkpoint,
@@ -576,6 +579,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 			size_t approachIndex = 0;
 			std::vector<SellLootBatch> batches;
 			uint64_t revenue = 0, roughCost = 0;
+			bool travelBoundChecked = false;
 		};
 		struct SellLootSearch {
 			Position origin;
@@ -591,6 +595,15 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 			std::shared_ptr<PlayerBotHuntTravelWork> routeWork;
 			PlayerBotRouteChanges::Watch routeWatch;
 			std::string routeFacts, sourceTravelPositions;
+			// The source leg depends only on the depot, not the seller. Reject a
+			// depot's remaining sellers without repeating its transport search.
+			std::map<uint16_t, std::string> unavailableSources;
+			// Keyed by seller leg start and provider; values are telemetry fields.
+			std::map<std::pair<Position, uint32_t>, std::string> unavailableSellers;
+			struct TravelOffer { Position provider, destination; uint64_t fare = 0; };
+			std::optional<std::vector<TravelOffer>> travelOffers;
+			// Reachability with the topology generation that produced it.
+			std::map<Position, std::pair<uint64_t, std::shared_ptr<const PlayerBotTopologyReachability>>> reachability;
 		};
 		struct ServiceRouteSearch {
 			Position origin, destination;
