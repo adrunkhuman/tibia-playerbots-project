@@ -23,6 +23,7 @@
 #include "playerbotequipmentadapter.h"
 #include "playerbotinventorypolicy.h"
 #include "playerbotnavigationruntime.h"
+#include "playerbotselllootfilter.h"
 #include "playerbottopology.h"
 #include "playerbotprogressionruntime.h"
 #include "playerbotprogressionplanners.h"
@@ -579,7 +580,8 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 			size_t approachIndex = 0;
 			std::vector<SellLootBatch> batches;
 			uint64_t revenue = 0, roughCost = 0;
-			bool travelBoundChecked = false;
+			// Optimistic fare plus travel time; no feasible trip costs less.
+			uint64_t tripCostBound = 0;
 		};
 		struct SellLootSearch {
 			Position origin;
@@ -598,10 +600,16 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 			// The source leg depends only on the depot, not the seller. Reject a
 			// depot's remaining sellers without repeating its transport search.
 			std::map<uint16_t, std::string> unavailableSources;
-			// Keyed by seller leg start and provider; values are telemetry fields.
-			std::map<std::pair<Position, uint32_t>, std::string> unavailableSellers;
+			// Validated source-leg cost and fare per depot. The engine picks that
+			// leg by the same economy, so no other seller can share a cheaper one.
+			std::map<uint16_t, std::pair<uint64_t, uint64_t>> sourceCosts;
 			struct TravelOffer { Position provider, destination; uint64_t fare = 0; };
 			std::optional<std::vector<TravelOffer>> travelOffers;
+			playerbot::SellLootTravelGraph travelGraph;
+			// Forward movement lower bounds, one per trip leg start.
+			std::map<Position, PlayerBotTopologyHeuristic> potentials;
+			bool bounded = false;
+			size_t pruned = 0;
 			// Reachability with the topology generation that produced it.
 			std::map<Position, std::pair<uint64_t, std::shared_ptr<const PlayerBotTopologyReachability>>> reachability;
 		};

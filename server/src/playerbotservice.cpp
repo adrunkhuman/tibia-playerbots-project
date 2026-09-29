@@ -262,7 +262,6 @@ bool PlayerBotController::planSellLootTrip(Player& player, uint16_t currentDepot
 	}
 	auto& search = *sellLootSearch;
 	const auto scannedItems = search.scannedItems;
-	const auto candidateCount = search.candidates.size();
 	size_t routeValidations = 0;
 	bool found = false;
 	uint32_t selectedSourceTravelNpcId = 0;
@@ -306,57 +305,152 @@ bool PlayerBotController::planSellLootTrip(Player& player, uint16_t currentDepot
 		}
 		return entry.second.get();
 	};
-	auto walkable = [&](const Position& start, const Position& target) {
-		const auto* from = reachabilityFrom(start);
-		return !from || !topology.walkNode(target) || topology.reachable(*from, target);
+	auto emitRejected = [&](const SellLootCandidate& candidate, const char* reason, uint64_t fare, uint64_t tripCost,
+	                        uint32_t danger, const std::string& extra) {
+		emit("sell_loot_candidate", position,
+		     "\"result\":\"rejected\",\"reason\":" + jsonString(reason) +
+		     ",\"source_depot_id\":" + std::to_string(candidate.sourceDepotId) +
+		     ",\"npc_id\":" + std::to_string(candidate.providerId) +
+		     ",\"expected_revenue\":" + std::to_string(candidate.revenue) +
+		     ",\"fare\":" + std::to_string(fare) + ",\"trip_cost\":" + std::to_string(tripCost) +
+		     ",\"danger_cost\":" + std::to_string(danger) +
+		     ",\"provider_approach_index\":" + std::to_string(candidate.approachIndex) + extra);
 	};
-	// Lower bound on one leg's fare, or nullopt when no usable route exists.
-	// Offers use the route engine's own eligibility, so the bound never rejects
-	// a route that the engine could return.
-	auto legMinimumFare = [&](const Position& start, const std::vector<Position>& targets) -> std::optional<uint64_t> {
+	// A provider counts as boardable when any walkable tile beside it is
+	// reachable. Tiles outside the walk graph are unknown, so never prune on them.
+	auto boardable = [&](const PlayerBotTopologyReachability& from, const Position& provider) {
+		bool unknown = false;
+		for (int32_t x = -1; x <= 1; ++x) for (int32_t y = -1; y <= 1; ++y) {
+			const Position tile(provider.x + x, provider.y + y, provider.z);
+			if (!topology.walkNode(tile)) {
+				unknown = true;
+				continue;
+			}
+			if (topology.reachable(from, tile)) return true;
+		}
+		return unknown;
+	};
+	// Offers use the route engine's own eligibility, so no bound below can
+	// reject a route that the engine could return.
+	if (!search.travelOffers) {
+		search.travelOffers.emplace();
+		const auto now = std::chrono::steady_clock::now();
+		for (const auto& entry : g_game.getNpcs()) {
+			Npc* npc = entry.second;
+			if (player.isPzLocked() || !npc || npc->isRemoved() ||
+			    !playerBotNpcHasCapability(*npc, PlayerBotNpcCapability::Travel)) continue;
+			for (const auto& offer : npc->getTravelOffers()) {
+				const auto unavailable = unavailableTravelOffers.find({npc->getID(), offer.destination});
+				if (!playerBotNpcTravelOfferEligible(player.getLevel(), player.isPremium(), spendableFare, offer.level,
+				        offer.premium, offer.price, offer.hasOpaqueCondition, offer.hasOpaqueAction) ||
+				    (unavailable != unavailableTravelOffers.end() && unavailable->second > now)) continue;
+				search.travelOffers->push_back({npc->getPosition(), offer.destination, offer.price});
+			}
+		}
+		const auto& offers = *search.travelOffers;
+		auto& graph = search.travelGraph;
+		graph.fares.clear();
+		graph.boardableAfter.assign(offers.size(), std::vector<bool>(offers.size()));
+		for (size_t i = 0; i < offers.size(); ++i) {
+			graph.fares.push_back(offers[i].fare);
+			const auto* landing = reachabilityFrom(offers[i].destination);
+			for (size_t j = 0; j < offers.size(); ++j) {
+				graph.boardableAfter[i][j] = !landing || boardable(*landing, offers[j].provider);
+			}
+		}
+	}
+	struct LegBound { uint64_t fare = 0; double seconds = 0; };
+	// Fare and time bounds are separate minima over the same routes, so their
+	// sum is still a lower bound. Time uses the engine's own step model: one
+	// relaxed hop covers at most one move or half a one-second tool use.
+	const double secondsPerHop = std::min<uint32_t>(player.getStepDuration(DIRECTION_NORTH), 500) / 1000.0;
+	auto legBound = [&](const Position& start, const std::vector<Position>& targets) -> std::optional<LegBound> {
+		LegBound bound;
+		const auto potential = search.potentials.find(start);
+		if (potential != search.potentials.end() && !targets.empty()) {
+			uint32_t cost = std::numeric_limits<uint32_t>::max();
+			for (const Position& target : targets) cost = std::min(cost, potential->second.estimate(target));
+			bound.seconds = cost / 10 * secondsPerHop;
+		}
 		const auto* from = reachabilityFrom(start);
 		if (!from || targets.empty() || std::any_of(targets.begin(), targets.end(), [&](const Position& target) {
 			    return !topology.walkNode(target) || topology.reachable(*from, target);
-		    })) return 0;
-		if (!search.travelOffers) {
-			search.travelOffers.emplace();
-			const auto now = std::chrono::steady_clock::now();
-			for (const auto& entry : g_game.getNpcs()) {
-				Npc* npc = entry.second;
-				if (player.isPzLocked() || !npc || npc->isRemoved() ||
-				    !playerBotNpcHasCapability(*npc, PlayerBotNpcCapability::Travel)) continue;
-				for (const auto& offer : npc->getTravelOffers()) {
-					const auto unavailable = unavailableTravelOffers.find({npc->getID(), offer.destination});
-					if (!playerBotNpcTravelOfferEligible(player.getLevel(), player.isPremium(), spendableFare, offer.level,
-					        offer.premium, offer.price, offer.hasOpaqueCondition, offer.hasOpaqueAction) ||
-					    (unavailable != unavailableTravelOffers.end() && unavailable->second > now)) continue;
-					search.travelOffers->push_back({npc->getPosition(), offer.destination, offer.price});
+		    })) return bound;
+		const auto& offers = *search.travelOffers;
+		std::vector<bool> fromStart(offers.size()), nearTarget(offers.size());
+		for (size_t i = 0; i < offers.size(); ++i) {
+			fromStart[i] = boardable(*from, offers[i].provider);
+			const auto* landing = reachabilityFrom(offers[i].destination);
+			nearTarget[i] = !landing || std::any_of(targets.begin(), targets.end(), [&](const Position& target) {
+				return !topology.walkNode(target) || topology.reachable(*landing, target);
+			});
+		}
+		const auto fare = playerbot::playerBotSellLootMinimumFare(search.travelGraph, false, fromStart, nearTarget);
+		if (!fare) return std::nullopt;
+		bound.fare = *fare;
+		return bound;
+	};
+	// Bound every candidate on the graph before any sliced route search, then
+	// validate only optimistic profits, best first. Each potential is one
+	// map-sized relaxed search, so build at most one per decision.
+	bool boundingPending = false;
+	if (!search.bounded) {
+		std::vector<Position> starts{position};
+		for (const auto& candidate : search.candidates) {
+			if (candidate.sourceDepotId != currentDepotId) starts.push_back(candidate.sourceApproach);
+		}
+		const auto missing = std::find_if(starts.begin(), starts.end(), [&](const Position& start) {
+			return !search.potentials.count(start);
+		});
+		if (missing != starts.end()) {
+			std::vector<PlayerBotShortcut> travel;
+			for (const auto& offer : *search.travelOffers) {
+				for (int32_t x = -1; x <= 1; ++x) for (int32_t y = -1; y <= 1; ++y) {
+					travel.push_back({Position(offer.provider.x + x, offer.provider.y + y, offer.provider.z), offer.destination});
 				}
 			}
-		}
-		std::vector<playerbot::SellLootTravelOffer> offers;
-		offers.reserve(search.travelOffers->size());
-		for (const auto& offer : *search.travelOffers) {
-			bool boardable = true;
-			std::vector<Position> board;
-			for (int32_t x = -1; x <= 1; ++x) for (int32_t y = -1; y <= 1; ++y) {
-				const Position tile(offer.provider.x + x, offer.provider.y + y, offer.provider.z);
-				if (topology.walkNode(tile)) board.push_back(tile);
+			search.potentials.emplace(*missing, topology.heuristicFrom(*missing, travel));
+			boundingPending = true;
+		} else {
+			std::vector<SellLootCandidate> kept;
+			for (auto& candidate : search.candidates) {
+				const Position sellerStart = candidate.sourceDepotId == currentDepotId ? position : candidate.sourceApproach;
+				std::optional<LegBound> source = LegBound{};
+				if (candidate.sourceDepotId != currentDepotId) source = legBound(position, {candidate.sourceApproach});
+				const auto seller = source ? legBound(sellerStart, candidate.providerApproaches) : std::nullopt;
+				if (!source || !seller) {
+					emitRejected(candidate, !source ? "source_route_unavailable" : "seller_route_unavailable", 0, 0, 0,
+					             std::string(!source ? ",\"source_result\"" : ",\"seller_result\"") +
+					                 ":\"no_affordable_travel\",\"pruned\":true");
+					++search.pruned;
+					continue;
+				}
+				const uint64_t fare = source->fare + seller->fare;
+				candidate.tripCostBound = fare + static_cast<uint64_t>(std::ceil(
+				    (source->seconds + seller->seconds) * sellLootTravelTimeGoldPerMinute / 60.0));
+				const auto bound = playerBotSellLootPrefilter({candidate.revenue, candidate.tripCostBound, fare,
+				                                               spendableFare, 0, survivalSell});
+				if (bound != SellLootPrefilterResult::NeedsRouteValidation) {
+					emitRejected(candidate, bound == SellLootPrefilterResult::UnaffordableFare ?
+					                 "upfront_fare_unavailable" : "optimistic_trip_unprofitable",
+					             fare, candidate.tripCostBound, 0, ",\"pruned\":true");
+					++search.pruned;
+					continue;
+				}
+				kept.push_back(std::move(candidate));
 			}
-			if (!board.empty()) {
-				boardable = std::any_of(board.begin(), board.end(), [&](const Position& tile) {
-					return topology.reachable(*from, tile);
-				});
-			}
-			const auto* landing = reachabilityFrom(offer.destination);
-			const bool lands = !landing || std::any_of(targets.begin(), targets.end(), [&](const Position& target) {
-				return topology.reachable(*landing, target);
+			std::stable_sort(kept.begin(), kept.end(), [](const SellLootCandidate& left, const SellLootCandidate& right) {
+				const int64_t leftNet = static_cast<int64_t>(left.revenue) - static_cast<int64_t>(left.tripCostBound);
+				const int64_t rightNet = static_cast<int64_t>(right.revenue) - static_cast<int64_t>(right.tripCostBound);
+				return leftNet != rightNet ? leftNet > rightNet : left.revenue > right.revenue;
 			});
-			offers.push_back({offer.fare, boardable, lands});
+			search.candidates = std::move(kept);
+			search.bounded = true;
 		}
-		return playerbot::playerBotSellLootLegMinimumFare(false, offers);
-	};
-	for (size_t index = 0; index < maximumSellLootRouteValidationsPerDecision && search.next < candidateCount;) {
+	}
+	const auto candidateCount = search.candidates.size();
+	for (size_t index = 0; !boundingPending && index < maximumSellLootRouteValidationsPerDecision &&
+	                       search.next < candidateCount;) {
 		auto& candidate = search.candidates[search.next];
 		auto resetRoutes = [&]() {
 			search.routeWork.reset();
@@ -369,14 +463,7 @@ bool PlayerBotController::planSellLootTrip(Player& player, uint16_t currentDepot
 		};
 		auto reject = [&](const char* reason, uint64_t fare = 0, uint64_t tripCost = 0, uint32_t danger = 0,
 		                  const std::string& extra = {}) {
-			emit("sell_loot_candidate", position,
-			     "\"result\":\"rejected\",\"reason\":" + jsonString(reason) +
-			     ",\"source_depot_id\":" + std::to_string(candidate.sourceDepotId) +
-			     ",\"npc_id\":" + std::to_string(candidate.providerId) +
-			     ",\"expected_revenue\":" + std::to_string(candidate.revenue) +
-			     ",\"fare\":" + std::to_string(fare) + ",\"trip_cost\":" + std::to_string(tripCost) +
-			     ",\"danger_cost\":" + std::to_string(danger) +
-			     ",\"provider_approach_index\":" + std::to_string(candidate.approachIndex) + extra);
+			emitRejected(candidate, reason, fare, tripCost, danger, extra);
 			++search.next;
 			search.invalidationRetries = 0;
 			resetRoutes();
@@ -387,10 +474,14 @@ bool PlayerBotController::planSellLootTrip(Player& player, uint16_t currentDepot
 			reject("source_route_unavailable", 0, 0, 0, cached->second + ",\"cached\":true");
 			continue;
 		}
-		if (const auto cached = search.unavailableSellers.find({sellerStart, candidate.providerId});
-		    cached != search.unavailableSellers.end()) {
-			reject("seller_route_unavailable", 0, 0, 0, cached->second + ",\"cached\":true");
-			continue;
+		if (const auto known = search.sourceCosts.find(candidate.sourceDepotId); known != search.sourceCosts.end()) {
+			const auto [cost, fare] = known->second;
+			const auto result = playerBotSellLootPrefilter({candidate.revenue, cost, fare, spendableFare, 0, survivalSell});
+			if (result != SellLootPrefilterResult::NeedsRouteValidation) {
+				reject(result == SellLootPrefilterResult::UnaffordableFare ? "upfront_fare_unavailable" :
+				       "source_cost_exceeds_revenue", fare, cost, 0, ",\"cached\":true");
+				continue;
+			}
 		}
 		++index;
 		++routeValidations;
@@ -435,35 +526,6 @@ bool PlayerBotController::planSellLootTrip(Player& player, uint16_t currentDepot
 			++search.invalidationRetries;
 			if (candidate.providerApproaches.empty()) { reject("provider_approach_unavailable"); continue; }
 			candidate.providerApproach = candidate.providerApproaches.front();
-		}
-		// Prune before any sliced route search: an island leg needs an affordable
-		// boat at both ends, and its cheapest possible fare must leave a profit.
-		if (!candidate.travelBoundChecked) {
-			candidate.travelBoundChecked = true;
-			std::optional<uint64_t> sourceFare = 0;
-			if (candidate.sourceDepotId != currentDepotId) {
-				sourceFare = legMinimumFare(position, {candidate.sourceApproach});
-				if (!sourceFare) {
-					const std::string cause = ",\"source_result\":\"no_affordable_travel\"";
-					search.unavailableSources.emplace(candidate.sourceDepotId, cause);
-					reject("source_route_unavailable", 0, 0, 0, cause);
-					continue;
-				}
-			}
-			const auto sellerFare = legMinimumFare(sellerStart, candidate.providerApproaches);
-			if (!sellerFare) {
-				const std::string cause = ",\"seller_result\":\"no_affordable_travel\"";
-				search.unavailableSellers.emplace(std::make_pair(sellerStart, candidate.providerId), cause);
-				reject("seller_route_unavailable", 0, 0, 0, cause);
-				continue;
-			}
-			const uint64_t fareBound = *sourceFare + *sellerFare;
-			const auto bound = playerBotSellLootPrefilter({candidate.revenue, fareBound, fareBound, spendableFare, 0, survivalSell});
-			if (bound != SellLootPrefilterResult::NeedsRouteValidation) {
-				reject(bound == SellLootPrefilterResult::UnaffordableFare ? "upfront_fare_unavailable" : "travel_fare_exceeds_revenue",
-				       fareBound, fareBound);
-				continue;
-			}
 		}
 		// The engine revalidates its pending leg. This enclosing watch and actor/
 		// offer fingerprint also protect a COMPLETED source leg while the seller
@@ -560,6 +622,9 @@ bool PlayerBotController::planSellLootTrip(Player& player, uint16_t currentDepot
 		    static_cast<uint64_t>(std::ceil(sourceMetrics.estimatedTravelSeconds * sellLootTravelTimeGoldPerMinute / 60.0));
 		// Once the source leg is fixed, its cost is unavoidable for this plan.
 		// Geometry alone is NOT a bound: free NPC travel/portals can defeat it.
+		if (candidate.sourceDepotId != currentDepotId) {
+			search.sourceCosts.emplace(candidate.sourceDepotId, std::make_pair(sourceCost, sourceMetrics.fare));
+		}
 		const auto prefilter = playerBotSellLootPrefilter({candidate.revenue, sourceCost, sourceMetrics.fare,
 		    spendableFare, 0, survivalSell});
 		if (prefilter != SellLootPrefilterResult::NeedsRouteValidation) {
@@ -578,12 +643,9 @@ bool PlayerBotController::planSellLootTrip(Player& player, uint16_t currentDepot
 			else ++candidate.approachIndex;
 			candidate.approachIndex = playerBotNextSellLootApproach(candidate.providerApproaches,
 				candidate.approachIndex, seller->getPosition(), failedApproach);
-			// Another tile helps only around a local blocker such as a counter. A
-			// failed travel route fails the same way for tiles in its walk component.
-			const bool sameTravelFailure = !providerMoved &&
-			    candidate.approachIndex < candidate.providerApproaches.size() && !walkable(sellerStart, failedApproach) &&
-			    topology.sameWalkComponent(failedApproach, candidate.providerApproaches[candidate.approachIndex]);
-			if (!sameTravelFailure && candidate.approachIndex < candidate.providerApproaches.size()) {
+			// A failed transport search may instead have failed on its last walking
+			// leg. Try the other speech tiles before rejecting the seller.
+			if (candidate.approachIndex < candidate.providerApproaches.size()) {
 				candidate.providerApproach = candidate.providerApproaches[candidate.approachIndex];
 				search.routeWork.reset();
 				++search.sequence;
@@ -600,10 +662,6 @@ bool PlayerBotController::planSellLootTrip(Player& player, uint16_t currentDepot
 			const std::string cause = ",\"seller_result\":" + jsonString(
 			    result == PlayerBotNavigationResult::Reached ? "unsafe" :
 			    result == PlayerBotNavigationResult::NodeLimit ? "incomplete" : "unreachable");
-			// Only a travel failure is shared by every tile; a moved provider is not.
-			if (!providerMoved && !walkable(sellerStart, failedApproach)) {
-				search.unavailableSellers.emplace(std::make_pair(sellerStart, candidate.providerId), cause);
-			}
 			reject("seller_route_unavailable", sellerPlan->metrics.fare, 0, sellerPlan->metrics.dangerCost, cause);
 			continue;
 		}
@@ -733,8 +791,10 @@ bool PlayerBotController::planSellLootTrip(Player& player, uint16_t currentDepot
 		found = true;
 		break;
 	}
-	sellLootSearchPending = !found && search.next < candidateCount;
+	sellLootSearchPending = !found && (boundingPending || search.next < candidateCount);
 	const auto candidateIndex = search.next;
+	const bool bounded = search.bounded;
+	const size_t pruned = search.pruned;
 	if (!sellLootSearchPending) sellLootSearch.reset();
 	std::ostringstream fields;
 	fields << "\"action\":\"sell_loot_plan\",\"result\":" << jsonString(found ? "candidate" : "deferred")
@@ -743,6 +803,7 @@ bool PlayerBotController::planSellLootTrip(Player& player, uint16_t currentDepot
 	       << ",\"top_level_items\":" << scannedItems
 	       << ",\"snapshot_rebuilt\":" << (rebuilt ? "true" : "false")
 	       << ",\"candidate_count\":" << candidateCount << ",\"candidate_index\":" << candidateIndex
+	       << ",\"bounded\":" << (bounded ? "true" : "false") << ",\"pruned_candidates\":" << pruned
 	       << ",\"snapshot_us\":" << snapshotUs
 	       << ",\"walking_us\":" << std::chrono::duration_cast<std::chrono::microseconds>(timing.walkingTime).count()
 	       << ",\"npc_us\":" << std::chrono::duration_cast<std::chrono::microseconds>(timing.npcTime).count()

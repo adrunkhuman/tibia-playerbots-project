@@ -137,6 +137,11 @@ class PlayerBotTopology
 		void build(const Map& map);
 		void invalidate();
 		PlayerBotTopologyHeuristic heuristicTo(const std::vector<Position>& exactGoals) const;
+		// Lower bound on movement cost FROM start, with extra directed shortcuts
+		// such as NPC travel. The relaxed grid is symmetric, so reversing every
+		// shortcut turns the reverse potential into a forward one.
+		PlayerBotTopologyHeuristic heuristicFrom(const Position& start,
+		                                         const std::vector<PlayerBotShortcut>& extraShortcuts) const;
 		std::optional<uint32_t> walkNode(const Position& position) const;
 		// Directed adjacency for graph-hop corridor expansion. References and
 		// node IDs remain valid only until the next topology build/invalidation.

@@ -434,6 +434,23 @@ PlayerBotTopologyHeuristic PlayerBotTopology::heuristicTo(const std::vector<Posi
 	return result;
 }
 
+PlayerBotTopologyHeuristic PlayerBotTopology::heuristicFrom(const Position& start,
+	                                                          const std::vector<PlayerBotShortcut>& extraShortcuts) const
+{
+	synchronizeShortcuts();
+	PlayerBotTopologyHeuristic result;
+	result.generation = topologyGeneration;
+	if (!liveMap) return result;
+	result.shortcutRevision = shortcutIndex.revision();
+	std::vector<PlayerBotShortcut> reversed;
+	reversed.reserve(shortcutIndex.shortcuts().size() + extraShortcuts.size());
+	for (const auto& shortcut : shortcutIndex.shortcuts()) reversed.push_back({shortcut.destination, shortcut.source});
+	for (const auto& shortcut : extraShortcuts) reversed.push_back({shortcut.destination, shortcut.source});
+	result.potential = std::make_shared<const PlayerBotShortcutHeuristic>(
+	    std::vector<Position>{start}, reversed, minimumPosition, maximumPosition);
+	return result;
+}
+
 bool PlayerBotTopologyHeuristic::valid() const
 {
 	const auto& topology = PlayerBotTopology::instance();

@@ -44,29 +44,43 @@ inline SellLootPrefilterResult playerBotSellLootPrefilter(const SellLootPrefilte
 	return SellLootPrefilterResult::NeedsRouteValidation;
 }
 
-// One NPC travel offer, seen from one trip leg. Pass only offers the route
-// engine could use now: eligible, available, and affordable after reserves.
-struct SellLootTravelOffer {
-	uint64_t fare = 0;
-	bool boardable = false; // The provider is reachable on foot from the leg start.
-	bool landsNearTarget = false; // The destination reaches the leg target on foot.
+// Eligible NPC travel offers as a graph. Pass only offers the route engine
+// could use now: eligible, available, and affordable after reserves.
+// boardableAfter[i][j] means offer j's provider is walkable from offer i's
+// landing. Walking and map portals are free here; only fares count.
+struct SellLootTravelGraph {
+	std::vector<uint64_t> fares;
+	std::vector<std::vector<bool>> boardableAfter;
 };
 
-// Lower bound on the fare of one leg. When walking and map portals cannot
-// connect the leg, every route boards a boardable offer first and ends on a
-// landing offer. One offer may be both, so the bound is the larger of the two
-// minima, never their sum. nullopt means no usable route exists.
-inline std::optional<uint64_t> playerBotSellLootLegMinimumFare(bool walkable,
-                                                               const std::vector<SellLootTravelOffer>& offers)
+// Cheapest total fare over every chain of offers from a leg start to a leg
+// target, or nullopt when no chain exists. A walkable leg costs nothing.
+inline std::optional<uint64_t> playerBotSellLootMinimumFare(const SellLootTravelGraph& graph, bool walkable,
+                                                            const std::vector<bool>& boardableFromStart,
+                                                            const std::vector<bool>& landsNearTarget)
 {
 	if (walkable) return 0;
-	std::optional<uint64_t> boarding, landing;
-	for (const SellLootTravelOffer& offer : offers) {
-		if (offer.boardable) boarding = std::min(boarding.value_or(offer.fare), offer.fare);
-		if (offer.landsNearTarget) landing = std::min(landing.value_or(offer.fare), offer.fare);
+	const size_t count = graph.fares.size();
+	std::vector<std::optional<uint64_t>> best(count);
+	std::vector<bool> done(count);
+	for (size_t i = 0; i < count; ++i) {
+		if (boardableFromStart[i]) best[i] = graph.fares[i];
 	}
-	if (!boarding || !landing) return std::nullopt;
-	return std::max(*boarding, *landing);
+	// Dense Dijkstra: offer counts are small and edges are dense.
+	for (;;) {
+		std::optional<size_t> next;
+		for (size_t i = 0; i < count; ++i) {
+			if (!done[i] && best[i] && (!next || *best[i] < *best[*next])) next = i;
+		}
+		if (!next) return std::nullopt;
+		if (landsNearTarget[*next]) return best[*next];
+		done[*next] = true;
+		for (size_t j = 0; j < count; ++j) {
+			if (done[j] || !graph.boardableAfter[*next][j]) continue;
+			const uint64_t fare = *best[*next] + graph.fares[j];
+			if (!best[j] || fare < *best[j]) best[j] = fare;
+		}
+	}
 }
 
 } // namespace playerbot
