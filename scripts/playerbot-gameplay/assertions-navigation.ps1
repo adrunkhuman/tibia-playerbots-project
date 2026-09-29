@@ -451,6 +451,49 @@ function Assert-CorpseDetourEvents {
 	}
 }
 
+function Assert-DeepHuntReturnEvents {
+	param([string]$Logs)
+
+	if ($Logs -notmatch 'PLAYERBOT_GAMEPLAY_TEST DEEP_HUNT_RETURN_START 33101 31745 9') {
+		throw "Deep hunt return did not start at the controlled origin."
+	}
+	$events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
+	$online = @($events | Where-Object { $_.event -eq 'lifecycle' -and $_.status -eq 'online' })
+	$hunts = @($events | Where-Object { $_.event -eq 'action_result' -and $_.action -eq 'hunt_cycle' -and $_.result -eq 'started' })
+	$returns = @($events | Where-Object { $_.event -eq 'objective_transition' -and $_.from -eq 'hunt' -and $_.to -eq 'return_to_depot' })
+	$started = @($events | Where-Object { $_.event -eq 'action_result' -and $_.action -eq 'return' -and $_.result -eq 'started' })
+	$depots = @($events | Where-Object {
+		$_.event -eq 'action_result' -and $_.action -eq 'depot_discover' -and $_.result -eq 'success' -and
+		$_.route_steps -gt 0 -and $_.depot_id -gt 0 -and $_.locker_item_id -in @(2589, 2590, 2591, 2592)
+	})
+	$arrivals = @($events | Where-Object { $_.event -eq 'objective_transition' -and $_.to -eq 'deposit_loot' })
+	$terminals = @($events | Where-Object {
+		$_.event -in @('terminal', 'death') -or
+		($_.event -eq 'lifecycle' -and $_.status -in @('dead', 'removed', 'recovery_abandoned'))
+	})
+	if ($online.Count -ne 1 -or $hunts.Count -lt 1 -or $returns.Count -lt 1 -or $started.Count -lt 1 -or
+		$depots.Count -lt 1 -or $arrivals.Count -lt 1 -or $terminals.Count -ne 0) {
+		throw "Deep hunt return incomplete. online=$($online.Count), hunts=$($hunts.Count), returns=$($returns.Count), started=$($started.Count), depots=$($depots.Count), arrivals=$($arrivals.Count), terminals=$($terminals.Count)."
+	}
+	$hunt = $hunts[0]
+	$return = @($returns | Where-Object { [long]$_.sequence -gt [long]$hunt.sequence }) | Select-Object -First 1
+	$departure = @($started | Where-Object { $return -and [long]$_.sequence -gt [long]$return.sequence }) | Select-Object -First 1
+	$depot = @($depots | Where-Object { $departure -and [long]$_.sequence -gt [long]$departure.sequence }) | Select-Object -First 1
+	$arrival = @($arrivals | Where-Object { $depot -and [long]$_.sequence -gt [long]$depot.sequence }) | Select-Object -First 1
+	if (-not $arrival -or [Math]::Abs($return.position.x - 33101) -gt 150 -or
+		[Math]::Abs($return.position.y - 31745) -gt 150 -or $return.position.z -lt 8 -or
+		[Math]::Abs($arrival.position.x - $depot.approach.x) -gt 2 -or
+		[Math]::Abs($arrival.position.y - $depot.approach.y) -gt 2 -or
+		$arrival.position.z -ne $depot.approach.z) {
+		throw "Deep hunt did not travel from its controlled start through a real return route to depot arrival."
+	}
+	# Route selection may choose a different validated exit than the example
+	# at (33161,31796,8). Check the selected locker approach and live arrival.
+	if ([Math]::Abs($depot.approach.x - 33101) -lt 40) {
+		throw "Deep hunt return did not select a depot approach outside the controlled pocket."
+	}
+}
+
 function Assert-DepotRiskRouteEvents {
 	param([string]$Logs)
 
@@ -460,16 +503,27 @@ function Assert-DepotRiskRouteEvents {
 		$_.retained_across_turns -eq $true -and $_.ranked_fallback -eq $true -and
 		$_.requested_revalidation -eq $true -and $_.failed_revalidation_rejected -eq $true
 	})
-	$safeRoute = @($events | Where-Object {
+	$selectedRoute = @($events | Where-Object {
 		$_.event -eq "action_result" -and $_.action -eq "depot_discover" -and $_.result -eq "success" -and
-		$_.risk_fallback -eq $false -and $_.unsafe_routes -gt 0 -and $_.route_steps -gt 0 -and
-		$null -ne $_.danger_cost -and $_.danger_cost -le 500 -and
-		$null -ne $_.maximum_health_loss_per_second -and $_.maximum_health_loss_per_second -le 0.08
+		$_.unsafe_routes -gt 0 -and $_.route_steps -gt 0 -and $null -ne $_.danger_cost -and
+		(($_.risk_fallback -eq $true) -or ($_.risk_fallback -eq $false -and
+		  $_.danger_cost -le 500 -and $_.maximum_health_loss_per_second -le 0.08))
 	})
 	$terminal = @($events | Where-Object { $_.event -eq "terminal" })
-	if ($Logs -notmatch 'PLAYERBOT_GAMEPLAY_TEST DEPOT_RISK_FALLBACK_PASS' -or $contract.Count -ne 1 -or
-		$safeRoute.Count -lt 1 -or $terminal.Count -ne 0) {
-		throw "The depot risk route did not reject unsafe candidates and cross the ramp safely. contract=$($contract.Count), safe_route=$($safeRoute.Count), terminal=$($terminal.Count)."
+	$arrival = [regex]::Match($Logs, 'PLAYERBOT_GAMEPLAY_TEST DEPOT_RISK_FALLBACK_PASS (\d+) (\d+) (\d+)')
+	$crossedRamp = $arrival.Success -and [int]$arrival.Groups[3].Value -eq 6 -and
+		[Math]::Abs([int]$arrival.Groups[1].Value - 32915) -le 2 -and
+		[Math]::Abs([int]$arrival.Groups[2].Value - 32230) -le 2
+	$arrivedAtDepot = $arrival.Success -and $selectedRoute.Count -gt 0 -and
+		[Math]::Abs([int]$arrival.Groups[1].Value - $selectedRoute[0].approach.x) -le 4 -and
+		[Math]::Abs([int]$arrival.Groups[2].Value - $selectedRoute[0].approach.y) -le 9 -and
+		[int]$arrival.Groups[3].Value -eq $selectedRoute[0].approach.z
+	$arrivedAtFallback = $selectedRoute.Count -gt 0 -and $selectedRoute[0].risk_fallback -eq $true -and
+		($crossedRamp -or $arrivedAtDepot)
+	if (-not $arrival.Success -or $contract.Count -ne 1 -or
+		$selectedRoute.Count -lt 1 -or ($selectedRoute[0].risk_fallback -and -not $arrivedAtFallback) -or
+		$terminal.Count -ne 0) {
+		throw "The depot risk route did not reject unsafe candidates and escape the cave without death. contract=$($contract.Count), selected_route=$($selectedRoute.Count), terminal=$($terminal.Count)."
 	}
 }
 

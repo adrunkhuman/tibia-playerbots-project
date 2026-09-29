@@ -5,6 +5,10 @@
 
 #include <map>
 
+// Optional travel must meet the risk budget; an owed hunt return chooses the
+// least-risk executable exit even when every route exceeds that budget.
+enum class PlayerBotRouteIntent { Optional, ForcedReturn };
+
 // A volatile world cannot be searched indefinitely under one selector request.
 // The retry count survives reconstruction of the request-local walking frontier.
 // On exhaustion the caller must report unknown, not unreachable or a stale route.
@@ -62,10 +66,11 @@ private:
 // A reached but unsafe walk does not disprove safe transport. Apply this after
 // choosing the best available route, so a safe paid/walking result still wins.
 inline PlayerBotNavigationResult playerBotHuntAggregateRouteResult(
-    PlayerBotNavigationResult result, uint32_t danger, double peak, bool transportIncomplete)
+    PlayerBotNavigationResult result, uint32_t danger, double peak, bool transportIncomplete,
+    const PlayerBotNavigationRiskProfile& risk = {})
 {
 	const bool safe = result == PlayerBotNavigationResult::Reached &&
-	    playerBotNavigationRiskAccepts({}, danger, peak);
+	    playerBotNavigationRiskAccepts(risk, danger, peak);
 	return !safe && transportIncomplete ? PlayerBotNavigationResult::NodeLimit : result;
 }
 

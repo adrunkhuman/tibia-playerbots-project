@@ -33,10 +33,36 @@ namespace {
 	constexpr size_t maximumServiceProvidersPerItem = 4;
 	constexpr size_t maximumServiceBankers = 2;
 	constexpr size_t maximumSellLootRouteValidationsPerDecision = 1;
+	constexpr uint32_t maximumServiceRouteTurns = 512;
 	constexpr uint32_t maximumSellLootBatch = 100;
 	constexpr uint32_t sellLootTravelTimeGoldPerMinute = 10;
 	constexpr std::chrono::seconds sellLootFailureCooldown(60);
 	uint64_t sellLootPlanningPass = 0;
+
+	bool executablePaidApproachMatches(const PlayerBotNavigationRoutePlan& executable,
+	                                  const PlayerBotNavigationRoutePlan& detailed,
+	                                  const PlayerBotNavigationStep& paid, Position source)
+	{
+		if (executable.metrics.result != PlayerBotNavigationResult::Reached ||
+		    !executable.metrics.firstNpcTravelOffer || executable.steps.empty() ||
+		    !playerBotNpcTravelOfferMatches(*executable.metrics.firstNpcTravelOffer, paid) ||
+		    executable.metrics.localDangerCost != 0 ||
+		    executable.metrics.localMaximumHealthLossPerSecond != 0 ||
+		    executable.metrics.fare != detailed.metrics.fare ||
+		    executable.steps.size() > detailed.metrics.steps) return false;
+		const auto first = std::find_if(executable.steps.begin(), executable.steps.end(), [](const auto& step) {
+			return step.action == PlayerBotNavigationAction::NpcTravel;
+		});
+		return std::all_of(executable.steps.begin(), first, [&source](const auto& step) {
+			const bool ordinary = step.action == PlayerBotNavigationAction::Move && !step.topologyPortal &&
+			    step.target == step.expectedPosition && step.target != source &&
+			    Position::areInRange<1, 1, 0>(source, step.target);
+			source = step.expectedPosition;
+			return ordinary;
+		}) && (first == executable.steps.end() ||
+		       (first + 1 == executable.steps.end() &&
+		        playerBotNpcTravelOfferMatches(*executable.metrics.firstNpcTravelOffer, *first)));
+	}
 
 	int32_t approachDirection(const Position& provider, const Position& approach)
 	{
@@ -261,9 +287,9 @@ bool PlayerBotController::planSellLootTrip(Player& player, uint16_t currentDepot
 		request.to = destination;
 		return advanceHuntTravelRoute(player, request, start, timing, fareReserve, true, walkingAlternative);
 	};
-	auto safe = [](const PlayerBotNavigationRoutePlan& route) {
+	auto safe = [this](const PlayerBotNavigationRoutePlan& route) {
 		return route.metrics.result == PlayerBotNavigationResult::Reached &&
-		       playerBotNavigationRiskAccepts({}, route.metrics.dangerCost, route.metrics.maximumHealthLossPerSecond);
+		       playerBotNavigationRiskVerdict(riskProfile, route.metrics) == PlayerBotNavigationRiskVerdict::Accepted;
 	};
 	auto usesTravel = [](const PlayerBotNavigationRoutePlan& route) {
 		return std::any_of(route.steps.begin(), route.steps.end(), [](const auto& step) {
@@ -505,7 +531,7 @@ bool PlayerBotController::planSellLootTrip(Player& player, uint16_t currentDepot
 					}
 					const uint32_t danger = static_cast<uint32_t>(std::min<uint64_t>(UINT32_MAX,
 					    uint64_t(source.metrics.dangerCost) + seller.metrics.dangerCost));
-					if (!playerBotNavigationRiskAccepts({}, danger,
+					if (!playerBotNavigationRiskAccepts(riskProfile, danger,
 					    std::max(source.metrics.maximumHealthLossPerSecond, seller.metrics.maximumHealthLossPerSecond))) {
 						return std::numeric_limits<double>::infinity();
 					}
@@ -537,7 +563,7 @@ bool PlayerBotController::planSellLootTrip(Player& player, uint16_t currentDepot
 		const uint32_t danger = static_cast<uint32_t>(std::min<uint64_t>(
 			static_cast<uint64_t>(sourceRoute.first.metrics.dangerCost) + sellerRoute.first.metrics.dangerCost,
 			std::numeric_limits<uint32_t>::max()));
-		if (!playerBotNavigationRiskAccepts(PlayerBotNavigationRiskProfile{}, danger,
+		if (!playerBotNavigationRiskAccepts(riskProfile, danger,
 		    std::max(sourceRoute.first.metrics.maximumHealthLossPerSecond,
 		             sellerRoute.first.metrics.maximumHealthLossPerSecond))) {
 			reject("combined_route_unsafe", fare, 0, danger);
@@ -750,18 +776,28 @@ void PlayerBotController::setCyclePhase(CyclePhase phase, const Position& positi
 	}
 	if (phase == CyclePhase::ReturnToDepot) {
 		huntTravelBudgetPhase = HuntTravelBudgetPhase::ReturnToDepot;
+		lastDepotDiscoveryHealth = 0;
+		depotDiscoveryUnderAttack = false;
 	}
 	if (phase == CyclePhase::Hunt) {
 		huntTravelBudgetPhase = HuntTravelBudgetPhase::None;
 		huntExitFareReserve = 0;
 		huntRecoveryPotionReserve = 0;
 		huntReturnCoverageVariantId = 0;
-		huntExitRouteProtected = false;
+		huntReturnDestination = Position();
+		huntExitValidationAttempted = false;
 		huntReturnCoverage.invalidate();
 	}
 	const char* previous = cyclePhaseName();
 	if (turnRouter.cyclePhase() == CyclePhase::Hunt && phase != CyclePhase::Hunt) {
 		cancelHuntPlanning(reason, position);
+	}
+	if (turnRouter.cyclePhase() == CyclePhase::Service && phase != CyclePhase::Service) {
+		serviceRouteSearch.reset();
+		playerBotHuntPlanningBudget().cancel(playerId, std::chrono::steady_clock::now());
+	}
+	if (turnRouter.cyclePhase() == CyclePhase::ReturnToDepot && phase != CyclePhase::ReturnToDepot) {
+		depotSourceRouteSearch.reset();
 	}
 	if (phase == CyclePhase::Hunt || phase == CyclePhase::DepositLoot) {
 		huntCoordinator.finishDangerRetreat();
@@ -779,6 +815,9 @@ void PlayerBotController::setCyclePhase(CyclePhase phase, const Position& positi
 void PlayerBotController::beginReturn(Player* player, const Position& position, const char* reason)
 {
 	huntTravelBudgetPhase = HuntTravelBudgetPhase::ReturnToDepot;
+	huntExitValidationAttempted = false;
+	lastDepotDiscoveryHealth = 0;
+	depotDiscoveryUnderAttack = false;
 	pendingHuntCompletionReason.clear();
 	const auto traversalTarget = huntCoordinator.traversalTarget();
 	const uint32_t previousTarget = traversalTarget ? traversalTarget->id : 0;
@@ -1116,6 +1155,22 @@ void PlayerBotController::processService(Player* player, const Position& current
 	uint64_t lastRouteExpandedNodes = 0;
 	uint32_t lastRouteSteps = 0;
 	bool lastRouteRequiresNpcTravel = false;
+	// A partial paid approach has no boarding step. Once its steps are consumed,
+	// validate another full itinerary before taking the next leg.
+	bool revalidatingSelectedApproach = false;
+	if (command.type == PlayerBotServiceCommandType::NavigateProvider &&
+	    !navigationRuntime.hasPendingWork() && command.destination != currentPosition) {
+		Npc* provider = g_game.getNpcByID(command.providerId);
+		if (provider && !Position::areInRange<3, 3, 0>(currentPosition, provider->getPosition())) {
+			command.type = PlayerBotServiceCommandType::ValidateProviderRoute;
+			revalidatingSelectedApproach = true;
+		}
+	}
+	// Keep a sliced search when an exhausted approach needs validation again.
+	if (command.type != PlayerBotServiceCommandType::ValidateProviderRoute && serviceRouteSearch) {
+		serviceRouteSearch.reset();
+		playerBotHuntPlanningBudget().cancel(playerId, std::chrono::steady_clock::now());
+	}
 	while (command.type == PlayerBotServiceCommandType::ValidateProviderRoute && routeValidations < 1) {
 		++routeValidations;
 		const uint32_t routeProviderId = command.providerId;
@@ -1125,48 +1180,116 @@ void PlayerBotController::processService(Player* player, const Position& current
 		routeObservation.approachRoute.destination = command.destination;
 		const auto startedAt = std::chrono::steady_clock::now();
 		PlayerBotNavigationRoutePlan routePlan;
+		bool validatedNpcTravel = false;
+		if (command.destination == currentPosition && serviceRouteSearch) {
+			serviceRouteSearch.reset();
+			playerBotHuntPlanningBudget().cancel(playerId, startedAt);
+		}
 		if (command.destination != currentPosition) {
-			if (sellingLocalLoot && !serviceWorkflow.liquidation()->allowNpcTravel) {
+			const bool travelAllowed = !sellingLocalLoot || serviceWorkflow.liquidation()->allowNpcTravel;
+			if (!travelAllowed) {
+				if (serviceRouteSearch) {
+					serviceRouteSearch.reset();
+					playerBotHuntPlanningBudget().cancel(playerId, startedAt);
+				}
 				routePlan = planCompleteNavigationRoute(*player, command.destination);
 			} else {
-				routePlan = planNavigationRoute(*player, command.destination);
-			}
-			// Ordinary navigation optimizes for hunting and may choose a dearer
-			// boat than the sale quoted. Retry within the quote before rejecting it.
-			if (sellingLocalLoot && serviceWorkflow.liquidation()->allowNpcTravel) {
-				const auto& quote = *serviceWorkflow.liquidation();
-				if (routePlan.metrics.result != PlayerBotNavigationResult::Reached || routePlan.steps.empty() ||
-				    !playerBotNavigationRiskAccepts({}, routePlan.metrics.dangerCost, routePlan.metrics.maximumHealthLossPerSecond) ||
-				    routePlan.metrics.fare > quote.maximumFare ||
-				    !huntTravelFareAffordable(*player, routePlan.metrics.fare, huntTravelBudgetPhase) ||
-				    (quote.maximumRouteSteps != 0 && routePlan.metrics.steps > quote.maximumRouteSteps)) {
-					const uint64_t reserve = std::max(huntTravelRecoveryFundsReserve(*player, huntTravelBudgetPhase),
-					                                  huntTravelReturnFareReserve(huntTravelBudgetPhase));
-					auto paid = planNpcTravelRoute(*player, currentPosition, command.destination, {},
-					    playerBotNavigationMaximumExpandedNodes, false, reserve, true);
-					if (paid && paid->metrics.result == PlayerBotNavigationResult::Reached && !paid->steps.empty() &&
-					    paid->metrics.fare <= quote.maximumFare &&
-					    (quote.maximumRouteSteps == 0 || paid->metrics.steps <= quote.maximumRouteSteps) &&
-					    playerBotNavigationRiskAccepts({}, paid->metrics.dangerCost, paid->metrics.maximumHealthLossPerSecond)) {
-						routePlan = std::move(*paid);
+				const uint64_t reserve = std::max(huntTravelRecoveryFundsReserve(*player, huntTravelBudgetPhase),
+				                                  huntTravelReturnFareReserve(huntTravelBudgetPhase));
+				const bool sellEconomy = sellingLocalLoot;
+				if (!serviceRouteSearch || serviceRouteSearch->origin != currentPosition ||
+				    serviceRouteSearch->destination != command.destination ||
+				    serviceRouteSearch->providerId != command.providerId ||
+				    serviceRouteSearch->reserve != reserve || serviceRouteSearch->sellEconomy != sellEconomy) {
+					serviceRouteSearch.emplace();
+					auto& search = *serviceRouteSearch;
+					search.origin = currentPosition;
+					search.destination = command.destination;
+					search.providerId = command.providerId;
+					search.reserve = reserve;
+					search.sellEconomy = sellEconomy;
+					search.pass = (uint64_t(1) << 62) | (uint64_t(playerId) << 24) | ++serviceRouteSerial;
+				}
+				auto& search = *serviceRouteSearch;
+				// Share admission and the sliced route engine, but not the hunt's pending work.
+				auto& budget = playerBotHuntPlanningBudget();
+				const auto admission = budget.request(playerId, startedAt);
+				if (!admission.admitted) {
+					schedule(static_cast<uint32_t>(std::clamp<int64_t>(
+					    std::chrono::duration_cast<std::chrono::milliseconds>(admission.wait).count(),
+					    blockedRouteRetryInterval, 5000)));
+					return;
+				}
+				PlayerBotPlanningBudget::Charge charge(budget, playerId);
+				{
+					struct WorkSlot {
+						std::shared_ptr<PlayerBotHuntTravelWork>& hunt;
+						std::shared_ptr<PlayerBotHuntTravelWork>& service;
+						WorkSlot(decltype(hunt) hunt, decltype(service) service) : hunt(hunt), service(service) { hunt.swap(service); }
+						~WorkSlot() { hunt.swap(service); }
+					} slot(huntTravelWork, search.work);
+					PlayerBotHuntRouteRequest request;
+					request.planningPass = search.pass;
+					// A nearby safe walk needs no search through every paid connection.
+					request.preferSafeWalking = !sellingLocalLoot &&
+					    playerBotNavigationDistance(currentPosition, command.destination) <= 128;
+					request.from = currentPosition;
+					request.to = command.destination;
+					PlayerBotHuntRouteTiming timing;
+					PlayerBotNavigationRoutePlan walking;
+					auto planned = advanceHuntTravelRoute(*player, request, currentPosition, timing, reserve,
+					                                      sellEconomy, &walking);
+					if (!planned && ++search.turns < maximumServiceRouteTurns) {
+						schedule(blockedRouteRetryInterval);
+						return;
+					}
+					if (!planned) {
+						routePlan.metrics.result = PlayerBotNavigationResult::NodeLimit;
 					} else {
-						routePlan = planCompleteNavigationRoute(*player, command.destination);
+						routePlan = std::move(*planned);
+						const auto paid = std::find_if(routePlan.steps.begin(), routePlan.steps.end(), [](const auto& step) {
+							return step.action == PlayerBotNavigationAction::NpcTravel;
+						});
+						if (paid != routePlan.steps.end() && routePlan.metrics.result == PlayerBotNavigationResult::Reached &&
+						    playerBotNavigationRiskVerdict(riskProfile, routePlan.metrics) == PlayerBotNavigationRiskVerdict::Accepted) {
+							const auto* quote = sellingLocalLoot ? &*serviceWorkflow.liquidation() : nullptr;
+							if (quote && (routePlan.metrics.fare > quote->maximumFare ||
+							    (quote->maximumRouteSteps != 0 && routePlan.metrics.steps > quote->maximumRouteSteps))) {
+								routePlan = std::move(walking);
+							} else {
+								// The sliced search proves full-route risk; the ordinary planner supplies
+								// an executable first leg. Its coarse future estimate proves nothing.
+								auto executable = planNpcTravelRoute(*player, currentPosition, command.destination, {},
+								    playerBotNavigationMaximumExpandedNodes, false, reserve, sellEconomy);
+								// Only borrow ordinary, unexposed local steps for the same
+								// offer; the detailed plan still owns full-route safety.
+								if (executable && executablePaidApproachMatches(*executable, routePlan, *paid, currentPosition)) {
+									validatedNpcTravel = true;
+									routePlan.steps = std::move(executable->steps);
+								} else {
+									routePlan = std::move(walking);
+								}
+							}
+						}
 					}
 				}
 			}
+			serviceRouteSearch.reset();
 		}
-		const PlayerBotNavigationRiskProfile risk;
-		const bool routeSafe = command.destination == currentPosition || playerBotNavigationRiskAccepts(
-		    risk, routePlan.metrics.dangerCost, routePlan.metrics.maximumHealthLossPerSecond);
+		const auto* quote = sellingLocalLoot ? &*serviceWorkflow.liquidation() : nullptr;
+		const bool quoteAllowed = !quote || (routePlan.metrics.fare <= quote->maximumFare &&
+		    (quote->maximumRouteSteps == 0 || routePlan.metrics.steps <= quote->maximumRouteSteps));
+		const bool routeSafe = command.destination == currentPosition ||
+		    playerBotNavigationRiskVerdict(riskProfile, routePlan.metrics) == PlayerBotNavigationRiskVerdict::Accepted;
 		const bool routeAffordable = command.destination == currentPosition ||
 		                             huntTravelFareAffordable(*player, routePlan.metrics.fare,
 		                                                      huntTravelBudgetPhase);
-		lastRouteResult = routeSafe && routeAffordable ? routePlan.metrics.result : PlayerBotNavigationResult::Unreachable;
+		lastRouteResult = routeSafe && routeAffordable && quoteAllowed ? routePlan.metrics.result : PlayerBotNavigationResult::Unreachable;
 		lastRouteExpandedNodes = routePlan.metrics.expandedNodes;
 		lastRouteSteps = routePlan.metrics.steps;
 		const bool reached = command.destination == currentPosition ||
 		                     (routePlan.metrics.result == PlayerBotNavigationResult::Reached && !routePlan.steps.empty() &&
-		                      routeSafe && routeAffordable);
+		                      routeSafe && routeAffordable && quoteAllowed);
 		const auto routeElapsed = std::chrono::duration_cast<std::chrono::microseconds>(
 		    std::chrono::steady_clock::now() - startedAt);
 		telemetry.recordPathfinding(routeElapsed, reached);
@@ -1176,7 +1299,7 @@ void PlayerBotController::processService(Player* player, const Position& current
 		routeObservation.approachRoute.dangerCost = routePlan.metrics.dangerCost;
 		routeObservation.approachRoute.fare = routePlan.metrics.fare;
 		routeObservation.approachRoute.maximumDanger = routePlan.metrics.maximumHealthLossPerSecond;
-		lastRouteRequiresNpcTravel = std::any_of(routePlan.steps.begin(), routePlan.steps.end(),
+		lastRouteRequiresNpcTravel = validatedNpcTravel || std::any_of(routePlan.steps.begin(), routePlan.steps.end(),
 			[](const PlayerBotNavigationStep& step) { return step.action == PlayerBotNavigationAction::NpcTravel; });
 		routeObservation.approachRoute.requiresNpcTravel = lastRouteRequiresNpcTravel;
 		if (reached) approachSteps = std::move(routePlan.steps);
@@ -1187,11 +1310,18 @@ void PlayerBotController::processService(Player* player, const Position& current
 		const char* routeReason = !reached ?
 		    (routePlan.metrics.result == PlayerBotNavigationResult::NodeLimit ? "node_limit" :
 		     routePlan.metrics.result != PlayerBotNavigationResult::Reached ? "route_unreachable" :
-		     !routeSafe ? "route_unsafe" : !routeAffordable ? "fare_unaffordable" : "no_executable_steps") :
+		     !routeSafe ? "route_unsafe" : !routeAffordable ? "fare_unaffordable" :
+		     !quoteAllowed && liquidation && routePlan.metrics.fare > liquidation->maximumFare ? "fare_exceeds_quote" :
+		     !quoteAllowed ? "route_steps_exceed_quote" : "no_executable_steps") :
 		    liquidation && lastRouteRequiresNpcTravel && !liquidation->allowNpcTravel ? "npc_travel_not_quoted" :
 		    liquidation && liquidation->maximumRouteSteps != 0 && routePlan.metrics.steps > liquidation->maximumRouteSteps ?
 		        "route_steps_exceed_quote" :
 		    liquidation && routePlan.metrics.fare > liquidation->maximumFare ? "fare_exceeds_quote" : "route_accepted";
+		if (revalidatingSelectedApproach && !reached) {
+			serviceWorkflow.rejectSelectedApproach();
+			npcApproach = {};
+			resetNavigation();
+		}
 		const uint64_t quotedFare = liquidation ? liquidation->maximumFare : 0;
 		const uint32_t quotedSteps = liquidation ? liquidation->maximumRouteSteps : 0;
 		const bool quotedNpcTravel = liquidation && liquidation->allowNpcTravel;
@@ -1334,19 +1464,30 @@ void PlayerBotController::processService(Player* player, const Position& current
 	Npc* provider = command.providerId == 0 ? nullptr : g_game.getNpcByID(command.providerId);
 	if (command.type == PlayerBotServiceCommandType::NavigateProvider && provider) {
 		if (!approachSteps.empty()) observeNavigationPlan(command.destination, std::move(approachSteps));
-		bool approachUnavailable = false;
-		if (processNpcApproach(player, currentPosition, provider, command.destination, approachUnavailable)) {
+		if (Position::areInRange<3, 3, 0>(currentPosition, provider->getPosition())) {
+			resetNavigation();
 			schedule(SCHEDULER_MINTICKS);
-		} else if (approachUnavailable) {
-			if (const std::optional<Position> rejected = serviceWorkflow.rejectSelectedApproach()) {
-				emit("service_provider_approach_rejected", currentPosition,
-				     "\"reason\":\"route_unavailable\",\"npc_id\":" + std::to_string(command.providerId) +
-				         ",\"destination\":{\"x\":" + std::to_string(rejected->x) +
-				         ",\"y\":" + std::to_string(rejected->y) + ",\"z\":" +
-				         std::to_string(static_cast<uint16_t>(rejected->z)) + "}");
-				resetNavigation();
-			}
+			return;
 		}
+		if (navigationRuntime.hasPendingWork()) {
+			// Execute only validated steps. An exhausted leg returns to detailed
+			// service validation, never ordinary navigation planning.
+			PlayerBotNavigationRuntimeOutcome navigation;
+			const bool reached = processNavigation(player, currentPosition,
+			    PlayerBotNavigationGoal::exact(command.destination), &navigation,
+			    playerBotNavigationMaximumExpandedNodes, false, false, nullptr, false);
+			if (reached || navigation.routeRequest) schedule(SCHEDULER_MINTICKS);
+			if (navigation.stepFailureCount < maximumRepeatedNavigationStepFailures) return;
+		}
+		if (const std::optional<Position> rejected = serviceWorkflow.rejectSelectedApproach()) {
+			emit("service_provider_approach_rejected", currentPosition,
+			     "\"reason\":\"route_unavailable\",\"npc_id\":" + std::to_string(command.providerId) +
+			         ",\"destination\":{\"x\":" + std::to_string(rejected->x) +
+			         ",\"y\":" + std::to_string(rejected->y) + ",\"z\":" +
+			         std::to_string(static_cast<uint16_t>(rejected->z)) + "}");
+			resetNavigation();
+		}
+		schedule(SCHEDULER_MINTICKS);
 		return;
 	}
 	if (command.type == PlayerBotServiceCommandType::Speak && provider) {
@@ -1491,20 +1632,50 @@ bool PlayerBotController::discoverDepot(Player& player, const Position& currentP
 {
 	const auto now = std::chrono::steady_clock::now();
 	const PlayerBotFixtureDepotEndpoint fixtureDepot = fixtureDriver.depotEndpoint();
+	const int32_t health = player.getHealth();
+	if (lastDepotDiscoveryHealth > health) depotDiscoveryUnderAttack = true;
+	lastDepotDiscoveryHealth = health;
 	auto advance = [&](PlayerBotDepotObservation observation) {
 		observation.currentPosition = currentPosition;
 		observation.now = now;
 		observation.fixtureSynthetic = fixtureDepot.synthetic;
+		// A forced return must not keep evaluating lockers while the bot is taking damage.
+		observation.emergencyReturn = !sellLootPlan && huntTravelBudgetPhase == HuntTravelBudgetPhase::ReturnToDepot &&
+		    depotDiscoveryUnderAttack;
 		return depotWorkflow.advance(observation, depotRouteValidationsPerDecision, maximumDepotDiscoveryAttempts,
 		                             depotApproachSuppression);
 	};
-	auto scan = [&] {
+	auto scan = [&](bool preferredExit = false) {
 		PlayerBotDepotScan result;
 		result.observed = true;
 		if (fixtureDepot.synthetic) {
 			result.indexedCandidates = result.inScopeCandidates = result.standableCandidates = 1;
 			result.candidates.push_back({fixtureDepot.depotId, fixtureDepot.lockerItemId, fixtureDepot.lockerPosition,
 			                             fixtureDepot.approachPosition, 0});
+			return result;
+		}
+		if (preferredExit) {
+			// The selected hunt already validated this exact exit approach.
+			for (int32_t x = -1; x <= 1; ++x) for (int32_t y = -1; y <= 1; ++y) {
+				if (!x && !y) continue;
+				const Position locker(huntReturnDestination.x + x, huntReturnDestination.y + y, huntReturnDestination.z);
+				Tile* tile = g_game.map.getTile(locker);
+				TileItemVector* items = tile ? tile->getItemList() : nullptr;
+				if (!items) continue;
+				for (Item* item : *items) {
+					Container* container = item->getContainer();
+					DepotLocker* depot = container ? container->getDepotLocker() : nullptr;
+					if (!depot) continue;
+					++result.indexedCandidates;
+					uint16_t lockerItemId = 0;
+					if (!findDepotLocker(locker, depot->getDepotId(), lockerItemId)) continue;
+					++result.inScopeCandidates;
+					Tile* approach = g_game.map.getTile(huntReturnDestination);
+					if (!approach || approach->queryAdd(0, player, 1, FLAG_IGNOREBLOCKCREATURE) != RETURNVALUE_NOERROR) continue;
+					++result.standableCandidates;
+					result.candidates.push_back({depot->getDepotId(), lockerItemId, locker, huntReturnDestination, 0});
+				}
+			}
 			return result;
 		}
 		const PlayerBotTopology& topology = PlayerBotTopology::instance();
@@ -1540,6 +1711,10 @@ bool PlayerBotController::discoverDepot(Player& player, const Position& currentP
 	};
 
 	PlayerBotDepotCommand command = advance({});
+	bool preferredExit = command.type == PlayerBotDepotCommandType::Scan && !fixtureDepot.synthetic &&
+	    !sellLootPlan && huntTravelBudgetPhase == HuntTravelBudgetPhase::ReturnToDepot &&
+	    !huntExitValidationAttempted && huntReturnDestination != Position();
+	if (preferredExit) huntExitValidationAttempted = true;
 	if (command.snapshot.hasSelectedDepot && !fixtureDepot.synthetic) {
 		uint16_t lockerItemId = 0;
 		if (!findDepotLocker(command.snapshot.selected.lockerPosition, command.snapshot.selected.depotId, lockerItemId) ||
@@ -1551,14 +1726,36 @@ bool PlayerBotController::discoverDepot(Player& player, const Position& currentP
 	}
 	if (command.type == PlayerBotDepotCommandType::Scan) {
 		PlayerBotDepotObservation observation;
-		observation.scan = scan();
+		observation.scan = scan(preferredExit);
 		command = advance(observation);
+		if (preferredExit && command.type != PlayerBotDepotCommandType::ValidateRoute) {
+			depotWorkflow.reset();
+			command = advance({});
+			observation.scan = scan();
+			command = advance(observation);
+			preferredExit = false;
+		}
 	}
 
+	if (command.type != PlayerBotDepotCommandType::ValidateRoute) depotSourceRouteSearch.reset();
 	std::deque<PlayerBotNavigationStep> steps;
 	uint32_t routeValidations = 0;
+	uint32_t lastDangerCost = 0;
+	double lastMaximumHealthLossPerSecond = 0;
+	const char* lastPlannerKind = "none";
+	const char* lastDangerEvidence = "unknown";
+	const char* lastSafetyVerdict = "unknown";
 	while (command.type == PlayerBotDepotCommandType::ValidateRoute && command.snapshot.hasRouteCandidate &&
 	       routeValidations < depotRouteValidationsPerDecision) {
+		auto& budget = playerBotHuntPlanningBudget();
+		const auto admission = budget.request(playerId, std::chrono::steady_clock::now());
+		if (!admission.admitted) {
+			schedule(static_cast<uint32_t>(std::clamp<int64_t>(
+			    std::chrono::duration_cast<std::chrono::milliseconds>(admission.wait).count(),
+			    blockedRouteRetryInterval, 5000)));
+			return false;
+		}
+		PlayerBotPlanningBudget::Charge charge(budget, playerId);
 		++routeValidations;
 		const PlayerBotDepotCandidate& candidate = command.snapshot.routeCandidate;
 		PlayerBotDepotObservation observation;
@@ -1569,29 +1766,97 @@ bool PlayerBotController::discoverDepot(Player& player, const Position& currentP
 			 tile && tile->queryAdd(0, player, 1, FLAG_IGNOREBLOCKCREATURE) == RETURNVALUE_NOERROR);
 		const auto startedAt = std::chrono::steady_clock::now();
 		PlayerBotNavigationRoutePlan routePlan;
-		if (valid && candidate.approachPosition != currentPosition) {
-			if (sellLootPlan && candidate.depotId == sellLootPlan->sourceDepotId && sellLootPlan->sourceAllowNpcTravel) {
-				const uint64_t reserve = std::max(huntTravelRecoveryFundsReserve(player, huntTravelBudgetPhase),
-				                                  huntTravelReturnFareReserve(huntTravelBudgetPhase));
-				if (auto paidRoute = planNpcTravelRoute(player, currentPosition, candidate.approachPosition, {},
-				                                        playerBotNavigationMaximumExpandedNodes, false, reserve, true)) {
-					routePlan = std::move(*paidRoute);
-				} else {
-					// A failed travel-approach plan is still a real attempt: mark it
-					// so the failure feeds exhaustion like any other route failure.
-					routePlan.metrics.attempted = true;
-					routePlan.metrics.result = PlayerBotNavigationResult::Unreachable;
-				}
-			} else {
-				// Respect the navigation session's temporarily suppressed tiles so
-				// a detour loop cannot re-install routes straight through a blocker.
-				routePlan = planNavigationRoute(player, candidate.approachPosition,
-				    navigationRuntime.activeBlockedPositions(startedAt));
+		const bool remoteLiquidation = valid && candidate.approachPosition != currentPosition &&
+		    sellLootPlan && candidate.depotId == sellLootPlan->sourceDepotId;
+		if (!remoteLiquidation) depotSourceRouteSearch.reset();
+		if (remoteLiquidation) {
+			const uint64_t reserve = std::max(huntTravelRecoveryFundsReserve(player, huntTravelBudgetPhase),
+			                                  huntTravelReturnFareReserve(huntTravelBudgetPhase));
+			if (!depotSourceRouteSearch || depotSourceRouteSearch->origin != currentPosition ||
+			    depotSourceRouteSearch->destination != candidate.approachPosition ||
+			    depotSourceRouteSearch->locker != candidate.lockerPosition ||
+			    depotSourceRouteSearch->depotId != candidate.depotId ||
+			    depotSourceRouteSearch->lockerItemId != candidate.lockerItemId ||
+			    depotSourceRouteSearch->reserve != reserve ||
+			    depotSourceRouteSearch->sourceFare != sellLootPlan->sourceFare) {
+				depotSourceRouteSearch.emplace();
+				auto& search = *depotSourceRouteSearch;
+				search.origin = currentPosition;
+				search.destination = candidate.approachPosition;
+				search.locker = candidate.lockerPosition;
+				search.depotId = candidate.depotId;
+				search.lockerItemId = candidate.lockerItemId;
+				search.reserve = reserve;
+				search.sourceFare = sellLootPlan->sourceFare;
+				search.pass = (uint64_t(1) << 61) | (uint64_t(playerId) << 24) | ++depotSourceRouteSerial;
 			}
+			auto& search = *depotSourceRouteSearch;
+			PlayerBotNavigationRoutePlan walking;
+			std::optional<PlayerBotNavigationRoutePlan> planned;
+			{
+				// The selector owns its own resumable work; never replace the hunt's frontier.
+				struct WorkSlot {
+					std::shared_ptr<PlayerBotHuntTravelWork>& hunt;
+					std::shared_ptr<PlayerBotHuntTravelWork>& depot;
+					WorkSlot(decltype(hunt) hunt, decltype(depot) depot) : hunt(hunt), depot(depot) { hunt.swap(depot); }
+					~WorkSlot() { hunt.swap(depot); }
+				} slot(huntTravelWork, search.work);
+				PlayerBotHuntRouteRequest request;
+				request.planningPass = search.pass;
+				// Revalidate the selected walking source without searching unrelated travel offers.
+				request.walkingOnly = !sellLootPlan->sourceAllowNpcTravel;
+				request.from = currentPosition;
+				request.to = candidate.approachPosition;
+				PlayerBotHuntRouteTiming timing;
+				planned = advanceHuntTravelRoute(player, request, currentPosition, timing, reserve, true, &walking);
+			}
+			if (!planned && ++search.turns < maximumServiceRouteTurns) {
+				schedule(blockedRouteRetryInterval);
+				return false;
+			}
+			if (!planned) {
+				routePlan.metrics.attempted = true;
+				routePlan.metrics.result = PlayerBotNavigationResult::NodeLimit;
+			} else {
+				routePlan = std::move(*planned);
+				const auto paid = std::find_if(routePlan.steps.begin(), routePlan.steps.end(), [](const auto& step) {
+					return step.action == PlayerBotNavigationAction::NpcTravel;
+				});
+				if (paid != routePlan.steps.end() && sellLootPlan->sourceAllowNpcTravel &&
+				    routePlan.metrics.result == PlayerBotNavigationResult::Reached &&
+				    playerBotNavigationRiskVerdict(riskProfile, routePlan.metrics) == PlayerBotNavigationRiskVerdict::Accepted &&
+				    routePlan.metrics.fare <= sellLootPlan->sourceFare) {
+					// The detailed selector proves the entire trip; only borrow an executable
+					// first leg if it boards the same offer without adding local exposure.
+					auto executable = planNpcTravelRoute(player, currentPosition, candidate.approachPosition, {},
+					    playerBotNavigationMaximumExpandedNodes, false, reserve, true);
+					if (executable && executablePaidApproachMatches(*executable, routePlan, *paid, currentPosition)) {
+						routePlan.steps = std::move(executable->steps);
+					} else {
+						routePlan = std::move(walking);
+					}
+				} else if (paid != routePlan.steps.end()) {
+					routePlan = std::move(walking);
+				}
+			}
+			depotSourceRouteSearch.reset();
+		} else if (valid && candidate.approachPosition != currentPosition) {
+			// Coarse topology orders candidates; detailed planning judges danger.
+			routePlan = planHuntTravelRoute(player, currentPosition, candidate.approachPosition,
+			    navigationRuntime.activeBlockedPositions(startedAt), false, nullptr,
+			    huntTravelBudgetPhase == HuntTravelBudgetPhase::ReturnToDepot ?
+			        PlayerBotRouteIntent::ForcedReturn : PlayerBotRouteIntent::Optional);
 		}
-		const PlayerBotNavigationRiskProfile risk;
-		const bool routeSafe = candidate.approachPosition == currentPosition || playerBotNavigationRiskAccepts(
-		    risk, routePlan.metrics.dangerCost, routePlan.metrics.maximumHealthLossPerSecond);
+		const auto verdict = playerBotNavigationRiskVerdict(riskProfile, routePlan.metrics);
+		const bool routeSafe = candidate.approachPosition == currentPosition ||
+		    verdict == PlayerBotNavigationRiskVerdict::Accepted;
+		lastDangerCost = routePlan.metrics.dangerCost;
+		lastMaximumHealthLossPerSecond = routePlan.metrics.maximumHealthLossPerSecond;
+		lastPlannerKind = remoteLiquidation && sellLootPlan->sourceAllowNpcTravel ? "npc_travel" : "hunt_travel";
+		lastDangerEvidence = routePlan.metrics.dangerEvidence == PlayerBotNavigationDangerEvidence::Detailed ? "detailed" : "coarse";
+		lastSafetyVerdict = verdict == PlayerBotNavigationRiskVerdict::Rejected ?
+		    (routePlan.metrics.dangerCost > static_cast<uint32_t>(riskProfile.maximumRouteHealthLoss * riskProfile.healthLossCost) ?
+		        "danger_cost" : "peak_health_loss") : verdict == PlayerBotNavigationRiskVerdict::Unknown ? "unknown" : "accepted";
 		const bool fareAccepted = (!sellLootPlan || candidate.depotId != sellLootPlan->sourceDepotId ||
 		                           routePlan.metrics.fare <= sellLootPlan->sourceFare) &&
 		                          huntTravelFareAffordable(player, routePlan.metrics.fare,
@@ -1599,18 +1864,39 @@ bool PlayerBotController::discoverDepot(Player& player, const Position& currentP
 		const bool executable = valid && fareAccepted && (candidate.approachPosition == currentPosition ||
 			(routePlan.metrics.result == PlayerBotNavigationResult::Reached && !routePlan.steps.empty()));
 		const bool liquidationSource = sellLootPlan && candidate.depotId == sellLootPlan->sourceDepotId;
+		const bool forcedReturn = huntTravelBudgetPhase == HuntTravelBudgetPhase::ReturnToDepot && !liquidationSource;
+		observation.allowUnknownFallback = forcedReturn;
+		// An NPC itinerary cannot certify its future legs at this point. A
+		// forced return may execute the verified first leg and replan afterward;
+		// optional trips and liquidation still require detailed acceptance.
+		const bool acceptingForcedExit = forcedReturn && (preferredExit || command.snapshot.validatingRiskFallback);
 		const bool reached = executable && playerBotDepotRouteSafetyAccepted(
-		    routeSafe, command.snapshot.validatingRiskFallback, liquidationSource, huntExitRouteProtected);
+		    routeSafe, liquidationSource,
+		    acceptingForcedExit ? PlayerBotRouteIntent::ForcedReturn : PlayerBotRouteIntent::Optional) &&
+		    (candidate.approachPosition == currentPosition ||
+		     routePlan.metrics.dangerEvidence == PlayerBotNavigationDangerEvidence::Detailed || acceptingForcedExit);
 		telemetry.recordPathfinding(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - startedAt), executable);
 		observation.routeResult = reached ? PlayerBotDepotRouteResult::Reached :
-		                          executable ? PlayerBotDepotRouteResult::Unsafe : PlayerBotDepotRouteResult::Unreachable;
+		    !executable ? PlayerBotDepotRouteResult::Unreachable :
+		    verdict == PlayerBotNavigationRiskVerdict::Unknown ? PlayerBotDepotRouteResult::Unknown :
+		    PlayerBotDepotRouteResult::Unsafe;
 		observation.routeSteps = static_cast<uint32_t>(routePlan.metrics.steps);
 		observation.expandedNodes = routePlan.metrics.expandedNodes;
 		observation.dangerCost = routePlan.metrics.dangerCost;
 		observation.maximumHealthLossPerSecond = routePlan.metrics.maximumHealthLossPerSecond;
+		if (!reached && executable) {
+			emit("action_result", currentPosition,
+			     "\"action\":\"depot_discover\",\"result\":\"rejected\",\"reason\":" +
+			         jsonString(verdict == PlayerBotNavigationRiskVerdict::Unknown ? "route_evidence_incomplete" : "route_unsafe") +
+			         ",\"danger_cost\":" +
+			         std::to_string(lastDangerCost) + ",\"maximum_health_loss_per_second\":" +
+			         std::to_string(lastMaximumHealthLossPerSecond) + ",\"planner_kind\":" +
+			         jsonString(lastPlannerKind) + ",\"danger_evidence\":" + jsonString(lastDangerEvidence) +
+			         ",\"safety_verdict\":" + jsonString(lastSafetyVerdict));
+		}
 		if (reached) {
 			steps = std::move(routePlan.steps);
-		} else if (routePlan.metrics.attempted &&
+		} else if (!preferredExit && routePlan.metrics.attempted &&
 		           routePlan.metrics.result != PlayerBotNavigationResult::Reached) {
 			huntCoordinator.observeTransitMovementFailure(currentPosition);
 			// Feed failed fixed-goal validation into the shared navigation bound.
@@ -1624,7 +1910,16 @@ bool PlayerBotController::discoverDepot(Player& player, const Position& currentP
 				return false;
 			}
 		}
-		command = advance(observation);
+		if (preferredExit && !reached) {
+			depotWorkflow.reset();
+			command = advance({});
+			PlayerBotDepotObservation fallback;
+			fallback.scan = scan();
+			command = advance(fallback);
+			preferredExit = false;
+		} else {
+			command = advance(observation);
+		}
 	}
 	if (command.type == PlayerBotDepotCommandType::ValidateRoute) {
 		emit("action_result", currentPosition,
@@ -1633,7 +1928,11 @@ bool PlayerBotController::discoverDepot(Player& player, const Position& currentP
 		         std::to_string(command.snapshot.inScopeCandidates) + ",\"standable\":" +
 		         std::to_string(command.snapshot.standableCandidates) + ",\"route_validations\":" +
 		         std::to_string(routeValidations) + ",\"unsafe_routes\":" +
-		         std::to_string(command.snapshot.unsafeRouteCandidates));
+		         std::to_string(command.snapshot.unsafeRouteCandidates) + ",\"danger_cost\":" +
+		         std::to_string(lastDangerCost) + ",\"maximum_health_loss_per_second\":" +
+		         std::to_string(lastMaximumHealthLossPerSecond) + ",\"planner_kind\":" +
+		         jsonString(lastPlannerKind) + ",\"danger_evidence\":" + jsonString(lastDangerEvidence) +
+		         ",\"safety_verdict\":" + jsonString(lastSafetyVerdict));
 		schedule(blockedRouteRetryInterval);
 		return false;
 	}
@@ -1653,6 +1952,9 @@ bool PlayerBotController::discoverDepot(Player& player, const Position& currentP
 		       << ",\"expanded_nodes\":" << command.telemetry.expandedNodes
 		       << ",\"danger_cost\":" << command.telemetry.dangerCost
 		       << ",\"maximum_health_loss_per_second\":" << command.telemetry.maximumHealthLossPerSecond
+		       << ",\"planner_kind\":" << jsonString(lastPlannerKind)
+		       << ",\"danger_evidence\":" << jsonString(lastDangerEvidence)
+		       << ",\"safety_verdict\":" << jsonString(lastSafetyVerdict)
 		       << ",\"risk_fallback\":" << (command.telemetry.riskFallback ? "true" : "false")
 		       << ",\"unsafe_routes\":" << command.snapshot.unsafeRouteCandidates
 		       << ",\"indexed\":" << command.snapshot.indexedCandidates
@@ -1877,7 +2179,6 @@ void PlayerBotController::processDeposit(Player* player, const Position& current
 		observation.atApproach = fixtureDepot.synthetic || Position::areInRange<1, 1, 0>(currentPosition, command.snapshot.selected.lockerPosition);
 		if (observation.atApproach && huntTravelBudgetPhase == HuntTravelBudgetPhase::ReturnToDepot) {
 			huntTravelBudgetPhase = HuntTravelBudgetPhase::Supply;
-			huntExitRouteProtected = false;
 		}
 		observation.lockerOpen = fixtureDepot.synthetic || player->getContainerByID(depotLockerContainerId) != nullptr;
 		observation.chestOpen = fixtureDepot.synthetic || player->getContainerByID(depotChestContainerId) != nullptr;

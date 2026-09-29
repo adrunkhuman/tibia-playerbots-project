@@ -15,6 +15,25 @@
 
 #include <chrono>
 #include <optional>
+#include <tuple>
+
+struct PlayerBotNpcTravelOfferIdentity {
+	uint32_t npcId = 0;
+	Position destination;
+	uint32_t price = 0;
+	uint32_t minimumLevel = 0;
+	bool premium = false;
+	std::vector<std::string> dialogue;
+};
+
+inline bool playerBotNpcTravelOfferMatches(const PlayerBotNpcTravelOfferIdentity& offer,
+                                            const PlayerBotNavigationStep& step)
+{
+	return step.action == PlayerBotNavigationAction::NpcTravel && step.npcId == offer.npcId &&
+	       step.expectedPosition == offer.destination && step.price == offer.price &&
+	       step.minimumLevel == offer.minimumLevel && step.premium == offer.premium &&
+	       step.dialogue == offer.dialogue;
+}
 
 struct PlayerBotNavigationPlanMetrics {
 	PlayerBotNavigationResult result = PlayerBotNavigationResult::Unreachable;
@@ -26,11 +45,42 @@ struct PlayerBotNavigationPlanMetrics {
 	uint32_t movementCost = 0;
 	uint32_t dangerCost = 0;
 	uint64_t fare = 0;
+	// Selection identity survives an incremental approach that has no boarding step yet.
+	std::optional<PlayerBotNpcTravelOfferIdentity> firstNpcTravelOffer;
 	double maximumHealthLossPerSecond = 0;
+	PlayerBotNavigationDangerEvidence dangerEvidence = PlayerBotNavigationDangerEvidence::Detailed;
+	// The current local leg is measured tile by tile even when the remaining
+	// route is only a coarse topology estimate.
+	uint32_t localDangerCost = 0;
+	double localMaximumHealthLossPerSecond = 0;
 	bool dangerAware = false;
 	std::chrono::microseconds elapsed = std::chrono::microseconds::zero();
 	bool attempted = false;
 };
+
+inline PlayerBotNavigationRiskVerdict playerBotNavigationRiskVerdict(
+    const PlayerBotNavigationRiskProfile& risk, const PlayerBotNavigationPlanMetrics& metrics)
+{
+	return playerBotNavigationRiskVerdict(risk, metrics.dangerEvidence,
+	                                      metrics.dangerCost, metrics.maximumHealthLossPerSecond);
+}
+
+inline PlayerBotNavigationRiskVerdict playerBotNavigationLocalRiskVerdict(
+    const PlayerBotNavigationRiskProfile& risk, const PlayerBotNavigationPlanMetrics& metrics)
+{
+	return playerBotNavigationRiskVerdict(risk, PlayerBotNavigationDangerEvidence::Detailed,
+	                                      metrics.localDangerCost, metrics.localMaximumHealthLossPerSecond);
+}
+
+inline bool playerBotPreferForcedPaidRoute(const PlayerBotNavigationPlanMetrics& walking,
+                                            const PlayerBotNavigationPlanMetrics& paid)
+{
+	if (paid.result != PlayerBotNavigationResult::Reached) return false;
+	if (walking.result != PlayerBotNavigationResult::Reached) return true;
+	return paid.dangerEvidence == PlayerBotNavigationDangerEvidence::Detailed &&
+	       std::tie(paid.dangerCost, paid.maximumHealthLossPerSecond) <
+	       std::tie(walking.dangerCost, walking.maximumHealthLossPerSecond);
+}
 
 struct PlayerBotNavigationRoutePlan {
 	PlayerBotNavigationPlanMetrics metrics;
@@ -43,8 +93,9 @@ struct PlayerBotNavigationRoutePlan {
 inline bool playerBotNavigationIsReversibleLocalWalk(
     const Position& source, const Position& destination, const PlayerBotNavigationRoutePlan& plan)
 {
-	if (plan.metrics.result != PlayerBotNavigationResult::Reached || source.z != destination.z ||
-	    plan.metrics.dangerCost != 0 || plan.metrics.maximumHealthLossPerSecond != 0 ||
+	if (plan.metrics.result != PlayerBotNavigationResult::Reached ||
+	    plan.metrics.dangerEvidence != PlayerBotNavigationDangerEvidence::Detailed ||
+	    source.z != destination.z || plan.metrics.dangerCost != 0 || plan.metrics.maximumHealthLossPerSecond != 0 ||
 	    (source != destination && plan.steps.empty()) || plan.metrics.fare != 0 ||
 	    plan.metrics.steps != plan.steps.size()) return false;
 	Position cursor = source;

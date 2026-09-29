@@ -16,6 +16,8 @@
 #include "playerbotnpccapabilities.h"
 #include "playerbottopology.h"
 #include "spells.h"
+#include "groups.h"
+#include "guild.h"
 
 #include <utility>
 
@@ -26,6 +28,32 @@ extern Spells* g_spells;
 
 namespace {
 	constexpr uint64_t maximumTargetApproachExpandedNodes = 10000;
+	constexpr uint32_t maximumPatrolRouteTurns = 512;
+
+	bool executablePatrolApproachMatches(const PlayerBotNavigationRoutePlan& executable,
+	                                    const PlayerBotNavigationRoutePlan& detailed,
+	                                    const PlayerBotNavigationStep& paid, Position source)
+	{
+		if (executable.metrics.result != PlayerBotNavigationResult::Reached ||
+		    !executable.metrics.firstNpcTravelOffer || executable.steps.empty() ||
+		    !playerBotNpcTravelOfferMatches(*executable.metrics.firstNpcTravelOffer, paid) ||
+		    executable.metrics.localDangerCost != 0 ||
+		    executable.metrics.localMaximumHealthLossPerSecond != 0 ||
+		    executable.metrics.fare != detailed.metrics.fare ||
+		    executable.steps.size() > detailed.metrics.steps) return false;
+		const auto first = std::find_if(executable.steps.begin(), executable.steps.end(), [](const auto& step) {
+			return step.action == PlayerBotNavigationAction::NpcTravel;
+		});
+		return std::all_of(executable.steps.begin(), first, [&source](const auto& step) {
+			const bool ordinary = step.action == PlayerBotNavigationAction::Move && !step.topologyPortal &&
+			    step.target == step.expectedPosition && step.target != source &&
+			    Position::areInRange<1, 1, 0>(source, step.target);
+			source = step.expectedPosition;
+			return ordinary;
+		}) && (first == executable.steps.end() ||
+		       (first + 1 == executable.steps.end() &&
+		        playerBotNpcTravelOfferMatches(*executable.metrics.firstNpcTravelOffer, *first)));
+	}
 
 	std::string supplyCapabilityChangedFields(uint64_t fields)
 	{
@@ -1310,13 +1338,12 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 			*retryAfter = std::chrono::milliseconds(1);
 		return false;
 	}
-	const PlayerBotNavigationRiskProfile risk;
 	const auto routePotionReserve = [&](uint32_t outboundDanger, uint32_t returnDanger) {
 		const uint32_t returning = recoveryPotionRouteReserve(player.getVocationId(), player.getMaxHealth(),
-		    returnDanger, static_cast<uint32_t>(risk.healthLossCost));
+		    returnDanger, static_cast<uint32_t>(riskProfile.healthLossCost));
 		const uint32_t outbound = outboundDanger == 0 ? 0 :
 		    recoveryPotionRouteReserve(player.getVocationId(), player.getMaxHealth(),
-		        outboundDanger, static_cast<uint32_t>(risk.healthLossCost));
+		        outboundDanger, static_cast<uint32_t>(riskProfile.healthLossCost));
 		return static_cast<uint32_t>(std::min<uint64_t>(UINT32_MAX,
 		    static_cast<uint64_t>(returning) + outbound));
 	};
@@ -1328,6 +1355,7 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 		const auto request = huntCoordinator.nextRouteRequest();
 		if (!request) { sliceResult = "route_request_missing"; return false; }
 		PlayerBotHuntRouteObservation observation;
+		observation.riskProfile = riskProfile;
 		if (request->stage == PlayerBotHuntRouteStage::Outbound ||
 		    request->stage == PlayerBotHuntRouteStage::Depot ||
 		    request->stage == PlayerBotHuntRouteStage::Supplier) {
@@ -1373,7 +1401,7 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 					observation.huntDurationSeconds = duration;
 					if (observation.travelSeconds > 0) observation.staminaMultiplier = projectedHuntStaminaMultiplier(
 					    player, std::max(0.0, duration - observation.travelSeconds));
-					if (observation.reached && playerBotNavigationRiskAccepts(risk, observation.dangerCost,
+					if (observation.reached && playerBotNavigationRiskAccepts(riskProfile, observation.dangerCost,
 					    observation.peakDanger)) {
 						const auto discoveryStarted = std::chrono::steady_clock::now();
 						observation.approaches = huntDepotExitCandidates(player, request->to);
@@ -1385,7 +1413,7 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 				++depotUnavailableChecks;
 			}
 			if (request->stage == PlayerBotHuntRouteStage::Depot && observation.reached &&
-			    playerBotNavigationRiskAccepts(risk, observation.dangerCost, observation.peakDanger)) {
+			    playerBotNavigationRiskAccepts(riskProfile, observation.dangerCost, observation.peakDanger)) {
 				observation.potionReserve = routePotionReserve(request->outboundDangerCost, observation.dangerCost);
 				observation.supplyProfile = huntPlanningFacts(player, huntCombatProfile(player)).supply;
 				observation.funds = player.getMoney() + player.getBankBalance();
@@ -1405,7 +1433,7 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 			    player, potionStockTarget(player, observation.potionReserve));
 			observation.recoveryRouteHealthLoss =
 			    (static_cast<double>(request->outboundDangerCost) + request->returnDangerCost) *
-			    player.getMaxHealth() / risk.healthLossCost;
+			    player.getMaxHealth() / riskProfile.healthLossCost;
 		}
 		routeResult = huntCoordinator.observeRoute(*request, observation);
 		if (!routeResult.accepted) {
@@ -1462,10 +1490,9 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 	huntExitFareReserve = selected.exitFare;
 	huntRecoveryPotionReserve = selected.recoveryPotionReserve;
 	huntReturnCoverageVariantId = selected.atlasVariantId;
-	huntExitRouteProtected = true;
 	huntReturnCoverage.validate(huntReturnCoverageVariantId, selected.atlasRevision,
 	                            huntReturnCoverageContext(player, selected.destination));
-	const uint32_t healthLossCost = static_cast<uint32_t>(risk.healthLossCost);
+	const uint32_t healthLossCost = static_cast<uint32_t>(riskProfile.healthLossCost);
 	huntPotionReturnThreshold = recoveryPotionRouteReserve(
 		player.getVocationId(), player.getMaxHealth(), huntReturnRouteDangerCost, healthLossCost);
 	huntPotionRestockTarget = potionStockTarget(player, huntPotionReturnThreshold);
@@ -1638,6 +1665,24 @@ void PlayerBotController::startHunt(Player* player, const Position& position, co
 
 void PlayerBotController::processTraversal(Player* player, const Position& currentPosition)
 {
+	// Only an explicit preflight yield retains work. Combat, service and other
+	// interruptions discard both the pending leg and completed outbound evidence.
+	bool retainPatrolSearch = false;
+	struct PatrolSearchGuard {
+		std::function<void()> cleanup;
+		~PatrolSearchGuard() { cleanup(); }
+	} patrolSearchGuard{[&] {
+		if (!huntPatrolRouteSearch) return;
+		if (retainPatrolSearch) {
+			huntPatrolRouteSearch->scheduledGeneration = scheduledTurnGeneration;
+			return;
+		}
+		huntPatrolRouteSearch.reset();
+		huntPatrolValidationDestination.reset();
+		huntPatrolValidationOrigin.reset();
+		huntPatrolOutboundPlan.reset();
+		playerBotHuntPlanningBudget().cancel(playerId, std::chrono::steady_clock::now());
+	}};
 	if (turnRouter.cyclePhase() == CyclePhase::Hunt && huntCoordinator.huntActive() && !huntRegionReached &&
 	    huntCoordinator.insideHuntArea(currentPosition, Map::maxClientViewportX, Map::maxClientViewportX + 1,
 	                                    Map::maxClientViewportY, Map::maxClientViewportY + 1)) {
@@ -1689,6 +1734,9 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 		turn.huntCycleFinished = hunt.cycleFinished;
 	}
 	const PlayerBotTurnCommand turnCommand = turnRouter.route(turn);
+	// Release a queued patrol admission before another workflow requests the
+	// same controller's budget slot.
+	if (turnCommand != PlayerBotTurnCommand::Hunt) patrolSearchGuard.cleanup();
 
 	if (turnCommand == PlayerBotTurnCommand::Progression) {
 		processProgression(player, currentPosition);
@@ -1821,7 +1869,6 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 	const PlayerBotHuntPatrolOutcome patrol = huntCoordinator.huntPatrolTarget();
 	const auto now = std::chrono::steady_clock::now();
 	PlayerBotNavigationRuntimeOutcome navigation;
-	const PlayerBotNavigationRiskProfile patrolRisk;
 	const bool activeRegionPatrol = huntCoordinator.huntActive();
 	auto observePatrolFailure = [&](const PlayerBotNavigationRuntimeOutcome& failure) {
 		if (failure.routeUnavailable && failure.plan.attempted) huntReturnCoverage.invalidate();
@@ -1846,31 +1893,149 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 		}
 	};
 	if (activeRegionPatrol && huntPatrolValidatedDestination != patrol.destination) {
+		const uint64_t revision = PlayerBotHuntRegionPlanner::getCacheRevision();
+		// resetNavigation clears the origin marker. The scheduled generation also
+		// detects turns consumed by healing/food before processTraversal runs.
+		if (!huntPatrolRouteSearch || huntPatrolValidationOrigin != currentPosition ||
+		    huntPatrolRouteSearch->scheduledGeneration != scheduledTurnGeneration ||
+		    huntPatrolRouteSearch->destination != patrol.destination ||
+		    huntPatrolRouteSearch->returnDestination != huntReturnDestination ||
+		    huntPatrolRouteSearch->revision != revision ||
+		    huntPatrolRouteSearch->variant != huntReturnCoverageVariantId) {
+			huntPatrolValidationDestination.reset();
+			huntPatrolOutboundPlan.reset();
+			huntPatrolValidationOrigin = currentPosition;
+			huntPatrolRouteSearch.emplace();
+			auto& search = *huntPatrolRouteSearch;
+			search.destination = patrol.destination;
+			search.returnDestination = huntReturnDestination;
+			search.revision = revision;
+			search.variant = huntReturnCoverageVariantId;
+			search.pass = (uint64_t(1) << 60) | (uint64_t(playerId) << 24) | ++huntPatrolRouteSerial;
+		}
+		auto& search = *huntPatrolRouteSearch;
 		const bool validateReturn = huntPatrolValidationDestination == patrol.destination;
-		if (validateReturn && (!huntPatrolValidationOrigin || *huntPatrolValidationOrigin != currentPosition ||
-		                       !huntPatrolOutboundPlan)) {
-			resetNavigation();
+		auto& budget = playerBotHuntPlanningBudget();
+		const auto admission = budget.request(playerId, std::chrono::steady_clock::now());
+		if (!admission.admitted) {
+			retainPatrolSearch = true;
+			schedule(static_cast<uint32_t>(std::clamp<int64_t>(
+			    std::chrono::duration_cast<std::chrono::milliseconds>(admission.wait).count(), SCHEDULER_MINTICKS, 5000)));
+			return;
+		}
+		PlayerBotPlanningBudget::Charge charge(budget, playerId);
+		// The sliced engine watches its pending leg. Also protect the completed
+		// outbound leg while return validation yields, including paid NPC anchors.
+		auto routeFacts = [&] {
+			const auto combat = huntCombatProfile(*player);
+			std::ostringstream facts;
+			facts.precision(17);
+			facts << combat.level << ':' << combat.maximumHealth << ':' << combat.armor << ':' << combat.defense
+			      << ':' << combat.attack << ':' << combat.attackSkill << ':' << combat.attackFactor
+			      << ':' << player->getMoney() << ':' << player->getBankBalance() << ':' << player->isPremium()
+			      << ':' << player->isPzLocked() << ':' << player->getStepDuration()
+			      << ':' << player->getStepDuration(DIRECTION_NORTHEAST)
+			      << ':' << (g_game.findItemOfType(player, ropeItemId, true) != nullptr)
+			      << ':' << (g_game.findItemOfType(player, 2554, true) != nullptr)
+			      << ':' << (player->getGroup() ? player->getGroup()->flags : 0)
+			      << ':' << (player->getGroup() && player->getGroup()->access)
+			      << ':' << (player->getGuild() ? player->getGuild()->getId() : 0)
+			      << ':' << (player->getGuildRank() ? player->getGuildRank()->id : 0)
+			      << ':' << PlayerBotTopology::instance().generation() << ':' << g_game.getNpcGeneration()
+			      << ':' << riskProfile.healthLossCost << ':' << riskProfile.maximumRouteHealthLoss
+			      << ':' << riskProfile.maximumHealthLossPerSecond << ':' << huntExitFareReserve;
+			if (search.outboundNpcId != 0) {
+				const Npc* npc = g_game.getNpcByID(search.outboundNpcId);
+				if (!npc || npc->isRemoved()) {
+					facts << ":provider_unavailable";
+				} else {
+					facts << ':' << npc->getID() << ':' << npc->getPosition();
+					for (const auto& offer : npc->getTravelOffers()) {
+						facts << ':' << offer.destination << ':' << offer.price << ':' << offer.level << ':' << offer.premium
+						      << ':' << offer.hasOpaqueCondition << ':' << offer.hasOpaqueAction;
+						for (const auto& word : offer.dialogue) facts << ':' << word.size() << ':' << word;
+						const auto unavailable = unavailableTravelOffers.find({npc->getID(), offer.destination});
+						facts << ':' << (unavailable != unavailableTravelOffers.end() && unavailable->second > now);
+					}
+				}
+			}
+			return facts.str();
+		};
+		if (validateReturn && (!huntPatrolOutboundPlan || !search.watch.valid() || search.outboundFacts != routeFacts())) {
 			schedule(SCHEDULER_MINTICKS);
 			return;
 		}
+		PlayerBotRouteChanges::Scope watch(search.watch);
 		const Position routeStart = validateReturn ? patrol.destination : currentPosition;
 		const Position routeDestination = validateReturn ? huntReturnDestination : patrol.destination;
-		// The outbound plan is installed below, so it must include a real approach
-		// to the first transport NPC. Return preflight consumes metrics only.
-		PlayerBotNavigationRoutePlan preflight = planHuntTravelRoute(
-		    *player, routeStart, routeDestination, huntPatrolPreflightBlockedPositions,
-		    validateReturn);
+		const HuntTravelBudgetPhase budgetPhase = validateReturn ? HuntTravelBudgetPhase::ReturnToDepot :
+		                                                        HuntTravelBudgetPhase::Outbound;
+		const uint64_t reserve = std::max(huntTravelReturnFareReserve(budgetPhase),
+		                                  huntTravelRecoveryFundsReserve(*player, budgetPhase));
+		PlayerBotNavigationRoutePlan preflight;
+		if (!huntPatrolPreflightBlockedPositions.empty()) {
+			// The sliced engine has no blocked-position input. Preserve bounded
+			// walking recovery rather than admit a route through a known blocker.
+			preflight = planCompleteNavigationRoute(*player, routeStart, routeDestination,
+			                                       huntPatrolPreflightBlockedPositions);
+		} else {
+			struct WorkSlot {
+				std::shared_ptr<PlayerBotHuntTravelWork>& hunt;
+				std::shared_ptr<PlayerBotHuntTravelWork>& patrol;
+				WorkSlot(decltype(hunt) hunt, decltype(patrol) patrol) : hunt(hunt), patrol(patrol) { hunt.swap(patrol); }
+				~WorkSlot() { hunt.swap(patrol); }
+			} slot(huntTravelWork, search.work);
+			PlayerBotHuntRouteRequest request;
+			request.planningPass = search.pass;
+			request.scoringRevision = revision;
+			request.sequence = validateReturn ? 1 : 0;
+			request.from = routeStart;
+			request.to = routeDestination;
+			request.preferSafeWalking = playerBotNavigationDistance(routeStart, routeDestination) <= 128;
+			PlayerBotHuntRouteTiming timing;
+			PlayerBotNavigationRoutePlan walking;
+			auto planned = advanceHuntTravelRoute(*player, request, routeStart, timing, reserve, false, &walking);
+			if (!planned && ++search.turns < maximumPatrolRouteTurns) {
+				retainPatrolSearch = true;
+				schedule(SCHEDULER_MINTICKS);
+				return;
+			}
+			if (!planned) {
+				preflight.metrics.attempted = true;
+				preflight.metrics.result = PlayerBotNavigationResult::NodeLimit;
+			} else {
+				preflight = std::move(*planned);
+				const auto paid = std::find_if(preflight.steps.begin(), preflight.steps.end(), [](const auto& step) {
+					return step.action == PlayerBotNavigationAction::NpcTravel;
+				});
+				if (!validateReturn && paid != preflight.steps.end() &&
+				    preflight.metrics.result == PlayerBotNavigationResult::Reached &&
+				    playerBotNavigationRiskVerdict(riskProfile, preflight.metrics) == PlayerBotNavigationRiskVerdict::Accepted) {
+					// Borrow only executable steps; coarse metrics never replace the
+					// detailed proof of the complete outbound itinerary.
+					auto executable = planNpcTravelRoute(*player, routeStart, routeDestination, {},
+					    playerBotNavigationMaximumExpandedNodes, false, reserve);
+					if (executable && executablePatrolApproachMatches(*executable, preflight, *paid, routeStart)) {
+						search.outboundNpcId = paid->npcId;
+						preflight.steps = std::move(executable->steps);
+					} else {
+						preflight = std::move(walking);
+					}
+				}
+			}
+		}
 		if (preflight.metrics.attempted) {
 			telemetry.recordPathfinding(preflight.metrics.elapsed,
 			                            preflight.metrics.result == PlayerBotNavigationResult::Reached);
 		}
-		const bool routeReached = preflight.metrics.result == PlayerBotNavigationResult::Reached;
-		const HuntTravelBudgetPhase budgetPhase = validateReturn ? HuntTravelBudgetPhase::ReturnToDepot :
-		                                                        HuntTravelBudgetPhase::Outbound;
+		const bool routeReached = preflight.metrics.result == PlayerBotNavigationResult::Reached &&
+		    (routeStart == routeDestination || !preflight.steps.empty());
 		const bool routeAffordable = routeReached && huntTravelFareAffordable(
 		    *player, preflight.metrics.fare, budgetPhase);
-		const bool routeSafe = routeAffordable && playerBotNavigationRiskAccepts(
-			patrolRisk, preflight.metrics.dangerCost, preflight.metrics.maximumHealthLossPerSecond);
+		// This is an optional move to a proposed patrol goal. Its return route
+		// must satisfy the same detailed safety limit before we move there.
+		const bool routeSafe = routeAffordable &&
+			playerBotNavigationRiskVerdict(riskProfile, preflight.metrics) == PlayerBotNavigationRiskVerdict::Accepted;
 		if (!routeSafe) {
 			navigation = playerBotHuntRejectedPatrolPreflight(preflight.metrics, routeAffordable);
 			if (!routeReached) huntCoordinator.observeTransitMovementFailure(currentPosition);
@@ -1913,6 +2078,9 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 				huntPatrolValidationDestination = patrol.destination;
 				huntPatrolValidationOrigin = currentPosition;
 				huntPatrolOutboundPlan = std::move(preflight);
+				search.outboundFacts = routeFacts();
+				search.turns = 0;
+				retainPatrolSearch = true;
 				schedule(SCHEDULER_MINTICKS);
 				return;
 			}
@@ -1922,7 +2090,7 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 			huntReturnRouteDangerCost = preflight.metrics.dangerCost;
 			const uint32_t requiredReserve = recoveryPotionRouteReserve(
 				player->getVocationId(), player->getMaxHealth(), preflight.metrics.dangerCost,
-				static_cast<uint32_t>(patrolRisk.healthLossCost));
+				static_cast<uint32_t>(riskProfile.healthLossCost));
 			if (requiredReserve > huntPotionReturnThreshold) {
 				huntPotionReturnThreshold = requiredReserve;
 				huntPotionRestockTarget = potionStockTarget(*player, requiredReserve);
@@ -1963,7 +2131,7 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 	}
 	if (!processNavigation(player, currentPosition, patrol.destination, &navigation,
 	                       playerBotNavigationMaximumExpandedNodes, false,
-	                       activeRegionPatrol ? &patrolRisk : nullptr, !activeRegionPatrol)) {
+	                       activeRegionPatrol ? &riskProfile : nullptr, !activeRegionPatrol)) {
 		if (activeRegionPatrol && navigation.routeRequest) {
 			std::set<Position> blockedPositions = std::move(navigation.routeRequest->blockedPositions);
 			huntReturnCoverage.invalidate();

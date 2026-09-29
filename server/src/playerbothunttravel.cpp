@@ -21,9 +21,9 @@ namespace {
 	                             uint64_t, bool, bool, bool, bool, uint32_t, uint32_t, bool,
 	                             uint64_t, uint32_t, uint32_t, Position>;
 
-	bool safe(const PlayerBotNavigationRoutePlan& p) {
+	bool safe(const PlayerBotNavigationRoutePlan& p, const PlayerBotNavigationRiskProfile& risk) {
 		return p.metrics.result == PlayerBotNavigationResult::Reached &&
-		       playerBotNavigationRiskAccepts({}, p.metrics.dangerCost, p.metrics.maximumHealthLossPerSecond);
+		       playerBotNavigationRiskAccepts(risk, p.metrics.dangerCost, p.metrics.maximumHealthLossPerSecond);
 	}
 	double cost(const PlayerBotNavigationRoutePlan& p, bool sellEconomy) {
 		return playerBotTransportRouteCost(p.metrics.estimatedTravelSeconds, p.metrics.fare, p.metrics.dangerCost, sellEconomy);
@@ -39,6 +39,7 @@ struct PlayerBotHuntTravelWork {
 	std::vector<OfferFact> offers;
 	PlayerBotRouteChanges::Watch watch;
 	PlayerBotNavigationCostPolicy policy;
+	PlayerBotNavigationRiskProfile riskProfile;
 	PlayerBotNavigationRoutePlan walking;
 	std::unique_ptr<PlayerBotHuntWalkSearch> local;
 	std::string profile;
@@ -52,10 +53,17 @@ struct PlayerBotHuntTravelWork {
 	uint64_t npcNodes = 0;
 	uint64_t transportReserve = 0;
 	bool sellEconomy = false;
+	bool walkingOnly = false;
+	bool preferSafeWalking = false;
 
-	bool sameRequest(const PlayerBotHuntRouteRequest& r, Position from, uint64_t reserve, bool sell) const {
+	bool sameRequest(const PlayerBotHuntRouteRequest& r, Position from, uint64_t reserve, bool sell,
+	                 const PlayerBotNavigationRiskProfile& risk) const {
 		return pass == r.planningPass && revision == r.scoringRevision && sequence == r.sequence &&
-		       source == from && destination == r.to && transportReserve == reserve && sellEconomy == sell;
+		       source == from && destination == r.to && transportReserve == reserve && sellEconomy == sell &&
+		       walkingOnly == r.walkingOnly && preferSafeWalking == r.preferSafeWalking &&
+		       riskProfile.healthLossCost == risk.healthLossCost &&
+		       riskProfile.maximumRouteHealthLoss == risk.maximumRouteHealthLoss &&
+		       riskProfile.maximumHealthLossPerSecond == risk.maximumHealthLossPerSecond;
 	}
 
 	void beginTransport(uint64_t money) {
@@ -85,7 +93,7 @@ struct PlayerBotHuntTravelWork {
 			graph.push_back({connections.at(npc), indices.at(to), fare, rank(to)});
 		}
 		std::optional<PlayerBotTransportSearch::Label> incumbent;
-		if (safe(walking)) {
+		if (safe(walking, riskProfile)) {
 			incumbent.emplace();
 			incumbent->cost = cost(walking, sellEconomy);
 			incumbent->seconds = walking.metrics.estimatedTravelSeconds;
@@ -96,7 +104,7 @@ struct PlayerBotHuntTravelWork {
 		stateRanks.reserve(states.size());
 		for (const auto& state : states) stateRanks.push_back(rank(state));
 		transport = std::make_unique<PlayerBotTransportSearch>(states.size(), std::move(graph), money, incumbent,
-		    std::move(stateRanks), states, std::move(providerPositions), sellEconomy);
+		    std::move(stateRanks), states, std::move(providerPositions), sellEconomy, riskProfile);
 	}
 };
 
@@ -119,7 +127,7 @@ std::optional<PlayerBotNavigationRoutePlan> PlayerBotController::advanceHuntTrav
 	    player.getGroup() ? player.getGroup()->flags : 0, player.getGuild() ? player.getGuild()->getId() : 0,
 	    player.getGuildRank() ? player.getGuildRank()->id : 0, player.getPosition()};
 	std::vector<OfferFact> offers;
-	if (!player.isPzLocked()) {
+	if (!request.walkingOnly && !player.isPzLocked()) {
 		for (Npc* npc : playerBotNpcProviders(g_game.getNpcs(), PlayerBotNpcCapability::Travel, source)) {
 			for (const auto& offer : npc->getTravelOffers()) {
 				if (!playerBotNpcTravelOfferEligible(player.getLevel(), player.isPremium(), money, offer.level,
@@ -135,7 +143,7 @@ std::optional<PlayerBotNavigationRoutePlan> PlayerBotController::advanceHuntTrav
 	std::sort(offers.begin(), offers.end());
 	const uint64_t generation = PlayerBotTopology::instance().generation();
 	const uint64_t riskRevision = PlayerBotHuntRegionPlanner::getCacheRevision();
-	const bool sameRequest = huntTravelWork && huntTravelWork->sameRequest(request, source, transportReserve, sellEconomy);
+	const bool sameRequest = huntTravelWork && huntTravelWork->sameRequest(request, source, transportReserve, sellEconomy, riskProfile);
 	const auto journalReason = sameRequest ? huntTravelWork->watch.check() : PlayerBotRouteChanges::Reason::None;
 	const char* invalidationReason = !sameRequest ? "request" :
 	    huntTravelWork->actor != actor ? "actor" :
@@ -169,6 +177,7 @@ std::optional<PlayerBotNavigationRoutePlan> PlayerBotController::advanceHuntTrav
 		w.pass = request.planningPass; w.revision = request.scoringRevision; w.sequence = request.sequence;
 		w.source = source; w.destination = request.to;
 		w.transportReserve = transportReserve; w.sellEconomy = sellEconomy;
+		w.walkingOnly = request.walkingOnly; w.preferSafeWalking = request.preferSafeWalking;
 		w.actor = actor; w.topologyGeneration = generation;
 		auto profile = actor;
 		std::get<7>(profile) = 0; // Money does not change a walking connection.
@@ -180,6 +189,7 @@ std::optional<PlayerBotNavigationRoutePlan> PlayerBotController::advanceHuntTrav
 		w.restartBudget = restartBudget;
 		w.riskRevision = riskRevision;
 		w.policy = navigationCostPolicy(player);
+		w.riskProfile = riskProfile;
 		w.walking.metrics.attempted = true;
 		w.walking.metrics.result = PlayerBotNavigationResult::Reached;
 		w.walking.metrics.waypoint = request.to;
@@ -207,7 +217,7 @@ std::optional<PlayerBotNavigationRoutePlan> PlayerBotController::advanceHuntTrav
 				// otherwise this is incomplete evidence, never unreachability.
 				auto result = std::move(w.walking);
 				result.metrics.result = playerBotHuntAggregateRouteResult(result.metrics.result,
-				    result.metrics.dangerCost, result.metrics.maximumHealthLossPerSecond, true);
+				    result.metrics.dangerCost, result.metrics.maximumHealthLossPerSecond, true, riskProfile);
 				huntTravelWork.reset();
 				return result;
 			}
@@ -267,6 +277,12 @@ std::optional<PlayerBotNavigationRoutePlan> PlayerBotController::advanceHuntTrav
 		w.walking.metrics.steps = w.walking.steps.size();
 		w.walkingDone = true;
 		timing.walkingReached += *result == PlayerBotNavigationResult::Reached;
+		if (w.preferSafeWalking && safe(w.walking, riskProfile) && !w.walking.steps.empty()) {
+			if (walkingAlternative) *walkingAlternative = w.walking;
+			PlayerBotNavigationRoutePlan route = std::move(w.walking);
+			huntTravelWork.reset();
+			return route;
+		}
 		w.beginTransport(money);
 	}
 
@@ -335,7 +351,7 @@ std::optional<PlayerBotNavigationRoutePlan> PlayerBotController::advanceHuntTrav
 	}
 	if (walkingAlternative) *walkingAlternative = w.walking;
 	PlayerBotNavigationRoutePlan result = std::move(w.walking);
-	if (const auto& paid = w.transport->bestPaid; paid && (!safe(result) || paid->cost < cost(result, w.sellEconomy))) {
+	if (const auto& paid = w.transport->bestPaid; paid && (!safe(result, riskProfile) || paid->cost < cost(result, w.sellEconomy))) {
 		result = {};
 		result.metrics.attempted = true;
 		result.metrics.result = PlayerBotNavigationResult::Reached;
@@ -357,7 +373,7 @@ std::optional<PlayerBotNavigationRoutePlan> PlayerBotController::advanceHuntTrav
 		result.steps.push_back(std::move(step));
 	}
 	result.metrics.result = playerBotHuntAggregateRouteResult(result.metrics.result,
-	    result.metrics.dangerCost, result.metrics.maximumHealthLossPerSecond, w.transport->incomplete);
+	    result.metrics.dangerCost, result.metrics.maximumHealthLossPerSecond, w.transport->incomplete, riskProfile);
 	huntTravelWork.reset();
 	return result;
 }

@@ -1,5 +1,4 @@
 #include "playerbothuntrouteselection.h"
-#include "playerbotnavigation.h"
 
 #include <algorithm>
 #include <utility>
@@ -110,7 +109,7 @@ PlayerBotHuntRouteResult PlayerBotHuntRouteSelection::observe(const PlayerBotHun
 	};
 	PlayerBotHuntRegion routed = *current;
 	searchIncomplete = searchIncomplete || observation.searchIncomplete;
-	const PlayerBotNavigationRiskProfile risk;
+	const auto& risk = observation.riskProfile;
 	const bool safe = observation.reached &&
 	    playerBotNavigationRiskAccepts(risk, observation.dangerCost, observation.peakDanger);
 	switch (stage) {

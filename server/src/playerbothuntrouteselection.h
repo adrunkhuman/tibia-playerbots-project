@@ -2,6 +2,7 @@
 #define FS_PLAYERBOTHUNTROUTESELECTION_H
 
 #include "playerbothuntregions.h"
+#include "playerbotnavigation.h"
 
 #include <map>
 #include <optional>
@@ -18,6 +19,8 @@ struct PlayerBotHuntRouteRequest {
 	uint64_t planningPass = 0;
 	uint64_t scoringRevision = 0;
 	uint64_t sequence = 0;
+	bool walkingOnly = false;
+	bool preferSafeWalking = false;
 	bool routeAvailable = true;
 	Position from;
 	Position to;
@@ -28,6 +31,7 @@ struct PlayerBotHuntRouteRequest {
 // Immutable facts for exactly one pending request; no world queries in the selector.
 struct PlayerBotHuntRouteObservation {
 	bool reached = false;
+	PlayerBotNavigationRiskProfile riskProfile;
 	uint32_t steps = 0;
 	uint64_t fare = 0;
 	uint32_t dangerCost = 0;

@@ -44,10 +44,10 @@ void expectFirst(std::vector<PlayerBotDepotCandidate> candidates, const PlayerBo
 
 int main()
 {
-	assert(playerBotDepotRouteSafetyAccepted(true, false, false, true));
-	assert(playerBotDepotRouteSafetyAccepted(false, true, false, false));
-	assert(!playerBotDepotRouteSafetyAccepted(false, true, false, true));
-	assert(!playerBotDepotRouteSafetyAccepted(false, true, true, false));
+	assert(playerBotDepotRouteSafetyAccepted(true, false, PlayerBotRouteIntent::Optional));
+	assert(!playerBotDepotRouteSafetyAccepted(false, false, PlayerBotRouteIntent::Optional));
+	assert(playerBotDepotRouteSafetyAccepted(false, false, PlayerBotRouteIntent::ForcedReturn));
+	assert(!playerBotDepotRouteSafetyAccepted(false, true, PlayerBotRouteIntent::ForcedReturn));
 
 	// Actual real_depot origin and endpoints: the upstairs route took 16 steps,
 	// but both topology costs were zero. The old floor-first tie chose upstairs.
@@ -99,6 +99,52 @@ int main()
 	assert(command.snapshot.routeCandidate.lockerPosition == nearest.lockerPosition);
 	observation.routeResult = PlayerBotDepotRouteResult::Reached;
 	command = workflow.advance(observation, 2, 4, std::chrono::seconds(2));
+	assert(command.type == PlayerBotDepotCommandType::Navigate);
+	assert(command.telemetry.riskFallback);
+	// An unsafe-only hunt exit must revalidate the least-risk fallback,
+	// rather than rescan the same lockers indefinitely.
+	PlayerBotDepotWorkflow huntExit;
+	scan(huntExit, {nearest});
+	observation.dangerCost = 550;
+	observation.maximumHealthLossPerSecond = 0.09;
+	observation.routeResult = PlayerBotDepotRouteResult::Unsafe;
+	command = huntExit.advance(observation, 2, 4, std::chrono::seconds(2));
+	assert(command.type == PlayerBotDepotCommandType::ValidateRoute);
+	assert(command.snapshot.validatingRiskFallback);
+	observation.routeResult = PlayerBotDepotRouteResult::Reached;
+	command = huntExit.advance(observation, 2, 4, std::chrono::seconds(2));
+	assert(command.type == PlayerBotDepotCommandType::Navigate);
+	assert(command.telemetry.riskFallback);
+	// A coarse NPC exit is unknown, not unsafe. Keep it for forced-return
+	// revalidation without treating its estimated danger as detailed evidence.
+	PlayerBotDepotWorkflow npcOnlyReturn;
+	scan(npcOnlyReturn, {nearest});
+	observation.routeResult = PlayerBotDepotRouteResult::Unknown;
+	observation.allowUnknownFallback = true;
+	command = npcOnlyReturn.advance(observation, 2, 4, std::chrono::seconds(2));
+	assert(command.type == PlayerBotDepotCommandType::ValidateRoute);
+	assert(command.snapshot.validatingRiskFallback);
+	observation.routeResult = PlayerBotDepotRouteResult::Reached;
+	command = npcOnlyReturn.advance(observation, 2, 4, std::chrono::seconds(2));
+	assert(command.type == PlayerBotDepotCommandType::Navigate);
+	PlayerBotDepotWorkflow optionalNpc;
+	scan(optionalNpc, {nearest});
+	observation.routeResult = PlayerBotDepotRouteResult::Unknown;
+	observation.allowUnknownFallback = false;
+	command = optionalNpc.advance(observation, 2, 4, std::chrono::seconds(2));
+	assert(!command.snapshot.validatingRiskFallback);
+	// Damage during a forced return must not leave the bot in place while the
+	// remaining, potentially large locker list is validated.
+	PlayerBotDepotWorkflow emergency;
+	scan(emergency, {nearest, upstairs});
+	observation.routeResult = PlayerBotDepotRouteResult::Unsafe;
+	observation.emergencyReturn = true;
+	command = emergency.advance(observation, 2, 4, std::chrono::seconds(2));
+	assert(command.type == PlayerBotDepotCommandType::ValidateRoute);
+	assert(command.snapshot.validatingRiskFallback);
+	assert(command.snapshot.routeCandidate.lockerPosition == nearest.lockerPosition);
+	observation.routeResult = PlayerBotDepotRouteResult::Reached;
+	command = emergency.advance(observation, 2, 4, std::chrono::seconds(2));
 	assert(command.type == PlayerBotDepotCommandType::Navigate);
 	assert(command.telemetry.riskFallback);
 	std::cout << "depot workflow regression tests passed\n";

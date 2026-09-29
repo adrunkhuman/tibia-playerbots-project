@@ -16,6 +16,7 @@
 #include "playerbot.h"
 #include "playerbothuntcoordinator.h"
 #include "playerbothunttiming.h"
+#include "playerbothunttravelpolicy.h"
 #include "playerbotdepotworkflow.h"
 #include "playerboteconomy.h"
 #include "playerbotequipmentpolicy.h"
@@ -415,7 +416,8 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		                                                 const Position& destination,
 		                                                 const std::set<Position>& blockedPositions = {},
 		                                                 bool estimateOnly = true,
-		                                                 PlayerBotHuntRouteTiming* timing = nullptr) const;
+		                                                 PlayerBotHuntRouteTiming* timing = nullptr,
+		                                                 PlayerBotRouteIntent intent = PlayerBotRouteIntent::Optional) const;
 		std::vector<Position> huntDepotExitCandidates(Player& player, const Position& source) const;
 		std::vector<Position> huntSupplyExitCandidates(Player& player, const Position& source) const;
 		uint64_t huntTravelReturnFareReserve(HuntTravelBudgetPhase phase) const;
@@ -513,6 +515,8 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		PlayerBotSurvivalRuntime survivalRuntime;
 		PlayerBotSupplyRecoveryState supplyRecovery;
 		PlayerBotDepotWorkflow depotWorkflow;
+		int32_t lastDepotDiscoveryHealth = 0;
+		bool depotDiscoveryUnderAttack = false;
 		PlayerBotHuntCoordinator huntCoordinator;
 		std::shared_ptr<PlayerBotHuntTravelWork> huntTravelWork;
 		PlayerBotProgressionRuntime progressionRuntime;
@@ -588,6 +592,25 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 			PlayerBotRouteChanges::Watch routeWatch;
 			std::string routeFacts, sourceTravelPositions;
 		};
+		struct ServiceRouteSearch {
+			Position origin, destination;
+			uint32_t providerId = 0;
+			uint64_t reserve = 0, pass = 0;
+			bool sellEconomy = false;
+			uint32_t turns = 0;
+			std::shared_ptr<PlayerBotHuntTravelWork> work;
+		};
+		std::optional<ServiceRouteSearch> serviceRouteSearch;
+		uint64_t serviceRouteSerial = 0;
+		struct DepotSourceRouteSearch {
+			Position origin, destination, locker;
+			uint16_t depotId = 0, lockerItemId = 0;
+			uint64_t reserve = 0, sourceFare = 0, pass = 0;
+			uint32_t turns = 0;
+			std::shared_ptr<PlayerBotHuntTravelWork> work;
+		};
+		std::optional<DepotSourceRouteSearch> depotSourceRouteSearch;
+		uint64_t depotSourceRouteSerial = 0;
 		std::optional<SellLootPlan> sellLootPlan;
 		std::optional<SellLootSearch> sellLootSearch;
 		bool depotCompletionAnnounced = false;
@@ -599,16 +622,28 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		bool serviceTopologyCanUseShovel = false;
 		uint32_t serviceTopologyLevel = 0;
 		uint64_t serviceTopologyGeneration = 0;
+		PlayerBotNavigationRiskProfile riskProfile;
 		PlayerBotNavigationRuntime navigationRuntime;
 		bool huntRegionReached = false;
 		HuntTravelBudgetPhase huntTravelBudgetPhase = HuntTravelBudgetPhase::None;
 		uint64_t huntExitFareReserve = 0;
 		uint32_t huntRecoveryPotionReserve = 0;
 		Position huntReturnDestination;
+		bool huntExitValidationAttempted = false;
 		uint32_t huntReturnRouteDangerCost = 0;
 		uint64_t huntReturnCoverageVariantId = 0;
-		bool huntExitRouteProtected = false;
 		PlayerBotHuntReturnCoverage huntReturnCoverage;
+		struct HuntPatrolRouteSearch {
+			Position destination, returnDestination;
+			uint64_t pass = 0, revision = 0, variant = 0, scheduledGeneration = 0;
+			uint32_t turns = 0;
+			uint32_t outboundNpcId = 0;
+			std::shared_ptr<PlayerBotHuntTravelWork> work;
+			PlayerBotRouteChanges::Watch watch;
+			std::string outboundFacts;
+		};
+		std::optional<HuntPatrolRouteSearch> huntPatrolRouteSearch;
+		uint64_t huntPatrolRouteSerial = 0;
 		std::optional<Position> huntPatrolValidationDestination;
 		std::optional<Position> huntPatrolValidationOrigin;
 		std::optional<PlayerBotNavigationRoutePlan> huntPatrolOutboundPlan;

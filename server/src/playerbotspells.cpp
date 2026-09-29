@@ -488,18 +488,17 @@ bool PlayerBotController::findSpellTraining(Player& player, const Position& posi
 			                  trainerRoute, offerReserve});
 			if (routeReachable) {
 				const uint32_t routeReserve = recoveryPotionRouteReserve(vocationId, player.getMaxHealth(),
-				    trainerRoute.dangerCost, static_cast<uint32_t>(PlayerBotNavigationRiskProfile{}.healthLossCost));
+				    trainerRoute.dangerCost, static_cast<uint32_t>(riskProfile.healthLossCost));
 				offers.back().potionReserve = std::max(huntPotionReturnThreshold, routeReserve);
 				offers.back().suppliesReady = potionCount > offers.back().potionReserve;
 			}
 			routes.push_back(trainerSteps);
 		}
 	}
-	const PlayerBotNavigationRiskProfile risk;
 	const PlayerBotSpellTrainingDecision decision = spellTrainingPlanner.select({reserve, totalMoney,
 	    reserve != std::numeric_limits<uint64_t>::max(),
-	    static_cast<uint32_t>(risk.maximumRouteHealthLoss * risk.healthLossCost),
-	    risk.maximumHealthLossPerSecond, offers});
+	    static_cast<uint32_t>(riskProfile.maximumRouteHealthLoss * riskProfile.healthLossCost),
+	    riskProfile.maximumHealthLossPerSecond, offers});
 	for (size_t offerIndex = 0; offerIndex < offers.size(); ++offerIndex) {
 		const auto& offer = offers[offerIndex];
 		const auto rejection = std::find_if(decision.rejections.begin(), decision.rejections.end(),

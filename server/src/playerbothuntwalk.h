@@ -10,6 +10,7 @@
 #include "playerbotroutecorridor.h"
 #include "playerbothunttiming.h"
 
+#include <iomanip>
 #include <sstream>
 
 // One connection, not one bot. The coarse itinerary is retained while its local
@@ -30,7 +31,9 @@ public:
 		if (!initialized) {
 			initialized = true;
 			std::ostringstream identity;
-			identity << profile << ':' << player.getID() << ':' << player.getGUID() << ':' << player.getPosition() << ':' << planningPass;
+			identity << profile << ':' << player.getID() << ':' << player.getGUID() << ':' << player.getPosition() << ':' << planningPass
+			         << ':' << std::setprecision(17) << policy.risk.healthLossCost << ':'
+			         << policy.risk.maximumRouteHealthLoss << ':' << policy.risk.maximumHealthLossPerSecond;
 			treeKey = key(source, {}, identity.str(), topology.generation(), riskRevision);
 			const auto geometryKey = key(source, {}, profile, topology.generation(), 0);
 			std::shared_ptr<const PlayerBotTopologyDistances> distances;
@@ -153,7 +156,7 @@ public:
 				append(player, policy, {step});
 			}
 			const bool reached = std::find(goals.begin(), goals.end(), current) != goals.end();
-			if (!playerBotNavigationRiskAccepts({}, summary.dangerCost, summary.maximumHealthLossPerSecond) && !unrestricted) {
+			if (!playerBotNavigationRiskAccepts(policy.risk, summary.dangerCost, summary.maximumHealthLossPerSecond) && !unrestricted) {
 				fallback(timing, "unsafe_prefix");
 			} else if (reached) {
 				return result = PlayerBotNavigationResult::Reached;
