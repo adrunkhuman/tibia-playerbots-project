@@ -462,12 +462,13 @@ function F.verifyDepotRiskFallback(playerId, attempts)
     assert(player and not player:isRemoved(), "Bot One disappeared during the depot risk fallback test")
     local position = player:getPosition()
     local crossedRamp = position.z == 6 and math.abs(position.x - 32915) <= 2 and math.abs(position.y - 32230) <= 2
-    if not crossedRamp and attempts > 0 then
+    local emergencyDepot = position.z == 7 and math.abs(position.x - 32930) <= 4 and position.y >= 32065 and position.y <= 32090
+    if not crossedRamp and not emergencyDepot and attempts > 0 then
         addEvent(F.verifyDepotRiskFallback, 500, playerId, attempts - 1)
         return
     end
-    assert(crossedRamp, "depot risk fallback did not cross the swamp-troll ramp")
-    print("PLAYERBOT_GAMEPLAY_TEST DEPOT_RISK_FALLBACK_PASS")
+    assert(crossedRamp or emergencyDepot, "depot risk fallback did not escape the swamp-troll cave")
+    print(string.format("PLAYERBOT_GAMEPLAY_TEST DEPOT_RISK_FALLBACK_PASS %d %d %d", position.x, position.y, position.z))
 end
 
 function F.verifySlottedLoot(playerId, sellerAvailable, attempts)

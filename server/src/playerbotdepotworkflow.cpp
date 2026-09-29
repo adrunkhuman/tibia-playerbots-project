@@ -122,13 +122,21 @@ PlayerBotDepotCommand PlayerBotDepotWorkflow::advance(const PlayerBotDepotObserv
 				telemetry.riskFallback = selectedRiskFallback;
 				return command(PlayerBotDepotCommandType::Navigate, PlayerBotDepotOutcome::Ready, telemetry);
 			}
-			if (observation.routeResult == PlayerBotDepotRouteResult::Unsafe && !validatingRiskFallback) {
-				recordUnsafeCandidate(observation);
+			if ((observation.routeResult == PlayerBotDepotRouteResult::Unsafe ||
+			     (observation.routeResult == PlayerBotDepotRouteResult::Unknown && observation.allowUnknownFallback)) &&
+			    !validatingRiskFallback) {
+				recordFallbackCandidate(observation);
 			} else {
 				session.rejectApproach(routeCandidate->approachPosition, observation.now + suppression);
 			}
 			routeCandidate.reset();
 			validatingRiskFallback = false;
+		}
+		if (observation.emergencyReturn && riskFallback) {
+			routeCandidate = riskFallback->candidate;
+			riskFallback.reset();
+			validatingRiskFallback = true;
+			return command(PlayerBotDepotCommandType::ValidateRoute, PlayerBotDepotOutcome::Retry);
 		}
 		for (uint32_t attempt = 0; attempt < routeBudget && hasNextCandidate(); ++attempt) {
 			routeCandidate = takeNextCandidate();
@@ -180,17 +188,22 @@ void PlayerBotDepotWorkflow::recordCandidate(PlayerBotDepotCandidate candidate)
 	discoveryCandidates.push_back(candidate);
 }
 
-void PlayerBotDepotWorkflow::recordUnsafeCandidate(const PlayerBotDepotObservation& observation)
+void PlayerBotDepotWorkflow::recordFallbackCandidate(const PlayerBotDepotObservation& observation)
 {
-	++unsafeRouteCandidates;
-	UnsafeCandidate candidate{*routeCandidate, observation.dangerCost,
+	const bool riskUnknown = observation.routeResult == PlayerBotDepotRouteResult::Unknown;
+	if (!riskUnknown) ++unsafeRouteCandidates;
+	UnsafeCandidate candidate{*routeCandidate, riskUnknown, observation.dangerCost,
 	                          observation.maximumHealthLossPerSecond, observation.routeSteps};
-	if (!riskFallback || std::tie(candidate.dangerCost, candidate.maximumHealthLossPerSecond, candidate.routeSteps,
+	// A detailed unsafe route has known exposure; coarse estimates only rank
+	// otherwise unknown exits and never outrank that evidence.
+	if (!riskFallback || std::tie(candidate.riskUnknown, candidate.dangerCost,
+	                            candidate.maximumHealthLossPerSecond, candidate.routeSteps,
 	                            candidate.candidate.depotId, candidate.candidate.lockerPosition,
 	                            candidate.candidate.approachPosition) <
-	                    std::tie(riskFallback->dangerCost, riskFallback->maximumHealthLossPerSecond,
-	                            riskFallback->routeSteps, riskFallback->candidate.depotId,
-	                            riskFallback->candidate.lockerPosition, riskFallback->candidate.approachPosition)) {
+	                    std::tie(riskFallback->riskUnknown, riskFallback->dangerCost,
+	                            riskFallback->maximumHealthLossPerSecond, riskFallback->routeSteps,
+	                            riskFallback->candidate.depotId, riskFallback->candidate.lockerPosition,
+	                            riskFallback->candidate.approachPosition)) {
 		riskFallback = std::move(candidate);
 	}
 }

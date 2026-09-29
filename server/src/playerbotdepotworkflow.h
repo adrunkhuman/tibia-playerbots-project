@@ -3,6 +3,7 @@
 #define FS_PLAYERBOTDEPOTWORKFLOW_H
 
 #include "playerbotdepotsession.h"
+#include "playerbothunttravelpolicy.h"
 
 #include <optional>
 
@@ -20,11 +21,11 @@ enum class PlayerBotDepotCommandType : uint8_t {
 	Wait,
 };
 enum class PlayerBotDepotOutcome : uint8_t { Pending, Ready, Success, Retry, Moved, Partial, Deferred, Rejected, Unavailable };
-enum class PlayerBotDepotRouteResult : uint8_t { NotObserved, Reached, Unsafe, Unreachable };
-inline bool playerBotDepotRouteSafetyAccepted(bool routeSafe, bool validatingRiskFallback,
-                                               bool liquidationSource, bool protectedHuntExit)
+enum class PlayerBotDepotRouteResult : uint8_t { NotObserved, Reached, Unsafe, Unreachable, Unknown };
+inline bool playerBotDepotRouteSafetyAccepted(bool routeSafe, bool liquidationSource,
+                                               PlayerBotRouteIntent intent)
 {
-	return routeSafe || (validatingRiskFallback && !liquidationSource && !protectedHuntExit);
+	return routeSafe || (intent == PlayerBotRouteIntent::ForcedReturn && !liquidationSource);
 }
 enum class PlayerBotDepotActionResult : uint8_t {
 	None,
@@ -67,6 +68,8 @@ struct PlayerBotDepotObservation {
 	bool chestOpen = false;
 	bool canDoAction = false;
 	bool fixtureSynthetic = false;
+	bool emergencyReturn = false;
+	bool allowUnknownFallback = false;
 	PlayerBotDepotActionResult actionResult = PlayerBotDepotActionResult::None;
 	PlayerBotDepotDepositSnapshot deposit;
 	PlayerBotDepotMoveObservation move;
@@ -117,7 +120,7 @@ class PlayerBotDepotWorkflow
 	private:
 		void clearDiscovery();
 		void recordCandidate(PlayerBotDepotCandidate candidate);
-		void recordUnsafeCandidate(const PlayerBotDepotObservation& observation);
+		void recordFallbackCandidate(const PlayerBotDepotObservation& observation);
 		void sortCandidates(const Position& origin);
 		bool hasCandidates() const { return !discoveryCandidates.empty(); }
 		bool hasNextCandidate() const;
@@ -131,6 +134,7 @@ class PlayerBotDepotWorkflow
 		std::optional<PlayerBotDepotCandidate> routeCandidate;
 		struct UnsafeCandidate {
 			PlayerBotDepotCandidate candidate;
+			bool riskUnknown = false;
 			uint32_t dangerCost = 0;
 			double maximumHealthLossPerSecond = 0;
 			uint32_t routeSteps = 0;

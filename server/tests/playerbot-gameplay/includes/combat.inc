@@ -295,7 +295,8 @@ function F.spawnCorpseMonster(playerId, monsterName)
         if tile and tile:isWalkable() then
             local monster = Game.createMonster(monsterName, position, true, true)
             assert(monster, "corpse test monster could not be created: " .. monsterName)
-            if monsterName == F.emptyMonsterName or monsterName == F.lootMonsterName or monsterName == F.cargoCoinStackMonsterName then
+            if monsterName == F.emptyMonsterName or monsterName == F.lootMonsterName or
+                monsterName == F.containerDeathItemMonsterName or monsterName == F.cargoCoinStackMonsterName then
                 -- These cases test proactive corpse looting, not defensive combat.
                 monster:setTarget(nil)
                 monster:setIdle(true)

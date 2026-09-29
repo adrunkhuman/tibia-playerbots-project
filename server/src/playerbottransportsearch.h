@@ -71,8 +71,8 @@ public:
 	PlayerBotTransportSearch(size_t states, std::vector<Offer> offers, uint64_t money,
 	                         std::optional<Label> walking = std::nullopt, std::vector<double> stateRanks = {},
 	                         std::vector<Position> statePositions = {}, std::vector<Position> connectionPositions = {},
-	                         bool sellEconomy = false)
-	    : offers(std::move(offers)), money(money), sellEconomy(sellEconomy), labels(states), incumbent(walking), stateRanks(std::move(stateRanks)),
+	                         bool sellEconomy = false, PlayerBotNavigationRiskProfile riskProfile = {})
+	    : offers(std::move(offers)), money(money), sellEconomy(sellEconomy), riskProfile(riskProfile), labels(states), incumbent(walking), stateRanks(std::move(stateRanks)),
 	      statePositions(std::move(statePositions)), connectionPositions(std::move(connectionPositions))
 	{
 		labels[0].push_back({});
@@ -193,7 +193,7 @@ private:
 		double priority;
 		bool operator>(const Task& other) const { return priority > other.priority; }
 	};
-	static bool safe(const Label& l) { return playerBotNavigationRiskAccepts({}, l.danger, l.peak); }
+	bool safe(const Label& l) const { return playerBotNavigationRiskAccepts(riskProfile, l.danger, l.peak); }
 	static bool dominates(const Label& a, const Label& b) {
 		return a.cost <= b.cost && a.lowerCost <= b.lowerCost && a.fare <= b.fare && a.danger <= b.danger && a.peak <= b.peak;
 	}
@@ -216,6 +216,7 @@ private:
 	std::vector<Offer> offers;
 	uint64_t money;
 	bool sellEconomy;
+	PlayerBotNavigationRiskProfile riskProfile;
 	std::vector<std::vector<Label>> labels;
 	std::optional<Label> incumbent;
 	std::vector<double> stateRanks;

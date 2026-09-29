@@ -449,8 +449,7 @@ bool PlayerBotController::planSimpleRewardApproach(Player& player, const Positio
 		return Position::getDistanceX(currentPosition, left) + Position::getDistanceY(currentPosition, left) <
 		       Position::getDistanceX(currentPosition, right) + Position::getDistanceY(currentPosition, right);
 	});
-	const PlayerBotNavigationRiskProfile risk;
-	const uint32_t maximumDangerCost = static_cast<uint32_t>(risk.maximumRouteHealthLoss * risk.healthLossCost);
+	const uint32_t maximumDangerCost = static_cast<uint32_t>(riskProfile.maximumRouteHealthLoss * riskProfile.healthLossCost);
 	bool selected = false;
 	bool selectedSafe = false;
 	uint64_t selectedCost = std::numeric_limits<uint64_t>::max();
@@ -551,7 +550,7 @@ bool PlayerBotController::planSimpleRewardApproach(Player& player, const Positio
 				continue;
 			}
 			const bool safe = routePlan.metrics.dangerCost <= maximumDangerCost &&
-			                  routePlan.metrics.maximumHealthLossPerSecond <= risk.maximumHealthLossPerSecond;
+			                  routePlan.metrics.maximumHealthLossPerSecond <= riskProfile.maximumHealthLossPerSecond;
 			const uint64_t weightedCost = static_cast<uint64_t>(routePlan.metrics.steps) * 10 + routePlan.metrics.dangerCost;
 			if (selected && ((!safe && selectedSafe) || (safe == selectedSafe && weightedCost >= selectedCost))) continue;
 			selected = true;
@@ -803,9 +802,8 @@ bool PlayerBotController::findPickupReward(Player& player, const Position& posit
 	uint64_t rewardRouteNodes = 0;
 	const PlayerBotRewardPlannerSnapshot routeSnapshot{player.getFreeCapacity(), pickupRewardBaseUtility,
 	                                                    economicPickupBaseUtility, huntGoalUtility,
-	                                                    PlayerBotNavigationRiskProfile{}.maximumHealthLossPerSecond,
-	                                                    static_cast<uint32_t>(PlayerBotNavigationRiskProfile{}.maximumRouteHealthLoss *
-	                                                        PlayerBotNavigationRiskProfile{}.healthLossCost), candidates};
+	                                                    riskProfile.maximumHealthLossPerSecond,
+	                                                    static_cast<uint32_t>(riskProfile.maximumRouteHealthLoss * riskProfile.healthLossCost), candidates};
 	const std::vector<size_t> routeCandidates = rewardPlanner.routeCandidates(routeSnapshot);
 	auto routeWithinTolerance = [&routeSnapshot](const PlayerBotRouteEstimate& route) {
 		return route.maximumDanger <= routeSnapshot.maximumTravelDanger &&
@@ -861,9 +859,8 @@ bool PlayerBotController::findPickupReward(Player& player, const Position& posit
 	}
 	const PlayerBotRewardPlannerSnapshot snapshot{player.getFreeCapacity(), pickupRewardBaseUtility,
 	                                              economicPickupBaseUtility, huntGoalUtility,
-	                                              PlayerBotNavigationRiskProfile{}.maximumHealthLossPerSecond,
-	                                              static_cast<uint32_t>(PlayerBotNavigationRiskProfile{}.maximumRouteHealthLoss *
-	                                                  PlayerBotNavigationRiskProfile{}.healthLossCost),
+	                                              riskProfile.maximumHealthLossPerSecond,
+	                                              static_cast<uint32_t>(riskProfile.maximumRouteHealthLoss * riskProfile.healthLossCost),
 	                                              std::move(candidates)};
 	const PlayerBotRewardDecision decision = rewardPlanner.select(snapshot);
 	for (const auto& outcome : decision.outcomes) {
@@ -1012,9 +1009,8 @@ bool PlayerBotController::selectTopLevelGoal(Player& player, const Position& pos
 	const bool pickupFound = !pickupCoolingDown && findPickupReward(player, position, reward, rewardSteps);
 	const PlayerBotRewardPlannerSnapshot rewardSnapshot{
 		0, pickupRewardBaseUtility, economicPickupBaseUtility, huntGoalUtility,
-		PlayerBotNavigationRiskProfile{}.maximumHealthLossPerSecond,
-		static_cast<uint32_t>(PlayerBotNavigationRiskProfile{}.maximumRouteHealthLoss *
-		    PlayerBotNavigationRiskProfile{}.healthLossCost), {},
+		riskProfile.maximumHealthLossPerSecond,
+		static_cast<uint32_t>(riskProfile.maximumRouteHealthLoss * riskProfile.healthLossCost), {},
 	};
 	const int32_t pickupUtility = pickupFound ? rewardPlanner.utility(reward, rewardSnapshot) : 0;
 	PlayerBotSpellTrainingPlan spellTraining;

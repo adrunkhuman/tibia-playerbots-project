@@ -108,6 +108,21 @@
 		}
 	}
 
+	if ($Depot -or $selectedScenarios.Contains("deep_hunt_return")) {
+		Invoke-Scenario -Name "deep_hunt_return" -DefaultTimeoutSeconds 900 -Body {
+			Invoke-Compose down --volumes --remove-orphans
+			# remote_hunt starts in Hunt without a fixed fixture route; this normal
+			# depot-move variant only places Bot One at the deep map origin.
+			$env:PLAYERBOT_GAMEPLAY_MODE = "remote_hunt"
+			$env:PLAYERBOT_DEPOT_MOVE_CASE = "deep_hunt_return"
+			$env:PLAYERBOT_HUNT_DURATION_SECONDS = "10"
+			Invoke-Compose up --detach
+			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST DEEP_HUNT_RETURN_START 33101 31745 9' | Out-Null
+			$logs = Wait-ForPlayerbotEvent -Predicate { $_.event -eq "objective_transition" -and $_.to -eq "deposit_loot" }
+			Assert-DeepHuntReturnEvents -Logs $logs
+		}
+	}
+
 	if ($Depot) {
 		Invoke-Scenario -Name "depot_risk_fallback" -DefaultTimeoutSeconds 720 -Body {
 			Invoke-Compose down --volumes --remove-orphans

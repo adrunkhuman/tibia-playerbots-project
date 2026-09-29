@@ -156,19 +156,28 @@ function New-DepotRiskRouteFixture {
             unsafe_routes = 34; route_steps = 577; danger_cost = 323; maximum_health_loss_per_second = 0.0137222 }
     )
 }
-$depotRiskLogs = "PLAYERBOT_GAMEPLAY_TEST DEPOT_RISK_FALLBACK_PASS`n" +
+$depotRiskLogs = "PLAYERBOT_GAMEPLAY_TEST DEPOT_RISK_FALLBACK_PASS 32915 32230 6`n" +
     (ConvertTo-FixtureLogs (New-DepotRiskRouteFixture))
 Assert-DepotRiskRouteEvents -Logs $depotRiskLogs
-foreach ($case in @("fallback_selected", "no_unsafe_rejections", "unsafe_safe_route", "terminal")) {
+$fallbackEvents = @(New-DepotRiskRouteFixture)
+$fallbackEvents[1].risk_fallback = $true
+$fallbackEvents[1].danger_cost = 601
+$fallbackEvents[1].approach = @{ x = 32930; y = 32081; z = 7 }
+Assert-DepotRiskRouteEvents -Logs ("PLAYERBOT_GAMEPLAY_TEST DEPOT_RISK_FALLBACK_PASS 32930 32081 7`n" +
+    (ConvertTo-FixtureLogs $fallbackEvents))
+Assert-Rejected "Depot risk fallback wrong arrival" {
+    Assert-DepotRiskRouteEvents -Logs ("PLAYERBOT_GAMEPLAY_TEST DEPOT_RISK_FALLBACK_PASS 33000 32081 7`n" +
+        (ConvertTo-FixtureLogs $fallbackEvents))
+} "The depot risk route did not reject unsafe candidates"
+foreach ($case in @("no_unsafe_rejections", "unsafe_safe_route", "terminal")) {
     $events = @(New-DepotRiskRouteFixture)
     switch ($case) {
-        "fallback_selected" { $events[1].risk_fallback = $true }
         "no_unsafe_rejections" { $events[1].unsafe_routes = 0 }
         "unsafe_safe_route" { $events[1].danger_cost = 501 }
         "terminal" { $events += @{ event = "terminal"; reason = "depot_unavailable" } }
     }
     Assert-Rejected "Depot risk route $case" {
-        Assert-DepotRiskRouteEvents -Logs ("PLAYERBOT_GAMEPLAY_TEST DEPOT_RISK_FALLBACK_PASS`n" + (ConvertTo-FixtureLogs $events))
+        Assert-DepotRiskRouteEvents -Logs ("PLAYERBOT_GAMEPLAY_TEST DEPOT_RISK_FALLBACK_PASS 32915 32230 6`n" + (ConvertTo-FixtureLogs $events))
     } "The depot risk route did not reject unsafe candidates"
 }
 

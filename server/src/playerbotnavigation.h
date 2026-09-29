@@ -214,6 +214,17 @@ struct PlayerBotNavigationStep {
 	std::vector<std::string> dialogue;
 };
 
+enum class PlayerBotNavigationDangerEvidence : uint8_t {
+	Detailed,
+	Coarse,
+};
+
+enum class PlayerBotNavigationRiskVerdict : uint8_t {
+	Accepted,
+	Rejected,
+	Unknown,
+};
+
 struct PlayerBotNavigationRiskProfile {
 	double healthLossCost = 1000.0;
 	double maximumHealthLossPerSecond = 0.08;
@@ -225,6 +236,15 @@ inline bool playerBotNavigationRiskAccepts(const PlayerBotNavigationRiskProfile&
 {
 	return dangerCost <= static_cast<uint32_t>(risk.maximumRouteHealthLoss * risk.healthLossCost) &&
 	       maximumHealthLossPerSecond <= risk.maximumHealthLossPerSecond;
+}
+
+inline PlayerBotNavigationRiskVerdict playerBotNavigationRiskVerdict(
+    const PlayerBotNavigationRiskProfile& risk, PlayerBotNavigationDangerEvidence evidence,
+    uint32_t dangerCost, double maximumHealthLossPerSecond)
+{
+	if (evidence == PlayerBotNavigationDangerEvidence::Coarse) return PlayerBotNavigationRiskVerdict::Unknown;
+	return playerBotNavigationRiskAccepts(risk, dangerCost, maximumHealthLossPerSecond) ?
+	    PlayerBotNavigationRiskVerdict::Accepted : PlayerBotNavigationRiskVerdict::Rejected;
 }
 
 struct PlayerBotNavigationCostPolicy {

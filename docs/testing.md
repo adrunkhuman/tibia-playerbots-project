@@ -26,6 +26,8 @@ For persistence checks, restart or recreate only the server with `--no-deps`. Re
 
 Useful subsystem switches include `-Healing`, `-ValueLoot` (value replacement plus currency, partial-weight, nested-slot, and protected full-slot cargo), `-DeathTelemetry`, `-GoalArbitration`, `-CombatReadiness`, `-HuntRegionPlanning`, `-AdaptiveChallenge`, `-EquipmentPurchases` (including rope/shovel replenishment and nested-inventory duplicate protection), `-MainlandRewards`, `-OracleDeparture`, `-Depot`, `-SellLoot`, `-SpellTraining`, `-SpellUse`, `-SpellCalibration`, `-MagicTraining`, and `-MainlandLoop`. The accepted switches and scenario catalog are authoritative in [`scripts/test-playerbot-gameplay.ps1`](../scripts/test-playerbot-gameplay.ps1).
 
+`-Scenario deep_hunt_return` seeds a level-15 Knight at `(33101,31745,9)` and checks arrival at the planner-selected depot locker approach. It does not prove unattended hunt progression.
+
 `-SkipBuild` requires a known-current `angelion-server:latest` image and does not prove it matches the worktree. `-KeepStack` preserves the final stack for debugging. `-TimeoutSeconds` accepts 30–3600 seconds. Most focused scenarios use controlled state or destinations; map-derived planning modes improve integration evidence but still do not prove long-running progression.
 
 ## Fast checks without a live stack

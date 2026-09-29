@@ -2364,12 +2364,11 @@ void remoteHuntTravelGuards()
 	incrementalNpcApproach.metrics.steps = 2; // The uninstalled next step is a free NPC transition.
 	assert(!playerBotNavigationIsReversibleLocalWalk(
 	    coveredPosition, nextPosition, incrementalNpcApproach));
-	assert(playerBotDepotRouteSafetyAccepted(true, false, false, true));
-	// Return-payment policy does not imply selected-hunt route protection:
-	// startup/service returns retain the established risky-depot fallback.
-	assert(playerBotDepotRouteSafetyAccepted(false, true, false, false));
-	assert(!playerBotDepotRouteSafetyAccepted(false, true, false, true));
-	assert(!playerBotDepotRouteSafetyAccepted(false, true, true, false));
+	assert(playerBotDepotRouteSafetyAccepted(true, false, PlayerBotRouteIntent::Optional));
+	// Only forced exits may exceed the profile; liquidation never can.
+	assert(!playerBotDepotRouteSafetyAccepted(false, false, PlayerBotRouteIntent::Optional));
+	assert(playerBotDepotRouteSafetyAccepted(false, false, PlayerBotRouteIntent::ForcedReturn));
+	assert(!playerBotDepotRouteSafetyAccepted(false, true, PlayerBotRouteIntent::ForcedReturn));
 	assert(!playerBotHuntTravelAffordable(500, 200, UINT64_MAX, 1));
 	assert(!playerBotHuntNeedsSupplyRoute(0, 3, 2));
 	assert(playerBotHuntNeedsSupplyRoute(1, 3, 2));
@@ -2385,6 +2384,42 @@ void remoteHuntTravelGuards()
 	assert(playerBotNavigationRiskAccepts(risk, 500, 0.08));
 	assert(!playerBotNavigationRiskAccepts(risk, 501, 0.08));
 	assert(!playerBotNavigationRiskAccepts(risk, 500, 0.081));
+	PlayerBotNavigationPlanMetrics metrics;
+	metrics.dangerCost = 1001;
+	metrics.maximumHealthLossPerSecond = 1;
+	metrics.dangerEvidence = PlayerBotNavigationDangerEvidence::Coarse;
+	assert(playerBotNavigationRiskVerdict(risk, metrics) == PlayerBotNavigationRiskVerdict::Unknown);
+	metrics.dangerCost = 0;
+	metrics.maximumHealthLossPerSecond = 0;
+	assert(playerBotNavigationRiskVerdict(risk, metrics) == PlayerBotNavigationRiskVerdict::Unknown);
+	metrics.localDangerCost = 501;
+	assert(playerBotNavigationLocalRiskVerdict(risk, metrics) == PlayerBotNavigationRiskVerdict::Rejected);
+	metrics.localDangerCost = 500;
+	metrics.localMaximumHealthLossPerSecond = 0.08;
+	assert(playerBotNavigationLocalRiskVerdict(risk, metrics) == PlayerBotNavigationRiskVerdict::Accepted);
+	metrics.localMaximumHealthLossPerSecond = 0.081;
+	assert(playerBotNavigationLocalRiskVerdict(risk, metrics) == PlayerBotNavigationRiskVerdict::Rejected);
+	metrics.dangerEvidence = PlayerBotNavigationDangerEvidence::Detailed;
+	metrics.dangerCost = 500;
+	metrics.maximumHealthLossPerSecond = 0.08;
+	assert(playerBotNavigationRiskVerdict(risk, metrics) == PlayerBotNavigationRiskVerdict::Accepted);
+	metrics.dangerCost = 501;
+	assert(playerBotNavigationRiskVerdict(risk, metrics) == PlayerBotNavigationRiskVerdict::Rejected);
+	metrics.dangerCost = 500;
+	metrics.maximumHealthLossPerSecond = 0.081;
+	assert(playerBotNavigationRiskVerdict(risk, metrics) == PlayerBotNavigationRiskVerdict::Rejected);
+	PlayerBotNavigationRiskProfile cautious = risk;
+	cautious.maximumRouteHealthLoss = 0.1;
+	PlayerBotNavigationPlanMetrics walking, paid;
+	walking.result = paid.result = PlayerBotNavigationResult::Reached;
+	walking.dangerCost = 550;
+	paid.dangerCost = 300;
+	assert(playerBotNavigationRiskVerdict(risk, walking) == PlayerBotNavigationRiskVerdict::Rejected);
+	assert(playerBotNavigationRiskVerdict(cautious, paid) == PlayerBotNavigationRiskVerdict::Rejected);
+	// Forced departure chooses the least-risk detailed route under either profile.
+	assert(playerBotPreferForcedPaidRoute(walking, paid));
+	paid.dangerEvidence = PlayerBotNavigationDangerEvidence::Coarse;
+	assert(!playerBotPreferForcedPaidRoute(walking, paid));
 }
 
 void overBudgetHunts()

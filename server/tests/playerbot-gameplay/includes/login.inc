@@ -505,6 +505,20 @@ function F.login.onLogin(player)
             print("PLAYERBOT_GAMEPLAY_TEST STAMINA_PROJECTION_START " .. staminaMinutes)
             return true
         end
+        -- The standalone hunt fixture double exposes only GAMEPLAY_MODE.
+        local variantAvailable, moveCase = false, nil
+        if mode == "remote_hunt" then
+            variantAvailable, moveCase = pcall(os.getenv, "PLAYERBOT_DEPOT_MOVE_CASE")
+        end
+        if variantAvailable and moveCase == "deep_hunt_return" then
+            local origin = Position(33101, 31745, 9)
+            assert(Tile(origin) and Tile(origin):isWalkable(),
+                "deep hunt return fixture requires a walkable start")
+            assert(player:teleportTo(origin), "deep hunt return fixture could not place Bot One")
+            F.suppressNearbyMonsters(player:getId())
+            print("PLAYERBOT_GAMEPLAY_TEST DEEP_HUNT_RETURN_START 33101 31745 9")
+            return true
+        end
         if mode == "hunt_planning" then F.suppressNearbyMonsters(player:getId()) end
         print(mode == "hunt_area_arrival" and "PLAYERBOT_GAMEPLAY_TEST HUNT_AREA_ARRIVAL_START" or
             mode == "remote_hunt" and "PLAYERBOT_GAMEPLAY_TEST REMOTE_HUNT_START" or
@@ -970,7 +984,9 @@ function F.login.onLogin(player)
         addEvent(F.spawnCorpseMonster, 500, player:getId(), F.nonlootableMonsterName)
         addEvent(F.spawnCorpseMonster, 5000, player:getId(), F.emptyMonsterName)
         addEvent(F.spawnCorpseMonster, 12500, player:getId(), F.lootMonsterName)
-        addEvent(F.spawnCorpseMonster, 20000, player:getId(), F.containerDeathItemMonsterName)
+        -- Spawn before the fixed route descends: this passive, speed-zero
+        -- target cannot follow the bot across floors.
+        addEvent(F.spawnCorpseMonster, 16000, player:getId(), F.containerDeathItemMonsterName)
         print("PLAYERBOT_GAMEPLAY_TEST CORPSE_START")
         return true
     end
