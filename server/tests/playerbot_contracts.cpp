@@ -2425,7 +2425,11 @@ void remoteHuntTravelGuards()
 	assert(rejection(changed) == "approach_exposed");
 	changed = approach;
 	changed.metrics.fare = 220;
-	assert(rejection(changed) == "fare_mismatch");
+	assert(rejection(changed) == "fare_above_validated");
+	// A validated itinerary with a later paid hop costs more than its first boat.
+	validated.metrics.fare = 170;
+	assert(rejection(approach).empty());
+	validated.metrics.fare = 110;
 	// Ladders, doors, and tool transitions before boarding are ordinary steps.
 	for (const auto action : {PlayerBotNavigationAction::Use, PlayerBotNavigationAction::UseDoor,
 	                          PlayerBotNavigationAction::UseRope, PlayerBotNavigationAction::UseShovel}) {

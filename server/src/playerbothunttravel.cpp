@@ -44,6 +44,9 @@ struct PlayerBotHuntTravelWork {
 	std::unique_ptr<PlayerBotHuntWalkSearch> local;
 	std::string profile;
 	std::chrono::steady_clock::duration connectionTime{};
+	// Connections that expanded no tiles, by fallback reason. The first of each
+	// is logged; slice counters cover the rest.
+	std::set<std::string> trivialConnections;
 	bool walkingDone = false;
 	std::vector<Position> states;
 	std::vector<uint32_t> providers;
@@ -232,6 +235,13 @@ std::optional<PlayerBotNavigationRoutePlan> PlayerBotController::advanceHuntTrav
 	w.walking.metrics.dangerAware = policy.enabled();
 	uint64_t localBudget = localNodesPerTurn;
 	auto connectionEvent = [&](const char* kind, PlayerBotNavigationResult result) {
+		// Transport searches probe hundreds of arrivals per request; most end in
+		// a graph verdict or cache hit without expanding a tile.
+		if (w.local->expanded == 0 && !w.trivialConnections.emplace(w.local->fallbackReason).second) {
+			w.connectionTime = {};
+			return;
+		}
+		constexpr size_t loggedTargets = 8;
 		std::ostringstream fields;
 		fields << "\"planning_pass\":" << w.pass << ",\"scoring_revision\":" << w.revision
 		       << ",\"request_sequence\":" << w.sequence << ",\"kind\":\"" << kind << "\""
@@ -246,12 +256,12 @@ std::optional<PlayerBotNavigationRoutePlan> PlayerBotController::advanceHuntTrav
 		       << ",\"corridor_radius\":" << w.local->corridorRadius
 		       << ",\"heuristic_restarts\":" << w.local->heuristicRestarts
 		       << ",\"elapsed_us\":" << std::chrono::duration_cast<std::chrono::microseconds>(w.connectionTime).count();
-		fields << ",\"fallback_reason\":\"" << w.local->fallbackReason << "\",\"requested_targets\":[";
-		bool first = true;
-		for (const auto& target : w.local->destinations()) {
-			if (!first) fields << ',';
-			first = false;
-			fields << "{\"x\":" << target.x << ",\"y\":" << target.y << ",\"z\":" << unsigned(target.z) << '}';
+		const auto& targets = w.local->destinations();
+		fields << ",\"fallback_reason\":\"" << w.local->fallbackReason << "\",\"requested_target_count\":"
+		       << targets.size() << ",\"requested_targets\":[";
+		for (size_t i = 0; i < std::min(targets.size(), loggedTargets); ++i) {
+			if (i != 0) fields << ',';
+			fields << "{\"x\":" << targets[i].x << ",\"y\":" << targets[i].y << ",\"z\":" << unsigned(targets[i].z) << '}';
 		}
 		fields << ']';
 		emit("hunt_route_connection", player.getPosition(), fields.str());

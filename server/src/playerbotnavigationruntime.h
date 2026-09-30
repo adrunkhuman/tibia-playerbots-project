@@ -145,7 +145,9 @@ inline const char* playerBotPaidApproachRejection(const PlayerBotNavigationRoute
 	if (!playerBotNpcTravelOfferMatches(*executable.metrics.firstNpcTravelOffer, paid)) return "different_travel_offer";
 	if (executable.metrics.localDangerCost != 0 || executable.metrics.localMaximumHealthLossPerSecond != 0)
 		return "approach_exposed";
-	if (executable.metrics.fare != detailed.metrics.fare) return "fare_mismatch";
+	// The validated fare covers every paid hop; the boarding offer's own price
+	// was matched above. Reject only an ordinary plan that expects to pay more.
+	if (executable.metrics.fare > detailed.metrics.fare) return "fare_above_validated";
 	if (executable.steps.size() > detailed.metrics.steps) return "approach_longer_than_validated";
 	const auto boarding = std::find_if(executable.steps.begin(), executable.steps.end(), [](const auto& step) {
 		return step.action == PlayerBotNavigationAction::NpcTravel;
