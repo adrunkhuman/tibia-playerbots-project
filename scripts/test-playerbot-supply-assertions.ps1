@@ -91,8 +91,11 @@ for ($index = 1; $index -le 80; $index++) {
         suitable = $false; reachable = $true; route_validated = $false; supply_budget_fits = $true
         supply_expected_potions = 1; score = $index; topology_reachable = $true
         topology_travel_steps = 10; route_danger_cost = 0; center = @{ x = 32500 + $index; y = 31800; z = 7 }
+        unstable_patrol_points = 0
     }
 }
+# The deep cave patrol candidate must be scored with stable patrol points.
+$huntPlanning[$huntPlanning.Count - 1].center = @{ x = 32682; y = 31934; z = 8 }
 for ($index = 1; $index -le 10; $index++) {
     $huntPlanning += @{
         event = 'hunt_region_candidate'; planning_pass = 3; scoring_revision = 11; candidate_phase = 'scored'
@@ -100,6 +103,7 @@ for ($index = 1; $index -le 10; $index++) {
         suitable = $true; reachable = $true; route_validated = $false; supply_budget_fits = $true
         supply_expected_potions = 1; score = 101 - $index; topology_reachable = $true
         topology_travel_steps = 10; route_danger_cost = 0; center = @{ x = 32400 + $index; y = 31800; z = 7 }
+        unstable_patrol_points = 0
     }
 }
 for ($index = 1; $index -le 10; $index++) {
@@ -112,6 +116,10 @@ for ($index = 1; $index -le 10; $index++) {
     }
 }
 $huntPlanning += @(
+    @{ event = 'hunt_route_connection'; planning_pass = 3; scoring_revision = 11; result = 'unreachable'
+       fallback_reason = 'coarse_unreachable'; expanded_nodes = 0 }
+    @{ event = 'hunt_planning_slice'; planning_pass = 3; scoring_revision = 11; phase = 'route_selection'
+       result = 'route_pending'; slices = 4; route_coarse_rejects = 1 }
     @{ event = 'hunt_region_selection'; result = 'selected'; planning_pass = 3; scoring_revision = 11; region_id = 1; selection_rule = 'supply_budget_then_xp' }
     @{ event = 'hunt_supply_reserve'; source = 'selected_return_route'; route_danger_cost = 100
        maximum_health = 200; health_loss_cost = 1000; minimum_potion_healing = 125
