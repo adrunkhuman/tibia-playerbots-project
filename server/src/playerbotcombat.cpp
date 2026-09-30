@@ -19,6 +19,7 @@
 #include "groups.h"
 #include "guild.h"
 
+#include <map>
 #include <utility>
 
 // Playerbot survival, combat targeting, and hunt orchestration.
@@ -28,32 +29,35 @@ extern Spells* g_spells;
 
 namespace {
 	constexpr uint64_t maximumTargetApproachExpandedNodes = 10000;
-	constexpr uint32_t maximumPatrolRouteTurns = 512;
+	constexpr size_t maximumDetailedHuntCandidates = 256;
 
-	bool executablePatrolApproachMatches(const PlayerBotNavigationRoutePlan& executable,
-	                                    const PlayerBotNavigationRoutePlan& detailed,
-	                                    const PlayerBotNavigationStep& paid, Position source)
+	std::string positionJson(const Position& position)
 	{
-		if (executable.metrics.result != PlayerBotNavigationResult::Reached ||
-		    !executable.metrics.firstNpcTravelOffer || executable.steps.empty() ||
-		    !playerBotNpcTravelOfferMatches(*executable.metrics.firstNpcTravelOffer, paid) ||
-		    executable.metrics.localDangerCost != 0 ||
-		    executable.metrics.localMaximumHealthLossPerSecond != 0 ||
-		    executable.metrics.fare != detailed.metrics.fare ||
-		    executable.steps.size() > detailed.metrics.steps) return false;
-		const auto first = std::find_if(executable.steps.begin(), executable.steps.end(), [](const auto& step) {
-			return step.action == PlayerBotNavigationAction::NpcTravel;
-		});
-		// Stairs and floor-change portals are walking moves: boat decks are often
-		// on another floor. Their exposure is covered by the zero-danger check.
-		return std::all_of(executable.steps.begin(), first, [&source](const auto& step) {
-			const bool walk = step.action == PlayerBotNavigationAction::Move && step.target != source &&
-			    Position::areInRange<1, 1, 0>(source, step.target);
-			source = step.expectedPosition;
-			return walk;
-		}) && (first == executable.steps.end() ||
-		       (first + 1 == executable.steps.end() &&
-		        playerBotNpcTravelOfferMatches(*executable.metrics.firstNpcTravelOffer, *first)));
+		return "{\"x\":" + std::to_string(position.x) + ",\"y\":" + std::to_string(position.y) +
+		       ",\"z\":" + std::to_string(position.z) + '}';
+	}
+
+	// At most eight positions; blocked sets are small, but keep records bounded.
+	std::string positionListJson(const std::set<Position>& positions)
+	{
+		std::string result = "[";
+		size_t count = 0;
+		for (const Position& position : positions) {
+			if (count++ == 8) break;
+			if (count > 1) result += ',';
+			result += positionJson(position);
+		}
+		return result + ']';
+	}
+
+	const char* playerBotPendingMovementResultName(PlayerBotPendingMovementResult result)
+	{
+		switch (result) {
+			case PlayerBotPendingMovementResult::Completed: return "completed";
+			case PlayerBotPendingMovementResult::Waiting: return "waiting";
+			case PlayerBotPendingMovementResult::Mismatch: return "mismatch";
+			default: return "none";
+		}
 	}
 
 	std::string supplyCapabilityChangedFields(uint64_t fields)
@@ -974,6 +978,122 @@ void PlayerBotController::emitHuntRegionPlanning(const PlayerBotHuntPlanningSess
 	emit("hunt_region_scan", position, fields.str());
 }
 
+void PlayerBotController::recordHuntPlanningSlice(HuntPlanningSliceRecord record)
+{
+	// A route search runs one short slice per turn for up to minutes. Merge
+	// those quiet slices into at most one record per interval.
+	if (huntPlanningSliceBacklog &&
+	    (huntPlanningSliceBacklog->attribution.planningPass != record.attribution.planningPass ||
+	     huntPlanningSliceBacklog->attribution.scoringRevision != record.attribution.scoringRevision)) {
+		flushHuntPlanningSlice();
+	}
+	if (huntPlanningSliceBacklog) {
+		huntPlanningSliceBacklog->counters.add(record.counters);
+		record.counters = huntPlanningSliceBacklog->counters;
+		record.started = huntPlanningSliceBacklog->started;
+		huntPlanningSliceBacklog.reset();
+	}
+	if (std::strcmp(record.result, "route_pending") == 0 &&
+	    std::chrono::steady_clock::now() - record.started < progressRecordInterval) {
+		huntPlanningSliceBacklog = std::move(record);
+		return;
+	}
+	emitHuntPlanningSlice(record);
+}
+
+void PlayerBotController::flushHuntPlanningSlice()
+{
+	if (!huntPlanningSliceBacklog) return;
+	if (!telemetry.terminalLogged()) emitHuntPlanningSlice(*huntPlanningSliceBacklog);
+	huntPlanningSliceBacklog.reset();
+}
+
+void PlayerBotController::emitHuntPlanningSlice(const HuntPlanningSliceRecord& record) const
+{
+	const PlayerBotHuntSliceCounters& counters = record.counters;
+	std::ostringstream fields;
+	fields << "\"phase\":" << jsonString(record.phase) << ",\"result\":" << jsonString(record.result)
+	       << ",\"reason\":" << jsonString(record.reason) << ",\"planning_pass\":" << record.attribution.planningPass
+	       << ",\"scoring_revision\":" << record.attribution.scoringRevision
+	       << ",\"invalidated_planning_pass\":" << record.attribution.invalidatedPass
+	       << ",\"invalidated_scoring_revision\":" << record.attribution.invalidatedRevision
+	       << ",\"slices\":" << counters.slices << ",\"elapsed_us\":" << counters.elapsedUs
+	       << ",\"max_elapsed_us\":" << counters.maxElapsedUs
+	       << ",\"over_10ms\":" << (counters.maxElapsedUs >= PlayerBotHuntSliceTiming::overrunThresholdUs ? "true" : "false")
+	       << ",\"schedule_delay_ms\":";
+	if (record.scheduleDelayMs) fields << *record.scheduleDelayMs;
+	else fields << "null";
+	fields << ",\"schedule_late_us\":";
+	if (record.scheduleDelayMs) fields << counters.maxScheduleLateUs;
+	else fields << "null";
+	fields << ",\"setup_us\":" << counters.us(PlayerBotHuntSlicePart::Setup)
+	       << ",\"transport_us\":" << counters.us(PlayerBotHuntSlicePart::Transport)
+	       << ",\"score_us\":" << counters.us(PlayerBotHuntSlicePart::Score)
+	       << ",\"score_completion_us\":" << counters.us(PlayerBotHuntSlicePart::ScoreCompletion)
+	       << ",\"evidence_us\":" << counters.us(PlayerBotHuntSlicePart::Evidence)
+	       << ",\"route_bookkeeping_us\":" << counters.us(PlayerBotHuntSlicePart::RouteBookkeeping)
+	       << ",\"route_checks_us\":" << counters.us(PlayerBotHuntSlicePart::RouteChecks)
+	       << ",\"transport_work_count\":" << counters.transportWork
+	       << ",\"score_work_count\":" << counters.scoreWork
+	       << ",\"candidate_emissions\":" << counters.candidateEmissions
+	       << ",\"outbound_checks\":" << counters.outboundChecks << ",\"depot_checks\":" << counters.depotChecks
+	       << ",\"depot_unavailable_checks\":" << counters.depotUnavailableChecks
+	       << ",\"supplier_checks\":" << counters.supplierChecks << ",\"discovery_checks\":" << counters.discoveryChecks
+	       << ",\"depot_discovery_calls\":" << counters.depotDiscoveryCalls
+	       << ",\"supplier_discovery_calls\":" << counters.supplierDiscoveryCalls
+	       << ",\"route_attempts\":" << counters.routes.attempts << ",\"walking_reached\":" << counters.routes.walkingReached
+	       << ",\"npc_plan_returned\":" << counters.routes.npcReturned << ",\"npc_reached\":" << counters.routes.npcReached
+	       << ",\"walking_expanded_nodes\":" << counters.routes.walkingExpandedNodes
+	       << ",\"npc_returned_expanded_nodes\":" << counters.routes.npcReturnedExpandedNodes
+	       << ",\"route_request_sequence\":" << counters.routes.requestSequence
+	       << ",\"route_transport_spendable_gold\":" << counters.routes.transportSpendableFunds
+	       << ",\"route_local_searches\":" << counters.routes.localSearches
+	       << ",\"route_local_expanded_nodes\":" << counters.routes.localExpandedNodes
+	       << ",\"route_node_limits\":" << counters.routes.nodeLimits
+	       << ",\"route_local_bound_stops\":" << counters.routes.localBoundStops
+	       << ",\"route_topology_queries\":" << counters.routes.topologyQueries
+	       << ",\"route_topology_expanded_nodes\":" << counters.routes.topologyExpandedNodes
+	       << ",\"route_topology_cache_hits\":" << counters.routes.topologyCacheHits
+	       << ",\"route_coarse_rejects\":" << counters.routes.coarseRejects
+	       << ",\"route_coarse_connections\":" << counters.routes.coarseConnections
+	       << ",\"route_local_connections\":" << counters.routes.localConnections
+	       << ",\"route_connection_cache_hits\":" << counters.routes.connectionCacheHits
+	       << ",\"route_unknown_connections\":" << counters.routes.unknownConnections
+	       << ",\"route_bound_rejects\":" << counters.routes.boundRejects
+	       << ",\"route_risk_rejects\":" << counters.routes.riskRejects
+	       << ",\"route_graph_labels\":" << counters.routes.graphLabels
+	       << ",\"route_shared_cache_hits\":" << counters.routes.sharedCacheHits
+	       << ",\"route_shared_cache_misses\":" << counters.routes.sharedCacheMisses
+	       << ",\"route_incomplete_cache_hits\":" << counters.routes.incompleteCacheHits
+	       << ",\"route_source_tree_hits\":" << counters.routes.sourceTreeHits
+	       << ",\"route_hierarchy_fallbacks\":" << counters.routes.hierarchyFallbacks
+	       << ",\"route_alternate_itineraries\":" << counters.routes.alternateItineraries
+	       << ",\"route_corridor_searches\":" << counters.routes.corridorSearches
+	       << ",\"route_corridor_widenings\":" << counters.routes.corridorWidenings
+	       << ",\"route_guided_searches\":" << counters.routes.guidedSearches
+	       << ",\"route_heuristic_builds\":" << counters.routes.heuristicBuilds
+	       << ",\"route_heuristic_restarts\":" << counters.routes.heuristicRestarts
+	       << ",\"route_ordinary_searches\":" << counters.routes.ordinarySearches
+	       << ",\"route_yields\":" << counters.routes.yields
+	       << ",\"route_invalidations\":" << counters.routes.invalidations
+	       << ",\"route_invalidation_reason\":\"" << counters.routes.invalidationReason << "\""
+	       << ",\"route_invalidation_cause\":\"" << counters.routes.invalidationCause << "\""
+	       << ",\"route_invalidation_tile_key\":" << counters.routes.invalidationChangedTile
+	       << ",\"route_invalidation_journal_delta\":" << counters.routes.invalidationJournalDelta
+	       << ",\"route_invalidation_watched_tiles\":" << counters.routes.invalidationWatchedTiles
+	       << ",\"route_request_restart_limits\":" << counters.routes.requestRestartLimits
+	       << ",\"route_transport_restarts\":" << counters.routes.transportRestarts
+	       << ",\"route_transport_restart_limits\":" << counters.routes.transportRestartLimits
+	       << ",\"outbound_route_us\":" << std::chrono::duration_cast<std::chrono::microseconds>(counters.outboundRoute).count()
+	       << ",\"depot_route_us\":" << std::chrono::duration_cast<std::chrono::microseconds>(counters.depotRoute).count()
+	       << ",\"supplier_route_us\":" << std::chrono::duration_cast<std::chrono::microseconds>(counters.supplierRoute).count()
+	       << ",\"depot_discovery_us\":" << std::chrono::duration_cast<std::chrono::microseconds>(counters.depotDiscovery).count()
+	       << ",\"supplier_discovery_us\":" << std::chrono::duration_cast<std::chrono::microseconds>(counters.supplierDiscovery).count()
+	       << ",\"walking_us\":" << std::chrono::duration_cast<std::chrono::microseconds>(counters.routes.walkingTime).count()
+	       << ",\"npc_us\":" << std::chrono::duration_cast<std::chrono::microseconds>(counters.routes.npcTime).count();
+	emit("hunt_planning_slice", record.position, fields.str());
+}
+
 void PlayerBotController::finishHuntRegion(const Player& player, const Position& position, const char* reason)
 {
 	Player& mutablePlayer = const_cast<Player&>(player);
@@ -1114,9 +1234,11 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 		const auto delay = std::chrono::duration_cast<std::chrono::milliseconds>(
 		    admission.wait + std::chrono::microseconds(999));
 		if (retryAfter) *retryAfter = delay;
-		if (!telemetry.terminalLogged()) {
+		const auto suppressed = huntPlanningBudgetRecords.admit(PlayerBotPlanningBudget::Clock::now());
+		if (suppressed && !telemetry.terminalLogged()) {
 			emit("hunt_planning_budget", position,
-			     "\"requested_delay_ms\":" + std::to_string(delay.count()) +
+			     "\"suppressed_denials\":" + std::to_string(*suppressed) +
+			     ",\"requested_delay_ms\":" + std::to_string(delay.count()) +
 			     ",\"debt_us\":" + std::to_string(admission.debtUs) +
 			     ",\"consumed_us\":" + std::to_string(admission.consumedUs) +
 			     ",\"credit_us\":" + std::to_string(admission.creditUs) +
@@ -1296,10 +1418,30 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 		emitHuntRegionPlanning(*planning, position, phase, outcome.planningPass, outcome.scoringRevision);
 	}
 	if (outcome.candidateSnapshot) {
+		// Live-map scans score thousands of candidates, mostly rejected for
+		// transport or lethality; full records for all of them filled the log
+		// within minutes. Large scans detail only unrejected candidates.
+		const bool detailRejected = outcome.candidates.size() <= maximumDetailedHuntCandidates;
+		std::map<std::string, uint32_t> rejections;
 		for (const PlayerBotHuntRegion& candidate : outcome.candidates) {
+			if (!candidate.rejectionReason.empty()) {
+				++rejections[candidate.rejectionReason];
+				if (!detailRejected) continue;
+			}
 			++candidateEmissions;
 			emitHuntRegionCandidate(candidate, position, outcome.planningPass, outcome.scoringRevision, "scored");
 		}
+		std::ostringstream summary;
+		summary << planningAttribution(outcome.planningPass, outcome.scoringRevision)
+		        << ",\"candidate_count\":" << outcome.candidates.size()
+		        << ",\"detailed_count\":" << candidateEmissions
+		        << ",\"detail\":\"" << (detailRejected ? "all" : "unrejected") << "\",\"rejections\":{";
+		for (auto rejection = rejections.begin(); rejection != rejections.end(); ++rejection) {
+			summary << (rejection == rejections.begin() ? "" : ",") << jsonString(rejection->first)
+			        << ':' << rejection->second;
+		}
+		summary << '}';
+		emit("hunt_region_candidate_summary", position, summary.str());
 		std::vector<PlayerBotHuntRegion> fixtureRouteCandidates;
 		const std::vector<PlayerBotHuntRegion>* routeCandidates = &outcome.routeCandidates;
 		if (fixtureDriver.remoteHuntScenario()) {
@@ -1536,88 +1678,33 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 	};
 	const bool selected = run();
 	timing.mark(PlayerBotHuntSlicePart::Other);
-	const int64_t totalUs = timing.elapsedUs(); // Excludes this final summary's serialization and emission.
 	if (!telemetry.terminalLogged()) {
-		std::ostringstream fields;
-		fields << "\"phase\":" << jsonString(slicePhase) << ",\"result\":" << jsonString(sliceResult)
-		       << ",\"reason\":" << jsonString(reason) << ",\"planning_pass\":" << attribution.planningPass
-		       << ",\"scoring_revision\":" << attribution.scoringRevision
-		       << ",\"invalidated_planning_pass\":" << attribution.invalidatedPass
-		       << ",\"invalidated_scoring_revision\":" << attribution.invalidatedRevision
-		       << ",\"elapsed_us\":" << totalUs
-		       << ",\"over_10ms\":" << (totalUs >= PlayerBotHuntSliceTiming::overrunThresholdUs ? "true" : "false")
-		       << ",\"schedule_delay_ms\":";
-		if (scheduleDelay) fields << *scheduleDelay;
-		else fields << "null";
-		fields << ",\"schedule_late_us\":";
-		if (scheduleDelay) fields << scheduleLateUs;
-		else fields << "null";
-		fields << ",\"setup_us\":" << timing.us(PlayerBotHuntSlicePart::Setup)
-		       << ",\"transport_us\":" << timing.us(PlayerBotHuntSlicePart::Transport)
-		       << ",\"score_us\":" << timing.us(PlayerBotHuntSlicePart::Score)
-		       << ",\"score_completion_us\":" << timing.us(PlayerBotHuntSlicePart::ScoreCompletion)
-		       << ",\"evidence_us\":" << timing.us(PlayerBotHuntSlicePart::Evidence)
-		       << ",\"route_bookkeeping_us\":" << timing.us(PlayerBotHuntSlicePart::RouteBookkeeping)
-		       << ",\"route_checks_us\":" << timing.us(PlayerBotHuntSlicePart::RouteChecks)
-		       << ",\"transport_work_count\":" << transportWorkCount
-		       << ",\"score_work_count\":" << scoreWorkCount
-		       << ",\"candidate_emissions\":" << candidateEmissions
-		       << ",\"outbound_checks\":" << outboundChecks << ",\"depot_checks\":" << depotChecks
-		       << ",\"depot_unavailable_checks\":" << depotUnavailableChecks
-		       << ",\"supplier_checks\":" << supplierChecks << ",\"discovery_checks\":" << discoveryChecks
-		       << ",\"depot_discovery_calls\":" << depotDiscoveryCalls
-		       << ",\"supplier_discovery_calls\":" << supplierDiscoveryCalls
-		       << ",\"route_attempts\":" << routes.attempts << ",\"walking_reached\":" << routes.walkingReached
-		       << ",\"npc_plan_returned\":" << routes.npcReturned << ",\"npc_reached\":" << routes.npcReached
-		       << ",\"walking_expanded_nodes\":" << routes.walkingExpandedNodes
-		       << ",\"npc_returned_expanded_nodes\":" << routes.npcReturnedExpandedNodes
-		       << ",\"route_request_sequence\":" << routes.requestSequence
-		       << ",\"route_transport_spendable_gold\":" << routes.transportSpendableFunds
-		       << ",\"route_local_searches\":" << routes.localSearches
-		       << ",\"route_local_expanded_nodes\":" << routes.localExpandedNodes
-		       << ",\"route_node_limits\":" << routes.nodeLimits
-		       << ",\"route_local_bound_stops\":" << routes.localBoundStops
-		       << ",\"route_topology_queries\":" << routes.topologyQueries
-		       << ",\"route_topology_expanded_nodes\":" << routes.topologyExpandedNodes
-		       << ",\"route_topology_cache_hits\":" << routes.topologyCacheHits
-		       << ",\"route_coarse_rejects\":" << routes.coarseRejects
-		       << ",\"route_coarse_connections\":" << routes.coarseConnections
-		       << ",\"route_local_connections\":" << routes.localConnections
-		       << ",\"route_connection_cache_hits\":" << routes.connectionCacheHits
-		       << ",\"route_unknown_connections\":" << routes.unknownConnections
-		       << ",\"route_bound_rejects\":" << routes.boundRejects
-		       << ",\"route_risk_rejects\":" << routes.riskRejects
-		       << ",\"route_graph_labels\":" << routes.graphLabels
-		       << ",\"route_shared_cache_hits\":" << routes.sharedCacheHits
-		       << ",\"route_shared_cache_misses\":" << routes.sharedCacheMisses
-		       << ",\"route_incomplete_cache_hits\":" << routes.incompleteCacheHits
-		       << ",\"route_source_tree_hits\":" << routes.sourceTreeHits
-		       << ",\"route_hierarchy_fallbacks\":" << routes.hierarchyFallbacks
-		       << ",\"route_alternate_itineraries\":" << routes.alternateItineraries
-		       << ",\"route_corridor_searches\":" << routes.corridorSearches
-		       << ",\"route_corridor_widenings\":" << routes.corridorWidenings
-		       << ",\"route_guided_searches\":" << routes.guidedSearches
-		       << ",\"route_heuristic_builds\":" << routes.heuristicBuilds
-		       << ",\"route_heuristic_restarts\":" << routes.heuristicRestarts
-		       << ",\"route_ordinary_searches\":" << routes.ordinarySearches
-		       << ",\"route_yields\":" << routes.yields
-		       << ",\"route_invalidations\":" << routes.invalidations
-		       << ",\"route_invalidation_reason\":\"" << routes.invalidationReason << "\""
-		       << ",\"route_invalidation_cause\":\"" << routes.invalidationCause << "\""
-		       << ",\"route_invalidation_tile_key\":" << routes.invalidationChangedTile
-		       << ",\"route_invalidation_journal_delta\":" << routes.invalidationJournalDelta
-		       << ",\"route_invalidation_watched_tiles\":" << routes.invalidationWatchedTiles
-		       << ",\"route_request_restart_limits\":" << routes.requestRestartLimits
-		       << ",\"route_transport_restarts\":" << routes.transportRestarts
-		       << ",\"route_transport_restart_limits\":" << routes.transportRestartLimits
-		       << ",\"outbound_route_us\":" << std::chrono::duration_cast<std::chrono::microseconds>(outboundRouteTime).count()
-		       << ",\"depot_route_us\":" << std::chrono::duration_cast<std::chrono::microseconds>(depotRouteTime).count()
-		       << ",\"supplier_route_us\":" << std::chrono::duration_cast<std::chrono::microseconds>(supplierRouteTime).count()
-		       << ",\"depot_discovery_us\":" << std::chrono::duration_cast<std::chrono::microseconds>(depotDiscoveryTime).count()
-		       << ",\"supplier_discovery_us\":" << std::chrono::duration_cast<std::chrono::microseconds>(supplierDiscoveryTime).count()
-		       << ",\"walking_us\":" << std::chrono::duration_cast<std::chrono::microseconds>(routes.walkingTime).count()
-		       << ",\"npc_us\":" << std::chrono::duration_cast<std::chrono::microseconds>(routes.npcTime).count();
-		emit("hunt_planning_slice", position, fields.str());
+		HuntPlanningSliceRecord record{slicePhase, sliceResult, reason, attribution, scheduleDelay, position,
+		                               std::chrono::steady_clock::now(), {}};
+		PlayerBotHuntSliceCounters& counters = record.counters;
+		// Excludes this record's serialization and emission.
+		counters.elapsedUs = counters.maxElapsedUs = timing.elapsedUs();
+		counters.maxScheduleLateUs = scheduleDelay ? scheduleLateUs : 0;
+		for (size_t part = 0; part < counters.partUs.size(); ++part) {
+			counters.partUs[part] = timing.us(static_cast<PlayerBotHuntSlicePart>(part));
+		}
+		counters.transportWork = transportWorkCount;
+		counters.scoreWork = scoreWorkCount;
+		counters.candidateEmissions = candidateEmissions;
+		counters.outboundChecks = outboundChecks;
+		counters.depotChecks = depotChecks;
+		counters.depotUnavailableChecks = depotUnavailableChecks;
+		counters.supplierChecks = supplierChecks;
+		counters.discoveryChecks = discoveryChecks;
+		counters.depotDiscoveryCalls = depotDiscoveryCalls;
+		counters.supplierDiscoveryCalls = supplierDiscoveryCalls;
+		counters.outboundRoute = outboundRouteTime;
+		counters.depotRoute = depotRouteTime;
+		counters.supplierRoute = supplierRouteTime;
+		counters.depotDiscovery = depotDiscoveryTime;
+		counters.supplierDiscovery = supplierDiscoveryTime;
+		counters.routes = routes;
+		recordHuntPlanningSlice(std::move(record));
 	}
 	budgetCharge.finish(); // Include slice telemetry in actual charged service.
 	if (stopForScopeExhaustion) stop("hunt_scope_exhausted", position);
@@ -1940,7 +2027,9 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 				if (!npc || npc->isRemoved()) {
 					facts << ":provider_unavailable";
 				} else {
-					facts << ':' << npc->getID() << ':' << npc->getPosition();
+					// The spawn anchor, not the live position: captains wander, and the
+					// executable approach already follows them.
+					facts << ':' << npc->getID() << ':' << npc->getMasterPos();
 					for (const auto& offer : npc->getTravelOffers()) {
 						facts << ':' << offer.destination << ':' << offer.price << ':' << offer.level << ':' << offer.premium
 						      << ':' << offer.hasOpaqueCondition << ':' << offer.hasOpaqueAction;
@@ -1952,9 +2041,23 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 			}
 			return facts.str();
 		};
-		if (validateReturn && (!huntPatrolOutboundPlan || !search.watch.valid() || search.outboundFacts != routeFacts())) {
-			schedule(SCHEDULER_MINTICKS);
-			return;
+		if (validateReturn) {
+			const char* restart = !huntPatrolOutboundPlan ? "outbound_plan_missing" :
+			                      !search.watch.valid() ? "outbound_route_changed" :
+			                      search.outboundFacts != routeFacts() ? "outbound_facts_changed" : nullptr;
+			if (restart) {
+				// The guard below discards the search; the next turn starts over.
+				std::ostringstream fields;
+				fields << "\"result\":\"restarted\",\"reason\":\"" << restart << "\",\"phase\":\"patrol_preflight\""
+				       << ",\"destination\":" << positionJson(patrol.destination);
+				if (!search.watch.valid()) {
+					fields << ",\"invalidation_reason\":\"" << PlayerBotRouteChanges::reasonName(search.watch.check())
+					       << "\",\"invalidation_cause\":\"" << PlayerBotRouteChanges::causeName(search.watch.changedCause) << '"';
+				}
+				emit("navigation_progress", currentPosition, fields.str());
+				schedule(SCHEDULER_MINTICKS);
+				return;
+			}
 		}
 		PlayerBotRouteChanges::Scope watch(search.watch);
 		const Position routeStart = validateReturn ? patrol.destination : currentPosition;
@@ -1964,12 +2067,15 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 		const uint64_t reserve = std::max(huntTravelReturnFareReserve(budgetPhase),
 		                                  huntTravelRecoveryFundsReserve(*player, budgetPhase));
 		PlayerBotNavigationRoutePlan preflight;
-		if (!huntPatrolPreflightBlockedPositions.empty()) {
-			// The sliced engine has no blocked-position input. Preserve bounded
-			// walking recovery rather than admit a route through a known blocker.
-			preflight = planCompleteNavigationRoute(*player, routeStart, routeDestination,
-			                                       huntPatrolPreflightBlockedPositions);
-		} else {
+		// Evidence for a rejected preflight: which search ran, and its walking alternative.
+		const char* preflightSource = "route_engine";
+		std::optional<PlayerBotNavigationPlanMetrics> walkingMetrics;
+		// The sliced engine proves the itinerary but has no blocked-position input.
+		// Known blockers apply to the executable walk instead, so a blocked tile
+		// near a boat never turns a paid route into a walking-only one.
+		const std::set<Position>& blockedPositions = huntPatrolPreflightBlockedPositions;
+		const bool avoidBlockers = !validateReturn && !blockedPositions.empty();
+		{
 			struct WorkSlot {
 				std::shared_ptr<PlayerBotHuntTravelWork>& hunt;
 				std::shared_ptr<PlayerBotHuntTravelWork>& patrol;
@@ -1986,15 +2092,18 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 			PlayerBotHuntRouteTiming timing;
 			PlayerBotNavigationRoutePlan walking;
 			auto planned = advanceHuntTravelRoute(*player, request, routeStart, timing, reserve, false, &walking);
-			if (!planned && ++search.turns < maximumPatrolRouteTurns) {
+			search.timing.add(timing);
+			if (!planned && ++search.turns < maximumRouteSearchTurns) {
 				retainPatrolSearch = true;
-				schedule(SCHEDULER_MINTICKS);
+				schedule(routeSearchContinuationInterval);
 				return;
 			}
 			if (!planned) {
+				preflightSource = "search_turn_limit";
 				preflight.metrics.attempted = true;
 				preflight.metrics.result = PlayerBotNavigationResult::NodeLimit;
 			} else {
+				walkingMetrics = walking.metrics; // A completed search always reports its walking alternative.
 				preflight = std::move(*planned);
 				const auto paid = std::find_if(preflight.steps.begin(), preflight.steps.end(), [](const auto& step) {
 					return step.action == PlayerBotNavigationAction::NpcTravel;
@@ -2004,14 +2113,22 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 				    playerBotNavigationRiskVerdict(riskProfile, preflight.metrics) == PlayerBotNavigationRiskVerdict::Accepted) {
 					// Borrow only executable steps; coarse metrics never replace the
 					// detailed proof of the complete outbound itinerary.
-					auto executable = planNpcTravelRoute(*player, routeStart, routeDestination, {},
-					    playerBotNavigationMaximumExpandedNodes, false, reserve);
-					if (executable && executablePatrolApproachMatches(*executable, preflight, *paid, routeStart)) {
+					auto executable = planValidatedPaidApproach(*player, routeStart, routeDestination, blockedPositions,
+					    reserve, false, *paid);
+					if (borrowPaidApproach("patrol_preflight", currentPosition, routeStart, executable, preflight,
+					                       *paid, walking)) {
 						search.outboundNpcId = paid->npcId;
 						preflight.steps = std::move(executable->steps);
+					} else if (avoidBlockers) {
+						preflightSource = "blocked_position_walk";
+						preflight = planCompleteNavigationRoute(*player, routeStart, routeDestination, blockedPositions);
 					} else {
 						preflight = std::move(walking);
 					}
+				} else if (avoidBlockers && paid == preflight.steps.end()) {
+					// The engine's walk may cross a known blocker; replan it around them.
+					preflightSource = "blocked_position_walk";
+					preflight = planCompleteNavigationRoute(*player, routeStart, routeDestination, blockedPositions);
 				}
 			}
 		}
@@ -2041,6 +2158,34 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 				         std::to_string(huntTravelReturnFareReserve(budgetPhase)) +
 				         ",\"recovery_funds_reserve\":" +
 				         std::to_string(huntTravelRecoveryFundsReserve(*player, budgetPhase)));
+			} else if (!routeReached) {
+				// An unsafe walk is only "unknown" while paid alternatives remain
+				// unexplored, so report the walking evidence alongside the result.
+				std::ostringstream fields;
+				fields << "\"result\":\"skipped\",\"reason\":\"route_not_reached\",\"phase\":\"patrol_preflight\""
+				       << ",\"direction\":" << jsonString(validateReturn ? "return" : "outbound")
+				       << ",\"source\":\"" << preflightSource << '"'
+				       << ",\"route_result\":\"" << playerBotNavigationResultName(preflight.metrics.result) << '"'
+				       << ",\"destination\":{\"x\":" << routeDestination.x << ",\"y\":" << routeDestination.y
+				       << ",\"z\":" << unsigned(routeDestination.z) << "},\"search_turns\":" << search.turns
+				       << ",\"route_expanded_nodes\":" << search.timing.localExpandedNodes
+				       << ",\"route_unknown_connections\":" << search.timing.unknownConnections
+				       << ",\"route_invalidations\":" << search.timing.invalidations
+				       << ",\"route_invalidation_reason\":\"" << search.timing.invalidationReason << '"'
+				       << ",\"route_invalidation_cause\":\"" << search.timing.invalidationCause << '"'
+				       << ",\"route_transport_restarts\":" << search.timing.transportRestarts
+				       << ",\"route_request_restart_limits\":" << search.timing.requestRestartLimits
+				       << ",\"route_graph_labels\":" << search.timing.graphLabels
+				       << ",\"blocked_positions\":" << positionListJson(blockedPositions);
+				if (walkingMetrics) {
+					fields << ",\"walking_result\":\"" << playerBotNavigationResultName(walkingMetrics->result) << '"'
+					       << ",\"walking_steps\":" << walkingMetrics->steps
+					       << ",\"walking_danger_cost\":" << walkingMetrics->dangerCost
+					       << ",\"walking_maximum_health_loss_per_second\":" << walkingMetrics->maximumHealthLossPerSecond
+					       << ",\"walking_risk_accepted\":" << (playerBotNavigationRiskVerdict(riskProfile, *walkingMetrics) ==
+					              PlayerBotNavigationRiskVerdict::Accepted ? "true" : "false");
+				}
+				emit("navigation_progress", currentPosition, fields.str());
 			} else if (navigation.routeUnsafe) {
 				emit("navigation_progress", currentPosition,
 				     "\"result\":\"skipped\",\"reason\":\"route_danger_above_tolerance\",\"phase\":\"patrol_preflight\",\"direction\":" +
@@ -2071,6 +2216,7 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 				huntPatrolOutboundPlan = std::move(preflight);
 				search.outboundFacts = routeFacts();
 				search.turns = 0;
+				search.timing = {};
 				retainPatrolSearch = true;
 				schedule(SCHEDULER_MINTICKS);
 				return;
@@ -2125,6 +2271,20 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 	                       activeRegionPatrol ? &riskProfile : nullptr, !activeRegionPatrol)) {
 		if (activeRegionPatrol && navigation.routeRequest) {
 			std::set<Position> blockedPositions = std::move(navigation.routeRequest->blockedPositions);
+			// A failed final step suppresses the waypoint itself. Avoiding the goal
+			// would make it unreachable; repeated step failures skip it instead.
+			blockedPositions.erase(patrol.destination);
+			std::ostringstream fields;
+			fields << "\"result\":\"replan_requested\",\"phase\":\"patrol\""
+			       << ",\"destination\":" << positionJson(patrol.destination)
+			       << ",\"blocked_positions\":" << positionListJson(blockedPositions)
+			       << ",\"step_failures\":" << navigation.stepFailureCount
+			       << ",\"movement_result\":\"" << playerBotPendingMovementResultName(navigation.movementResult) << '"'
+			       << ",\"failed_target\":" << (navigation.failedMovementTarget ?
+			              positionJson(*navigation.failedMovementTarget) : std::string("null"))
+			       << ",\"oscillation\":" << (navigation.oscillation ? "true" : "false")
+			       << ",\"route_unavailable\":" << (navigation.routeUnavailable ? "true" : "false");
+			emit("navigation_progress", currentPosition, fields.str());
 			huntReturnCoverage.invalidate();
 			resetNavigation();
 			huntPatrolPreflightBlockedPositions = std::move(blockedPositions);

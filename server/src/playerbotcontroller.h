@@ -64,6 +64,12 @@ namespace playerbot {
 	inline constexpr uint32_t huntRegionPathfindingCallsPerTurn = 1;
 	inline constexpr uint32_t huntRegionScoringCandidatesPerTurn = 32;
 	inline constexpr uint32_t blockedRouteRetryInterval = 500;
+	// Sliced route searches bound work per turn and share the planning budget,
+	// so continue them promptly, as hunt selection does. The turn cap is only a
+	// backstop behind the engine's own node and restart limits: a cross-map
+	// paid search needs well over 512 turns.
+	inline constexpr uint32_t routeSearchContinuationInterval = 1;
+	inline constexpr uint32_t maximumRouteSearchTurns = 4096;
 	inline constexpr uint16_t ratCorpseItemId = 5964;
 	inline constexpr uint16_t meatItemId = 2666;
 	inline constexpr int32_t healingHealthPercent = 60;
@@ -285,7 +291,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		                              double& maximumDanger);
 
 		void emitRewardCandidate(const PlayerBotRewardPlan& candidate, const Position& position, const char* result,
-		                         const char* reason = nullptr) const;
+		                         const char* reason = nullptr);
 
 		void emitRewardInspection(uint16_t uniqueId, const Position& rewardPosition,
 		                          const RewardInspection& inspection, const Position& position);
@@ -403,6 +409,12 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		                                                const std::set<Position>& blockedPositions = {},
 		                                                uint64_t maximumExpandedNodes = playerBotNavigationMaximumExpandedNodes,
 		                                                bool sameFloorOnly = false) const;
+		// Accepts the executable first leg of a validated paid route, or logs why
+		// the caller must fall back to walking.
+		bool borrowPaidApproach(const char* phase, const Position& position, const Position& source,
+		                        const std::optional<PlayerBotNavigationRoutePlan>& executable,
+		                        const PlayerBotNavigationRoutePlan& detailed, const PlayerBotNavigationStep& paid,
+		                        const PlayerBotNavigationRoutePlan& walking) const;
 		std::optional<PlayerBotNavigationRoutePlan> planNpcTravelRoute(Player& player, const Position& destination,
 		                                                               const std::set<Position>& blockedPositions,
 		                                                               uint64_t maximumExpandedNodes) const;
@@ -411,7 +423,13 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		                                                               const std::set<Position>& blockedPositions,
 		                                                               uint64_t maximumExpandedNodes,
 		                                                               bool estimateOnly = false, uint64_t transportReserve = 0,
-		                                                               bool sellEconomy = false) const;
+		                                                               bool sellEconomy = false,
+		                                                               const PlayerBotNpcTravelOfferIdentity* requiredFirstOffer = nullptr) const;
+		// The executable first leg for a validated paid itinerary: the planner's
+		// own choice, or the validated boarding offer when it chose another boat.
+		std::optional<PlayerBotNavigationRoutePlan> planValidatedPaidApproach(Player& player, const Position& source,
+		    const Position& destination, const std::set<Position>& blockedPositions, uint64_t transportReserve,
+		    bool sellEconomy, const PlayerBotNavigationStep& paid) const;
 		std::optional<PlayerBotNavigationRoutePlan> advanceHuntTravelRoute(Player& player,
 		    const PlayerBotHuntRouteRequest& request, const Position& source, PlayerBotHuntRouteTiming& timing,
 		    uint64_t transportReserve, bool sellEconomy, PlayerBotNavigationRoutePlan* walkingAlternative = nullptr);
@@ -478,6 +496,19 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		void emitFixtureEvents(const std::vector<playerbot::PlayerBotFixtureEvent>& events, const Position& position) const;
 		void emitHuntRegionPlanning(const PlayerBotHuntPlanningSession& planning, const Position& position,
 		                            const char* phase, uint64_t planningPass, uint64_t scoringRevision) const;
+		struct HuntPlanningSliceRecord {
+			const char* phase;
+			const char* result;
+			const char* reason;
+			PlayerBotHuntSliceAttribution attribution;
+			std::optional<uint32_t> scheduleDelayMs;
+			Position position;
+			std::chrono::steady_clock::time_point started;
+			PlayerBotHuntSliceCounters counters;
+		};
+		void recordHuntPlanningSlice(HuntPlanningSliceRecord record);
+		void flushHuntPlanningSlice();
+		void emitHuntPlanningSlice(const HuntPlanningSliceRecord& record) const;
 		void cancelHuntPlanning(const char* reason, const Position& position);
 		void finishHuntRegion(const Player& player, const Position& position, const char* reason);
 
@@ -511,6 +542,10 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		std::chrono::steady_clock::time_point scheduledTurnDeadline;
 		std::optional<uint32_t> executingTurnDelayMs;
 		int64_t executingTurnLateUs = 0;
+		std::optional<HuntPlanningSliceRecord> huntPlanningSliceBacklog;
+		playerbot::PlayerBotRecordThrottle huntPlanningBudgetRecords;
+		// Throttles per distinct spell skip record; emitSpellCastEvent is const telemetry.
+		mutable std::map<size_t, playerbot::PlayerBotRecordThrottle> spellSkipRecords;
 		playerbot::PlayerBotFixtureDriver fixtureDriver;
 		playerbot::PlayerBotTelemetry telemetry;
 		Position lastPosition;
@@ -538,6 +573,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		size_t spellTrainerScanOffset = 0;
 		PlayerBotDeparturePlanner departurePlanner;
 		std::map<uint16_t, std::string> rewardInspectionFingerprints;
+		std::map<uint16_t, size_t> rewardCandidateFingerprints;
 		PlayerBotServiceWorkflow serviceWorkflow;
 		struct SellLootBatch {
 			uint16_t itemId = 0;
@@ -638,6 +674,17 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		uint64_t depotSourceRouteSerial = 0;
 		std::optional<SellLootPlan> sellLootPlan;
 		std::optional<SellLootSearch> sellLootSearch;
+		// Pending sell_loot_plan calls merged into one record; counters are sums.
+		struct SellLootPlanReport {
+			size_t candidateIndex = 0;
+			std::chrono::steady_clock::time_point started;
+			uint32_t slices = 0;
+			int64_t elapsedUs = 0, maxElapsedUs = 0, snapshotUs = 0;
+			bool rebuilt = false;
+			PlayerBotHuntRouteTiming routes;
+		};
+		std::optional<SellLootPlanReport> sellLootPlanReport;
+		playerbot::PlayerBotRecordThrottle sellLootBudgetRecords;
 		bool depotCompletionAnnounced = false;
 		bool sellLootSearchPending = false;
 		bool sellLootSurvivalFallback = false;
@@ -663,6 +710,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 			uint64_t pass = 0, revision = 0, variant = 0, scheduledGeneration = 0;
 			uint32_t turns = 0;
 			uint32_t outboundNpcId = 0;
+			PlayerBotHuntRouteTiming timing; // Summed over turns for rejection telemetry.
 			std::shared_ptr<PlayerBotHuntTravelWork> work;
 			PlayerBotRouteChanges::Watch watch;
 			std::string outboundFacts;

@@ -290,6 +290,7 @@ class PlayerBotHuntRuntime
 		size_t patrolIndex = 0;
 		bool singleWaypointReached = false;
 		uint32_t patrolRouteFailures = 0;
+		uint32_t patrolWaypointSkips = 0;
 		uint64_t patrolFailureExpandedNodes = 0;
 		uint32_t scopeExhaustions = 0;
 		uint32_t cycles = 0;

@@ -20,6 +20,37 @@
 
 namespace playerbot {
 	inline constexpr std::chrono::seconds summaryInterval(60);
+	// Repetitive per-turn progress (pending searches, budget denials) is merged
+	// or throttled to at most one record per interval.
+	inline constexpr std::chrono::seconds progressRecordInterval(5);
+
+	class PlayerBotRecordThrottle
+	{
+		public:
+			explicit PlayerBotRecordThrottle(std::chrono::steady_clock::duration interval = progressRecordInterval) :
+				interval(interval) {}
+			// Returns the number of calls suppressed since the last admitted one,
+			// or nullopt when this call is suppressed too.
+			std::optional<uint32_t> admit(std::chrono::steady_clock::time_point now)
+			{
+				if (admitted && now - last < interval) {
+					++suppressed;
+					return std::nullopt;
+				}
+				admitted = true;
+				last = now;
+				const uint32_t count = suppressed;
+				suppressed = 0;
+				return count;
+			}
+
+		private:
+			std::chrono::steady_clock::duration interval;
+			std::chrono::steady_clock::time_point last;
+			uint32_t suppressed = 0;
+			bool admitted = false;
+	};
+
 	struct PlayerBotTelemetryTarget {
 		uint32_t id;
 		Position position;

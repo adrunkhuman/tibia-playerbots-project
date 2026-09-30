@@ -13,7 +13,9 @@
 
 #include "playerbotnavigationsession.h"
 
+#include <algorithm>
 #include <chrono>
+#include <iterator>
 #include <optional>
 #include <tuple>
 
@@ -108,6 +110,53 @@ inline bool playerBotNavigationIsReversibleLocalWalk(
 	return cursor == destination;
 }
 
+inline const char* playerBotNavigationActionName(PlayerBotNavigationAction action)
+{
+	switch (action) {
+		case PlayerBotNavigationAction::Move: return "move";
+		case PlayerBotNavigationAction::Use: return "use";
+		case PlayerBotNavigationAction::UseRope: return "use_rope";
+		case PlayerBotNavigationAction::UseShovel: return "use_shovel";
+		case PlayerBotNavigationAction::UseDoor: return "use_door";
+		case PlayerBotNavigationAction::NpcTravel: return "npc_travel";
+	}
+	return "unknown";
+}
+
+inline const char* playerBotNavigationResultName(PlayerBotNavigationResult result)
+{
+	return result == PlayerBotNavigationResult::Reached ? "reached" :
+	       result == PlayerBotNavigationResult::NodeLimit ? "node_limit" : "unreachable";
+}
+
+// The sliced route engine proves a complete paid itinerary but supplies no
+// executable local steps. Callers borrow the ordinary planner's first leg when
+// it boards the same offer for the same fare without added exposure. Any step
+// that planner produces is executable: stairs, ladders, doors, and tool
+// transitions are ordinary walking, and runtime replanning handles failures.
+// Returns nullptr when the leg is acceptable, otherwise a stable telemetry reason.
+inline const char* playerBotPaidApproachRejection(const PlayerBotNavigationRoutePlan& executable,
+                                                  const PlayerBotNavigationRoutePlan& detailed,
+                                                  const PlayerBotNavigationStep& paid)
+{
+	if (executable.metrics.result != PlayerBotNavigationResult::Reached || executable.steps.empty())
+		return "approach_unreached";
+	if (!executable.metrics.firstNpcTravelOffer) return "approach_without_travel";
+	if (!playerBotNpcTravelOfferMatches(*executable.metrics.firstNpcTravelOffer, paid)) return "different_travel_offer";
+	if (executable.metrics.localDangerCost != 0 || executable.metrics.localMaximumHealthLossPerSecond != 0)
+		return "approach_exposed";
+	if (executable.metrics.fare != detailed.metrics.fare) return "fare_mismatch";
+	if (executable.steps.size() > detailed.metrics.steps) return "approach_longer_than_validated";
+	const auto boarding = std::find_if(executable.steps.begin(), executable.steps.end(), [](const auto& step) {
+		return step.action == PlayerBotNavigationAction::NpcTravel;
+	});
+	// An incremental approach may not have installed its boarding step yet.
+	if (boarding == executable.steps.end()) return nullptr;
+	if (std::next(boarding) != executable.steps.end()) return "steps_after_boarding";
+	return playerBotNpcTravelOfferMatches(*executable.metrics.firstNpcTravelOffer, *boarding) ?
+	    nullptr : "different_boarding_step";
+}
+
 struct PlayerBotNavigationRuntimeTiming {
 	std::chrono::steady_clock::time_point now;
 	std::chrono::steady_clock::duration stepTimeout;
@@ -200,6 +249,7 @@ struct PlayerBotNavigationRuntimeOutcome {
 	bool fixedTargetChanged = false;
 	PlayerBotPendingMovementResult movementResult = PlayerBotPendingMovementResult::None;
 	std::optional<Position> failedMovementTarget;
+	std::optional<PlayerBotNavigationStep> failedMovementStep;
 	uint32_t stepFailureCount = 0;
 	std::optional<PlayerBotNavigationOscillation> oscillation;
 	std::optional<PlayerBotNavigationStep> pendingWorldChange;

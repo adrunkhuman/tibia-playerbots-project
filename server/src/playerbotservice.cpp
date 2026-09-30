@@ -33,39 +33,12 @@ namespace {
 	constexpr size_t maximumServiceProvidersPerItem = 4;
 	constexpr size_t maximumServiceBankers = 2;
 	constexpr size_t maximumSellLootRouteValidationsPerDecision = 1;
-	constexpr uint32_t maximumServiceRouteTurns = 512;
 	// One-second waits; a refused step keeps its tile blocked for ten seconds.
 	constexpr uint32_t maximumServiceBlockedRouteWaits = 30;
 	constexpr uint32_t maximumSellLootBatch = 100;
 	constexpr uint32_t sellLootTravelTimeGoldPerMinute = 10;
 	constexpr std::chrono::seconds sellLootFailureCooldown(60);
 	uint64_t sellLootPlanningPass = 0;
-
-	bool executablePaidApproachMatches(const PlayerBotNavigationRoutePlan& executable,
-	                                  const PlayerBotNavigationRoutePlan& detailed,
-	                                  const PlayerBotNavigationStep& paid, Position source)
-	{
-		if (executable.metrics.result != PlayerBotNavigationResult::Reached ||
-		    !executable.metrics.firstNpcTravelOffer || executable.steps.empty() ||
-		    !playerBotNpcTravelOfferMatches(*executable.metrics.firstNpcTravelOffer, paid) ||
-		    executable.metrics.localDangerCost != 0 ||
-		    executable.metrics.localMaximumHealthLossPerSecond != 0 ||
-		    executable.metrics.fare != detailed.metrics.fare ||
-		    executable.steps.size() > detailed.metrics.steps) return false;
-		const auto first = std::find_if(executable.steps.begin(), executable.steps.end(), [](const auto& step) {
-			return step.action == PlayerBotNavigationAction::NpcTravel;
-		});
-		// Stairs and floor-change portals are walking moves: boat decks are often
-		// on another floor. Their exposure is covered by the zero-danger check.
-		return std::all_of(executable.steps.begin(), first, [&source](const auto& step) {
-			const bool walk = step.action == PlayerBotNavigationAction::Move && step.target != source &&
-			    Position::areInRange<1, 1, 0>(source, step.target);
-			source = step.expectedPosition;
-			return walk;
-		}) && (first == executable.steps.end() ||
-		       (first + 1 == executable.steps.end() &&
-		        playerBotNpcTravelOfferMatches(*executable.metrics.firstNpcTravelOffer, *first)));
-	}
 
 	int32_t approachDirection(const Position& provider, const Position& approach)
 	{
@@ -114,8 +87,11 @@ bool PlayerBotController::planSellLootTrip(Player& player, uint16_t currentDepot
 	const auto admission = budget.request(playerId, began);
 	if (!admission.admitted) {
 		sellLootSearchPending = true;
-		emit("sell_loot_plan", position, "\"action\":\"sell_loot_plan\",\"result\":\"deferred\",\"reason\":\"planning_budget\",\"budget_wait_us\":" +
-		     std::to_string(admission.wait.count()) + ",\"budget_debt_us\":" + std::to_string(admission.debtUs));
+		if (const auto suppressed = sellLootBudgetRecords.admit(began)) {
+			emit("sell_loot_plan", position, "\"action\":\"sell_loot_plan\",\"result\":\"deferred\",\"reason\":\"planning_budget\",\"suppressed_denials\":" +
+			     std::to_string(*suppressed) + ",\"budget_wait_us\":" + std::to_string(admission.wait.count()) +
+			     ",\"budget_debt_us\":" + std::to_string(admission.debtUs));
+		}
 		return false;
 	}
 	PlayerBotPlanningBudget::Charge charge(budget, playerId);
@@ -804,21 +780,38 @@ bool PlayerBotController::planSellLootTrip(Player& player, uint16_t currentDepot
 	const bool bounded = search.bounded;
 	const size_t pruned = search.pruned;
 	if (!sellLootSearchPending) sellLootSearch.reset();
+	// A candidate's route search runs one slice per turn. Merge those pending
+	// calls until the scan reaches another candidate, finishes, or ages out.
+	if (rebuilt) sellLootPlanReport.reset();
+	const auto now = std::chrono::steady_clock::now();
+	const int64_t elapsedUs = std::chrono::duration_cast<std::chrono::microseconds>(now - began).count();
+	SellLootPlanReport& report = sellLootPlanReport ? *sellLootPlanReport :
+	    sellLootPlanReport.emplace(SellLootPlanReport{candidateIndex, began});
+	++report.slices;
+	report.elapsedUs += elapsedUs;
+	report.maxElapsedUs = std::max(report.maxElapsedUs, elapsedUs);
+	report.snapshotUs += snapshotUs;
+	report.rebuilt = report.rebuilt || rebuilt;
+	report.routes.add(timing);
+	if (sellLootSearchPending && candidateIndex == report.candidateIndex &&
+	    now - report.started < progressRecordInterval) return found;
+	const SellLootPlanReport merged = std::move(report);
+	sellLootPlanReport.reset();
 	std::ostringstream fields;
 	fields << "\"action\":\"sell_loot_plan\",\"result\":" << jsonString(found ? "candidate" : "deferred")
 	       << ",\"reason\":" << jsonString(found ? (survivalSell ? "survival_trip_validated" : "profitable_trip_validated") :
 	           sellLootSearchPending ? "candidate_scan_pending" : "no_profitable_trip")
 	       << ",\"top_level_items\":" << scannedItems
-	       << ",\"snapshot_rebuilt\":" << (rebuilt ? "true" : "false")
+	       << ",\"snapshot_rebuilt\":" << (merged.rebuilt ? "true" : "false")
 	       << ",\"candidate_count\":" << candidateCount << ",\"candidate_index\":" << candidateIndex
 	       << ",\"bounded\":" << (bounded ? "true" : "false") << ",\"pruned_candidates\":" << pruned
-	       << ",\"snapshot_us\":" << snapshotUs
-	       << ",\"walking_us\":" << std::chrono::duration_cast<std::chrono::microseconds>(timing.walkingTime).count()
-	       << ",\"npc_us\":" << std::chrono::duration_cast<std::chrono::microseconds>(timing.npcTime).count()
-	       << ",\"route_expanded_nodes\":" << timing.localExpandedNodes << ",\"route_yields\":" << timing.yields
-	       << ",\"route_invalidations\":" << timing.invalidations
-	       << ",\"route_unknown_connections\":" << timing.unknownConnections
-	       << ",\"elapsed_us\":" << std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - began).count()
+	       << ",\"slices\":" << merged.slices << ",\"snapshot_us\":" << merged.snapshotUs
+	       << ",\"walking_us\":" << std::chrono::duration_cast<std::chrono::microseconds>(merged.routes.walkingTime).count()
+	       << ",\"npc_us\":" << std::chrono::duration_cast<std::chrono::microseconds>(merged.routes.npcTime).count()
+	       << ",\"route_expanded_nodes\":" << merged.routes.localExpandedNodes << ",\"route_yields\":" << merged.routes.yields
+	       << ",\"route_invalidations\":" << merged.routes.invalidations
+	       << ",\"route_unknown_connections\":" << merged.routes.unknownConnections
+	       << ",\"elapsed_us\":" << merged.elapsedUs << ",\"max_elapsed_us\":" << merged.maxElapsedUs
 	       << ",\"route_validations\":" << routeValidations
 	       << ",\"route_validation_budget\":" << maximumSellLootRouteValidationsPerDecision
 	       << (survivalSell ? ",\"survival\":true" : "");
@@ -1012,6 +1005,9 @@ void PlayerBotController::beginReturn(Player* player, const Position& position, 
 {
 	huntTravelBudgetPhase = HuntTravelBudgetPhase::ReturnToDepot;
 	huntExitValidationAttempted = false;
+	// The selected exit depot belongs to the hunt area. A hunt that ends before
+	// reaching it returns to the nearest depot through the normal scan.
+	if (!huntRegionReached) huntReturnDestination = Position();
 	lastDepotDiscoveryHealth = 0;
 	depotDiscoveryUnderAttack = false;
 	pendingHuntCompletionReason.clear();
@@ -1485,8 +1481,8 @@ void PlayerBotController::processService(Player* player, const Position& current
 						         ",\"npc_id\":" + std::to_string(command.providerId) +
 						         ",\"turns\":" + std::to_string(search.turns));
 					}
-					if (!planned && ++search.turns < maximumServiceRouteTurns) {
-						schedule(blockedRouteRetryInterval);
+					if (!planned && ++search.turns < maximumRouteSearchTurns) {
+						schedule(routeSearchContinuationInterval);
 						return;
 					}
 					if (!planned) {
@@ -1505,11 +1501,12 @@ void PlayerBotController::processService(Player* player, const Position& current
 							} else {
 								// The sliced search proves full-route risk; the ordinary planner supplies
 								// an executable first leg. Its coarse future estimate proves nothing.
-								auto executable = planNpcTravelRoute(*player, currentPosition, command.destination, {},
-								    playerBotNavigationMaximumExpandedNodes, false, reserve, sellEconomy);
+								auto executable = planValidatedPaidApproach(*player, currentPosition, command.destination, {},
+								    reserve, sellEconomy, *paid);
 								// Only borrow ordinary, unexposed local steps for the same
 								// offer; the detailed plan still owns full-route safety.
-								if (executable && executablePaidApproachMatches(*executable, routePlan, *paid, currentPosition)) {
+								if (borrowPaidApproach("service_route", currentPosition, currentPosition, executable,
+								        routePlan, *paid, walking)) {
 									validatedNpcTravel = true;
 									routePlan.steps = std::move(executable->steps);
 								} else {
@@ -2120,8 +2117,8 @@ bool PlayerBotController::discoverDepot(Player& player, const Position& currentP
 				PlayerBotHuntRouteTiming timing;
 				planned = advanceHuntTravelRoute(player, request, currentPosition, timing, reserve, true, &walking);
 			}
-			if (!planned && ++search.turns < maximumServiceRouteTurns) {
-				schedule(blockedRouteRetryInterval);
+			if (!planned && ++search.turns < maximumRouteSearchTurns) {
+				schedule(routeSearchContinuationInterval);
 				return false;
 			}
 			if (!planned) {
@@ -2138,9 +2135,10 @@ bool PlayerBotController::discoverDepot(Player& player, const Position& currentP
 				    routePlan.metrics.fare <= sellLootPlan->sourceFare) {
 					// The detailed selector proves the entire trip; only borrow an executable
 					// first leg if it boards the same offer without adding local exposure.
-					auto executable = planNpcTravelRoute(player, currentPosition, candidate.approachPosition, {},
-					    playerBotNavigationMaximumExpandedNodes, false, reserve, true);
-					if (executable && executablePaidApproachMatches(*executable, routePlan, *paid, currentPosition)) {
+					auto executable = planValidatedPaidApproach(player, currentPosition, candidate.approachPosition, {},
+					    reserve, true, *paid);
+					if (borrowPaidApproach("sell_loot_source_route", currentPosition, currentPosition, executable,
+					        routePlan, *paid, walking)) {
 						routePlan.steps = std::move(executable->steps);
 					} else {
 						routePlan = std::move(walking);
