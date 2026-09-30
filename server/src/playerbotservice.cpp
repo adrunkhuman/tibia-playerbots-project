@@ -976,6 +976,7 @@ void PlayerBotController::setCyclePhase(CyclePhase phase, const Position& positi
 		huntReturnDestination = Position();
 		huntExitValidationAttempted = false;
 		huntReturnCoverage.invalidate();
+		huntPatrolTrip.reset();
 	}
 	const char* previous = cyclePhaseName();
 	if (turnRouter.cyclePhase() == CyclePhase::Hunt && phase != CyclePhase::Hunt) {

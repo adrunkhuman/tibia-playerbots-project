@@ -50,6 +50,14 @@ namespace {
 		return result + ']';
 	}
 
+	std::vector<PlayerBotNavigationStep> npcTravelSteps(const std::deque<PlayerBotNavigationStep>& steps)
+	{
+		std::vector<PlayerBotNavigationStep> result;
+		std::copy_if(steps.begin(), steps.end(), std::back_inserter(result),
+		             [](const auto& step) { return step.action == PlayerBotNavigationAction::NpcTravel; });
+		return result;
+	}
+
 	const char* playerBotPendingMovementResultName(PlayerBotPendingMovementResult result)
 	{
 		switch (result) {
@@ -1626,6 +1634,7 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 	}
 	huntPatrolValidationDestination.reset();
 	huntPatrolValidatedDestination.reset();
+	huntPatrolTrip.reset();
 	PlayerBotHuntRegion selected = std::move(*safeSelection);
 	huntReturnRouteDangerCost = selected.returnRouteDangerCost;
 	huntReturnDestination = selected.exitDepotDestination;
@@ -1721,6 +1730,7 @@ void PlayerBotController::beginHuntCycle(Player* player, const Position& positio
 	// separate outbound leg before the bot enters their observed hunt area.
 	huntRegionReached = !fixtureDriver.huntObservation().selectRegion;
 	resetNavigation();
+	huntPatrolTrip.reset();
 	emit("action_result", position, "\"action\":\"hunt_cycle\",\"result\":\"started\",\"cycle\":" + std::to_string(huntCoordinator.completedHuntCycles()) + ",\"duration_seconds\":" + std::to_string(duration));
 	schedule(SCHEDULER_MINTICKS);
 }
@@ -1749,6 +1759,50 @@ void PlayerBotController::startHunt(Player* player, const Position& position, co
 		}
 	}
 	beginHuntCycle(player, position, reason);
+}
+
+const char* PlayerBotController::continueHuntPatrolTrip(Player& player, const Position& currentPosition,
+                                                        const Position& destination,
+                                                        const std::set<Position>& blockedPositions,
+                                                        bool startsNavigation)
+{
+	if (!huntPatrolTrip) return "no_validated_trip";
+	HuntPatrolTrip& trip = *huntPatrolTrip;
+	if (trip.destination != destination || trip.returnDestination != huntReturnDestination ||
+	    trip.variant != huntReturnCoverageVariantId) return "trip_changed";
+	if (trip.continuations >= maximumPatrolTripContinuations) return "continuation_limit";
+	// Return coverage is the cached return validation; its context tracks level,
+	// tools, topology and NPC generations.
+	if (!huntReturnCoverage.covers(huntReturnCoverageVariantId, PlayerBotHuntRegionPlanner::getCacheRevision(),
+	                               huntReturnCoverageContext(player, destination))) return "return_unvalidated";
+	PlayerBotNavigationRoutePlan leg = planNavigationRoute(player, destination, blockedPositions);
+	telemetry.recordPathfinding(leg.metrics.elapsed, leg.metrics.result == PlayerBotNavigationResult::Reached);
+	// A leg may only board a boat the validated itinerary boards, within its fare,
+	// under the same risk checks as ordinary navigation.
+	const auto& offer = leg.metrics.firstNpcTravelOffer;
+	const char* rejection =
+	    leg.metrics.result != PlayerBotNavigationResult::Reached || leg.steps.empty() ? "leg_unreached" :
+	    leg.metrics.fare > trip.fare ? "fare_above_validated" :
+	    offer && std::none_of(trip.offers.begin(), trip.offers.end(), [&](const auto& step) {
+		    return playerBotNpcTravelOfferMatches(*offer, step);
+	    }) ? "unvalidated_travel_offer" :
+	    !huntTravelFareAffordable(player, leg.metrics.fare, HuntTravelBudgetPhase::Outbound) ? "fare_unaffordable" :
+	    playerBotNavigationRiskVerdict(riskProfile, leg.metrics) == PlayerBotNavigationRiskVerdict::Rejected ||
+	        (leg.metrics.dangerEvidence == PlayerBotNavigationDangerEvidence::Coarse &&
+	         playerBotNavigationLocalRiskVerdict(riskProfile, leg.metrics) == PlayerBotNavigationRiskVerdict::Rejected) ?
+	        "leg_unsafe" : nullptr;
+	if (rejection) return rejection;
+	++trip.continuations;
+	std::ostringstream fields;
+	fields << "\"result\":\"patrol_leg_continued\",\"destination\":" << positionJson(destination)
+	       << ",\"steps\":" << leg.steps.size() << ",\"fare\":" << leg.metrics.fare
+	       << ",\"blocked_positions\":" << positionListJson(blockedPositions)
+	       << ",\"continuations\":" << trip.continuations;
+	emit("navigation_progress", currentPosition, fields.str());
+	navigationRuntime.observePlan({PlayerBotNavigationGoal::exact(destination), std::move(leg), player.canDoAction(),
+	                               startsNavigation, std::chrono::steady_clock::now()});
+	huntPatrolValidatedDestination = destination;
+	return nullptr;
 }
 
 void PlayerBotController::processTraversal(Player* player, const Position& currentPosition)
@@ -1966,10 +2020,29 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 		if (recovery.stepFailures != 0 || recovery.routeFailures != 0) telemetry.recordStuckEvent();
 		navigationRuntime.resetPatrolRecovery();
 		resetNavigation();
+		huntPatrolTrip.reset();
 		if (recovery.command == PlayerBotHuntPatrolCommand::RegionExhausted) {
 			beginService(player, currentPosition, "hunt_region_patrol_unreachable");
 		}
 	};
+	if (activeRegionPatrol && huntPatrolValidatedDestination != patrol.destination && huntPatrolTrip &&
+	    (!huntPatrolRouteSearch || huntPatrolRouteSearch->destination != patrol.destination)) {
+		// Interruptions such as traversal combat reset navigation, not the trip.
+		if (const char* reason = continueHuntPatrolTrip(*player, currentPosition, patrol.destination,
+		                                                huntPatrolPreflightBlockedPositions, true)) {
+			// A new waypoint is an expected new trip, not a rejected leg.
+			if (std::strcmp(reason, "trip_changed") != 0) {
+				emit("navigation_progress", currentPosition,
+				     std::string("\"result\":\"patrol_trip_revalidated\",\"reason\":\"") + reason +
+				         "\",\"destination\":" + positionJson(patrol.destination));
+			}
+			huntPatrolTrip.reset();
+		} else {
+			huntPatrolPreflightBlockedPositions.clear();
+			schedule(SCHEDULER_MINTICKS);
+			return;
+		}
+	}
 	if (activeRegionPatrol && huntPatrolValidatedDestination != patrol.destination) {
 		const uint64_t revision = PlayerBotHuntRegionPlanner::getCacheRevision();
 		// resetNavigation clears the origin marker. The scheduled generation also
@@ -2105,6 +2178,7 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 			} else {
 				walkingMetrics = walking.metrics; // A completed search always reports its walking alternative.
 				preflight = std::move(*planned);
+				if (!validateReturn) search.outboundOffers = npcTravelSteps(preflight.steps);
 				const auto paid = std::find_if(preflight.steps.begin(), preflight.steps.end(), [](const auto& step) {
 					return step.action == PlayerBotNavigationAction::NpcTravel;
 				});
@@ -2122,8 +2196,10 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 					} else if (avoidBlockers) {
 						preflightSource = "blocked_position_walk";
 						preflight = planCompleteNavigationRoute(*player, routeStart, routeDestination, blockedPositions);
+						search.outboundOffers.clear();
 					} else {
 						preflight = std::move(walking);
+						search.outboundOffers.clear();
 					}
 				} else if (avoidBlockers && paid == preflight.steps.end()) {
 					// The engine's walk may cross a known blocker; replan it around them.
@@ -2261,6 +2337,8 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 		PlayerBotNavigationRoutePlan outboundPlan = validateReturn ?
 		    std::move(*huntPatrolOutboundPlan) : std::move(preflight);
 		resetNavigation();
+		huntPatrolTrip = HuntPatrolTrip{patrol.destination, huntReturnDestination, huntReturnCoverageVariantId,
+		                                outboundPlan.metrics.fare, std::move(search.outboundOffers)};
 		observeNavigationPlan(patrol.destination, std::move(outboundPlan.steps));
 		huntPatrolValidatedDestination = patrol.destination;
 		schedule(SCHEDULER_MINTICKS);
@@ -2274,6 +2352,15 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 			// A failed final step suppresses the waypoint itself. Avoiding the goal
 			// would make it unreachable; repeated step failures skip it instead.
 			blockedPositions.erase(patrol.destination);
+			// A finished leg or a local obstacle keeps the validated trip and its
+			// navigation state; only a rejected leg revalidates the whole trip.
+			const char* continuation = continueHuntPatrolTrip(*player, currentPosition, patrol.destination,
+			                                                  blockedPositions, false);
+			if (!continuation) {
+				schedule(SCHEDULER_MINTICKS);
+				return;
+			}
+			huntPatrolTrip.reset();
 			std::ostringstream fields;
 			fields << "\"result\":\"replan_requested\",\"phase\":\"patrol\""
 			       << ",\"destination\":" << positionJson(patrol.destination)
@@ -2283,9 +2370,9 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 			       << ",\"failed_target\":" << (navigation.failedMovementTarget ?
 			              positionJson(*navigation.failedMovementTarget) : std::string("null"))
 			       << ",\"oscillation\":" << (navigation.oscillation ? "true" : "false")
-			       << ",\"route_unavailable\":" << (navigation.routeUnavailable ? "true" : "false");
+			       << ",\"route_unavailable\":" << (navigation.routeUnavailable ? "true" : "false")
+			       << ",\"continuation\":\"" << continuation << '"';
 			emit("navigation_progress", currentPosition, fields.str());
-			huntReturnCoverage.invalidate();
 			resetNavigation();
 			huntPatrolPreflightBlockedPositions = std::move(blockedPositions);
 			schedule(SCHEDULER_MINTICKS);

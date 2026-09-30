@@ -70,6 +70,9 @@ namespace playerbot {
 	// paid search needs well over 512 turns.
 	inline constexpr uint32_t routeSearchContinuationInterval = 1;
 	inline constexpr uint32_t maximumRouteSearchTurns = 4096;
+	// Local legs of one validated patrol trip before a full revalidation. Bounds
+	// a leg that keeps failing around the same obstacle.
+	inline constexpr uint32_t maximumPatrolTripContinuations = 32;
 	inline constexpr uint16_t ratCorpseItemId = 5964;
 	inline constexpr uint16_t meatItemId = 2666;
 	inline constexpr int32_t healingHealthPercent = 60;
@@ -415,6 +418,12 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		                        const std::optional<PlayerBotNavigationRoutePlan>& executable,
 		                        const PlayerBotNavigationRoutePlan& detailed, const PlayerBotNavigationStep& paid,
 		                        const PlayerBotNavigationRoutePlan& walking) const;
+		// Plans the next leg of the validated patrol trip with the ordinary planner.
+		// Returns nullptr once the leg is installed, otherwise why the trip needs
+		// full revalidation.
+		const char* continueHuntPatrolTrip(Player& player, const Position& currentPosition,
+		                                   const Position& destination, const std::set<Position>& blockedPositions,
+		                                   bool startsNavigation);
 		std::optional<PlayerBotNavigationRoutePlan> planNpcTravelRoute(Player& player, const Position& destination,
 		                                                               const std::set<Position>& blockedPositions,
 		                                                               uint64_t maximumExpandedNodes) const;
@@ -710,6 +719,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 			uint64_t pass = 0, revision = 0, variant = 0, scheduledGeneration = 0;
 			uint32_t turns = 0;
 			uint32_t outboundNpcId = 0;
+			std::vector<PlayerBotNavigationStep> outboundOffers; // Boats on the validated outbound itinerary.
 			PlayerBotHuntRouteTiming timing; // Summed over turns for rejection telemetry.
 			std::shared_ptr<PlayerBotHuntTravelWork> work;
 			PlayerBotRouteChanges::Watch watch;
@@ -722,6 +732,15 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		std::optional<PlayerBotNavigationRoutePlan> huntPatrolOutboundPlan;
 		std::set<Position> huntPatrolPreflightBlockedPositions;
 		std::optional<Position> huntPatrolValidatedDestination;
+		// The last fully validated trip to a waypoint. It outlives resetNavigation
+		// so later legs, including those after combat, can replan locally.
+		struct HuntPatrolTrip {
+			Position destination, returnDestination;
+			uint64_t variant = 0, fare = 0;
+			std::vector<PlayerBotNavigationStep> offers;
+			uint32_t continuations = 0;
+		};
+		std::optional<HuntPatrolTrip> huntPatrolTrip;
 		uint32_t huntPotionReturnThreshold = playerbot::healthPotionReturnThreshold;
 		uint32_t huntPotionRestockTarget = playerbot::healthPotionSafetyTarget;
 		struct {
