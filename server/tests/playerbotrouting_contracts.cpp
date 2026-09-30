@@ -802,6 +802,23 @@ void itemUpdateDependencies()
 	// Different visual IDs with identical non-passage semantics do not affect a route.
 	const auto cosmetic = harmless;
 	assert(!playerBotRouteItemUpdateAffectsNavigation(harmless, cosmetic));
+	// Corpses, splashes, loot, and parcels appear and vanish without changing routes.
+	assert(!playerBotRouteItemPresenceAffectsNavigation(harmless));
+	assert(!playerBotRouteItemPresenceAffectsNavigation(PlayerBotRouteItemSignature{}));
+	auto present = harmless;
+	present.magicField = true; // Fire, poison, and energy fields change danger.
+	assert(playerBotRouteItemPresenceAffectsNavigation(present));
+	present = harmless;
+	present.blockSolid = true; // Bots cannot push movable blockers yet.
+	assert(playerBotRouteItemPresenceAffectsNavigation(present));
+	present.moveable = false; // Magic wall, wild growth.
+	assert(playerBotRouteItemPresenceAffectsNavigation(present));
+	present = harmless;
+	present.blockPath = true;
+	assert(playerBotRouteItemPresenceAffectsNavigation(present));
+	present = harmless;
+	present.passageId = 1386; // Ladders, teleports, holes, doors, ground.
+	assert(playerBotRouteItemPresenceAffectsNavigation(present));
 	const Position location(100, 200, 7);
 	PlayerBotRouteChanges::Watch watch;
 	{ PlayerBotRouteChanges::Scope scope(watch); PlayerBotRouteChanges::read(location); }

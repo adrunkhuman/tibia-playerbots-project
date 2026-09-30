@@ -412,7 +412,9 @@ Thing* Tile::getTopVisibleThing(const Creature* creature)
 
 void Tile::onAddTileItem(Item* item)
 {
-	PlayerBotRouteChanges::changed(getPosition(), PlayerBotRouteChanges::Cause::ItemAdd);
+	if (playerBotRouteItemPresenceAffectsNavigation(routeItemSignature(Item::items[item->getID()], item))) {
+		PlayerBotRouteChanges::changed(getPosition(), PlayerBotRouteChanges::Cause::ItemAdd);
+	}
 	setTileFlags(item);
 
 	const Position& cylinderMapPos = getPosition();
@@ -466,7 +468,9 @@ void Tile::onUpdateTileItem(Item* oldItem, const ItemType& oldType, Item* newIte
 
 void Tile::onRemoveTileItem(const SpectatorVec& spectators, const std::vector<int32_t>& oldStackPosVector, Item* item)
 {
-	PlayerBotRouteChanges::changed(getPosition(), PlayerBotRouteChanges::Cause::ItemRemove);
+	if (playerBotRouteItemPresenceAffectsNavigation(routeItemSignature(Item::items[item->getID()], item))) {
+		PlayerBotRouteChanges::changed(getPosition(), PlayerBotRouteChanges::Cause::ItemRemove);
+	}
 	resetTileFlags(item);
 
 	const Position& cylinderMapPos = getPosition();
@@ -1488,8 +1492,10 @@ void Tile::internalAddThing(uint32_t, Thing* thing)
 
 		// A new teleport can replace the selected redirect without changing
 		// TILESTATE_TELEPORT. Internal insertion must notify by coordinate too.
-		PlayerBotRouteChanges::changed(getPosition(), PlayerBotRouteChanges::Cause::ItemAdd);
 		const ItemType& itemType = Item::items[item->getID()];
+		if (playerBotRouteItemPresenceAffectsNavigation(routeItemSignature(itemType, item))) {
+			PlayerBotRouteChanges::changed(getPosition(), PlayerBotRouteChanges::Cause::ItemAdd);
+		}
 		if (itemType.isGroundTile()) {
 			if (ground == nullptr) {
 				ground = item;

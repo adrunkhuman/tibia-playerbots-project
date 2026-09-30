@@ -7,7 +7,7 @@
 // Route-relevant state of a tile item. Runtime builds this from ItemType and
 // the item's permission attributes. Ordinary decorative IDs are deliberately
 // not identity-bearing; only supported passages, ground and interactive items
-// can change navigation by identity alone. Item-add/remove remains conservative.
+// can change navigation by identity alone.
 struct PlayerBotRouteItemSignature {
 	uint16_t passageId = 0;
 	uint16_t groundSpeed = 0;
@@ -29,6 +29,16 @@ struct PlayerBotRouteItemSignature {
 		    forceUse, alwaysOnTop, blockPickupable, vertical, horizontal, hangable);
 	}
 };
+
+// Adding or removing an item changes routes only for these kinds: damaging
+// fields, blockers (movable ones too, since bots cannot push items), and items
+// with passage identity (ground, doors, teleports, floor changes, usable and
+// supported passages). Corpses, splashes, loot, and other walkable items never
+// restart route searches or invalidate cached routes.
+inline bool playerBotRouteItemPresenceAffectsNavigation(const PlayerBotRouteItemSignature& item)
+{
+	return item.magicField || item.blockSolid || item.blockPath || item.passageId != 0;
+}
 
 inline bool playerBotRouteItemUpdateAffectsNavigation(
     const PlayerBotRouteItemSignature& oldItem, const PlayerBotRouteItemSignature& newItem)
