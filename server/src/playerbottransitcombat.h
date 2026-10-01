@@ -2,8 +2,10 @@
 #ifndef FS_PLAYERBOTTRANSITCOMBAT_H
 #define FS_PLAYERBOTTRANSITCOMBAT_H
 
+#include <chrono>
 #include <cstdint>
 #include <optional>
+#include <set>
 
 #include "playerbotturnrouter.h"
 
@@ -94,6 +96,40 @@ class PlayerBotTransitCombat
 		PlayerBotCyclePhase cyclePhase = PlayerBotCyclePhase::Idle;
 		Position stalledPosition;
 		std::optional<Position> intendedMovementStep;
+};
+
+// Trips to a hunt cross caves and stairs where monsters and players block
+// tiles for a while. Before the hunt area, a trip fails only when navigation
+// stops reaching tiles it has not stood on during this trip. Gaps between
+// navigation turns (combat, looting, healing) do not count as stall time.
+class PlayerBotTransitProgress
+{
+	public:
+		using Clock = std::chrono::steady_clock;
+
+		void reset()
+		{
+			visited.clear();
+			lastProgress = lastObserved = {};
+		}
+		void observe(const Position& position, Clock::time_point now)
+		{
+			if (lastObserved != Clock::time_point{} && now - lastObserved > idleGap) lastProgress += now - lastObserved;
+			lastObserved = now;
+			if (visited.size() >= maximumVisited) visited.clear();
+			if (visited.insert(position).second || lastProgress == Clock::time_point{}) lastProgress = now;
+		}
+		std::chrono::milliseconds stalledFor(Clock::time_point now) const
+		{
+			if (lastProgress == Clock::time_point{}) return std::chrono::milliseconds(0);
+			return std::chrono::duration_cast<std::chrono::milliseconds>(now - lastProgress);
+		}
+
+	private:
+		static constexpr Clock::duration idleGap = std::chrono::seconds(5);
+		static constexpr size_t maximumVisited = 4096;
+		std::set<Position> visited;
+		Clock::time_point lastProgress, lastObserved;
 };
 
 #endif

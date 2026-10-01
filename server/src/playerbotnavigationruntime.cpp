@@ -39,10 +39,12 @@ PlayerBotNavigationRuntimeOutcome PlayerBotNavigationRuntime::process(const Play
 	}
 
 	const std::optional<Position> pendingMoveTarget = session.pendingMoveTarget();
+	std::optional<PlayerBotNavigationStep> pendingMoveStep = session.pendingMoveStep();
 	outcome.movementResult = session.observeMovement(input.currentPosition, input.actionPending, input.timing.now,
 	                                                input.timing.stepTimeout, input.timing.blockSuppression);
 	if (outcome.movementResult == PlayerBotPendingMovementResult::Mismatch) {
 		outcome.failedMovementTarget = pendingMoveTarget;
+		outcome.failedMovementStep = std::move(pendingMoveStep);
 	}
 	if (outcome.movementResult == PlayerBotPendingMovementResult::Waiting) {
 		outcome.command = PlayerBotNavigationRuntimeCommand::Retry;

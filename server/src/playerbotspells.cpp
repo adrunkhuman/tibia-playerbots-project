@@ -118,6 +118,17 @@ void PlayerBotController::emitSpellCastEvent(const Position& position, const cha
 		fields << ",\"reason\":" << jsonString(reason);
 	}
 	fields << ",\"fallback\":" << (fallback ? jsonString(fallback) : "null");
+	if (!pending && std::strcmp(result, "skipped") == 0) {
+		// Walking and combat turns re-check spells several times a second; an
+		// unchanged skip is repeated at most once per summary interval.
+		// Skip records hold only static spell, need, and reason fields, so the
+		// set of distinct records stays small.
+		const size_t fingerprint = std::hash<std::string>{}(fields.str());
+		auto& throttle = spellSkipRecords.try_emplace(fingerprint, summaryInterval).first->second;
+		const auto suppressed = throttle.admit(std::chrono::steady_clock::now());
+		if (!suppressed) return;
+		fields << ",\"suppressed_repeats\":" << *suppressed;
+	}
 	emit("action_result", position, fields.str());
 }
 

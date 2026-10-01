@@ -315,6 +315,7 @@ void PlayerBotHuntRuntime::activate(PlayerBotHuntRegion region, const PlayerBotH
 	activeRegion = std::move(region);
 	supplyBaseline.reset();
 	patrolIndex = 0;
+	patrolWaypointSkips = 0;
 	singleWaypointReached = false;
 	huntStarted = now;
 	huntStartExperience = player.experience;
@@ -511,7 +512,14 @@ PlayerBotHuntPatrolOutcome PlayerBotHuntRuntime::observePatrolNavigation(const P
 	outcome.routeFailures = patrolRouteFailures;
 	outcome.expandedNodes = patrolFailureExpandedNodes;
 	outcome.elapsedMs = patrolFailureStarted == std::chrono::steady_clock::time_point{} ? 0 : static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(now - patrolFailureStarted).count());
-	if (activeRegion && activeRegion->viability.reachableSpawns != 0) {
+	const size_t circuit = activeRegion ? activeRegion->patrolPoints.size() : 0;
+	if (activeRegion && activeRegion->viability.reachableSpawns != 0 && supplyBaseline && circuit > 1 &&
+	    patrolWaypointSkips < std::max<size_t>(1, circuit / 4)) {
+		// Inside the area, pass over a waypoint without removing it. The circuit
+		// keeps its eligibility, and the next lap retries a transient blocker.
+		++patrolWaypointSkips;
+		patrolIndex = (patrolIndex + 1) % circuit;
+	} else if (activeRegion && activeRegion->viability.reachableSpawns != 0) {
 		// Eligibility describes the original circuit. Removing even one point
 		// invalidates its absence windows; return for service and replan rather
 		// than reuse that eligibility for a reduced, potentially blocked patrol.

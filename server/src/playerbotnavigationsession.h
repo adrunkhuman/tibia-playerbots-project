@@ -59,6 +59,10 @@ class PlayerBotNavigationSession
 		{
 			return movementPending ? std::optional<Position>(stepTarget) : std::nullopt;
 		}
+		std::optional<PlayerBotNavigationStep> pendingMoveStep() const
+		{
+			return movementPending ? std::optional<PlayerBotNavigationStep>(movingStep) : std::nullopt;
+		}
 
 		PlayerBotPendingMovementResult observeMovement(const Position& currentPosition, bool actionPending,
 		                                                   std::chrono::steady_clock::time_point now,
@@ -87,6 +91,7 @@ class PlayerBotNavigationSession
 		bool targetSet = false;
 		Position expectedPosition;
 		Position stepTarget;
+		PlayerBotNavigationStep movingStep;
 		PlayerBotNavigationGoal progressTarget;
 		bool progressTargetSet = false;
 		Position progressPrevious;

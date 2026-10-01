@@ -442,6 +442,7 @@ void PlayerBotController::cancelHuntPlanning(const char* reason, const Position&
 	PlayerBotPlanningBudget& budget = playerBotHuntPlanningBudget();
 	if (!budget.isActive(playerId)) budget.cancel(playerId, PlayerBotPlanningBudget::Clock::now());
 	huntTravelWork.reset();
+	flushHuntPlanningSlice();
 	const PlayerBotHuntRuntimeOutcome outcome = huntCoordinator.cancelPlanning();
 	if (telemetry.terminalLogged() || outcome.planningPass == 0) return;
 	telemetry.emit("hunt_region_scan", position, "\"phase\":\"cancelled\",\"reason\":" +
@@ -945,6 +946,50 @@ PlayerBotNavigationRoutePlan PlayerBotController::planNavigationRoute(Player& pl
 	return routePlan;
 }
 
+std::optional<PlayerBotNavigationRoutePlan> PlayerBotController::planValidatedPaidApproach(Player& player,
+	const Position& source, const Position& destination, const std::set<Position>& blockedPositions,
+	uint64_t transportReserve, bool sellEconomy, const PlayerBotNavigationStep& paid) const
+{
+	auto executable = planNpcTravelRoute(player, source, destination, blockedPositions,
+	    playerBotNavigationMaximumExpandedNodes, false, transportReserve, sellEconomy);
+	if (executable && executable->metrics.firstNpcTravelOffer &&
+	    playerBotNpcTravelOfferMatches(*executable->metrics.firstNpcTravelOffer, paid)) return executable;
+	// The two planners weigh boats differently. The validated itinerary is the
+	// one proven safe, so board its offer rather than the ordinary choice.
+	const PlayerBotNpcTravelOfferIdentity validated{paid.npcId, paid.expectedPosition, paid.price,
+	                                                paid.minimumLevel, paid.premium, paid.dialogue};
+	auto required = planNpcTravelRoute(player, source, destination, blockedPositions,
+	    playerBotNavigationMaximumExpandedNodes, false, transportReserve, sellEconomy, &validated);
+	return required ? required : executable;
+}
+
+bool PlayerBotController::borrowPaidApproach(const char* phase, const Position& position, const Position& source,
+                                            const std::optional<PlayerBotNavigationRoutePlan>& executable,
+                                            const PlayerBotNavigationRoutePlan& detailed,
+                                            const PlayerBotNavigationStep& paid,
+                                            const PlayerBotNavigationRoutePlan& walking) const
+{
+	const char* reason = executable ? playerBotPaidApproachRejection(*executable, detailed, paid) :
+	                                  "approach_unplanned";
+	if (!reason) return true;
+	std::ostringstream fields;
+	fields << "\"result\":\"paid_approach_rejected\",\"phase\":" << jsonString(phase)
+	       << ",\"reason\":" << jsonString(reason) << ",\"npc_id\":" << paid.npcId
+	       << ",\"source\":{\"x\":" << source.x << ",\"y\":" << source.y << ",\"z\":" << unsigned(source.z) << '}'
+	       << ",\"travel_destination\":{\"x\":" << paid.expectedPosition.x << ",\"y\":" << paid.expectedPosition.y
+	       << ",\"z\":" << unsigned(paid.expectedPosition.z) << '}'
+	       << ",\"validated_fare\":" << detailed.metrics.fare << ",\"validated_steps\":" << detailed.metrics.steps;
+	if (executable) {
+		fields << ",\"approach_result\":\"" << playerBotNavigationResultName(executable->metrics.result) << '"'
+		       << ",\"approach_steps\":" << executable->steps.size() << ",\"approach_fare\":" << executable->metrics.fare
+		       << ",\"approach_local_danger\":" << executable->metrics.localDangerCost;
+	}
+	fields << ",\"walking_result\":\"" << playerBotNavigationResultName(walking.metrics.result) << '"'
+	       << ",\"walking_steps\":" << walking.steps.size();
+	emit("navigation_progress", position, fields.str());
+	return false;
+}
+
 std::optional<PlayerBotNavigationRoutePlan> PlayerBotController::planNpcTravelRoute(
 	Player& player, const Position& destination, const std::set<Position>& blockedPositions,
 	uint64_t maximumExpandedNodes) const
@@ -955,7 +1000,8 @@ std::optional<PlayerBotNavigationRoutePlan> PlayerBotController::planNpcTravelRo
 
 std::optional<PlayerBotNavigationRoutePlan> PlayerBotController::planNpcTravelRoute(
 	Player& player, const Position& source, const Position& destination, const std::set<Position>& blockedPositions,
-	uint64_t maximumExpandedNodes, bool estimateOnly, uint64_t transportReserve, bool sellEconomy) const
+	uint64_t maximumExpandedNodes, bool estimateOnly, uint64_t transportReserve, bool sellEconomy,
+	const PlayerBotNpcTravelOfferIdentity* requiredFirstOffer) const
 {
 	if (player.isPzLocked()) return std::nullopt;
 
@@ -1171,6 +1217,13 @@ std::optional<PlayerBotNavigationRoutePlan> PlayerBotController::planNpcTravelRo
 		});
 		for (size_t edgeIndex : edgeIndices) {
 			const Edge& edge = edges[edgeIndex];
+			if (current.state == 0 && requiredFirstOffer &&
+			    (edge.npc->getID() != requiredFirstOffer->npcId ||
+			     edge.offer->destination != requiredFirstOffer->destination ||
+			     edge.offer->price != requiredFirstOffer->price || edge.offer->level != requiredFirstOffer->minimumLevel ||
+			     edge.offer->premium != requiredFirstOffer->premium || edge.offer->dialogue != requiredFirstOffer->dialogue)) {
+				continue;
+			}
 			const std::optional<SegmentEstimate> approach = walkSegment(current.state, edgeIndex);
 			if (!approach) continue;
 			const size_t nextState = stateIndices.at(edge.offer->destination);
@@ -1555,10 +1608,12 @@ bool PlayerBotController::processNavigation(Player* player, const Position& curr
 		}
 		const PlayerBotPendingMovementResult movementResult = outcome.movementResult;
 		const std::optional<Position> failedMovementTarget = outcome.failedMovementTarget;
+		std::optional<PlayerBotNavigationStep> failedMovementStep = std::move(outcome.failedMovementStep);
 		const bool positionalProgress = outcome.positionalProgress;
 		outcome = navigationRuntime.observePlan({goal, std::move(routePlan), player->canDoAction(), false, now});
 		outcome.movementResult = movementResult;
 		outcome.failedMovementTarget = failedMovementTarget;
+		outcome.failedMovementStep = std::move(failedMovementStep);
 		outcome.positionalProgress = positionalProgress;
 	}
 	if (outcome.plan.attempted && !outcome.routeUnavailable &&
@@ -1646,6 +1701,43 @@ bool PlayerBotController::processNavigation(Player* player, const Position& curr
 	if (outcome.movementResult == PlayerBotPendingMovementResult::Mismatch) {
 		huntCoordinator.observeTransitMovementFailure(currentPosition, outcome.failedMovementTarget);
 		telemetry.logActionFailure("navigate", "step_result_mismatch", currentPosition);
+		if (const auto& step = outcome.failedMovementStep) {
+			// Classify from what the target tile holds now. A blocker that has
+			// already moved on reads as "cleared".
+			lastStepFailure = {"cleared", {}};
+			const Tile* tile = g_game.map.getTile(step->target);
+			const Creature* creature = tile ? tile->getTopCreature() : nullptr;
+			if (step->action != PlayerBotNavigationAction::Move) {
+				lastStepFailure.cause = "landing_mismatch";
+			} else if (!tile) {
+				lastStepFailure.cause = "tile_missing";
+			} else if (creature && creature != player) {
+				lastStepFailure = {creature->getMonster() ? "monster" : creature->getPlayer() ? "player" :
+				                   creature->getNpc() ? "npc" : "creature", creature->getName()};
+			} else if (tile->queryAdd(0, *player, 1, FLAG_IGNOREBLOCKCREATURE) != RETURNVALUE_NOERROR) {
+				lastStepFailure.cause = "tile_blocked";
+				if (const TileItemVector* items = tile->getItemList()) {
+					for (const Item* item : *items) {
+						if (!item->hasProperty(CONST_PROP_BLOCKSOLID) && !item->hasProperty(CONST_PROP_BLOCKPATH)) continue;
+						lastStepFailure.blocker = std::to_string(item->getID());
+						break;
+					}
+				}
+			}
+			// The planner's predicted landing disagreed with the server's.
+			auto position = [](const Position& p) {
+				return "{\"x\":" + std::to_string(p.x) + ",\"y\":" + std::to_string(p.y) +
+				       ",\"z\":" + std::to_string(p.z) + '}';
+			};
+			telemetry.emit("navigation_progress", currentPosition,
+			    std::string("\"result\":\"step_mismatch\",\"action\":\"") + playerBotNavigationActionName(step->action) +
+			    "\",\"direction\":" + std::to_string(static_cast<uint32_t>(step->direction)) +
+			    ",\"item_id\":" + std::to_string(step->itemId) + ",\"target\":" + position(step->target) +
+			    ",\"expected\":" + position(step->expectedPosition) + ",\"actual\":" + position(currentPosition) +
+			    ",\"cause\":\"" + lastStepFailure.cause + "\",\"blocker\":" +
+			    (lastStepFailure.blocker.empty() ? std::string("null") : jsonString(lastStepFailure.blocker)) +
+			    ",\"step_failures\":" + std::to_string(outcome.stepFailureCount));
+		}
 		if (outcome.stepFailureCount >= maximumRepeatedNavigationStepFailures) {
 			schedule(blockedRouteRetryInterval);
 			return false;

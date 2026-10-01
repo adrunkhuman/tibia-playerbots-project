@@ -3,6 +3,7 @@
 #include <cassert>
 #include <chrono>
 #include <iostream>
+#include <string>
 
 int main()
 {
@@ -33,5 +34,26 @@ int main()
 	PlayerBotHuntSliceAttribution cancelled;
 	cancelled.update(0, 0, 12, 4);
 	assert(cancelled.planningPass == 12 && cancelled.scoringRevision == 4);
+	PlayerBotHuntSliceCounters merged;
+	merged.elapsedUs = merged.maxElapsedUs = 1200;
+	merged.partUs[static_cast<size_t>(PlayerBotHuntSlicePart::RouteChecks)] = 1000;
+	merged.outboundChecks = 1;
+	merged.routes.localExpandedNodes = 300;
+	merged.routes.requestSequence = 4;
+	merged.routes.invalidations = 1;
+	merged.routes.invalidationReason = "tile_changed";
+	PlayerBotHuntSliceCounters later = merged;
+	later.elapsedUs = later.maxElapsedUs = 11000;
+	later.routes.requestSequence = 5;
+	later.routes.invalidations = 0;
+	later.routes.invalidationReason = "none";
+	later.routes.walkingTime = microseconds(700);
+	merged.add(later);
+	assert(merged.slices == 2 && merged.elapsedUs == 12200 && merged.maxElapsedUs == 11000);
+	assert(merged.us(PlayerBotHuntSlicePart::RouteChecks) == 2000 && merged.outboundChecks == 2);
+	assert(merged.routes.localExpandedNodes == 600 && merged.routes.walkingTime == microseconds(700));
+	// Request identity is the latest; the last invalidation survives quiet slices.
+	assert(merged.routes.requestSequence == 5 && merged.routes.invalidations == 1);
+	assert(std::string(merged.routes.invalidationReason) == "tile_changed");
 	std::cout << "hunt timing contracts passed\n";
 }

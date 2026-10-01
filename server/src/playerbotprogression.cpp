@@ -566,7 +566,7 @@ bool PlayerBotController::planSimpleRewardApproach(Player& player, const Positio
 }
 
 void PlayerBotController::emitRewardCandidate(const PlayerBotRewardPlan& candidate, const Position& position, const char* result,
-                         const char* reason) const
+                         const char* reason)
 {
 	std::ostringstream fields;
 	fields << "\"goal\":\"pickup_reward\",\"candidate_id\":" << candidate.uniqueId
@@ -595,7 +595,16 @@ void PlayerBotController::emitRewardCandidate(const PlayerBotRewardPlan& candida
 	if (reason) {
 		fields << ",\"reason\":" << jsonString(reason);
 	}
-	emit("strategy_candidate", position, fields.str());
+	// Reward goals are re-evaluated every few seconds; log a candidate only
+	// when its outcome changes, as reward inspections do.
+	const std::string record = fields.str();
+	const size_t fingerprint = std::hash<std::string>{}(record);
+	auto [previous, inserted] = rewardCandidateFingerprints.try_emplace(candidate.uniqueId, fingerprint);
+	if (!inserted) {
+		if (previous->second == fingerprint) return;
+		previous->second = fingerprint;
+	}
+	emit("strategy_candidate", position, record);
 }
 
 void PlayerBotController::emitRewardInspection(uint16_t uniqueId, const Position& rewardPosition,

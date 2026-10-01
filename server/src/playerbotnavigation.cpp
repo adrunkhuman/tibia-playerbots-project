@@ -110,23 +110,46 @@ namespace {
 		return true;
 	}
 
-	bool moveUpstairsDestination(Player& player, const Position& target, Position& destination)
+	// Tile.isWalkable in data/lib/core/tile.lua: ground that is not solid, and
+	// no immovable solid item other than a magic field.
+	bool scriptWalkable(const Tile* tile)
+	{
+		if (!tile) return false;
+		const Item* ground = tile->getGround();
+		if (!ground || ground->hasProperty(CONST_PROP_BLOCKSOLID)) return false;
+		if (const TileItemVector* items = tile->getItemList()) {
+			for (const Item* item : *items) {
+				const ItemType& type = Item::items[item->getID()];
+				if (!type.isMagicField() && !type.moveable && item->hasProperty(CONST_PROP_BLOCKSOLID)) return false;
+			}
+		}
+		return true;
+	}
+
+	// Mirrors Position:moveUpstairs() in data/lib/core/position.lua, used by the
+	// ladder and rope actions: the tile south of the upper position when it is
+	// walkable, otherwise the first walkable neighbour in Direction order with
+	// south replaced by west. The script teleports without an occupancy check.
+	bool moveUpstairsDestination(Player&, const Position& target, Position& destination)
 	{
 		if (target.z == 0) {
 			return false;
 		}
 		const Position upper(target.x, target.y, target.z - 1);
-		constexpr std::array<Direction, 8> preference = {
-			DIRECTION_SOUTH, DIRECTION_NORTH, DIRECTION_EAST, DIRECTION_WEST,
-			DIRECTION_SOUTHWEST, DIRECTION_SOUTHEAST, DIRECTION_NORTHWEST, DIRECTION_NORTHEAST,
-		};
-		for (Direction direction : preference) {
-			Position candidate = getNextPosition(direction, upper);
-			if (canOccupy(player, g_game.map.getTile(candidate))) {
+		const Position south = getNextPosition(DIRECTION_SOUTH, upper);
+		if (scriptWalkable(g_game.map.getTile(south))) {
+			destination = south;
+			return true;
+		}
+		for (uint8_t value = DIRECTION_NORTH; value <= DIRECTION_NORTHEAST; ++value) {
+			const Direction direction = value == DIRECTION_SOUTH ? DIRECTION_WEST : static_cast<Direction>(value);
+			const Position candidate = getNextPosition(direction, upper);
+			if (scriptWalkable(g_game.map.getTile(candidate))) {
 				destination = candidate;
 				return true;
 			}
 		}
+		// The script would teleport onto an unwalkable south tile; never plan it.
 		return false;
 	}
 

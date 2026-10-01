@@ -83,6 +83,7 @@ void PlayerBotNavigationSession::beginMovement(const PlayerBotNavigationStep& st
 {
 	expectedPosition = step.expectedPosition;
 	stepTarget = step.target;
+	movingStep = step;
 	stepStarted = now;
 	movementPending = true;
 }

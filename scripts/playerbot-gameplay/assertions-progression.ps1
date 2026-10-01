@@ -373,6 +373,7 @@ function Assert-HuntRegionPlanningEvents {
 		$_.event -eq 'hunt_planning_slice' -and $_.route_coarse_rejects -gt 0
 	})
 	$routeValidationRecords = @($candidates | Where-Object { $_.candidate_phase -eq 'route_validation' })
+	$candidateSummaries = @($events | Where-Object { $_.event -eq 'hunt_region_candidate_summary' })
 	$snapshotAttributionValid = $completedScoring.Count -ge 1 -and @($completedScoring | Where-Object {
 		$completion = $_
 		$records = @($scoredCandidateRecords | Where-Object {
@@ -380,7 +381,17 @@ function Assert-HuntRegionPlanningEvents {
 		})
 		$uniqueRecords = @($records | ForEach-Object { "$($_.planning_pass):$($_.scoring_revision):$($_.region_id)" } |
 			Select-Object -Unique)
-		$records.Count -eq $completion.candidate_count -and $uniqueRecords.Count -eq $records.Count
+		# Large scans log only unrejected candidates; their summary counts the rest.
+		$summary = @($candidateSummaries | Where-Object {
+			$_.planning_pass -eq $completion.planning_pass -and $_.scoring_revision -eq $completion.scoring_revision
+		})
+		$rejected = if ($summary.Count -eq 1) {
+			($summary[0].rejections.PSObject.Properties | Measure-Object -Property Value -Sum).Sum
+		} else { 0 }
+		$expected = if ($summary.Count -eq 1) { $summary[0].detailed_count } else { $completion.candidate_count }
+		$summary.Count -le 1 -and $records.Count -eq $expected -and $uniqueRecords.Count -eq $records.Count -and
+			($summary.Count -eq 0 -or ($summary[0].candidate_count -eq $completion.candidate_count -and
+			 ($summary[0].detail -eq 'all' -or $summary[0].detailed_count + $rejected -eq $completion.candidate_count)))
 	}).Count -eq $completedScoring.Count
     $outsideLocalFixture = @($candidates | Where-Object {
 		[Math]::Max([Math]::Abs($_.center.x - 32360), [Math]::Abs($_.center.y - 31782)) -gt 32

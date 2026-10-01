@@ -68,6 +68,11 @@ void PlayerBotTelemetry::recordStuckEvent()
 	++stuckEvents;
 }
 
+void PlayerBotTelemetry::recordHuntAbort(const std::string& cause)
+{
+	++huntAborts[cause];
+}
+
 void PlayerBotTelemetry::recordPathfindingAttempt(std::chrono::microseconds elapsed)
 {
 	++pathfindingCalls;
@@ -131,7 +136,11 @@ void PlayerBotTelemetry::emitSummary(const Position& position, bool final, const
 	       << ",\"actions_attempted\":" << actionsAttemptedCount
 	       << ",\"actions_failed\":" << actionsFailed
 	       << ",\"stuck_events\":" << stuckEvents
-	       << ",\"suppressed_events\":0";
+	       << ",\"hunt_aborts\":{";
+	for (auto it = huntAborts.begin(); it != huntAborts.end(); ++it) {
+		fields << (it == huntAborts.begin() ? "" : ",") << jsonString(it->first) << ':' << it->second;
+	}
+	fields << "},\"suppressed_events\":0";
 	emit("summary", position, fields.str());
 }
 
