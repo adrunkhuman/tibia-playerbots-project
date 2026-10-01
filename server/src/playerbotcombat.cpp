@@ -1428,8 +1428,10 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 	if (outcome.candidateSnapshot) {
 		// Live-map scans score thousands of candidates, mostly rejected for
 		// transport or lethality; full records for all of them filled the log
-		// within minutes. Large scans detail only unrejected candidates.
-		const bool detailRejected = outcome.candidates.size() <= maximumDetailedHuntCandidates;
+		// within minutes. Large scans detail only unrejected candidates, except
+		// in the hunt-planning fixture, whose assertions inspect rejections.
+		const bool detailRejected = fixtureDriver.detailAllHuntCandidates() ||
+		                            outcome.candidates.size() <= maximumDetailedHuntCandidates;
 		std::map<std::string, uint32_t> rejections;
 		for (const PlayerBotHuntRegion& candidate : outcome.candidates) {
 			if (!candidate.rejectionReason.empty()) {
@@ -1629,7 +1631,9 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 		     "\"result\":\"failed\",\"reason\":\"no_safe_route_candidate\",\"route_rejection_counts\":" +
 		         routeFailureCounts() + "," + planningAttribution(routeResult.planningPass, routeResult.scoringRevision));
 		huntCoordinator.completePlanningSelection();
-		if (retryAfter) *retryAfter = std::chrono::seconds(1);
+		// Rejected variants stay on a 10-minute cooldown, so a prompt rescan
+		// repeats the same failure and its full candidate log.
+		if (retryAfter) *retryAfter = std::chrono::seconds(30);
 		return false;
 	}
 	huntPatrolValidationDestination.reset();

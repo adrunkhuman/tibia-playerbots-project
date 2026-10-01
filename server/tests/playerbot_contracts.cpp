@@ -2448,9 +2448,9 @@ void remoteHuntTravelGuards()
 	changed.metrics.localDangerCost = 1;
 	assert(rejection(changed) == "approach_exposed");
 	changed = approach;
+	// Later hops of either plan are not executed; only the boarding offer counts.
 	changed.metrics.fare = 220;
-	assert(rejection(changed) == "fare_above_validated");
-	// A validated itinerary with a later paid hop costs more than its first boat.
+	assert(rejection(changed).empty());
 	validated.metrics.fare = 170;
 	assert(rejection(approach).empty());
 	validated.metrics.fare = 110;

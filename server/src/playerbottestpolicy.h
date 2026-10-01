@@ -72,6 +72,7 @@ namespace playerbot {
 		bool localRouteRecoveryFixture;
 		bool doorPassagesFixture;
 		NavigationPreflightFixture navigationPreflightFixture;
+		bool detailAllHuntCandidates; // Planning assertions inspect rejected candidates.
 	};
 
 	inline uint32_t playerBotFixtureHuntPlanningDuration(bool mainlandLoopFixture,

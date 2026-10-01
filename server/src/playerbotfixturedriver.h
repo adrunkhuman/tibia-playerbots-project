@@ -63,6 +63,7 @@ namespace playerbot {
 			bool mapRewardsEnabled() const { return !policy.equipmentPurchaseFixture && !policy.toolReplenishmentFixture; }
 			PlayerBotFixtureHuntObservation huntObservation() const;
 			bool startInHunt() const { return policy.startInHunt; }
+			bool detailAllHuntCandidates() const { return policy.detailAllHuntCandidates; }
 			bool remoteHuntScenario() const { return policy.remoteHuntFixture; }
 			PlayerBotFixtureLocalRouteRecovery localRouteRecovery() const;
 			NavigationPreflightFixture navigationPreflightFixture() const { return policy.navigationPreflightFixture; }

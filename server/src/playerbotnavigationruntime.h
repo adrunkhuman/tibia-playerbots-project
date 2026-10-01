@@ -131,7 +131,9 @@ inline const char* playerBotNavigationResultName(PlayerBotNavigationResult resul
 
 // The sliced route engine proves a complete paid itinerary but supplies no
 // executable local steps. Callers borrow the ordinary planner's first leg when
-// it boards the same offer for the same fare without added exposure. Any step
+// it boards the same offer without added exposure. The offer identity includes
+// its price; the ordinary plan's later hops are never executed, so its total
+// fare is not compared. Any step
 // that planner produces is executable: stairs, ladders, doors, and tool
 // transitions are ordinary walking, and runtime replanning handles failures.
 // Returns nullptr when the leg is acceptable, otherwise a stable telemetry reason.
@@ -145,9 +147,6 @@ inline const char* playerBotPaidApproachRejection(const PlayerBotNavigationRoute
 	if (!playerBotNpcTravelOfferMatches(*executable.metrics.firstNpcTravelOffer, paid)) return "different_travel_offer";
 	if (executable.metrics.localDangerCost != 0 || executable.metrics.localMaximumHealthLossPerSecond != 0)
 		return "approach_exposed";
-	// The validated fare covers every paid hop; the boarding offer's own price
-	// was matched above. Reject only an ordinary plan that expects to pay more.
-	if (executable.metrics.fare > detailed.metrics.fare) return "fare_above_validated";
 	if (executable.steps.size() > detailed.metrics.steps) return "approach_longer_than_validated";
 	const auto boarding = std::find_if(executable.steps.begin(), executable.steps.end(), [](const auto& step) {
 		return step.action == PlayerBotNavigationAction::NpcTravel;
