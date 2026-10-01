@@ -1635,6 +1635,7 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 	huntPatrolValidationDestination.reset();
 	huntPatrolValidatedDestination.reset();
 	huntPatrolTrip.reset();
+	huntTransitProgress.reset();
 	PlayerBotHuntRegion selected = std::move(*safeSelection);
 	huntReturnRouteDangerCost = selected.returnRouteDangerCost;
 	huntReturnDestination = selected.exitDepotDestination;
@@ -1731,6 +1732,7 @@ void PlayerBotController::beginHuntCycle(Player* player, const Position& positio
 	huntRegionReached = !fixtureDriver.huntObservation().selectRegion;
 	resetNavigation();
 	huntPatrolTrip.reset();
+	huntTransitProgress.reset();
 	emit("action_result", position, "\"action\":\"hunt_cycle\",\"result\":\"started\",\"cycle\":" + std::to_string(huntCoordinator.completedHuntCycles()) + ",\"duration_seconds\":" + std::to_string(duration));
 	schedule(SCHEDULER_MINTICKS);
 }
@@ -2002,7 +2004,24 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 	const auto now = std::chrono::steady_clock::now();
 	PlayerBotNavigationRuntimeOutcome navigation;
 	const bool activeRegionPatrol = huntCoordinator.huntActive();
+	const bool inTransit = activeRegionPatrol && !huntRegionReached;
 	auto observePatrolFailure = [&](const PlayerBotNavigationRuntimeOutcome& failure) {
+		const auto stalledFor = huntTransitProgress.stalledFor(now);
+		if (inTransit && (failure.oscillation || failure.stepFailureCount >= maximumRepeatedNavigationStepFailures) &&
+		    stalledFor < transitStallLimit) {
+			// A blocked corridor on the way usually clears. Keep the validated trip,
+			// forget the blocked tiles and failure count, and plan the leg again.
+			emit("navigation_progress", currentPosition,
+			     std::string("\"result\":\"transit_blocked\",\"destination\":") + positionJson(patrol.destination) +
+			         ",\"step_failures\":" + std::to_string(failure.stepFailureCount) +
+			         ",\"oscillation\":" + (failure.oscillation ? "true" : "false") +
+			         ",\"cause\":\"" + lastStepFailure.cause + "\",\"blocker\":" +
+			         (lastStepFailure.blocker.empty() ? std::string("null") : jsonString(lastStepFailure.blocker)) +
+			         ",\"stalled_ms\":" + std::to_string(stalledFor.count()));
+			resetNavigation();
+			schedule(transitBlockedRetryInterval);
+			return;
+		}
 		if (failure.routeUnavailable && failure.plan.attempted) huntReturnCoverage.invalidate();
 		if (fixtureDriver.navigationRecovery(failure.routeUnavailable).pause) navigationRuntime.clearBlockedPositions();
 		const PlayerBotHuntPatrolOutcome recovery = huntCoordinator.observeHuntPatrolNavigation(failure, now,
@@ -2010,8 +2029,15 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 		if (recovery.command != PlayerBotHuntPatrolCommand::SkipWaypoint &&
 		    recovery.command != PlayerBotHuntPatrolCommand::RegionExhausted) return;
 		huntReturnCoverage.invalidate();
-		const char* recoveryReason = failure.routeUnsafe ? "route_danger_above_tolerance" : recovery.reason;
+		const char* recoveryReason = failure.routeUnsafe ? "route_danger_above_tolerance" :
+		    inTransit && stalledFor >= transitStallLimit ? "transit_stalled" : recovery.reason;
+		const bool stepFailure = failure.stepFailureCount != 0 || failure.oscillation;
 		emit("hunt_region_patrol", currentPosition, "\"result\":\"skipped\",\"reason\":" + jsonString(recoveryReason) +
+			",\"in_transit\":" + (inTransit ? "true" : "false") +
+			",\"stalled_ms\":" + std::to_string(inTransit ? stalledFor.count() : 0) +
+			",\"step_failure_cause\":" + (stepFailure ? jsonString(lastStepFailure.cause) : std::string("null")) +
+			",\"blocker\":" + (stepFailure && !lastStepFailure.blocker.empty() ? jsonString(lastStepFailure.blocker) :
+			                   std::string("null")) +
 			",\"step_failures\":" + std::to_string(recovery.stepFailures) + ",\"route_failures\":" + std::to_string(recovery.routeFailures) +
 			",\"elapsed_ms\":" + std::to_string(recovery.elapsedMs) + ",\"expanded_nodes\":" + std::to_string(recovery.expandedNodes) +
 			",\"region_id\":" + (recovery.regionId ? std::to_string(*recovery.regionId) : "null") +
@@ -2021,7 +2047,11 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 		navigationRuntime.resetPatrolRecovery();
 		resetNavigation();
 		huntPatrolTrip.reset();
+		const char* stepFailureCause = lastStepFailure.cause;
+		lastStepFailure = {"none", {}};
 		if (recovery.command == PlayerBotHuntPatrolCommand::RegionExhausted) {
+			telemetry.recordHuntAbort(std::string(recoveryReason) +
+			                          (stepFailure ? std::string("/") + stepFailureCause : std::string()));
 			beginService(player, currentPosition, "hunt_region_patrol_unreachable");
 		}
 	};
@@ -2344,6 +2374,8 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 		schedule(SCHEDULER_MINTICKS);
 		return;
 	}
+	// Only navigation turns count; route searches and fights are idle gaps.
+	if (inTransit) huntTransitProgress.observe(currentPosition, now);
 	if (!processNavigation(player, currentPosition, patrol.destination, &navigation,
 	                       playerBotNavigationMaximumExpandedNodes, false,
 	                       activeRegionPatrol ? &riskProfile : nullptr, !activeRegionPatrol)) {

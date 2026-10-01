@@ -34,6 +34,7 @@
 #include "playerbottelemetry.h"
 #include "playerbotserviceworkflow.h"
 #include "playerbotturnrouter.h"
+#include "playerbottransitcombat.h"
 #include "playerbotroutechanges.h"
 
 #include "container.h"
@@ -99,6 +100,10 @@ namespace playerbot {
 	inline constexpr std::chrono::seconds navigationStepTimeout(2);
 	inline constexpr uint32_t maximumRepeatedNavigationStepFailures = 3;
 	inline constexpr uint32_t maximumPatrolRouteFailures = 3;
+	// Before the hunt area, blocked steps retry until the trip stops reaching new
+	// tiles for this long (see PlayerBotTransitProgress).
+	inline constexpr std::chrono::seconds transitStallLimit(45);
+	inline constexpr uint32_t transitBlockedRetryInterval = 1000;
 	inline constexpr std::chrono::seconds healingRetryInterval(2);
 	inline constexpr std::chrono::minutes stableLifetimeReset(5);
 	inline constexpr std::chrono::minutes huntRegionCooldown(10);
@@ -741,6 +746,12 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 			uint32_t continuations = 0;
 		};
 		std::optional<HuntPatrolTrip> huntPatrolTrip;
+		PlayerBotTransitProgress huntTransitProgress;
+		// What the last mismatched step met, for patrol failure records.
+		struct {
+			const char* cause = "none";
+			std::string blocker;
+		} lastStepFailure;
 		uint32_t huntPotionReturnThreshold = playerbot::healthPotionReturnThreshold;
 		uint32_t huntPotionRestockTarget = playerbot::healthPotionSafetyTarget;
 		struct {

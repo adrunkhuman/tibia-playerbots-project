@@ -1185,6 +1185,30 @@ void transitCombat()
 	assert(!PlayerBotTransitCombat::lootDeadlineRequiresRelease(true, false));
 	assert(!PlayerBotTransitCombat::lootDeadlineRequiresRelease(false, true));
 
+	{
+		using namespace std::chrono_literals;
+		PlayerBotTransitProgress progress;
+		const auto t0 = std::chrono::steady_clock::time_point{} + 1h;
+		assert(progress.stalledFor(t0) == 0ms);
+		progress.observe(Position(100, 100, 7), t0);
+		// Blocked in place: retries accrue stall time.
+		for (auto t = t0 + 1s; t <= t0 + 4s; t += 1s) progress.observe(Position(100, 100, 7), t);
+		assert(progress.stalledFor(t0 + 4s) == 4000ms);
+		// Stepping back and forth between known tiles is not progress.
+		progress.observe(Position(101, 100, 7), t0 + 5s);
+		assert(progress.stalledFor(t0 + 5s) == 0ms);
+		progress.observe(Position(100, 100, 7), t0 + 6s);
+		progress.observe(Position(101, 100, 7), t0 + 7s);
+		assert(progress.stalledFor(t0 + 7s) == 2000ms);
+		// A 30 s fight between navigation turns is not stall time.
+		progress.observe(Position(101, 100, 7), t0 + 37s);
+		assert(progress.stalledFor(t0 + 37s) == 2000ms);
+		progress.observe(Position(102, 100, 7), t0 + 38s);
+		assert(progress.stalledFor(t0 + 38s) == 0ms);
+		progress.reset();
+		assert(progress.stalledFor(t0 + 60s) == 0ms);
+	}
+
 	const Position stalled(100, 100, 7);
 	const Position intended(101, 100, 7);
 	PlayerBotTransitCombat episode;

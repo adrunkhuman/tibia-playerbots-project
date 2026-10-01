@@ -1702,6 +1702,28 @@ bool PlayerBotController::processNavigation(Player* player, const Position& curr
 		huntCoordinator.observeTransitMovementFailure(currentPosition, outcome.failedMovementTarget);
 		telemetry.logActionFailure("navigate", "step_result_mismatch", currentPosition);
 		if (const auto& step = outcome.failedMovementStep) {
+			// Classify from what the target tile holds now. A blocker that has
+			// already moved on reads as "cleared".
+			lastStepFailure = {"cleared", {}};
+			const Tile* tile = g_game.map.getTile(step->target);
+			const Creature* creature = tile ? tile->getTopCreature() : nullptr;
+			if (step->action != PlayerBotNavigationAction::Move) {
+				lastStepFailure.cause = "landing_mismatch";
+			} else if (!tile) {
+				lastStepFailure.cause = "tile_missing";
+			} else if (creature && creature != player) {
+				lastStepFailure = {creature->getMonster() ? "monster" : creature->getPlayer() ? "player" :
+				                   creature->getNpc() ? "npc" : "creature", creature->getName()};
+			} else if (tile->queryAdd(0, *player, 1, FLAG_IGNOREBLOCKCREATURE) != RETURNVALUE_NOERROR) {
+				lastStepFailure.cause = "tile_blocked";
+				if (const TileItemVector* items = tile->getItemList()) {
+					for (const Item* item : *items) {
+						if (!item->hasProperty(CONST_PROP_BLOCKSOLID) && !item->hasProperty(CONST_PROP_BLOCKPATH)) continue;
+						lastStepFailure.blocker = std::to_string(item->getID());
+						break;
+					}
+				}
+			}
 			// The planner's predicted landing disagreed with the server's.
 			auto position = [](const Position& p) {
 				return "{\"x\":" + std::to_string(p.x) + ",\"y\":" + std::to_string(p.y) +
@@ -1712,6 +1734,8 @@ bool PlayerBotController::processNavigation(Player* player, const Position& curr
 			    "\",\"direction\":" + std::to_string(static_cast<uint32_t>(step->direction)) +
 			    ",\"item_id\":" + std::to_string(step->itemId) + ",\"target\":" + position(step->target) +
 			    ",\"expected\":" + position(step->expectedPosition) + ",\"actual\":" + position(currentPosition) +
+			    ",\"cause\":\"" + lastStepFailure.cause + "\",\"blocker\":" +
+			    (lastStepFailure.blocker.empty() ? std::string("null") : jsonString(lastStepFailure.blocker)) +
 			    ",\"step_failures\":" + std::to_string(outcome.stepFailureCount));
 		}
 		if (outcome.stepFailureCount >= maximumRepeatedNavigationStepFailures) {

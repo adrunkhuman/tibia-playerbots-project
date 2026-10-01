@@ -12,6 +12,7 @@
 #define FS_PLAYERBOTTELEMETRY_H
 
 #include <chrono>
+#include <map>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -98,6 +99,7 @@ namespace playerbot {
 			void recordActionAttempt();
 			void recordActionFailure();
 			void recordStuckEvent();
+			void recordHuntAbort(const std::string& cause);
 			void recordPathfindingAttempt(std::chrono::microseconds elapsed);
 			void recordPathfinding(std::chrono::microseconds elapsed, bool found);
 			void maybeEmitSummary(const Position& position, const PlayerBotTelemetrySummary& summary);
@@ -118,6 +120,7 @@ namespace playerbot {
 			uint64_t actionsAttemptedCount = 0;
 			uint64_t actionsFailed = 0;
 			uint64_t stuckEvents = 0;
+			std::map<std::string, uint64_t> huntAborts; // Patrol failures that ended a hunt, by cause.
 			const std::chrono::steady_clock::time_point started = std::chrono::steady_clock::now();
 			std::chrono::steady_clock::time_point lastSummary = started;
 			std::chrono::steady_clock::time_point decisionStarted;
