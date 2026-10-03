@@ -64,6 +64,7 @@ namespace {
 			case PlayerBotPendingMovementResult::Completed: return "completed";
 			case PlayerBotPendingMovementResult::Waiting: return "waiting";
 			case PlayerBotPendingMovementResult::Mismatch: return "mismatch";
+			case PlayerBotPendingMovementResult::LandingOffset: return "landing_offset";
 			default: return "none";
 		}
 	}

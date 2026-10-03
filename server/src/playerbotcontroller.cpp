@@ -1705,6 +1705,20 @@ bool PlayerBotController::processNavigation(Player* player, const Position& curr
 		schedule(navigationDecisionDelay(*player));
 		return false;
 	}
+	if (outcome.movementResult == PlayerBotPendingMovementResult::LandingOffset && outcome.failedMovementStep) {
+		// Not a failure: the route is replanned from the actual landing. Keep the
+		// record so systematic prediction drift stays visible.
+		const PlayerBotNavigationStep& step = *outcome.failedMovementStep;
+		auto position = [](const Position& p) {
+			return "{\"x\":" + std::to_string(p.x) + ",\"y\":" + std::to_string(p.y) +
+			       ",\"z\":" + std::to_string(p.z) + '}';
+		};
+		telemetry.emit("navigation_progress", currentPosition,
+		    std::string("\"result\":\"step_mismatch\",\"action\":\"") + playerBotNavigationActionName(step.action) +
+		    "\",\"item_id\":" + std::to_string(step.itemId) + ",\"target\":" + position(step.target) +
+		    ",\"expected\":" + position(step.expectedPosition) + ",\"actual\":" + position(currentPosition) +
+		    ",\"cause\":\"landing_offset\",\"step_failures\":0");
+	}
 	if (outcome.movementResult == PlayerBotPendingMovementResult::Mismatch) {
 		huntCoordinator.observeTransitMovementFailure(currentPosition, outcome.failedMovementTarget);
 		telemetry.logActionFailure("navigate", "step_result_mismatch", currentPosition);

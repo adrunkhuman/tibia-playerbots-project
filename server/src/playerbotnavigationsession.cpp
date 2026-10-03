@@ -8,7 +8,7 @@
  * (at your option) any later version.
  */
 
-#include "otpch.h"
+#include "definitions.h"
 
 #include "playerbotnavigationsession.h"
 
@@ -64,6 +64,18 @@ PlayerBotPendingMovementResult PlayerBotNavigationSession::observeMovement(
 			steps.pop_front();
 		}
 		return PlayerBotPendingMovementResult::Completed;
+	}
+	// Ladders, ropes, and stairs choose the landing from live tile state, which
+	// can differ from the planner's prediction by one tile. The remaining route
+	// starts at the predicted tile, so it is replaced rather than blamed.
+	const bool floorChange = movingStep.target.z != expectedPosition.z;
+	if (floorChange && currentPosition.z == expectedPosition.z &&
+	    Position::getDistanceX(currentPosition, expectedPosition) <= 1 &&
+	    Position::getDistanceY(currentPosition, expectedPosition) <= 1) {
+		movementPending = false;
+		blockedStepCount = 0;
+		steps.clear();
+		return PlayerBotPendingMovementResult::LandingOffset;
 	}
 	if (actionPending && now - stepStarted < timeout) {
 		return PlayerBotPendingMovementResult::Waiting;
