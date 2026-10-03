@@ -953,48 +953,29 @@ PlayerBotNavigationRoutePlan PlayerBotController::planNavigationRoute(Player& pl
 	return routePlan;
 }
 
-std::optional<PlayerBotNavigationRoutePlan> PlayerBotController::planValidatedPaidApproach(Player& player,
-	const Position& source, const Position& destination, const std::set<Position>& blockedPositions,
-	uint64_t transportReserve, bool sellEconomy, const PlayerBotNavigationStep& paid) const
+bool PlayerBotController::rerouteValidatedPaidApproach(Player& player, PlayerBotNavigationRoutePlan& route,
+	const std::set<Position>& blockedPositions) const
 {
-	auto executable = planNpcTravelRoute(player, source, destination, blockedPositions,
-	    playerBotNavigationMaximumExpandedNodes, false, transportReserve, sellEconomy);
-	if (executable && executable->metrics.firstNpcTravelOffer &&
-	    playerBotNpcTravelOfferMatches(*executable->metrics.firstNpcTravelOffer, paid)) return executable;
-	// The two planners weigh boats differently. The validated itinerary is the
-	// one proven safe, so board its offer rather than the ordinary choice.
-	const PlayerBotNpcTravelOfferIdentity validated{paid.npcId, paid.expectedPosition, paid.price,
-	                                                paid.minimumLevel, paid.premium, paid.dialogue};
-	auto required = planNpcTravelRoute(player, source, destination, blockedPositions,
-	    playerBotNavigationMaximumExpandedNodes, false, transportReserve, sellEconomy, &validated);
-	return required ? required : executable;
-}
-
-bool PlayerBotController::borrowPaidApproach(const char* phase, const Position& position, const Position& source,
-                                            const std::optional<PlayerBotNavigationRoutePlan>& executable,
-                                            const PlayerBotNavigationRoutePlan& detailed,
-                                            const PlayerBotNavigationStep& paid,
-                                            const PlayerBotNavigationRoutePlan& walking) const
-{
-	const char* reason = executable ? playerBotPaidApproachRejection(*executable, detailed, paid) :
-	                                  "approach_unplanned";
-	if (!reason) return true;
-	std::ostringstream fields;
-	fields << "\"result\":\"paid_approach_rejected\",\"phase\":" << jsonString(phase)
-	       << ",\"reason\":" << jsonString(reason) << ",\"npc_id\":" << paid.npcId
-	       << ",\"source\":{\"x\":" << source.x << ",\"y\":" << source.y << ",\"z\":" << unsigned(source.z) << '}'
-	       << ",\"travel_destination\":{\"x\":" << paid.expectedPosition.x << ",\"y\":" << paid.expectedPosition.y
-	       << ",\"z\":" << unsigned(paid.expectedPosition.z) << '}'
-	       << ",\"validated_fare\":" << detailed.metrics.fare << ",\"validated_steps\":" << detailed.metrics.steps;
-	if (executable) {
-		fields << ",\"approach_result\":\"" << playerBotNavigationResultName(executable->metrics.result) << '"'
-		       << ",\"approach_steps\":" << executable->steps.size() << ",\"approach_fare\":" << executable->metrics.fare
-		       << ",\"approach_local_danger\":" << executable->metrics.localDangerCost;
-	}
-	fields << ",\"walking_result\":\"" << playerBotNavigationResultName(walking.metrics.result) << '"'
-	       << ",\"walking_steps\":" << walking.steps.size();
-	emit("navigation_progress", position, fields.str());
-	return false;
+	if (route.steps.empty() || route.steps.back().action != PlayerBotNavigationAction::NpcTravel) return false;
+	const PlayerBotNavigationStep boarding = route.steps.back();
+	PlayerBotNavigationRoutePlan walk = planNavigationRoute(player, PlayerBotNavigationGoal::withinRange(boarding.target, 1, 1),
+	                                                        blockedPositions);
+	if (walk.metrics.result != PlayerBotNavigationResult::Reached) return false;
+	// Only the first leg changes. Its old peak cannot be separated from later
+	// legs, so keep the larger peak.
+	const uint32_t danger = route.metrics.dangerCost - std::min(route.metrics.dangerCost, route.metrics.localDangerCost) +
+	                        walk.metrics.localDangerCost;
+	const double peak = std::max(route.metrics.maximumHealthLossPerSecond, walk.metrics.localMaximumHealthLossPerSecond);
+	if (!playerBotNavigationRiskAccepts(riskProfile, danger, peak)) return false;
+	const size_t oldSteps = route.steps.size() - 1;
+	route.metrics.steps = route.metrics.steps - std::min<size_t>(route.metrics.steps, oldSteps) + walk.steps.size();
+	route.metrics.dangerCost = danger;
+	route.metrics.maximumHealthLossPerSecond = peak;
+	route.metrics.localDangerCost = walk.metrics.localDangerCost;
+	route.metrics.localMaximumHealthLossPerSecond = walk.metrics.localMaximumHealthLossPerSecond;
+	route.steps = std::move(walk.steps);
+	route.steps.push_back(boarding);
+	return true;
 }
 
 std::optional<PlayerBotNavigationRoutePlan> PlayerBotController::planNpcTravelRoute(
@@ -1007,8 +988,7 @@ std::optional<PlayerBotNavigationRoutePlan> PlayerBotController::planNpcTravelRo
 
 std::optional<PlayerBotNavigationRoutePlan> PlayerBotController::planNpcTravelRoute(
 	Player& player, const Position& source, const Position& destination, const std::set<Position>& blockedPositions,
-	uint64_t maximumExpandedNodes, bool estimateOnly, uint64_t transportReserve, bool sellEconomy,
-	const PlayerBotNpcTravelOfferIdentity* requiredFirstOffer) const
+	uint64_t maximumExpandedNodes, bool estimateOnly, uint64_t transportReserve, bool sellEconomy) const
 {
 	if (player.isPzLocked()) return std::nullopt;
 
@@ -1224,13 +1204,6 @@ std::optional<PlayerBotNavigationRoutePlan> PlayerBotController::planNpcTravelRo
 		});
 		for (size_t edgeIndex : edgeIndices) {
 			const Edge& edge = edges[edgeIndex];
-			if (current.state == 0 && requiredFirstOffer &&
-			    (edge.npc->getID() != requiredFirstOffer->npcId ||
-			     edge.offer->destination != requiredFirstOffer->destination ||
-			     edge.offer->price != requiredFirstOffer->price || edge.offer->level != requiredFirstOffer->minimumLevel ||
-			     edge.offer->premium != requiredFirstOffer->premium || edge.offer->dialogue != requiredFirstOffer->dialogue)) {
-				continue;
-			}
 			const std::optional<SegmentEstimate> approach = walkSegment(current.state, edgeIndex);
 			if (!approach) continue;
 			const size_t nextState = stateIndices.at(edge.offer->destination);

@@ -414,7 +414,13 @@ void remoteAlternativesAndFareLabels()
 		if (state == 0 && connection == 1) {
 			assert(detailed);
 			if (++pending < 4) return std::nullopt;
-			return Segment{Result::Reached, 30, 30, 0, 0};
+			Segment segment{Result::Reached, 30, 30, 0, 0};
+			PlayerBotNavigationStep ladder;
+			ladder.action = PlayerBotNavigationAction::Use;
+			ladder.target = Position(100, 100, 8);
+			ladder.expectedPosition = Position(100, 100, 7);
+			segment.path = {ladder};
+			return segment;
 		}
 		if (state == 1 && connection == 2) return Segment{Result::Reached, 1, 1, 0, 0};
 		if (state == 2 && connection == SIZE_MAX) return Segment{Result::Reached, 1, 1, 0, 0};
@@ -423,6 +429,10 @@ void remoteAlternativesAndFareLabels()
 	assert(pending == 4);
 	assert(graph.bestPaid && graph.bestPaid->fare == 60 && graph.bestPaid->firstOffer == 1);
 	assert(graph.bestPaid->seconds == 34);
+	// The selected itinerary keeps its validated walk to the first boarding NPC.
+	const Segment* firstLeg = graph.firstLeg(*graph.bestPaid);
+	assert(firstLeg && firstLeg->path.size() == 1 && firstLeg->path.front().action == PlayerBotNavigationAction::Use);
+	assert(!graph.firstLeg(Transport::Label{}));
 }
 
 void goalDirectedTransportScheduling()

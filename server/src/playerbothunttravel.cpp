@@ -341,6 +341,7 @@ std::optional<PlayerBotNavigationRoutePlan> PlayerBotController::advanceHuntTrav
 		connectionEvent(final ? "transport_destination" : "npc_approach", *result);
 		PlayerBotTransportSegment segment{*result, w.local->seconds, static_cast<uint32_t>(w.local->steps.size()),
 		    w.local->summary.dangerCost, w.local->summary.maximumHealthLossPerSecond};
+		if (state == 0 && !final) segment.path = std::move(w.local->steps);
 		w.local.reset();
 		return segment;
 	};
@@ -381,14 +382,21 @@ std::optional<PlayerBotNavigationRoutePlan> PlayerBotController::advanceHuntTrav
 		result.metrics.dangerCost = paid->danger;
 		result.metrics.maximumHealthLossPerSecond = paid->peak;
 		result.metrics.dangerAware = policy.enabled();
-		// Estimate-only marker. Movement callers still use planHuntTravelRoute and
-		// its live, same-floor NPC approach validation before executing travel.
+		// Executable through boarding: the validated walk to the first NPC, then
+		// travel. Later legs are replanned from each arrival.
 		const auto& offer = w.offers.at(paid->firstOffer);
 		PlayerBotNavigationStep step;
 		step.action = PlayerBotNavigationAction::NpcTravel;
 		step.npcId = std::get<0>(offer); step.target = w.providerValidation.use(step.npcId); step.expectedPosition = std::get<2>(offer);
 		step.price = std::get<3>(offer); step.minimumLevel = std::get<4>(offer); step.premium = std::get<5>(offer);
 		step.dialogue = std::get<6>(offer);
+		if (const PlayerBotTransportSegment* firstLeg = w.transport->firstLeg(*paid)) {
+			result.steps = firstLeg->path;
+			result.metrics.localDangerCost = firstLeg->danger;
+			result.metrics.localMaximumHealthLossPerSecond = firstLeg->peak;
+		}
+		result.metrics.firstNpcTravelOffer = PlayerBotNpcTravelOfferIdentity{
+		    step.npcId, step.expectedPosition, step.price, step.minimumLevel, step.premium, step.dialogue};
 		result.steps.push_back(std::move(step));
 	}
 	result.metrics.result = playerBotHuntAggregateRouteResult(result.metrics.result,

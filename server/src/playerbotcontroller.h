@@ -417,12 +417,6 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		                                                const std::set<Position>& blockedPositions = {},
 		                                                uint64_t maximumExpandedNodes = playerBotNavigationMaximumExpandedNodes,
 		                                                bool sameFloorOnly = false) const;
-		// Accepts the executable first leg of a validated paid route, or logs why
-		// the caller must fall back to walking.
-		bool borrowPaidApproach(const char* phase, const Position& position, const Position& source,
-		                        const std::optional<PlayerBotNavigationRoutePlan>& executable,
-		                        const PlayerBotNavigationRoutePlan& detailed, const PlayerBotNavigationStep& paid,
-		                        const PlayerBotNavigationRoutePlan& walking) const;
 		// Plans the next leg of the validated patrol trip with the ordinary planner.
 		// Returns nullptr once the leg is installed, otherwise why the trip needs
 		// full revalidation.
@@ -437,13 +431,11 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		                                                               const std::set<Position>& blockedPositions,
 		                                                               uint64_t maximumExpandedNodes,
 		                                                               bool estimateOnly = false, uint64_t transportReserve = 0,
-		                                                               bool sellEconomy = false,
-		                                                               const PlayerBotNpcTravelOfferIdentity* requiredFirstOffer = nullptr) const;
-		// The executable first leg for a validated paid itinerary: the planner's
-		// own choice, or the validated boarding offer when it chose another boat.
-		std::optional<PlayerBotNavigationRoutePlan> planValidatedPaidApproach(Player& player, const Position& source,
-		    const Position& destination, const std::set<Position>& blockedPositions, uint64_t transportReserve,
-		    bool sellEconomy, const PlayerBotNavigationStep& paid) const;
+		                                                               bool sellEconomy = false) const;
+		// Replaces the validated walk to a paid route's boarding NPC with one that
+		// avoids known blockers, if the whole itinerary stays within risk limits.
+		bool rerouteValidatedPaidApproach(Player& player, PlayerBotNavigationRoutePlan& route,
+		                                  const std::set<Position>& blockedPositions) const;
 		std::optional<PlayerBotNavigationRoutePlan> advanceHuntTravelRoute(Player& player,
 		    const PlayerBotHuntRouteRequest& request, const Position& source, PlayerBotHuntRouteTiming& timing,
 		    uint64_t transportReserve, bool sellEconomy, PlayerBotNavigationRoutePlan* walkingAlternative = nullptr);
