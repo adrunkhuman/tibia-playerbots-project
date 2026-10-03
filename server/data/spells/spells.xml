@@ -9,11 +9,11 @@
 		<vocation name="Sorcerer" />
 		<vocation name="Master Sorcerer" />
 	</instant>
-	<instant group="attack" name="Divine Caldera" words="exevo mas san" level="50" mana="160" premium="1" selftarget="1" cooldown="4000" needlearn="0" script="attack/divine_caldera.lua">
+	<instant group="attack" name="Divine Caldera" words="exevo mas san" level="50" mana="160" premium="1" selftarget="1" cooldown="4000" needlearn="1" script="attack/divine_caldera.lua">
 		<vocation name="Paladin" />
 		<vocation name="Royal Paladin" />
 	</instant>
-	<instant group="attack" name="Divine Missile" words="exori san" level="40" mana="20" premium="1" range="4" casterTargetOrDirection="1" needlearn="0" blockwalls="1" cooldown="2000" script="attack/divine_missile.lua">
+	<instant group="attack" name="Divine Missile" words="exori san" level="40" mana="20" premium="1" range="4" casterTargetOrDirection="1" needlearn="1" blockwalls="1" cooldown="2000" script="attack/divine_missile.lua">
 		<vocation name="Paladin" />
 		<vocation name="Royal Paladin" />
 	</instant>
@@ -35,7 +35,7 @@
 		<vocation name="Druid" />
 		<vocation name="Elder Druid" />
 	</instant>
-	<instant group="attack" name="Ethereal Spear" words="exori con" level="23" mana="25" premium="1" range="7" needtarget="1" cooldown="2000" blockwalls="1" needlearn="0" script="attack/ethereal_spear.lua">
+	<instant group="attack" name="Ethereal Spear" words="exori con" level="23" mana="25" premium="1" range="7" needtarget="1" cooldown="2000" blockwalls="1" needlearn="1" script="attack/ethereal_spear.lua">
 		<vocation name="Paladin" />
 		<vocation name="Royal Paladin" />
 	</instant>
@@ -109,7 +109,7 @@
 		<vocation name="Royal Paladin" />
 		<vocation name="Elite Knight" />
 	</instant>
-	<instant group="healing" name="Divine Healing" words="exura san" level="35" mana="160" premium="0" selftarget="1" aggressive="0" cooldown="1000" needlearn="0" script="healing/divine_healing.lua">
+	<instant group="healing" name="Divine Healing" words="exura san" level="35" mana="210" premium="1" selftarget="1" aggressive="0" cooldown="1000" needlearn="1" script="healing/divine_healing.lua">
 		<vocation name="Paladin" />
 		<vocation name="Royal Paladin" />
 	</instant>
@@ -117,7 +117,7 @@
 		<vocation name="Druid" />
 		<vocation name="Elder Druid" />
 	</instant>
-	<instant group="healing" name="Intense Healing" words="exura gran" level="20" mana="70" aggressive="0" selftarget="1" cooldown="1000" needlearn="0" script="healing/intense_healing.lua">
+	<instant group="healing" name="Intense Healing" words="exura gran" level="11" mana="70" aggressive="0" selftarget="1" cooldown="1000" needlearn="1" script="healing/intense_healing.lua">
 		<vocation name="Sorcerer" />
 		<vocation name="Druid" />
 		<vocation name="Paladin" />
@@ -156,8 +156,8 @@
 		<vocation name="Elite Knight" />
 	</instant>
 	<instant group="support" name="Cancel Invisibility" words="exana ina" level="26" mana="200" premium="1" aggressive="0" selftarget="1" cooldown="2000" needlearn="0" script="support/cancel_invisibility.lua">
-		<vocation name="Paladin" />
-		<vocation name="Royal Paladin" />
+		<vocation name="Sorcerer" />
+		<vocation name="Master Sorcerer" />
 	</instant>
 	<instant group="support" name="Challenge" words="exeta res" level="20" mana="30" premium="1" aggressive="0" cooldown="2000" needlearn="1" script="support/challenge.lua">
 		<vocation name="Elite Knight" />
@@ -206,11 +206,13 @@
 		<vocation name="Royal Paladin" />
 		<vocation name="Elite Knight" />
 	</instant>
-	<instant group="support" name="Invisibility" words="utana vid" level="35" mana="440" aggressive="0" selftarget="1" cooldown="2000" needlearn="0" script="support/invisible.lua">
+	<instant group="support" name="Invisibility" words="utana vid" level="35" mana="440" aggressive="0" selftarget="1" cooldown="2000" needlearn="1" script="support/invisible.lua">
 		<vocation name="Sorcerer" />
 		<vocation name="Druid" />
 		<vocation name="Master Sorcerer" />
 		<vocation name="Elder Druid" />
+		<vocation name="Paladin" />
+		<vocation name="Royal Paladin" />
 	</instant>
 	<instant group="support" name="Levitate" words="exani hur" level="12" mana="50" premium="1" aggressive="0" cooldown="2000" params="1" needlearn="1" script="support/levitate.lua">
 		<vocation name="Sorcerer" />
@@ -252,7 +254,7 @@
 		<vocation name="Knight" />
 		<vocation name="Elite Knight" />
 	</instant>
-	<instant group="support" secondarygroup="healing" name="Sharpshooter" words="utito tempo san" level="60" mana="450" premium="1" aggressive="0" selftarget="1" cooldown="2000" secondaryneedlearn="0" script="support/sharpshooter.lua">
+	<instant group="support" secondarygroup="healing" name="Sharpshooter" words="utito tempo san" level="60" mana="450" premium="1" aggressive="0" selftarget="1" cooldown="2000" needlearn="1" script="support/sharpshooter.lua">
 		<vocation name="Paladin" />
 		<vocation name="Royal Paladin" />
 	</instant>
@@ -268,7 +270,7 @@
 		<vocation name="Master Sorcerer" />
 		<vocation name="Elder Druid" />
 	</instant>
-	<instant group="support" name="Swift Foot" words="utamo tempo san" level="55" mana="400" premium="1" aggressive="0" selftarget="1" cooldown="2000" needlearn="0" script="support/swift_foot.lua">
+	<instant group="support" name="Swift Foot" words="utamo tempo san" level="55" mana="400" premium="1" aggressive="0" selftarget="1" cooldown="2000" needlearn="1" script="support/swift_foot.lua">
 		<vocation name="Paladin" />
 		<vocation name="Royal Paladin" />
 	</instant>
@@ -288,7 +290,7 @@
 		<vocation name="Druid" />
 		<vocation name="Elder Druid" />
 	</instant>
-	<instant group="support" name="Protect Party" words="utamo mas sio" level="32" mana="0" premium="1" aggressive="0" selftarget="1" cooldown="2000" needlearn="0" script="party/protect_party.lua">
+	<instant group="support" name="Protect Party" words="utamo mas sio" level="32" mana="0" premium="1" aggressive="0" selftarget="1" cooldown="2000" needlearn="1" script="party/protect_party.lua">
 		<vocation name="Paladin" />
 		<vocation name="Royal Paladin" />
 	</instant>
@@ -370,30 +372,30 @@
 		<vocation name="Druid" />
 		<vocation name="Elder Druid" />
 	</instant>
-	<instant group="support" name="Conjure Arrow" words="exevo con" level="13" mana="100" soul="1" premium="0" aggressive="0" selftarget="1" cooldown="2000" needlearn="0" script="conjuring/conjure_arrow.lua">
+	<instant group="support" name="Conjure Arrow" words="exevo con" level="13" mana="100" soul="1" premium="0" aggressive="0" selftarget="1" cooldown="2000" needlearn="1" script="conjuring/conjure_arrow.lua">
 		<vocation name="Paladin" />
 		<vocation name="Royal Paladin" />
 	</instant>
-	<instant group="support" name="Conjure Bolt" words="exevo con mort" level="17" mana="140" soul="2" premium="1" aggressive="0" selftarget="1" cooldown="2000" needlearn="0" script="conjuring/conjure_bolt.lua">
+	<instant group="support" name="Conjure Bolt" words="exevo con mort" level="17" mana="140" soul="2" premium="1" aggressive="0" selftarget="1" cooldown="2000" needlearn="1" script="conjuring/conjure_bolt.lua">
 		<vocation name="Paladin" />
 		<vocation name="Royal Paladin" />
 	</instant>
-	<instant group="support" name="Conjure Explosive Arrow" words="exevo con flam" level="25" mana="290" soul="3" premium="0" aggressive="0" selftarget="1" cooldown="2000" needlearn="0" script="conjuring/conjure_explosive_arrow.lua">
+	<instant group="support" name="Conjure Explosive Arrow" words="exevo con flam" level="25" mana="290" soul="3" premium="0" aggressive="0" selftarget="1" cooldown="2000" needlearn="1" script="conjuring/conjure_explosive_arrow.lua">
 		<vocation name="Paladin" />
 		<vocation name="Royal Paladin" />
 	</instant>
-	<instant group="support" name="Conjure Piercing Bolt" words="exevo con grav" level="33" mana="180" soul="3" premium="1" aggressive="0" selftarget="1" cooldown="2000" needlearn="0" script="conjuring/conjure_piercing_bolt.lua">
+	<instant group="support" name="Conjure Piercing Bolt" words="exevo con grav" level="33" mana="180" soul="3" premium="1" aggressive="0" selftarget="1" cooldown="2000" needlearn="1" script="conjuring/conjure_piercing_bolt.lua">
 		<vocation name="Paladin" />
 		<vocation name="Royal Paladin" />
 	</instant>
-	<instant group="support" name="Conjure Poisoned Arrow" words="exevo con pox" level="16" mana="130" soul="2" premium="0" aggressive="0" selftarget="1" cooldown="2000" needlearn="0" script="conjuring/conjure_poisoned_arrow.lua">
+	<instant group="support" name="Conjure Poisoned Arrow" words="exevo con pox" level="16" mana="130" soul="2" premium="0" aggressive="0" selftarget="1" cooldown="2000" needlearn="1" script="conjuring/conjure_poisoned_arrow.lua">
 		<vocation name="Paladin" />
 		<vocation name="Royal Paladin" />
 	</instant>
-	<instant group="support" name="Conjure Power Bolt" words="exevo con vis" level="59" mana="700" soul="4" premium="1" aggressive="0" selftarget="1" cooldown="2000" needlearn="0" script="conjuring/conjure_power_bolt.lua">
+	<instant group="support" name="Conjure Power Bolt" words="exevo con vis" level="59" mana="700" soul="4" premium="1" aggressive="0" selftarget="1" cooldown="2000" needlearn="1" script="conjuring/conjure_power_bolt.lua">
 		<vocation name="Royal Paladin" />
 	</instant>
-	<instant group="support" name="Conjure Sniper Arrow" words="exevo con hur" level="24" mana="160" soul="3" premium="1" aggressive="0" selftarget="1" cooldown="2000" needlearn="0" script="conjuring/conjure_sniper_arrow.lua">
+	<instant group="support" name="Conjure Sniper Arrow" words="exevo con hur" level="24" mana="160" soul="3" premium="1" aggressive="0" selftarget="1" cooldown="2000" needlearn="1" script="conjuring/conjure_sniper_arrow.lua">
 		<vocation name="Paladin" />
 		<vocation name="Royal Paladin" />
 	</instant>
@@ -405,7 +407,7 @@
 		<vocation name="Druid" />
 		<vocation name="Elder Druid" />
 	</instant>
-	<instant group="support" name="Destroy Field Rune" words="adito grav" level="17" mana="120" soul="2" aggressive="0" cooldown="2000" needlearn="0" script="conjuring/destroy_field_rune.lua">
+	<instant group="support" name="Destroy Field Rune" words="adito grav" level="17" mana="120" soul="2" aggressive="0" cooldown="2000" needlearn="1" script="conjuring/destroy_field_rune.lua">
 		<vocation name="Sorcerer" />
 		<vocation name="Druid" />
 		<vocation name="Paladin" />
@@ -413,7 +415,7 @@
 		<vocation name="Elder Druid" />
 		<vocation name="Royal Paladin" />
 	</instant>
-	<instant group="support" name="Disintegrate Rune" words="adito tera" level="21" mana="200" soul="3" premium="1" aggressive="0" cooldown="2000" needlearn="0" script="conjuring/disintegrate_rune.lua">
+	<instant group="support" name="Disintegrate Rune" words="adito tera" level="21" mana="200" soul="3" premium="1" aggressive="0" cooldown="2000" needlearn="1" script="conjuring/disintegrate_rune.lua">
 		<vocation name="Sorcerer" />
 		<vocation name="Druid" />
 		<vocation name="Paladin" />
@@ -421,7 +423,7 @@
 		<vocation name="Elder Druid" />
 		<vocation name="Royal Paladin" />
 	</instant>
-	<instant group="support" name="Enchant Spear" words="exeta con" level="45" mana="350" soul="3" premium="1" aggressive="0" selftarget="1" cooldown="2000" needlearn="0" script="conjuring/enchant_spear.lua">
+	<instant group="support" name="Enchant Spear" words="exeta con" level="45" mana="350" soul="3" premium="1" aggressive="0" selftarget="1" cooldown="2000" needlearn="1" script="conjuring/enchant_spear.lua">
 		<vocation name="Paladin" />
 		<vocation name="Royal Paladin" />
 	</instant>
@@ -487,12 +489,10 @@
 		<vocation name="Master Sorcerer" />
 		<vocation name="Druid" />
 		<vocation name="Elder Druid" />
-		<vocation name="Paladin" />
-		<vocation name="Royal Paladin" />
 		<vocation name="Knight" />
 		<vocation name="Elite Knight" />
 	</instant>
-	<instant group="support" name="Holy Missile Rune" words="adori san" level="27" mana="300" soul="3" premium="1" aggressive="0" cooldown="2000" needlearn="0" script="conjuring/holy_missile_rune.lua">
+	<instant group="support" name="Holy Missile Rune" words="adori san" level="27" mana="300" soul="3" premium="1" aggressive="0" cooldown="2000" needlearn="1" script="conjuring/holy_missile_rune.lua">
 		<vocation name="Paladin" />
 		<vocation name="Royal Paladin" />
 	</instant>
