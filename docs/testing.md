@@ -32,10 +32,11 @@ Useful subsystem switches include `-Healing`, `-ValueLoot` (value replacement pl
 
 ## Fast checks without a live stack
 
-The spell contract check needs neither Docker nor elevation:
+The spell contract checks need neither Docker nor elevation:
 
 ```powershell
 pwsh -File scripts/test-knight-spell-contract.ps1
+pwsh -File scripts/test-paladin-spell-contract.ps1
 ```
 
 Run the assertion scripts relevant to the change:

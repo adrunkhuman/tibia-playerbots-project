@@ -9,6 +9,10 @@ local modeValues = {
     spellPersistence = 86020,
     spellTrainer = 86021,
     spellFailures = 86023,
+    paladinSpellReset = 86024,
+    paladinSpellLearning = 86025,
+    paladinSpellPersistence = 86026,
+    paladinSpellFailures = 86027,
 }
 
 local function pass(mode)
@@ -58,6 +62,38 @@ local function hasCastableSpell(player, spellName)
     end
     return false
 end
+
+-- Each step runs 100 ms after the previous one so NPC dialogue is processed in order.
+local function newTimeline()
+    local delay = 0
+    return function(callback)
+        delay = delay + 100
+        addEvent(callback, delay)
+    end
+end
+
+local function trainer(name)
+    local npc = Npc(name)
+    assert(npc, name .. " is unavailable")
+    local position = npc:getPosition()
+    return {npc = npc, position = Position(position.x - 1, position.y, position.z)}
+end
+
+local function sayTo(later, playerId, target, message)
+    later(function()
+        local bot = getBot(playerId)
+        assert(bot:teleportTo(target.position), "trainer position could not be reached")
+        assert(bot:say(message, TALKTYPE_PRIVATE_PN, false, target.npc), "trainer dialogue failed: " .. message)
+    end)
+end
+
+local function buySpell(later, playerId, target, keyword)
+    sayTo(later, playerId, target, "hi")
+    sayTo(later, playerId, target, keyword)
+    sayTo(later, playerId, target, "yes")
+end
+
+local paladinSpells = {"Light Healing", "Intense Healing", "Conjure Arrow"}
 
 local login = CreatureEvent("zzPlayerbotConnectionlessRegression")
 
@@ -367,6 +403,164 @@ function login.onLogin(player)
             for _, spellName in ipairs(testedSpells) do
                 if originallyLearned[spellName] then
                     bot:learnSpell(spellName)
+                end
+            end
+            assert(bot:getMoney() == originalInventoryMoney, "restored inventory money is incorrect")
+            assert(bot:getBankBalance() == originalBankMoney, "restored bank money is incorrect")
+            pass(mode)
+        end)
+        return true
+    elseif mode == "paladinSpellReset" then
+        local playerId = player:getId()
+        addEvent(function()
+            local bot = getBot(playerId)
+            assert(bot:setVocation(3), "Paladin spell reset could not select Paladin vocation")
+            setLevel(bot, 11)
+            for _, spellName in ipairs(paladinSpells) do
+                bot:forgetSpell(spellName)
+                assert(not bot:hasLearnedSpell(spellName), spellName .. " remained learned after reset")
+                assert(not hasCastableSpell(bot, spellName), "unlearned " .. spellName .. " remained castable")
+            end
+            pass(mode)
+        end, 100)
+        return true
+    elseif mode == "paladinSpellLearning" then
+        assert(player:getVocation():getId() == 3, "Paladin learning phase did not start as a Paladin")
+        assert(player:getLevel() == 11, "Paladin learning phase did not start at level 11")
+        for _, spellName in ipairs(paladinSpells) do
+            assert(not player:hasLearnedSpell(spellName), spellName .. " was learned before the learning phase")
+            assert(not hasCastableSpell(player, spellName), spellName .. " was castable before training")
+        end
+        assert(player:canLearnSpell("Intense Healing"), "level 11 Paladin cannot learn Intense Healing")
+        clearMoney(player)
+        assert(player:addMoney(520), "Paladin healing money could not be added")
+
+        local elane = trainer("Elane")
+        local playerId = player:getId()
+        local later = newTimeline()
+        buySpell(later, playerId, elane, "light healing")
+        buySpell(later, playerId, elane, "intense healing")
+        later(function()
+            local bot = getBot(playerId)
+            assert(bot:hasLearnedSpell("Light Healing"), "Elane did not teach Light Healing")
+            assert(bot:hasLearnedSpell("Intense Healing"), "Elane did not teach Intense Healing at level 11")
+            assert(hasCastableSpell(bot, "Intense Healing"), "Intense Healing remained uncastable after training")
+            assert(getTotalMoney(bot) == 0, "Elane did not charge exactly 170 and 350 gold")
+            setLevel(bot, 13)
+            assert(bot:addMoney(450), "Conjure Arrow money could not be added")
+        end)
+        buySpell(later, playerId, elane, "conjure arrow")
+        later(function()
+            local bot = getBot(playerId)
+            assert(bot:hasLearnedSpell("Conjure Arrow"), "Elane did not teach Conjure Arrow")
+            assert(hasCastableSpell(bot, "Conjure Arrow"), "Conjure Arrow remained uncastable after training")
+            assert(getTotalMoney(bot) == 0, "Elane did not charge exactly 450 gold for Conjure Arrow")
+            pass(mode)
+        end)
+        return true
+    elseif mode == "paladinSpellPersistence" then
+        for _, spellName in ipairs(paladinSpells) do
+            assert(player:hasLearnedSpell(spellName), "learned " .. spellName .. " did not persist")
+            assert(hasCastableSpell(player, spellName), "persisted " .. spellName .. " is not castable")
+        end
+        assert(player:addMoney(350), "duplicate test money could not be added")
+        local moneyBefore = getTotalMoney(player)
+        local playerId = player:getId()
+        local later = newTimeline()
+        buySpell(later, playerId, trainer("Elane"), "intense healing")
+        later(function()
+            local bot = getBot(playerId)
+            assert(bot:hasLearnedSpell("Intense Healing"), "duplicate purchase removed learned Intense Healing")
+            assert(getTotalMoney(bot) == moneyBefore, "duplicate purchase changed money")
+            assert(bot:removeMoney(350), "duplicate test money could not be removed")
+            pass(mode)
+        end)
+        return true
+    elseif mode == "paladinSpellFailures" then
+        local originalExperience = player:getExperience()
+        local originalVocation = player:getVocation():getId()
+        local originalPremiumEndsAt = player:getPremiumEndsAt()
+        local originalInventoryMoney = player:getMoney()
+        local originalBankMoney = player:getBankBalance()
+        local testedSpells = {"Light Healing", "Intense Healing", "Conjure Bolt", "Conjure Power Bolt"}
+        local originallyLearned = {}
+        for _, spellName in ipairs(testedSpells) do
+            originallyLearned[spellName] = player:hasLearnedSpell(spellName)
+            player:forgetSpell(spellName)
+        end
+        clearMoney(player)
+
+        local elane, ursula, eremo = trainer("Elane"), trainer("Ursula"), trainer("Eremo")
+        local playerId = player:getId()
+        local later = newTimeline()
+        local function rejected(spellName, money, reason)
+            later(function()
+                local bot = getBot(playerId)
+                assert(not bot:hasLearnedSpell(spellName), reason .. " learned " .. spellName)
+                assert(getTotalMoney(bot) == money, reason .. " rejection changed money")
+                clearMoney(bot)
+            end)
+        end
+        -- Proves that the preceding rejection came from the gate under test, not from a missing offer.
+        local function learned(spellName, reason)
+            later(function()
+                local bot = getBot(playerId)
+                assert(bot:hasLearnedSpell(spellName), reason .. " could not learn " .. spellName)
+                assert(getTotalMoney(bot) == 0, reason .. " was not charged the exact price of " .. spellName)
+            end)
+        end
+        local function prepare(vocation, level, premium, money)
+            later(function()
+                local bot = getBot(playerId)
+                assert(bot:setVocation(vocation), "failure setup could not select vocation " .. vocation)
+                setLevel(bot, level)
+                assert(bot:setPremiumEndsAt(premium and os.time() + 86400 or 0), "failure setup could not set premium")
+                if money > 0 then
+                    assert(bot:addMoney(money), "failure setup money could not be added")
+                end
+            end)
+        end
+
+        prepare(3, 10, false, 350)
+        buySpell(later, playerId, elane, "intense healing")
+        rejected("Intense Healing", 350, "level-10 Paladin")
+
+        prepare(3, 17, false, 750)
+        buySpell(later, playerId, ursula, "conjure bolt")
+        rejected("Conjure Bolt", 750, "free-account Paladin")
+        prepare(3, 17, true, 750)
+        buySpell(later, playerId, ursula, "conjure bolt")
+        learned("Conjure Bolt", "premium Paladin")
+
+        prepare(4, 9, false, 170)
+        buySpell(later, playerId, elane, "light healing")
+        rejected("Light Healing", 170, "Knight at Elane")
+
+        prepare(3, 59, true, 2000)
+        buySpell(later, playerId, eremo, "conjure power bolt")
+        rejected("Conjure Power Bolt", 2000, "unpromoted Paladin")
+        prepare(7, 59, true, 2000)
+        buySpell(later, playerId, eremo, "conjure power bolt")
+        learned("Conjure Power Bolt", "Royal Paladin")
+
+        prepare(3, 11, false, 0)
+        buySpell(later, playerId, elane, "intense healing")
+        rejected("Intense Healing", 0, "moneyless Paladin")
+
+        later(function()
+            local bot = getBot(playerId)
+            assert(bot:setVocation(originalVocation), "original vocation could not be restored")
+            setExperience(bot, originalExperience)
+            assert(bot:setPremiumEndsAt(originalPremiumEndsAt), "original premium could not be restored")
+            if originalInventoryMoney > 0 then
+                assert(bot:addMoney(originalInventoryMoney), "original inventory money could not be restored")
+            end
+            assert(bot:setBankBalance(originalBankMoney), "original bank money could not be restored")
+            for _, spellName in ipairs(testedSpells) do
+                if originallyLearned[spellName] then
+                    bot:learnSpell(spellName)
+                else
+                    bot:forgetSpell(spellName)
                 end
             end
             assert(bot:getMoney() == originalInventoryMoney, "restored inventory money is incorrect")

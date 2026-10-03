@@ -75,7 +75,7 @@ npcHandler:addModule(FocusModule:new())
 
 
 	keywordHandler:addSpellKeyword({'challenge'}, {npcHandler = npcHandler, spellName = 'Challenge', price = 2000, level = 20, premium = true, vocation ={4}})
-	keywordHandler:addSpellKeyword({'conjure','power','bolt'}, {npcHandler = npcHandler, spellName = 'Conjure Power Bolt', price = 2000, level = 59, vocation ={3}})
+	keywordHandler:addSpellKeyword({'conjure','power','bolt'}, {npcHandler = npcHandler, spellName = 'Conjure Power Bolt', price = 2000, level = 59, premium = true, vocation ={3}})
 	keywordHandler:addSpellKeyword({'enchant','staff'}, {npcHandler = npcHandler, spellName = 'Enchant Staff', price = 2000, level = 41, vocation ={1}})
 	keywordHandler:addSpellKeyword({'wild','growth'}, {npcHandler = npcHandler, spellName = 'Wild Growth', price = 2000, level = 27, vocation ={2}})
 	keywordHandler:addKeyword({'support', 'spells'}, StdModule.say, {npcHandler = npcHandler, text = "In this category I have '{Challenge}', '{Conjure Power Bolt}', '{Enchant Staff}' and '{Wild Growth}'."})
