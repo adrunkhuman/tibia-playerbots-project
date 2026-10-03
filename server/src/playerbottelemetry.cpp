@@ -150,7 +150,7 @@ void PlayerBotTelemetry::emitSummary(const Position& position, bool final, const
 void PlayerBotTelemetry::maybeEmitSummary(const Position& position, const PlayerBotTelemetrySummary& summary)
 {
 	const auto now = std::chrono::steady_clock::now();
-	if (!lastPosition || *lastPosition != position || !summary.planning.empty() || summary.target) {
+	if (!lastPosition || *lastPosition != position || summary.planningResetsIdle || summary.target) {
 		lastPosition = position;
 		lastProgress = now;
 	}

@@ -65,7 +65,10 @@ namespace playerbot {
 		std::string activity;
 		std::string waitingReason;
 		std::string recovery;
-		std::string planning; // Pending hunt, sell-loot, or route search; empty when idle.
+		std::string planning; // Pending hunt, sell-loot, route, or depot search; empty when idle.
+		// Hunt, sell-loot, and route searches end. Depot discovery can cycle
+		// (select, fail, rescan), so it is labelled but still counts as idle.
+		bool planningResetsIdle = false;
 		bool playerStateAvailable = false;
 		uint32_t health = 0;
 		uint32_t maximumHealth = 0;

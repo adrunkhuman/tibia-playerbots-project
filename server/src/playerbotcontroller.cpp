@@ -428,6 +428,10 @@ playerbot::PlayerBotTelemetrySummary PlayerBotController::telemetrySummary() con
 	if (huntCoordinator.planningActive()) summary.planning = "hunt";
 	else if (sellLootSearch || sellLootSearchPending) summary.planning = "sell_loot";
 	else if (huntTravelWork) summary.planning = "route";
+	summary.planningResetsIdle = !summary.planning.empty();
+	if (summary.planning.empty() && (turnRouter.cyclePhase() == CyclePhase::ReturnToDepot ||
+	                                  turnRouter.cyclePhase() == CyclePhase::DepositLoot) &&
+	    depotWorkflow.snapshot().stage == PlayerBotDepotStage::Discover) summary.planning = "depot";
 	if (supplyRecovery.active()) summary.recovery = "supply";
 	else if (huntCoordinator.retreatingFromDanger()) summary.recovery = "danger_retreat";
 	return summary;

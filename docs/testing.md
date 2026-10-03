@@ -190,7 +190,7 @@ For a normal-stack observation, shorten hunts only when useful, recreate the ser
 
 ### Long-running stack checks
 
-The development server runs continuously, so there is no run boundary to analyze. Each bot's once-per-minute `summary` reports `idle_seconds`: time since the bot last moved, had a combat target, or had a search pending. `planning` names that search (`hunt`, `sell_loot`, or `route`) or is `null`. Planning pauses are expected and do not count as idle. Events carry `server_run_id`, so restarts stay distinguishable. Docker keeps a rolling log window; recreating the container discards it.
+The development server runs continuously, so there is no run boundary to analyze. Each bot's once-per-minute `summary` reports `idle_seconds`: time since the bot last moved, had a combat target, or had a search pending. `planning` names that search (`hunt`, `sell_loot`, or `route`) or is `null`. Planning pauses are expected and do not count as idle. `planning: "depot"` labels depot discovery, which still counts as idle because it can cycle (select a locker, fail, rescan) without end. Events carry `server_run_id`, so restarts stay distinguishable. Docker keeps a rolling log window; recreating the container discards it.
 
 ```sh
 logs() { docker compose -f server/compose.yaml logs --no-log-prefix --since "${1:-2h}" server | jq -cR 'fromjson? | select(.component == "playerbot")'; }
