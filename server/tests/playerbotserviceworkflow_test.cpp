@@ -85,5 +85,28 @@ int main()
 	assert(restless.awaitProviderAtApproach(true) == PlayerBotServiceProviderWait::Rejected);
 	select(restless, observe({northTile, secondNorthTile}), secondNorthTile);
 
+	// An occupied tile is used only after free tiles (see playerbotapproach.h).
+	PlayerBotServiceWorkflow crowded = selling();
+	PlayerBotServiceObservation occupied = observe({northTile, secondNorthTile});
+	occupied.providers[sellerId].approaches.front().occupied = true;
+	select(crowded, occupied, secondNorthTile);
+
+	// Rejected routes move to the next tile; the shared bound then rejects the
+	// provider even while tiles remain.
+	PlayerBotServiceWorkflow unreachable = selling();
+	const PlayerBotEconomyCatalog catalog;
+	const PlayerBotDispositionPolicy disposition;
+	std::vector<Position> tiles;
+	for (int x = 0; x < 6; ++x) tiles.emplace_back(32396 + x, 32219, 7);
+	PlayerBotServiceObservation blocked = observe(tiles);
+	for (size_t tile = 0; tile < PlayerBotApproachLimits::rejectedTiles; ++tile) {
+		PlayerBotServiceCommand command = unreachable.advance(blocked, catalog, disposition);
+		assert(command.type == PlayerBotServiceCommandType::ValidateProviderRoute && command.destination == tiles[tile]);
+		blocked.approachRoute = {sellerId, tiles[tile], PlayerBotServiceRouteResult::Unreachable, 0};
+	}
+	const PlayerBotServiceCommand rejected = unreachable.advance(blocked, catalog, disposition);
+	assert(rejected.type == PlayerBotServiceCommandType::Wait && rejected.outcome == PlayerBotServiceOutcome::Retry &&
+	       rejected.providerId == sellerId);
+
 	std::cout << "service workflow regression tests passed\n";
 }

@@ -10,7 +10,6 @@
 
 using playerbot::SellLootApproach;
 using playerbot::playerBotSellLootApproaches;
-using playerbot::playerBotNextSellLootApproach;
 
 int main()
 {
@@ -61,11 +60,5 @@ int main()
 	assert((playerBotSellLootApproaches(ties) ==
 	        std::vector<Position>{Position(501, 500, 7), Position(502, 500, 7)}));
 	assert(playerBotSellLootApproaches({}).empty());
-	// When the seller moves east, an old western-edge approach is out of
-	// speech range. Skip it even if it was valid in the original snapshot.
-	const Position failed(103, 100, 7);
-	const std::vector<Position> moving{failed, Position(97, 100, 7), Position(104, 101, 7)};
-	assert(playerBotNextSellLootApproach(moving, 1, Position(101, 100, 7), failed) == 2);
-	assert(playerBotNextSellLootApproach(moving, 2, Position(90, 100, 7), failed) == moving.size());
 	std::cout << "playerbotselllootapproach contracts passed\n";
 }

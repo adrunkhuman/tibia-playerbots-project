@@ -9,6 +9,7 @@
 void PlayerBotDepotWorkflow::reset()
 {
 	session.reset();
+	selectedApproach.reset();
 	discoveryCandidates.clear();
 	routeCandidate.reset();
 	riskFallback.reset();

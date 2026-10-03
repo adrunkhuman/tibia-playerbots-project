@@ -55,6 +55,8 @@ class PlayerBotNavigationSession
 			steps[1].direction = onward;
 		}
 		void clearRoute() { steps.clear(); }
+		// Walk to a moved provider before its pending interaction step.
+		void prepend(const std::deque<PlayerBotNavigationStep>& leading) { steps.insert(steps.begin(), leading.begin(), leading.end()); }
 		size_t routeSize() const { return steps.size(); }
 		bool hasPendingWork() const { return movementPending || worldChangePending || !steps.empty(); }
 		std::optional<Position> pendingMoveTarget() const

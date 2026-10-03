@@ -34,7 +34,6 @@ namespace {
 	constexpr size_t maximumServiceBankers = 2;
 	constexpr size_t maximumSellLootRouteValidationsPerDecision = 1;
 	// One-second waits; a refused step keeps its tile blocked for ten seconds.
-	constexpr uint32_t maximumServiceBlockedRouteWaits = 30;
 	constexpr uint32_t maximumSellLootBatch = 100;
 	constexpr uint32_t sellLootTravelTimeGoldPerMinute = 10;
 	constexpr std::chrono::seconds sellLootFailureCooldown(60);
@@ -119,7 +118,25 @@ bool PlayerBotController::planSellLootTrip(Player& player, uint16_t currentDepot
 			approaches.push_back({target, coarseDistance.has_value(), coarseDistance.value_or(UINT32_MAX),
 				playerBotNavigationDistance(start, target), static_cast<uint8_t>(approachDirection(provider, target))});
 		}
-		return playerBotSellLootApproaches(std::move(approaches), maximumServiceProviderApproaches);
+		std::vector<PlayerBotApproachTile> tiles;
+		uint32_t rank = 0;
+		for (const Position& target : playerBotSellLootApproaches(std::move(approaches), maximumServiceProviderApproaches)) {
+			const Tile* tile = g_game.map.getTile(target);
+			const Creature* occupant = tile ? tile->getTopCreature() : nullptr;
+			tiles.push_back({target, rank++, occupant && occupant != &player});
+		}
+		return tiles;
+	};
+	auto approachPositions = [](const PlayerBotApproach& approach) {
+		std::vector<Position> positions;
+		for (const PlayerBotApproachTile& tile : approach.offered()) positions.push_back(tile.position);
+		return positions;
+	};
+	auto approachIndex = [](const SellLootCandidate& candidate) {
+		const auto& tiles = candidate.approach.offered();
+		return static_cast<size_t>(std::find_if(tiles.begin(), tiles.end(), [&candidate](const PlayerBotApproachTile& tile) {
+			return tile.position == candidate.providerApproach;
+		}) - tiles.begin());
 	};
 	PlayerBotHuntRouteTiming timing;
 	int64_t snapshotUs = 0;
@@ -224,9 +241,10 @@ bool PlayerBotController::planSellLootTrip(Player& player, uint16_t currentDepot
 					candidate.revenue += static_cast<uint64_t>(item.offer->sellPrice) * count;
 				}
 				if (candidate.batches.empty()) continue;
-				candidate.providerApproaches = conversationApproaches(sellerStart, candidate.providerPosition, sellerDistances);
-				if (candidate.providerApproaches.empty()) continue;
-				candidate.providerApproach = candidate.providerApproaches.front();
+				candidate.approach.offer(conversationApproaches(sellerStart, candidate.providerPosition, sellerDistances));
+				const std::optional<Position> firstApproach = candidate.approach.next();
+				if (!firstApproach) continue;
+				candidate.providerApproach = *firstApproach;
 				candidate.roughCost = static_cast<uint64_t>(sourceDistance) +
 					playerBotNavigationDistance(sourceApproach, candidate.providerApproach);
 				candidates.push_back(std::move(candidate));
@@ -293,7 +311,7 @@ bool PlayerBotController::planSellLootTrip(Player& player, uint16_t currentDepot
 		     ",\"expected_revenue\":" + std::to_string(candidate.revenue) +
 		     ",\"fare\":" + std::to_string(fare) + ",\"trip_cost\":" + std::to_string(tripCost) +
 		     ",\"danger_cost\":" + std::to_string(danger) +
-		     ",\"provider_approach_index\":" + std::to_string(candidate.approachIndex) + extra);
+		     ",\"provider_approach_index\":" + std::to_string(approachIndex(candidate)) + extra);
 	};
 	// A provider counts as boardable when any walkable tile beside it is
 	// reachable. Tiles outside the walk graph are unknown, so never prune on them.
@@ -396,7 +414,7 @@ bool PlayerBotController::planSellLootTrip(Player& player, uint16_t currentDepot
 				const Position sellerStart = candidate.sourceDepotId == currentDepotId ? position : candidate.sourceApproach;
 				std::optional<LegBound> source = LegBound{};
 				if (candidate.sourceDepotId != currentDepotId) source = legBound(position, {candidate.sourceApproach});
-				const auto seller = source ? legBound(sellerStart, candidate.providerApproaches) : std::nullopt;
+				const auto seller = source ? legBound(sellerStart, approachPositions(candidate.approach)) : std::nullopt;
 				if (!source || !seller) {
 					emitRejected(candidate, !source ? "source_route_unavailable" : "seller_route_unavailable", 0, 0, 0,
 					             std::string(!source ? ",\"source_result\"" : ",\"seller_result\"") +
@@ -496,15 +514,15 @@ bool PlayerBotController::planSellLootTrip(Player& player, uint16_t currentDepot
 		auto refreshApproaches = [&]() {
 			candidate.providerPosition = seller->getPosition();
 			const auto distances = topology.distancesFrom(sellerStart, canUseRope, canUseShovel, player.getLevel());
-			candidate.providerApproaches = conversationApproaches(sellerStart, candidate.providerPosition, distances);
-			candidate.approachIndex = 0;
+			candidate.approach.offer(conversationApproaches(sellerStart, candidate.providerPosition, distances));
 		};
 		if (!Position::areInRange<3, 3, 0>(candidate.providerApproach, seller->getPosition())) {
 			refreshApproaches();
 			resetRoutes();
 			++search.invalidationRetries;
-			if (candidate.providerApproaches.empty()) { reject("provider_approach_unavailable"); continue; }
-			candidate.providerApproach = candidate.providerApproaches.front();
+			const std::optional<Position> liveApproach = candidate.approach.next();
+			if (!liveApproach) { reject("provider_approach_unavailable"); continue; }
+			candidate.providerApproach = *liveApproach;
 		}
 		// The engine revalidates its pending leg. This enclosing watch and actor/
 		// offer fingerprint also protect a COMPLETED source leg while the seller
@@ -619,30 +637,33 @@ bool PlayerBotController::planSellLootTrip(Player& player, uint16_t currentDepot
 			const Position failedApproach = candidate.providerApproach;
 			const auto result = sellerPlan->metrics.result;
 			const bool providerMoved = candidate.providerPosition != seller->getPosition();
-			if (providerMoved) refreshApproaches();
-			else ++candidate.approachIndex;
-			candidate.approachIndex = playerBotNextSellLootApproach(candidate.providerApproaches,
-				candidate.approachIndex, seller->getPosition(), failedApproach);
 			// A failed transport search may instead have failed on its last walking
 			// leg. Try the other speech tiles before rejecting the seller. An
 			// exhausted or unsafe search fails the same way for every tile, and a
-			// wandering seller may refresh its tiles only a few times.
-			constexpr uint32_t maximumSellLootProviderMoves = 2;
-			const bool retryable = providerMoved ? ++candidate.providerMoves <= maximumSellLootProviderMoves :
-			    result == PlayerBotNavigationResult::Unreachable;
-			if (retryable && candidate.approachIndex < candidate.providerApproaches.size()) {
-				candidate.providerApproach = candidate.providerApproaches[candidate.approachIndex];
+			// wandering seller is retargeted only within the shared bound.
+			PlayerBotApproachVerdict verdict = PlayerBotApproachVerdict::Exhausted;
+			if (providerMoved) {
+				verdict = candidate.approach.providerMoved();
+				if (verdict == PlayerBotApproachVerdict::Continue) refreshApproaches();
+			}
+			// After a move the failed tile may still be in range; never retry it.
+			if (providerMoved ? verdict == PlayerBotApproachVerdict::Continue : result == PlayerBotNavigationResult::Unreachable) {
+				verdict = candidate.approach.reject(failedApproach, providerMoved ? "provider_moved" : "route_unavailable");
+			}
+			const std::optional<Position> nextApproach = verdict == PlayerBotApproachVerdict::Continue ?
+			    candidate.approach.next() : std::nullopt;
+			if (nextApproach) {
+				candidate.providerApproach = *nextApproach;
 				search.routeWork.reset();
 				++search.sequence;
-				emit("sell_loot_approach", position, "\"result\":\"retry\",\"npc_id\":" +
-					std::to_string(candidate.providerId) + ",\"approach_index\":" +
-					std::to_string(candidate.approachIndex) + ",\"approach_count\":" +
-					std::to_string(candidate.providerApproaches.size()) +
-					",\"destination\":{\"x\":" + std::to_string(candidate.providerApproach.x) +
-					",\"y\":" + std::to_string(candidate.providerApproach.y) +
-					",\"z\":" + std::to_string(candidate.providerApproach.z) + "}");
+				emitApproachResult("sell_loot", "retry", candidate.approach.reason(), position, candidate.providerId,
+				                   *nextApproach, ",\"approach_index\":" + std::to_string(approachIndex(candidate)) +
+				                       ",\"approach_count\":" + std::to_string(candidate.approach.offered().size()));
 				break;
 			}
+			emitApproachResult("sell_loot", "failed", result == PlayerBotNavigationResult::Unreachable || providerMoved ?
+			                   candidate.approach.reason() : result == PlayerBotNavigationResult::NodeLimit ?
+			                   "route_incomplete" : "route_unsafe", position, candidate.providerId, failedApproach);
 			const std::string cause = ",\"seller_result\":" + jsonString(
 			    result == PlayerBotNavigationResult::Reached ? "unsafe" :
 			    result == PlayerBotNavigationResult::NodeLimit ? "incomplete" : "unreachable");
@@ -771,7 +792,7 @@ bool PlayerBotController::planSellLootTrip(Player& player, uint16_t currentDepot
 		}
 		sellLootPlan = std::move(plan);
 		selectedProviderApproach = candidate.providerApproach;
-		selectedApproachIndex = candidate.approachIndex;
+		selectedApproachIndex = approachIndex(candidate);
 		found = true;
 		break;
 	}
@@ -1300,9 +1321,12 @@ void PlayerBotController::processService(Player* player, const Position& current
 				if (xOffset == 0 && yOffset == 0) continue;
 				const Position approach(npc->getPosition().x + xOffset, npc->getPosition().y + yOffset, npc->getPosition().z);
 				Tile* tile = g_game.map.getTile(approach);
-				if (tile && tile->queryAdd(0, *player, 1, 0) == RETURNVALUE_NOERROR) {
+				// Occupied tiles stay eligible as a last resort (see playerbotapproach.h).
+				if (tile && tile->queryAdd(0, *player, 1, FLAG_IGNOREBLOCKCREATURE) == RETURNVALUE_NOERROR) {
+					const Creature* occupant = tile->getTopCreature();
 					providerObservation.approaches.push_back({approach, static_cast<uint32_t>(
-						std::max(Position::getDistanceX(currentPosition, approach), Position::getDistanceY(currentPosition, approach)))});
+						std::max(Position::getDistanceX(currentPosition, approach), Position::getDistanceY(currentPosition, approach))),
+						occupant && occupant != player});
 				}
 			}
 			// Tiles behind a shop counter are never walkable. When any tile is, skip
@@ -1333,6 +1357,7 @@ void PlayerBotController::processService(Player* player, const Position& current
 				                                               Position::getDistanceY(npc->getPosition(), left.position));
 				const uint32_t rightProviderDistance = std::max(Position::getDistanceX(npc->getPosition(), right.position),
 				                                                Position::getDistanceY(npc->getPosition(), right.position));
+				if (left.occupied != right.occupied) return !left.occupied;
 				if (leftProviderDistance != rightProviderDistance) return leftProviderDistance > rightProviderDistance;
 				return left.distance != right.distance ? left.distance < right.distance : left.position < right.position;
 			});
@@ -1525,20 +1550,16 @@ void PlayerBotController::processService(Player* player, const Position& current
 			    playerBotNavigationRiskVerdict(riskProfile, detour.metrics) == PlayerBotNavigationRiskVerdict::Accepted) {
 				routePlan = std::move(detour);
 				validatedNpcTravel = false;
-			} else if (++serviceBlockedRouteWaits <= maximumServiceBlockedRouteWaits) {
-				emit("service_route_blocked", currentPosition,
-				     "\"result\":\"waiting\",\"npc_id\":" + std::to_string(command.providerId) +
-				         ",\"destination\":{\"x\":" + std::to_string(command.destination.x) +
-				         ",\"y\":" + std::to_string(command.destination.y) + ",\"z\":" +
-				         std::to_string(static_cast<uint16_t>(command.destination.z)) +
-				         "},\"waits\":" + std::to_string(serviceBlockedRouteWaits));
+			} else if (serviceWorkflow.approach().blocked() == PlayerBotApproachVerdict::Wait) {
+				emitApproachResult("service", "waiting", "route_blocked", currentPosition, command.providerId,
+				                   command.destination, ",\"waits\":" + std::to_string(serviceWorkflow.approach().blockedWaits()));
 				schedule(1000);
 				return;
 			} else {
 				routeBlocked = true;
 			}
 		}
-		if (!routeBlocked) serviceBlockedRouteWaits = 0;
+		if (!routeBlocked) serviceWorkflow.approach().unblocked();
 		const auto* quote = sellingLocalLoot ? &*serviceWorkflow.liquidation() : nullptr;
 		const bool quoteAllowed = !quote || (routePlan.metrics.fare <= quote->maximumFare &&
 		    (quote->maximumRouteSteps == 0 || routePlan.metrics.steps <= quote->maximumRouteSteps));
@@ -1757,22 +1778,17 @@ void PlayerBotController::processService(Player* player, const Position& current
 				schedule(1000);
 				return;
 			}
-			emit(wait == PlayerBotServiceProviderWait::Released ? "service_provider_approach_released" :
-			         "service_provider_approach_rejected", currentPosition,
-			     "\"reason\":\"provider_out_of_range\",\"npc_id\":" + std::to_string(command.providerId) +
-			         ",\"provider_position\":{\"x\":" + std::to_string(provider->getPosition().x) +
-			         ",\"y\":" + std::to_string(provider->getPosition().y) + ",\"z\":" +
-			         std::to_string(static_cast<uint16_t>(provider->getPosition().z)) + "}");
+			emitApproachResult("service", wait == PlayerBotServiceProviderWait::Released ? "released" : "rejected",
+			                   "provider_out_of_range", currentPosition, command.providerId, currentPosition,
+			                   ",\"provider_position\":{\"x\":" + std::to_string(provider->getPosition().x) +
+			                       ",\"y\":" + std::to_string(provider->getPosition().y) + ",\"z\":" +
+			                       std::to_string(static_cast<uint16_t>(provider->getPosition().z)) + "}");
 			resetNavigation();
 			schedule(SCHEDULER_MINTICKS);
 			return;
 		}
 		if (const std::optional<Position> rejected = serviceWorkflow.rejectSelectedApproach()) {
-			emit("service_provider_approach_rejected", currentPosition,
-			     "\"reason\":\"route_unavailable\",\"npc_id\":" + std::to_string(command.providerId) +
-			         ",\"destination\":{\"x\":" + std::to_string(rejected->x) +
-			         ",\"y\":" + std::to_string(rejected->y) + ",\"z\":" +
-			         std::to_string(static_cast<uint16_t>(rejected->z)) + "}");
+			emitApproachResult("service", "rejected", "route_unavailable", currentPosition, command.providerId, rejected);
 			resetNavigation();
 		}
 		schedule(SCHEDULER_MINTICKS);
@@ -2278,19 +2294,39 @@ bool PlayerBotController::depotApproachStalled(Player& player, const Position& c
 	                                          const PlayerBotNavigationRuntimeOutcome* navigation)
 {
 	if (currentPosition == approach) return false;
+	PlayerBotApproach& shared = depotWorkflow.approach();
+	if (navigation && navigation->positionalProgress) shared.unblocked();
 	// Without a navigation outcome, runtime counters may still describe an
 	// earlier goal. Depot suppression is short; occupancy ordering, not
 	// suppression, keeps a rescan from selecting the same approach again.
+	const bool stalled = navigation && (navigation->oscillation ||
+	                                    navigation->stepFailureCount >= maximumRepeatedNavigationStepFailures);
 	const char* reason = navigation && navigationRuntime.fixedTargetRouteFailureCount() != 0 ? "route_unavailable" :
-	    navigation && (navigation->oscillation ||
-	                   navigation->stepFailureCount >= maximumRepeatedNavigationStepFailures) ? "navigation_stalled" :
+	    stalled ? "navigation_stalled" :
 	    Position::areInRange<7, 5, 0>(currentPosition, approach) && depotApproachOccupied(player, approach) ?
 	        "approach_occupied" : nullptr;
 	if (!reason) return false;
-	emit("action_result", currentPosition,
-	     "\"action\":\"depot_approach\",\"result\":\"rejected\",\"reason\":" + jsonString(reason) +
-	         ",\"approach\":{\"x\":" + std::to_string(approach.x) + ",\"y\":" + std::to_string(approach.y) +
-	         ",\"z\":" + std::to_string(static_cast<uint16_t>(approach.z)) + '}');
+	// Walking already sidestepped and replanning detours around the blocked
+	// tile. Wait out a creature on the path within the shared bound.
+	// Oscillation may follow an older step failure; only repeated failed steps
+	// name their current blocker.
+	const char* cause = lastStepFailure.cause;
+	if (std::strcmp(reason, "navigation_stalled") == 0 &&
+	    navigation->stepFailureCount >= maximumRepeatedNavigationStepFailures &&
+	    (!std::strcmp(cause, "monster") || !std::strcmp(cause, "player") || !std::strcmp(cause, "npc") ||
+	     !std::strcmp(cause, "creature"))) {
+		if (shared.blocked() == PlayerBotApproachVerdict::Wait) {
+			emitApproachResult("depot", "waiting", "route_blocked", currentPosition, 0, approach,
+			                   ",\"waits\":" + std::to_string(shared.blockedWaits()));
+			return true;
+		}
+		reason = "route_blocked";
+	}
+	const PlayerBotApproachVerdict verdict = shared.reject(approach, reason);
+	emitApproachResult("depot", verdict == PlayerBotApproachVerdict::Exhausted ? "failed" : "rejected", reason,
+	                   currentPosition, 0, approach);
+	// Depot exhaustion only defers: a depot failure stops the controller.
+	if (verdict == PlayerBotApproachVerdict::Exhausted) shared.reset();
 	PlayerBotDepotObservation observation;
 	observation.currentPosition = currentPosition;
 	observation.now = std::chrono::steady_clock::now();

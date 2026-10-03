@@ -953,6 +953,16 @@ PlayerBotNavigationRoutePlan PlayerBotController::planNavigationRoute(Player& pl
 	return routePlan;
 }
 
+void PlayerBotController::emitApproachResult(const char* caller, const char* result, const char* reason,
+	const Position& position, uint32_t providerId, const std::optional<Position>& tile, const std::string& extra) const
+{
+	std::string fields = std::string("\"caller\":") + jsonString(caller) + ",\"result\":" + jsonString(result) +
+	                     ",\"reason\":" + jsonString(reason) + ",\"npc_id\":" + std::to_string(providerId) + ",\"tile\":";
+	fields += tile ? "{\"x\":" + std::to_string(tile->x) + ",\"y\":" + std::to_string(tile->y) + ",\"z\":" +
+	                 std::to_string(static_cast<uint16_t>(tile->z)) + '}' : std::string("null");
+	emit("approach_result", position, fields + extra);
+}
+
 bool PlayerBotController::rerouteValidatedPaidApproach(Player& player, PlayerBotNavigationRoutePlan& route,
 	const std::set<Position>& blockedPositions) const
 {
@@ -1824,6 +1834,33 @@ bool PlayerBotController::processNavigation(Player* player, const Position& curr
 			return false;
 		}
 	}
+	if (resolvedStep && resolvedStep->action == PlayerBotNavigationAction::NpcTravel) {
+		// Boarding needs the captain within 3 tiles. One that wandered since
+		// planning is followed to its live tiles within the shared bound.
+		const Npc* captain = g_game.getNpcByID(resolvedStep->npcId);
+		if (captain && captain->getPosition().z == currentPosition.z &&
+		    !Position::areInRange<3, 3, 0>(captain->getPosition(), currentPosition)) {
+			if (boardingApproachNpcId != resolvedStep->npcId) {
+				boardingApproach.reset();
+				boardingApproachNpcId = resolvedStep->npcId;
+			}
+			const char* reason = "provider_moved";
+			if (boardingApproach.providerMoved() == PlayerBotApproachVerdict::Continue) {
+				PlayerBotNavigationRoutePlan walk = planNavigationRoute(*player,
+				    PlayerBotNavigationGoal::withinRange(captain->getPosition(), 1, 1),
+				    navigationRuntime.activeBlockedPositions(now), playerBotNavigationMaximumExpandedNodes, true);
+				if (walk.metrics.result == PlayerBotNavigationResult::Reached && !walk.steps.empty()) {
+					navigationRuntime.prependSteps(walk.steps);
+					emitApproachResult("npc_travel", "retry", reason, currentPosition, resolvedStep->npcId,
+					                   walk.steps.back().expectedPosition);
+					schedule(navigationDecisionDelay(*player));
+					return false;
+				}
+				reason = "route_unavailable";
+			}
+			emitApproachResult("npc_travel", "failed", reason, currentPosition, resolvedStep->npcId);
+		}
+	}
 	if (resolvedStep && resolvedStep->action == PlayerBotNavigationAction::Move) {
 		// Planning ignores creatures. One tile lookup per move finds a creature on
 		// the next tile; only then search for a sidestep around it.
@@ -1857,6 +1894,7 @@ bool PlayerBotController::processNavigation(Player* player, const Position& curr
 	}
 
 	step = *resolvedStep;
+	if (step.action == PlayerBotNavigationAction::NpcTravel) boardingApproachNpcId = 0;
 	navigationRuntime.observeStep({step, PlayerBotNavigationStepResult::Dispatched,
 	                               std::chrono::steady_clock::now(), navigationBlockSuppression});
 	schedule(navigationDecisionDelay(*player));

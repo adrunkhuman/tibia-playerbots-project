@@ -2,6 +2,7 @@
 #ifndef FS_PLAYERBOTSERVICEWORKFLOW_H
 #define FS_PLAYERBOTSERVICEWORKFLOW_H
 
+#include "playerbotapproach.h"
 #include "playerboteconomy.h"
 #include "playerbotnpcsession.h"
 #include "playerbotservicesession.h"
@@ -36,6 +37,7 @@ struct PlayerBotServiceProviderObservation {
 	struct Approach {
 		Position position;
 		uint32_t distance = 0;
+		bool occupied = false; // Another creature stands on the tile.
 	};
 	std::vector<Approach> approaches;
 };
@@ -146,6 +148,9 @@ class PlayerBotServiceWorkflow
 		// Release the tile for a live reselection, waiting first when no other
 		// reachable tile is in range; reject it only after repeated releases.
 		PlayerBotServiceProviderWait awaitProviderAtApproach(bool alternativeInRange);
+		// Shared tile choice and retry bounds for the targeted provider.
+		PlayerBotApproach& approach() { return providerApproach; }
+		const PlayerBotApproach& approach() const { return providerApproach; }
 		PlayerBotServiceCommand advance(const PlayerBotServiceObservation& observation,
 		                               const PlayerBotEconomyCatalog& catalog,
 		                               const PlayerBotDispositionPolicy& disposition);
@@ -184,12 +189,8 @@ class PlayerBotServiceWorkflow
 		uint32_t slottedMoveAttempts = 0;
 		uint32_t shopOpenAttempts = 0;
 		std::map<std::pair<uint16_t, slots_t>, std::chrono::steady_clock::time_point> unavailableSlottedSales;
-		std::vector<PlayerBotServiceProviderObservation::Approach> providerApproaches;
+		PlayerBotApproach providerApproach;
 		std::optional<Position> pendingApproachRoute;
-		std::optional<Position> selectedApproach;
-		std::set<Position> rejectedApproaches;
-		uint32_t providerWaits = 0;
-		uint32_t approachReleases = 0;
 		std::set<uint32_t> unavailableProviderIds;
 		std::map<uint32_t, uint32_t> providerRouteCosts;
 		std::set<uint32_t> providersRequiringNpcTravel;
