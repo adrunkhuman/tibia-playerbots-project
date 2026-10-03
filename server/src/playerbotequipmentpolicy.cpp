@@ -21,6 +21,15 @@ namespace {
 		       type == PlayerBotEquipmentWeaponType::Axe;
 	}
 
+	bool inFamily(PlayerBotWeaponFamily family, PlayerBotEquipmentWeaponType type)
+	{
+		switch (family) {
+			case PlayerBotWeaponFamily::Melee: return melee(type);
+			case PlayerBotWeaponFamily::None: break;
+		}
+		return false;
+	}
+
 	int32_t skill(const PlayerBotEquipmentPlayerSnapshot& player, PlayerBotEquipmentWeaponType type)
 	{
 		switch (type) {
@@ -38,13 +47,9 @@ namespace {
 	}
 }
 
-PlayerBotEquipmentPolicy::PlayerBotEquipmentPolicy(uint16_t combatReadinessVocationId) :
-	combatReadinessVocationId(combatReadinessVocationId)
-{}
-
-bool PlayerBotEquipmentPolicy::requiresKnightCombatReadiness(const PlayerBotEquipmentPlayerSnapshot& player) const
+bool PlayerBotEquipmentPolicy::managesEquipment(const PlayerBotEquipmentPlayerSnapshot& player) const
 {
-	return player.vocationId == combatReadinessVocationId;
+	return playerBotCombatStyle(player.vocationId).managed;
 }
 
 bool PlayerBotEquipmentPolicy::isLegalEquipmentItem(const PlayerBotEquipmentPlayerSnapshot& player,
@@ -55,10 +60,26 @@ bool PlayerBotEquipmentPolicy::isLegalEquipmentItem(const PlayerBotEquipmentPlay
 	       (item.vocationIds.empty() || std::find(item.vocationIds.begin(), item.vocationIds.end(), player.vocationId) != item.vocationIds.end());
 }
 
-bool PlayerBotEquipmentPolicy::isKnightMeleeWeapon(const PlayerBotEquipmentPlayerSnapshot& player,
+bool PlayerBotEquipmentPolicy::isStyleWeapon(const PlayerBotEquipmentPlayerSnapshot& player,
 	const PlayerBotEquipmentItemSnapshot& item) const
 {
-	return isLegalEquipmentItem(player, item) && item.attack > 0 && melee(item.weaponType) && (item.left || item.right);
+	return isLegalEquipmentItem(player, item) && item.attack > 0 && inFamily(playerBotCombatStyle(player.vocationId).weapons, item.weaponType) &&
+	       (item.left || item.right);
+}
+
+bool PlayerBotEquipmentPolicy::weaponReady(const PlayerBotEquipmentPlayerSnapshot& player,
+	const PlayerBotEquipmentLoadout& loadout) const
+{
+	return isStyleWeapon(player, loadout.items[static_cast<uint8_t>(left)]) || isStyleWeapon(player, loadout.items[static_cast<uint8_t>(right)]);
+}
+
+const char* PlayerBotEquipmentPolicy::weaponRequirement(const PlayerBotEquipmentPlayerSnapshot& player)
+{
+	switch (playerBotCombatStyle(player.vocationId).weapons) {
+		case PlayerBotWeaponFamily::Melee: return "legal_melee_weapon";
+		case PlayerBotWeaponFamily::None: break;
+	}
+	return "legal_weapon";
 }
 
 bool PlayerBotEquipmentPolicy::isCombatEquipment(const PlayerBotEquipmentItemSnapshot& item) const
@@ -102,9 +123,9 @@ std::optional<PlayerBotEquipmentCarriedUpgrade> PlayerBotEquipmentPolicy::findCa
 	for (size_t index = 0; index < candidates.size(); ++index) {
 		const auto& candidate = candidates[index];
 		auto upgrade = evaluateUpgrade(player, loadout, candidate.item);
-		if (!candidate.actionable || !candidate.item.inContainer || !upgrade || (requiresKnightCombatReadiness(player) &&
+		if (!candidate.actionable || !candidate.item.inContainer || !upgrade || (managesEquipment(player) &&
 		    candidate.item.weaponType != PlayerBotEquipmentWeaponType::None &&
-		    candidate.item.weaponType != PlayerBotEquipmentWeaponType::Shield && !isKnightMeleeWeapon(player, candidate.item)) ||
+		    candidate.item.weaponType != PlayerBotEquipmentWeaponType::Shield && !isStyleWeapon(player, candidate.item)) ||
 		    (selected && upgrade->benefit <= selected->upgrade.benefit)) continue;
 		selected = PlayerBotEquipmentCarriedUpgrade{index, *upgrade};
 	}
@@ -133,7 +154,7 @@ bool PlayerBotEquipmentPolicy::applyOffer(const PlayerBotEquipmentPlayerSnapshot
 	else if (candidate.feet) target = feet;
 	else if (candidate.weaponType == PlayerBotEquipmentWeaponType::Shield) target = weapon(left) && !twoHanded(left) ? right : weapon(right) && !twoHanded(right) ? left : right;
 	else if (candidate.weaponType != PlayerBotEquipmentWeaponType::None && candidate.weaponType != PlayerBotEquipmentWeaponType::Ammo && (candidate.left || candidate.right)) {
-		if (requiresKnightCombatReadiness(player) && !melee(candidate.weaponType)) { rejection = "unsupported_weapon_type"; return false; }
+		if (managesEquipment(player) && !inFamily(playerBotCombatStyle(player.vocationId).weapons, candidate.weaponType)) { rejection = "unsupported_weapon_type"; return false; }
 		target = shield(left) ? right : shield(right) ? left : candidate.left ? left : right;
 	} else { rejection = "unsupported_slot"; return false; }
 	replacedItemId = candidate.twoHanded ? loadout.itemIds[static_cast<uint8_t>(left)] : loadout.itemIds[static_cast<uint8_t>(target)];
@@ -182,12 +203,10 @@ PlayerBotCombatProfile PlayerBotEquipmentPolicy::combatProfile(const PlayerBotEq
 bool PlayerBotEquipmentPolicy::loadoutReady(const PlayerBotEquipmentPlayerSnapshot& player, const PlayerBotEquipmentLoadout& loadout,
 	const PlayerBotEquipmentReadinessInput& readiness, uint32_t additionalWeight) const
 {
-	const auto& leftItem = loadout.items[static_cast<uint8_t>(left)];
-	const auto& rightItem = loadout.items[static_cast<uint8_t>(right)];
 	const auto& armorItem = loadout.items[static_cast<uint8_t>(armor)];
-	const bool weaponReady = isKnightMeleeWeapon(player, leftItem) || isKnightMeleeWeapon(player, rightItem);
+	const bool weaponIsReady = weaponReady(player, loadout);
 	const bool armorReady = armorItem.itemId != 0 && isLegalEquipmentItem(player, armorItem) && armorItem.armorSlot && armorItem.armor > 0;
-	return weaponReady && armorReady && readiness.backpackReady && readiness.suppliesReady &&
+	return weaponIsReady && armorReady && readiness.backpackReady && readiness.suppliesReady &&
 	       static_cast<uint64_t>(readiness.effectiveFreeCapacity) >= static_cast<uint64_t>(readiness.minimumFreeCapacity) + additionalWeight;
 }
 
@@ -195,7 +214,7 @@ PlayerBotBackpackAcquisition PlayerBotEquipmentPolicy::standardBackpackAcquisiti
 	const PlayerBotEquipmentPlayerSnapshot& player, uint16_t currentBackItemId, bool currentBackIsContainer,
 	uint32_t currentBackItems, uint32_t currentBackCapacity) const
 {
-	if (!requiresKnightCombatReadiness(player)) return {false, false, "unsupported_vocation"};
+	if (!managesEquipment(player)) return {false, false, "unsupported_vocation"};
 	if (currentBackItemId == 0) return {true, false, nullptr};
 	if (currentBackItemId != 1987 || !currentBackIsContainer || currentBackItems > currentBackCapacity) {
 		return {false, false, "back_slot_not_upgradeable"};
@@ -207,15 +226,13 @@ PlayerBotEquipmentReadiness PlayerBotEquipmentPolicy::combatReadiness(const Play
 	const PlayerBotEquipmentLoadout& loadout, bool carriedUpgrade, const PlayerBotEquipmentReadinessInput& readiness) const
 {
 	PlayerBotEquipmentReadiness result;
-	if (!requiresKnightCombatReadiness(player)) { result.ready = true; return result; }
-	const auto& leftItem = loadout.items[static_cast<uint8_t>(left)];
-	const auto& rightItem = loadout.items[static_cast<uint8_t>(right)];
+	if (!managesEquipment(player)) { result.ready = true; return result; }
 	const auto& armorItem = loadout.items[static_cast<uint8_t>(armor)];
-	const bool weaponReady = isKnightMeleeWeapon(player, leftItem) || isKnightMeleeWeapon(player, rightItem);
+	const bool weaponIsReady = weaponReady(player, loadout);
 	const bool armorReady = armorItem.itemId != 0 && isLegalEquipmentItem(player, armorItem) && armorItem.armorSlot && armorItem.armor > 0;
 	if (carriedUpgrade) { result.recovery = "equip_carried"; return result; }
-	if (weaponReady && armorReady && readiness.backpackReady && readiness.suppliesReady && readiness.effectiveFreeCapacity >= readiness.minimumFreeCapacity) { result.ready = true; return result; }
-	if (!weaponReady) result.terminalReason = "missing_legal_melee_weapon";
+	if (weaponIsReady && armorReady && readiness.backpackReady && readiness.suppliesReady && readiness.effectiveFreeCapacity >= readiness.minimumFreeCapacity) { result.ready = true; return result; }
+	if (!weaponIsReady) result.terminalReason = std::string("missing_") + weaponRequirement(player);
 	else if (!armorReady) result.terminalReason = "missing_legal_armor";
 	else if (!readiness.backpackReady) result.recovery = "acquire_backpack";
 	else result.recovery = "service";

@@ -133,7 +133,7 @@ namespace {
 		// uses the same equipment formula without that transient; attackFactor
 		// separately preserves the selected fight mode.
 		equipmentPlayer.defenseFactor = 1.0f;
-		profile.supplyCapabilityDefense = PlayerBotEquipmentPolicy(oracleVocationId).combatProfile(
+		profile.supplyCapabilityDefense = PlayerBotEquipmentPolicy().combatProfile(
 		    equipmentPlayer, PlayerBotEquipmentAdapter::loadout(player)).defense;
 		return profile;
 	}

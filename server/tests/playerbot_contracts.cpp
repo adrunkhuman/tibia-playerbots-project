@@ -2857,7 +2857,7 @@ void oracleRecovery()
 
 static void backpackAcquisition()
 {
-	PlayerBotEquipmentPolicy policy(4);
+	PlayerBotEquipmentPolicy policy;
 	PlayerBotEquipmentPlayerSnapshot knight;
 	knight.vocationId = 4;
 	auto acquisition = policy.standardBackpackAcquisition(knight, 0, false, 0, 0);
@@ -2898,7 +2898,7 @@ static void backpackAcquisition()
 
 static void carriedShieldUpgrade()
 {
-	PlayerBotEquipmentPolicy policy(4);
+	PlayerBotEquipmentPolicy policy;
 	PlayerBotEquipmentPlayerSnapshot knight;
 	knight.vocationId = 4;
 	knight.level = 20;
@@ -2950,10 +2950,56 @@ static void carriedShieldUpgrade()
 	}
 }
 
+static void combatStyles()
+{
+	static_assert(playerBotCombatStyle(4).managed && playerBotCombatStyle(4).weapons == PlayerBotWeaponFamily::Melee);
+	static_assert(!playerBotCombatStyle(0).managed && playerBotCombatStyle(0).weapons == PlayerBotWeaponFamily::Melee);
+	for (uint16_t unsupported : {uint16_t{1}, uint16_t{2}, uint16_t{3}, uint16_t{8}}) {
+		assert(!playerBotCombatStyle(unsupported).managed);
+		assert(playerBotCombatStyle(unsupported).weapons == PlayerBotWeaponFamily::None);
+	}
+
+	PlayerBotEquipmentPolicy policy;
+	PlayerBotEquipmentLoadout loadout;
+	PlayerBotEquipmentItemSnapshot weapon;
+	weapon.itemId = 2376;
+	weapon.weaponType = PlayerBotEquipmentWeaponType::Sword;
+	weapon.attack = 14;
+	weapon.left = weapon.pickupable = true;
+	loadout.items[6] = weapon;
+	PlayerBotEquipmentItemSnapshot armor;
+	armor.itemId = 2463;
+	armor.armorSlot = armor.pickupable = true;
+	armor.armor = 10;
+	loadout.items[4] = armor;
+	const PlayerBotEquipmentReadinessInput readiness{true, true, 10000, 100};
+
+	// Rookgaard rewards rely on melee readiness without the managed Knight loop.
+	PlayerBotEquipmentPlayerSnapshot player{0, 0, 0};
+	assert(!policy.managesEquipment(player) && policy.weaponReady(player, loadout) && policy.loadoutReady(player, loadout, readiness));
+	player.vocationId = 4;
+	assert(policy.managesEquipment(player) && policy.loadoutReady(player, loadout, readiness));
+	assert(std::string(PlayerBotEquipmentPolicy::weaponRequirement(player)) == "legal_melee_weapon");
+	player.vocationId = 3;
+	assert(!policy.managesEquipment(player) && !policy.weaponReady(player, loadout));
+	assert(policy.combatReadiness(player, {}, false, readiness).ready);
+	assert(std::string(PlayerBotEquipmentPolicy::weaponRequirement(player)) == "legal_weapon");
+
+	player.vocationId = 4;
+	loadout.items[6].weaponType = PlayerBotEquipmentWeaponType::Distance;
+	assert(!policy.weaponReady(player, loadout));
+	assert(policy.combatReadiness(player, loadout, false, readiness).terminalReason == "missing_legal_melee_weapon");
+	PlayerBotEquipmentLoadout empty;
+	auto evaluation = policy.evaluateCandidate(player, loadout.items[6], empty, {}, {}, false, readiness, 0, true,
+	    [](const PlayerBotCombatProfile&) { return PlayerBotEquipmentHuntSummary{}; });
+	assert(evaluation.rejection == "unsupported_weapon_type");
+}
+
 int main()
 {
 	backpackAcquisition();
 	carriedShieldUpgrade();
+	combatStyles();
 	toolReplenishmentPlannerGuards();
 	loggingContracts();
 	huntEconomy();

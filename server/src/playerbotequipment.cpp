@@ -551,7 +551,7 @@ std::optional<PlayerBotController::EquipmentOfferEvaluation> PlayerBotController
 			                         route.value_or(PlayerBotRouteEstimate{false,
 			                             providerRouteNodeLimits.find(npc->getID()) != providerRouteNodeLimits.end()})});
 	}
-	const PlayerBotEquipmentProviderPlannerSnapshot plannerSnapshot{equipmentPolicy.requiresKnightCombatReadiness(playerFacts), reserve,
+	const PlayerBotEquipmentProviderPlannerSnapshot plannerSnapshot{equipmentPolicy.managesEquipment(playerFacts), reserve,
 	    totalMoney, reserve != std::numeric_limits<uint64_t>::max(), player.getFreeCapacity(),
 	    static_cast<uint32_t>(riskProfile.maximumRouteHealthLoss * riskProfile.healthLossCost),
 	    riskProfile.maximumHealthLossPerSecond, plannerOffers};

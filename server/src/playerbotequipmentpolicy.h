@@ -23,6 +23,33 @@ enum class PlayerBotEquipmentWeaponType : uint8_t {
 	None, Shield, Sword, Club, Axe, Distance, Ammo, Other,
 };
 
+// The server lets any vocation wield any weapon; only skill growth makes one
+// fit. The family is a hard filter for now. It could later become a scoring
+// prior toward the vocation's fast-training skill line, letting loadouts
+// compete on expected outcome. Pure outcome scoring alone is not enough: at
+// low level equal skills favor higher-attack melee weapons, so a Paladin would
+// never train distance.
+enum class PlayerBotWeaponFamily : uint8_t {
+	None, Melee,
+};
+
+struct PlayerBotCombatStyle {
+	PlayerBotWeaponFamily weapons = PlayerBotWeaponFamily::None;
+	// Managed styles gate hunting on readiness, buy backpacks and equipment from
+	// shops, and reject weapons outside their family.
+	bool managed = false;
+};
+
+constexpr PlayerBotCombatStyle playerBotCombatStyle(uint16_t vocationId)
+{
+	switch (vocationId) {
+		// Rookgaard characters fight melee before the Oracle assigns a vocation.
+		case 0: return {PlayerBotWeaponFamily::Melee, false};
+		case 4: return {PlayerBotWeaponFamily::Melee, true};
+		default: return {};
+	}
+}
+
 struct PlayerBotEquipmentItemSnapshot {
 	uint16_t itemId = 0;
 	uint16_t minimumLevel = 0;
@@ -151,12 +178,13 @@ class PlayerBotEquipmentPolicy
 	public:
 		using HuntSummaryEvaluator = std::function<PlayerBotEquipmentHuntSummary(const PlayerBotCombatProfile&)>;
 
-		explicit PlayerBotEquipmentPolicy(uint16_t combatReadinessVocationId);
-		bool requiresKnightCombatReadiness(const PlayerBotEquipmentPlayerSnapshot& player) const;
+		bool managesEquipment(const PlayerBotEquipmentPlayerSnapshot& player) const;
 		bool isLegalEquipmentItem(const PlayerBotEquipmentPlayerSnapshot& player,
 		                          const PlayerBotEquipmentItemSnapshot& item) const;
-		bool isKnightMeleeWeapon(const PlayerBotEquipmentPlayerSnapshot& player,
-		                         const PlayerBotEquipmentItemSnapshot& item) const;
+		bool isStyleWeapon(const PlayerBotEquipmentPlayerSnapshot& player,
+		                   const PlayerBotEquipmentItemSnapshot& item) const;
+		bool weaponReady(const PlayerBotEquipmentPlayerSnapshot& player, const PlayerBotEquipmentLoadout& loadout) const;
+		static const char* weaponRequirement(const PlayerBotEquipmentPlayerSnapshot& player);
 		bool isCombatEquipment(const PlayerBotEquipmentItemSnapshot& item) const;
 		std::optional<PlayerBotEquipmentUpgrade> evaluateUpgrade(const PlayerBotEquipmentPlayerSnapshot& player,
 		                                                         const PlayerBotEquipmentLoadout& loadout,
@@ -192,7 +220,6 @@ class PlayerBotEquipmentPolicy
 		bool applyOffer(const PlayerBotEquipmentPlayerSnapshot& player, PlayerBotEquipmentLoadout& loadout,
 		                const PlayerBotEquipmentItemSnapshot& candidate, slots_t& slot, uint16_t& replacedItemId,
 		                uint16_t& displacedLeftItemId, uint16_t& displacedRightItemId, std::string& rejection) const;
-		const uint16_t combatReadinessVocationId;
 };
 
 #endif

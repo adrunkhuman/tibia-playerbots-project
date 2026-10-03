@@ -187,7 +187,6 @@ PlayerBotController::PlayerBotController(const Player& player, std::string contr
 	                            std::map<uint64_t, std::chrono::steady_clock::time_point>& sharedHuntRegionCooldowns) :
 	playerId(player.getID()), playerGuid(player.getGUID()), playerName(player.getName()), fixtureDriver(playerBotTestPolicyFromEnvironment()),
 	telemetry(player.getName(), player.getGUID(), std::move(controllerId)),
-	equipmentPolicy(oracleVocationId),
 	inventoryPolicy(economyCatalog.sellValues(), [this](const Player& candidatePlayer, const Item& item) {
 		return equipmentPolicy.evaluateUpgrade(PlayerBotEquipmentAdapter::player(candidatePlayer),
 		                                      PlayerBotEquipmentAdapter::loadout(candidatePlayer),
