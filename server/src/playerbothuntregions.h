@@ -527,6 +527,23 @@ class PlayerBotHuntReturnCoverage
 		std::optional<Evidence> evidence;
 };
 
+// For one stamina snapshot, multiplier * available seconds never decreases as
+// available time grows, so the full hunt duration gives a zero-travel XP upper
+// bound. A stamina or premium change restarts hunt planning.
+inline double playerBotHuntStaminaExperienceMultiplier(uint16_t staminaMinutes, bool staminaSystem, bool premium,
+                                                       double availableHuntSeconds)
+{
+	if (staminaMinutes == 0) return 0;
+	if (!staminaSystem) return 1;
+	if (staminaMinutes > 2400 && premium && availableHuntSeconds > 0) {
+		// The award callback can consume two minutes before it checks the premium threshold.
+		const double bonusSeconds = std::min(availableHuntSeconds,
+		                                     std::max<int32_t>(0, staminaMinutes - 2402) * 60.0);
+		return 1 + 0.5 * bonusSeconds / availableHuntSeconds;
+	}
+	return staminaMinutes <= 840 ? 0.5 : 1;
+}
+
 inline bool playerBotHuntNeedsSupplyRoute(double expectedPotions, uint32_t availablePotions,
                                           uint32_t routeReserve)
 {

@@ -2,6 +2,7 @@
 #include "playerbotcontroller.h"
 #include "playerbotnpccapabilities.h"
 #include "playerbothuntwalk.h"
+#include <cstring>
 #include <iomanip>
 #include "playerbotroutechanges.h"
 #include "playerbottransportsearch.h"
@@ -238,6 +239,14 @@ std::optional<PlayerBotNavigationRoutePlan> PlayerBotController::advanceHuntTrav
 		// Transport searches probe hundreds of arrivals per request; most end in
 		// a graph verdict or cache hit without expanding a tile.
 		if (w.local->expanded == 0 && !w.trivialConnections.emplace(w.local->fallbackReason).second) {
+			w.connectionTime = {};
+			return;
+		}
+		// Ordinary successes dominated live logs; slice counters already total
+		// them. Keep failures, refinement fallbacks, and expensive successes.
+		constexpr uint64_t expensiveConnectionNodes = 10000;
+		if (result == PlayerBotNavigationResult::Reached && std::strcmp(w.local->fallbackReason, "none") == 0 &&
+		    !w.local->unrestricted && w.local->expanded < expensiveConnectionNodes) {
 			w.connectionTime = {};
 			return;
 		}

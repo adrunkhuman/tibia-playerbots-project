@@ -950,6 +950,24 @@ void incrementalHuntValidationPipeline()
 	assert(playerBotNextHuntCandidateToValidate(sparseCompetition, 1, &earlyWinner) ==
 	       sparseCompetition.size());
 
+	// The full-duration stamina bound dominates every shorter available hunt,
+	// so validated travel can never lift a skipped candidate above it.
+	for (const uint16_t stamina : {0, 500, 840, 841, 2400, 2401, 2402, 2403, 2410, 2520}) {
+		for (const bool system : {false, true}) {
+			for (const bool premium : {false, true}) {
+				const double duration = 2400;
+				const double bound = playerBotHuntStaminaExperienceMultiplier(stamina, system, premium, duration) * duration;
+				for (double available = 0; available <= duration; available += 30) {
+					assert(playerBotHuntStaminaExperienceMultiplier(stamina, system, premium, available) * available <=
+					       bound + 1e-9);
+				}
+			}
+		}
+	}
+	assert(playerBotHuntStaminaExperienceMultiplier(557, true, true, 2400) == 0.5);
+	assert(playerBotHuntStaminaExperienceMultiplier(2520, true, true, 2400) == 1.5);
+	assert(playerBotHuntStaminaExperienceMultiplier(2520, true, false, 2400) == 1);
+
 	// Scoring remains bounded per turn and cancellation is honored before a
 	// second 256-candidate batch starts.
 	PlayerBotHuntRuntime runtime({});

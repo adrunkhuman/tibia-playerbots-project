@@ -699,6 +699,9 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		};
 		std::optional<SellLootPlanReport> sellLootPlanReport;
 		playerbot::PlayerBotRecordThrottle sellLootBudgetRecords;
+		// Scan progress yields once per turn; keep the first per pass and phase.
+		playerbot::PlayerBotRecordThrottle huntScanYieldRecords;
+		std::pair<uint64_t, std::string> huntScanYieldKey;
 		bool depotCompletionAnnounced = false;
 		bool sellLootSearchPending = false;
 		bool sellLootSurvivalFallback = false;

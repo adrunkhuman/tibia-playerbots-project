@@ -100,19 +100,8 @@ namespace {
 
 	double projectedHuntStaminaMultiplier(const Player& player, double availableHuntSeconds)
 	{
-		const uint16_t staminaMinutes = player.getStaminaMinutes();
-		if (staminaMinutes == 0) {
-			return 0;
-		}
-		if (!g_config.getBoolean(ConfigManager::STAMINA_SYSTEM)) {
-			return 1;
-		}
-		if (staminaMinutes > 2400 && player.isPremium() && availableHuntSeconds > 0) {
-			const double bonusSeconds = std::min(availableHuntSeconds,
-			                                     std::max<int32_t>(0, staminaMinutes - 2402) * 60.0);
-			return 1 + 0.5 * bonusSeconds / availableHuntSeconds;
-		}
-		return staminaMinutes <= 840 ? 0.5 : 1;
+		return playerBotHuntStaminaExperienceMultiplier(player.getStaminaMinutes(),
+		    g_config.getBoolean(ConfigManager::STAMINA_SYSTEM), player.isPremium(), availableHuntSeconds);
 	}
 
 	PlayerBotHuntRuntimePlayerObservation huntPlayerObservation(Player& player)
@@ -988,11 +977,13 @@ void PlayerBotController::emitHuntRegionPlanning(const PlayerBotHuntPlanningSess
 
 void PlayerBotController::recordHuntPlanningSlice(HuntPlanningSliceRecord record)
 {
-	// A route search runs one short slice per turn for up to minutes. Merge
-	// those quiet slices into at most one record per interval.
+	// Scoring, transport, and route searches yield once per turn for up to
+	// minutes. Merge those quiet slices into at most one record per interval
+	// and phase; milestones and failures still close the record.
 	if (huntPlanningSliceBacklog &&
 	    (huntPlanningSliceBacklog->attribution.planningPass != record.attribution.planningPass ||
-	     huntPlanningSliceBacklog->attribution.scoringRevision != record.attribution.scoringRevision)) {
+	     huntPlanningSliceBacklog->attribution.scoringRevision != record.attribution.scoringRevision ||
+	     std::strcmp(huntPlanningSliceBacklog->phase, record.phase) != 0)) {
 		flushHuntPlanningSlice();
 	}
 	if (huntPlanningSliceBacklog) {
@@ -1001,8 +992,10 @@ void PlayerBotController::recordHuntPlanningSlice(HuntPlanningSliceRecord record
 		record.started = huntPlanningSliceBacklog->started;
 		huntPlanningSliceBacklog.reset();
 	}
-	if (std::strcmp(record.result, "route_pending") == 0 &&
-	    std::chrono::steady_clock::now() - record.started < progressRecordInterval) {
+	const bool quiet = std::strcmp(record.result, "route_pending") == 0 || std::strcmp(record.result, "yield") == 0 ||
+	    (std::strcmp(record.result, "pending") == 0 &&
+	     (std::strcmp(record.phase, "transport_yield") == 0 || std::strcmp(record.phase, "scoring_yield") == 0));
+	if (quiet && std::chrono::steady_clock::now() - record.started < progressRecordInterval) {
 		huntPlanningSliceBacklog = std::move(record);
 		return;
 	}
@@ -1423,7 +1416,16 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 		                    planning->transportPlanning() ? "transport_yield" :
 		                    outcome.command == PlayerBotHuntRuntimeCommand::PlanningYield ? "scoring_yield" :
 		                    outcome.command == PlayerBotHuntRuntimeCommand::PlanningScored ? "scored" : "planning_yield";
-		emitHuntRegionPlanning(*planning, position, phase, outcome.planningPass, outcome.scoringRevision);
+		bool admitted = true;
+		if (std::strstr(phase, "_yield")) {
+			std::pair<uint64_t, std::string> key{outcome.planningPass, phase};
+			if (key != huntScanYieldKey) {
+				huntScanYieldKey = std::move(key);
+				huntScanYieldRecords = playerbot::PlayerBotRecordThrottle();
+			}
+			admitted = huntScanYieldRecords.admit(std::chrono::steady_clock::now()).has_value();
+		}
+		if (admitted) emitHuntRegionPlanning(*planning, position, phase, outcome.planningPass, outcome.scoringRevision);
 	}
 	if (outcome.candidateSnapshot) {
 		// Live-map scans score thousands of candidates, mostly rejected for
