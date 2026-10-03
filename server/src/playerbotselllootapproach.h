@@ -46,16 +46,6 @@ inline std::vector<Position> playerBotSellLootApproaches(std::vector<SellLootApp
 	return positions;
 }
 
-// An NPC may move while a route is pending. Never retry a previously ranked
-// tile unless it still lies in the NPC's live conversation range.
-inline size_t playerBotNextSellLootApproach(const std::vector<Position>& approaches, size_t start,
-                                           const Position& provider, const Position& failed)
-{
-	while (start < approaches.size() &&
-	       (approaches[start] == failed || !Position::areInRange<3, 3, 0>(approaches[start], provider))) ++start;
-	return start;
-}
-
 } // namespace playerbot
 
 #endif

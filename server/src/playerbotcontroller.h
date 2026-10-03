@@ -626,13 +626,12 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 			uint16_t sourceDepotId = 0;
 			uint32_t providerId = 0;
 			Position sourceApproach, providerPosition, providerApproach;
-			std::vector<Position> providerApproaches;
-			size_t approachIndex = 0;
+			// Conversation tiles around the seller and their shared retry bounds.
+			PlayerBotApproach approach;
 			std::vector<SellLootBatch> batches;
 			uint64_t revenue = 0, roughCost = 0;
 			// Optimistic fare plus travel time; no feasible trip costs less.
 			uint64_t tripCostBound = 0;
-			uint32_t providerMoves = 0;
 		};
 		struct SellLootSearch {
 			Position origin;
