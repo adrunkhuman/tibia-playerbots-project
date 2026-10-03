@@ -49,7 +49,11 @@ void partlyUnreachableTiles()
 	for (const Position& tile : {north, east, south}) assert(crowded.reject(tile, "approach_occupied") == Verdict::Continue);
 	assert(crowded.reject(west, "approach_occupied") == Verdict::Exhausted);
 	assert(!crowded.next());
-	// Repeating a rejection does not spend the bound twice.
+	// A caller with its own candidate list counts rejections against the bound.
+	Approach depot;
+	for (const Position& tile : {north, east, south}) assert(depot.reject(tile, "route_unavailable") == Verdict::Continue);
+	assert(depot.reject(west, "route_unavailable") == Verdict::Exhausted);
+		// Repeating a rejection does not spend the bound twice.
 	Approach repeated;
 	repeated.offer({{north, 1}, {east, 2}});
 	assert(repeated.reject(north, "route_unavailable") == Verdict::Continue);

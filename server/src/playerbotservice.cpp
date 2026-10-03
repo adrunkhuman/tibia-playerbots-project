@@ -2294,19 +2294,39 @@ bool PlayerBotController::depotApproachStalled(Player& player, const Position& c
 	                                          const PlayerBotNavigationRuntimeOutcome* navigation)
 {
 	if (currentPosition == approach) return false;
+	PlayerBotApproach& shared = depotWorkflow.approach();
+	if (navigation && navigation->positionalProgress) shared.unblocked();
 	// Without a navigation outcome, runtime counters may still describe an
 	// earlier goal. Depot suppression is short; occupancy ordering, not
 	// suppression, keeps a rescan from selecting the same approach again.
+	const bool stalled = navigation && (navigation->oscillation ||
+	                                    navigation->stepFailureCount >= maximumRepeatedNavigationStepFailures);
 	const char* reason = navigation && navigationRuntime.fixedTargetRouteFailureCount() != 0 ? "route_unavailable" :
-	    navigation && (navigation->oscillation ||
-	                   navigation->stepFailureCount >= maximumRepeatedNavigationStepFailures) ? "navigation_stalled" :
+	    stalled ? "navigation_stalled" :
 	    Position::areInRange<7, 5, 0>(currentPosition, approach) && depotApproachOccupied(player, approach) ?
 	        "approach_occupied" : nullptr;
 	if (!reason) return false;
-	emit("action_result", currentPosition,
-	     "\"action\":\"depot_approach\",\"result\":\"rejected\",\"reason\":" + jsonString(reason) +
-	         ",\"approach\":{\"x\":" + std::to_string(approach.x) + ",\"y\":" + std::to_string(approach.y) +
-	         ",\"z\":" + std::to_string(static_cast<uint16_t>(approach.z)) + '}');
+	// Walking already sidestepped and replanning detours around the blocked
+	// tile. Wait out a creature on the path within the shared bound.
+	// Oscillation may follow an older step failure; only repeated failed steps
+	// name their current blocker.
+	const char* cause = lastStepFailure.cause;
+	if (std::strcmp(reason, "navigation_stalled") == 0 &&
+	    navigation->stepFailureCount >= maximumRepeatedNavigationStepFailures &&
+	    (!std::strcmp(cause, "monster") || !std::strcmp(cause, "player") || !std::strcmp(cause, "npc") ||
+	     !std::strcmp(cause, "creature"))) {
+		if (shared.blocked() == PlayerBotApproachVerdict::Wait) {
+			emitApproachResult("depot", "waiting", "route_blocked", currentPosition, 0, approach,
+			                   ",\"waits\":" + std::to_string(shared.blockedWaits()));
+			return true;
+		}
+		reason = "route_blocked";
+	}
+	const PlayerBotApproachVerdict verdict = shared.reject(approach, reason);
+	emitApproachResult("depot", verdict == PlayerBotApproachVerdict::Exhausted ? "failed" : "rejected", reason,
+	                   currentPosition, 0, approach);
+	// Depot exhaustion only defers: a depot failure stops the controller.
+	if (verdict == PlayerBotApproachVerdict::Exhausted) shared.reset();
 	PlayerBotDepotObservation observation;
 	observation.currentPosition = currentPosition;
 	observation.now = std::chrono::steady_clock::now();

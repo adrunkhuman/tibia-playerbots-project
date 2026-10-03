@@ -107,7 +107,10 @@ class PlayerBotApproach
 			if (rejectedTiles.insert(tile).second) ++rejections;
 			blockedCount = 0;
 			outOfRangeWaits = 0;
-			return !next() ?
+			// A caller that never offers tiles, such as depot, keeps its own
+			// candidates; only the rejection bound applies to it.
+			const bool spent = rejections >= PlayerBotApproachLimits::rejectedTiles;
+			return spent || (!tiles.empty() && !next()) ?
 			    PlayerBotApproachVerdict::Exhausted : PlayerBotApproachVerdict::Continue;
 		}
 

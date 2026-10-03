@@ -2,6 +2,7 @@
 #ifndef FS_PLAYERBOTDEPOTWORKFLOW_H
 #define FS_PLAYERBOTDEPOTWORKFLOW_H
 
+#include "playerbotapproach.h"
 #include "playerbotdepotsession.h"
 #include "playerbothunttravelpolicy.h"
 
@@ -116,6 +117,8 @@ class PlayerBotDepotWorkflow
 		PlayerBotDepotSnapshot snapshot() const;
 		PlayerBotDepotCommand advance(const PlayerBotDepotObservation& observation, uint32_t routeBudget,
 		                              uint32_t maximumDiscoveryAttempts, std::chrono::steady_clock::duration suppression);
+		// Shared blocker waits and rejection bound for the selected approach.
+		PlayerBotApproach& approach() { return selectedApproach; }
 
 	private:
 		void clearDiscovery();
@@ -130,6 +133,7 @@ class PlayerBotDepotWorkflow
 		                              PlayerBotDepotTelemetry telemetry = {}) const;
 
 		PlayerBotDepotSession session;
+		PlayerBotApproach selectedApproach;
 		std::vector<PlayerBotDepotCandidate> discoveryCandidates;
 		std::optional<PlayerBotDepotCandidate> routeCandidate;
 		struct UnsafeCandidate {
