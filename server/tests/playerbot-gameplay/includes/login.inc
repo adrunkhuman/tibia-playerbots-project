@@ -125,7 +125,13 @@ function F.login.onLogin(player)
         assert(player:addItem(fixtureWeaponId, 1, false, 1, CONST_SLOT_LEFT),
             "equipment fixture could not equip the starter weapon")
         F.removeAll(player, F.potionItemId)
-        assert(player:addItem(F.potionItemId, 10), "equipment fixture could not normalize healing supplies")
+        -- Equipment spending must start with the full level-8 recovery stock,
+        -- so the protected reserve stays at 100 gold rather than funding a restock.
+        assert(player:addItem(F.potionItemId, 20), "equipment fixture could not normalize healing supplies")
+        if mode == "equipment_buy_provider_moved" or mode == "equipment_shadow_unaffordable" then
+            -- Keep provider movement and affordability independent of upgrade weight.
+            assert(player:setCapacity(100000), "equipment fixture could not reserve upgrade capacity")
+        end
         if mode == "equipment_buy_provider_moved" then
             for _, spellName in ipairs({"Find Person", "Light"}) do
                 if not player:hasLearnedSpell(spellName) then
