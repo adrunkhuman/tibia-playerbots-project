@@ -52,13 +52,13 @@ void PlayerBotController::emitCombatReadiness(const Player& player, const Positi
 	const uint16_t potionItemId = recoveryPotionItemId(player.getVocationId());
 	const uint32_t currencyWeight = inventoryPolicy.currencyInventoryWeight(player);
 	const uint32_t usableCapacity = inventoryPolicy.huntFreeCapacity(player);
-	const bool weaponReady = equipmentPolicy.isKnightMeleeWeapon(playerFacts, loadout.items[CONST_SLOT_LEFT]) ||
-	                         equipmentPolicy.isKnightMeleeWeapon(playerFacts, loadout.items[CONST_SLOT_RIGHT]);
+	const bool weaponReady = equipmentPolicy.weaponReady(playerFacts, loadout);
 	const bool armorReady = armor && equipmentPolicy.isLegalEquipmentItem(playerFacts, loadout.items[CONST_SLOT_ARMOR]) && armor->getArmor() > 0;
 	std::ostringstream fields;
 	fields << "\"result\":" << jsonString(result)
 	       << ",\"vocation_id\":" << player.getVocationId()
-	       << ",\"requirements\":[{\"name\":\"legal_melee_weapon\",\"ready\":" << (weaponReady ? "true" : "false")
+	       << ",\"requirements\":[{\"name\":" << jsonString(PlayerBotEquipmentPolicy::weaponRequirement(playerFacts))
+	       << ",\"ready\":" << (weaponReady ? "true" : "false")
 	       << ",\"left_item_id\":" << (left ? std::to_string(left->getID()) : "null")
 	       << ",\"right_item_id\":" << (right ? std::to_string(right->getID()) : "null") << '}'
 	       << ",{\"name\":\"armor_loadout\",\"ready\":" << (armorReady && backpack && backpack->getContainer() ? "true" : "false")
@@ -192,7 +192,7 @@ void PlayerBotController::processReadinessEquipment(Player* player, const Positi
 
 bool PlayerBotController::ensureCombatReady(Player* player, const Position& position, const char* reason, bool requireCapacity)
 {
-	if (!player || !equipmentPolicy.requiresKnightCombatReadiness(PlayerBotEquipmentAdapter::player(*player))) {
+	if (!player || !equipmentPolicy.managesEquipment(PlayerBotEquipmentAdapter::player(*player))) {
 		return true;
 	}
 	Item* carriedUpgrade = nullptr;
