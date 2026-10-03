@@ -2219,23 +2219,23 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 				const auto paid = std::find_if(preflight.steps.begin(), preflight.steps.end(), [](const auto& step) {
 					return step.action == PlayerBotNavigationAction::NpcTravel;
 				});
+				const auto crossesBlocker = [&blockedPositions](const auto& steps) {
+					return std::any_of(steps.begin(), steps.end(), [&blockedPositions](const auto& step) {
+						return blockedPositions.count(step.target) || blockedPositions.count(step.expectedPosition);
+					});
+				};
 				if (!validateReturn && paid != preflight.steps.end() &&
 				    preflight.metrics.result == PlayerBotNavigationResult::Reached &&
 				    playerBotNavigationRiskVerdict(riskProfile, preflight.metrics) == PlayerBotNavigationRiskVerdict::Accepted) {
-					// Borrow only executable steps; coarse metrics never replace the
-					// detailed proof of the complete outbound itinerary.
-					auto executable = planValidatedPaidApproach(*player, routeStart, routeDestination, blockedPositions,
-					    reserve, false, *paid);
-					if (borrowPaidApproach("patrol_preflight", currentPosition, routeStart, executable, preflight,
-					                       *paid, walking)) {
-						search.outboundNpcId = paid->npcId;
-						preflight.steps = std::move(executable->steps);
-					} else if (avoidBlockers) {
+					// The engine returns its validated walk to the boarding NPC. Known
+					// blockers reroute only that walk; the paid itinerary stays.
+					const uint32_t npcId = paid->npcId;
+					if (!avoidBlockers || !crossesBlocker(preflight.steps) ||
+					    rerouteValidatedPaidApproach(*player, preflight, blockedPositions)) {
+						search.outboundNpcId = npcId;
+					} else {
 						preflightSource = "blocked_position_walk";
 						preflight = planCompleteNavigationRoute(*player, routeStart, routeDestination, blockedPositions);
-						search.outboundOffers.clear();
-					} else {
-						preflight = std::move(walking);
 						search.outboundOffers.clear();
 					}
 				} else if (avoidBlockers && paid == preflight.steps.end()) {

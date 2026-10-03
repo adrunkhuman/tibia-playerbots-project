@@ -1501,19 +1501,8 @@ void PlayerBotController::processService(Player* player, const Position& current
 							    (quote->maximumRouteSteps != 0 && routePlan.metrics.steps > quote->maximumRouteSteps))) {
 								routePlan = std::move(walking);
 							} else {
-								// The sliced search proves full-route risk; the ordinary planner supplies
-								// an executable first leg. Its coarse future estimate proves nothing.
-								auto executable = planValidatedPaidApproach(*player, currentPosition, command.destination, {},
-								    reserve, sellEconomy, *paid);
-								// Only borrow ordinary, unexposed local steps for the same
-								// offer; the detailed plan still owns full-route safety.
-								if (borrowPaidApproach("service_route", currentPosition, currentPosition, executable,
-								        routePlan, *paid, walking)) {
-									validatedNpcTravel = true;
-									routePlan.steps = std::move(executable->steps);
-								} else {
-									routePlan = std::move(walking);
-								}
+								// The sliced search returns its validated walk to the boarding NPC.
+								validatedNpcTravel = true;
 							}
 						}
 					}
@@ -2131,21 +2120,12 @@ bool PlayerBotController::discoverDepot(Player& player, const Position& currentP
 				const auto paid = std::find_if(routePlan.steps.begin(), routePlan.steps.end(), [](const auto& step) {
 					return step.action == PlayerBotNavigationAction::NpcTravel;
 				});
-				if (paid != routePlan.steps.end() && sellLootPlan->sourceAllowNpcTravel &&
+				// The detailed selector proves the entire trip and returns its validated
+				// walk to the boarding NPC. Otherwise walk.
+				if (paid != routePlan.steps.end() && !(sellLootPlan->sourceAllowNpcTravel &&
 				    routePlan.metrics.result == PlayerBotNavigationResult::Reached &&
 				    playerBotNavigationRiskVerdict(riskProfile, routePlan.metrics) == PlayerBotNavigationRiskVerdict::Accepted &&
-				    routePlan.metrics.fare <= sellLootPlan->sourceFare) {
-					// The detailed selector proves the entire trip; only borrow an executable
-					// first leg if it boards the same offer without adding local exposure.
-					auto executable = planValidatedPaidApproach(player, currentPosition, candidate.approachPosition, {},
-					    reserve, true, *paid);
-					if (borrowPaidApproach("sell_loot_source_route", currentPosition, currentPosition, executable,
-					        routePlan, *paid, walking)) {
-						routePlan.steps = std::move(executable->steps);
-					} else {
-						routePlan = std::move(walking);
-					}
-				} else if (paid != routePlan.steps.end()) {
+				    routePlan.metrics.fare <= sellLootPlan->sourceFare)) {
 					routePlan = std::move(walking);
 				}
 			}

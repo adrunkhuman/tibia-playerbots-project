@@ -2470,68 +2470,6 @@ void remoteHuntTravelGuards()
 	assert(throttle.admit(throttleStart + playerbot::progressRecordInterval) == 2u);
 	assert(throttle.admit(throttleStart + 2 * playerbot::progressRecordInterval) == 0u);
 
-	PlayerBotNavigationStep boarding;
-	boarding.action = PlayerBotNavigationAction::NpcTravel;
-	boarding.npcId = 9;
-	boarding.target = nextPosition;
-	boarding.expectedPosition = Position(32300, 32200, 6);
-	boarding.price = 110;
-	boarding.dialogue = {"hi", "carlin", "yes"};
-	PlayerBotNpcTravelOfferIdentity offer{9, boarding.expectedPosition, 110, 0, false, boarding.dialogue};
-	PlayerBotNavigationRoutePlan validated;
-	validated.metrics.result = PlayerBotNavigationResult::Reached;
-	validated.metrics.fare = 110;
-	validated.metrics.steps = 40;
-	PlayerBotNavigationRoutePlan approach;
-	approach.metrics.result = PlayerBotNavigationResult::Reached;
-	approach.metrics.fare = 110;
-	approach.metrics.firstNpcTravelOffer = offer;
-	PlayerBotNavigationStep upstairs = localStep;
-	upstairs.expectedPosition = Position(nextPosition.x, nextPosition.y - 1, 6); // A walk-on floor change.
-	approach.steps = {upstairs, boarding};
-	assert(!playerBotPaidApproachRejection(approach, validated, boarding));
-	PlayerBotNavigationRoutePlan unboarded = approach;
-	unboarded.steps.pop_back();
-	assert(!playerBotPaidApproachRejection(unboarded, validated, boarding));
-	auto rejection = [&](PlayerBotNavigationRoutePlan plan, const PlayerBotNavigationStep& paid = {}) {
-		const char* reason = playerBotPaidApproachRejection(plan, validated,
-		    paid.action == PlayerBotNavigationAction::NpcTravel ? paid : boarding);
-		return std::string(reason ? reason : "");
-	};
-	PlayerBotNavigationRoutePlan changed = approach;
-	changed.metrics.result = PlayerBotNavigationResult::NodeLimit;
-	assert(rejection(changed) == "approach_unreached");
-	changed = approach;
-	changed.metrics.firstNpcTravelOffer.reset();
-	assert(rejection(changed) == "approach_without_travel");
-	PlayerBotNavigationStep otherBoat = boarding;
-	otherBoat.npcId = 10;
-	assert(rejection(approach, otherBoat) == "different_travel_offer");
-	changed = approach;
-	changed.metrics.localDangerCost = 1;
-	assert(rejection(changed) == "approach_exposed");
-	changed = approach;
-	// Later hops of either plan are not executed; only the boarding offer counts.
-	changed.metrics.fare = 220;
-	assert(rejection(changed).empty());
-	validated.metrics.fare = 170;
-	assert(rejection(approach).empty());
-	validated.metrics.fare = 110;
-	// Ladders, doors, and tool transitions before boarding are ordinary steps.
-	for (const auto action : {PlayerBotNavigationAction::Use, PlayerBotNavigationAction::UseDoor,
-	                          PlayerBotNavigationAction::UseRope, PlayerBotNavigationAction::UseShovel}) {
-		changed = approach;
-		changed.steps.front().action = action;
-		assert(rejection(changed).empty());
-	}
-	changed = approach;
-	changed.steps.push_back(localStep);
-	assert(rejection(changed) == "steps_after_boarding");
-	changed = approach;
-	changed.steps.back().price = 120;
-	assert(rejection(changed) == "different_boarding_step");
-	validated.metrics.steps = 1;
-	assert(rejection(approach) == "approach_longer_than_validated");
 	assert(playerBotDepotRouteSafetyAccepted(true, false, PlayerBotRouteIntent::Optional));
 	// Only forced exits may exceed the profile; liquidation never can.
 	assert(!playerBotDepotRouteSafetyAccepted(false, false, PlayerBotRouteIntent::Optional));

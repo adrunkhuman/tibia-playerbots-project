@@ -3,6 +3,7 @@
 
 #include "playerbotnavigation.h"
 
+#include <deque>
 #include <limits>
 #include <map>
 #include <queue>
@@ -15,6 +16,9 @@ struct PlayerBotTransportSegment {
 	uint32_t danger = 0;
 	double peak = 0;
 	bool boundRejected = false; // Not unreachable, not a node-limit result.
+	// Executable walk, kept only for legs from the request source so a selected
+	// paid itinerary can board exactly as validated.
+	std::deque<PlayerBotNavigationStep> path{};
 };
 
 // Keep fractional time throughout the search: rounding each leg breaks
@@ -179,6 +183,14 @@ public:
 		at.push_back(next);
 		queue.push({next, SIZE_MAX, next.lowerCost, next.lowerCost + stateRank(next.state)});
 		return false;
+	}
+
+	// The validated walk from the request source to a label's first boarding NPC.
+	const PlayerBotTransportSegment* firstLeg(const Label& label) const
+	{
+		if (label.firstOffer >= offers.size()) return nullptr;
+		const auto found = connections.find({0, offers[label.firstOffer].connection});
+		return found == connections.end() ? nullptr : &found->second;
 	}
 
 	std::optional<Label> bestPaid;
