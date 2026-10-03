@@ -425,6 +425,9 @@ playerbot::PlayerBotTelemetrySummary PlayerBotController::telemetrySummary() con
 		if (player->getWalkDelay() > 0) summary.waitingReason = "walk_delay";
 		else if (!player->canDoAction()) summary.waitingReason = "action_delay";
 	}
+	if (huntCoordinator.planningActive()) summary.planning = "hunt";
+	else if (sellLootSearch || sellLootSearchPending) summary.planning = "sell_loot";
+	else if (huntTravelWork) summary.planning = "route";
 	if (supplyRecovery.active()) summary.recovery = "supply";
 	else if (huntCoordinator.retreatingFromDanger()) summary.recovery = "danger_retreat";
 	return summary;

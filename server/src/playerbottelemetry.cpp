@@ -106,6 +106,9 @@ void PlayerBotTelemetry::emitSummary(const Position& position, bool final, const
 	       << ",\"activity\":" << jsonString(summary.activity)
 	       << ",\"waiting_reason\":" << (summary.waitingReason.empty() ? "null" : jsonString(summary.waitingReason))
 	       << ",\"recovery\":" << (summary.recovery.empty() ? "null" : jsonString(summary.recovery))
+	       << ",\"planning\":" << (summary.planning.empty() ? "null" : jsonString(summary.planning))
+	       << ",\"idle_seconds\":" << std::chrono::duration_cast<std::chrono::seconds>(
+	              std::chrono::steady_clock::now() - lastProgress).count()
 	       << ",\"player_state_available\":" << (summary.playerStateAvailable ? "true" : "false")
 	       << ",\"health\":";
 	if (summary.playerStateAvailable) {
@@ -147,6 +150,10 @@ void PlayerBotTelemetry::emitSummary(const Position& position, bool final, const
 void PlayerBotTelemetry::maybeEmitSummary(const Position& position, const PlayerBotTelemetrySummary& summary)
 {
 	const auto now = std::chrono::steady_clock::now();
+	if (!lastPosition || *lastPosition != position || !summary.planning.empty() || summary.target) {
+		lastPosition = position;
+		lastProgress = now;
+	}
 	if (now - lastSummary < summaryInterval) {
 		return;
 	}

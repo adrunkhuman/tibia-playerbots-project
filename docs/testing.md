@@ -89,7 +89,7 @@ Follow one bot's depot visit across `sell_loot_plan` records: route work can spa
 
 ### Hunt-selection timing
 
-Capture a normal selection and group `hunt_planning_slice` events by `server_run_id`, `controller_id`, and `planning_pass`. Each record covers `slices` consecutive admitted `selectHuntRegion` calls. Quiet `route_pending` calls are merged into one record per 5 seconds of the same pass; every other result, including yields, failures, stale revisions and final selection, closes the record. Counters and times are sums over the merged calls; `max_elapsed_us` is the longest single call and sets `over_10ms`. Budget-denied calls instead emit `hunt_planning_budget` with the requested retry delay, credit/debt, cumulative consumed time and queue depth, at most once per 5 seconds; `suppressed_denials` counts the denials since the previous record. `invalidated_planning_pass`/`invalidated_scoring_revision` identify a replaced pass.
+Capture a normal selection and group `hunt_planning_slice` events by `server_run_id`, `controller_id`, and `planning_pass`. Each record covers `slices` consecutive admitted `selectHuntRegion` calls. Quiet calls (`route_pending`, route `yield`, and scoring or transport yields) are merged into one record per 5 seconds of the same pass and phase; every other result, including milestones, failures, stale revisions and final selection, closes the record. `hunt_region_scan` progress records for scoring and transport yields are limited to the first per pass and phase, then one per 5 seconds. Counters and times are sums over the merged calls; `max_elapsed_us` is the longest single call and sets `over_10ms`. Budget-denied calls instead emit `hunt_planning_budget` with the requested retry delay, credit/debt, cumulative consumed time and queue depth, at most once per 5 seconds; `suppressed_denials` counts the denials since the previous record. `invalidated_planning_pass`/`invalidated_scoring_revision` identify a replaced pass.
 
 | Fields | Meaning |
 | --- | --- |
@@ -133,7 +133,7 @@ Route-alternative, route-stage and discovery timings are **nested within** `rout
 
 Candidate `topology_reachable` and `topology_travel_steps` describe coarse walking reachability, not NPC transport. A selected hunt may have `false`/zero there if its outbound NPC route is validated; assertions must not require a walking-only winner.
 
-`hunt_route_connection` records one completed walking/NPC connection: the requested target count and up to eight targets, source, last reached position (`to`), result, expanded nodes, successful-segment cache hits, incomplete-result reuse, fallback reason and accumulated active time. Use it to distinguish expensive successes from exhausted alternatives. `alternate_itineraries`, `corridor_searches`, `corridor_radius`, `unrestricted_fallback` and `heuristic_restarts` identify the refinement stages used by that connection. It excludes scheduling waits and is nested in slice timings. A connection that expands no tiles, such as a `coarse_unreachable` verdict or a cache hit, is logged once per route request and fallback reason; slice counters such as `route_coarse_rejects` count the rest.
+`hunt_route_connection` records one completed walking/NPC connection that failed, used a fallback, or expanded at least 10,000 nodes; ordinary successes appear only in slice counters. Each event contains the requested target count and up to eight targets, source, last reached position (`to`), result, expanded nodes, successful-segment cache hits, incomplete-result reuse, fallback reason and accumulated active time. Use it to distinguish expensive successes from exhausted alternatives. `alternate_itineraries`, `corridor_searches`, `corridor_radius`, `unrestricted_fallback` and `heuristic_restarts` identify the refinement stages used by that connection. It excludes scheduling waits and is nested in slice timings. A connection that expands no tiles, such as a `coarse_unreachable` verdict or a cache hit, is logged once per route request and fallback reason; slice counters such as `route_coarse_rejects` count the rest.
 
 The planning-budget contract runs ten synthetic concurrent requesters under a virtual clock and checks fairness and aggregate debt accounting. It is not a live ten-bot benchmark. For live comparisons, keep the same seeded character and compare candidate identities/eligibility, route outcomes, expanded nodes, active work, end-to-end latency and scheduler lateness. Do not interpret a faster run caused by fewer resolved candidates as an unconditional improvement.
 
@@ -187,6 +187,20 @@ With no selection arguments, this runs the full suite: the baseline hunt/service
 The normal console output shows build/scenario phases, timings, and results. Use `-Verbose` when Compose lifecycle detail is needed. On a scenario failure, the reported artifact directory contains complete Compose command output, retained and streamed server logs, unfiltered playerbot JSONL evidence, container restart/exit/OOM state, Compose status, and failure metadata. Do not pipe the stored JSONL through summary filters: hunt candidate detail and startup events are part of the evidence.
 
 For a normal-stack observation, shorten hunts only when useful, recreate the server, and inspect `goal_*`, `action_result`, `hunt_*`, `navigation_progress`, `summary`, and `terminal` JSONL events. Focused tests prove deterministic transitions; use 20–60 minute hunts to evaluate repeated combat, service, recovery, planner retries, and telemetry volume. For bounded agent diagnostics, start with `docker compose -f server/compose.yaml logs --tail 200 server`; increase the tail only for a specific missing interval, and save the complete JSONL source when it is test evidence. Do not report a fixture or short smoke run as proof of sustained progression.
+
+### Long-running stack checks
+
+The development server runs continuously, so there is no run boundary to analyze. Each bot's once-per-minute `summary` reports `idle_seconds`: time since the bot last moved, had a combat target, or had a search pending. `planning` names that search (`hunt`, `sell_loot`, or `route`) or is `null`. Planning pauses are expected and do not count as idle. Events carry `server_run_id`, so restarts stay distinguishable. Docker keeps a rolling log window; recreating the container discards it.
+
+```sh
+logs() { docker compose -f server/compose.yaml logs --no-log-prefix --since "${1:-2h}" server | jq -cR 'fromjson? | select(.component == "playerbot")'; }
+# Bots idle for 3+ minutes, with their objective and position.
+logs 6h | jq -c 'select(.event == "summary" and .idle_seconds >= 180) | {ts, bot, idle_seconds, goal, activity, position}'
+# Most frequent navigation failures and step-mismatch causes.
+logs 6h | jq -r 'select(.event == "navigation_progress") | [.bot, .result, .reason // .cause // ""] | @tsv' | sort | uniq -c | sort -rn | head
+# Completed objective cycles.
+logs 6h | jq -r 'select(.event == "objective_transition") | [.ts, .bot, .from, .to, .reason] | @tsv'
+```
 
 ## Client compatibility
 

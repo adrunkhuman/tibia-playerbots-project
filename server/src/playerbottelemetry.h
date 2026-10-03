@@ -65,6 +65,7 @@ namespace playerbot {
 		std::string activity;
 		std::string waitingReason;
 		std::string recovery;
+		std::string planning; // Pending hunt, sell-loot, or route search; empty when idle.
 		bool playerStateAvailable = false;
 		uint32_t health = 0;
 		uint32_t maximumHealth = 0;
@@ -123,6 +124,10 @@ namespace playerbot {
 			std::map<std::string, uint64_t> huntAborts; // Patrol failures that ended a hunt, by cause.
 			const std::chrono::steady_clock::time_point started = std::chrono::steady_clock::now();
 			std::chrono::steady_clock::time_point lastSummary = started;
+			// Standing still is expected while planning or fighting; idle time
+			// counts only turns with none of movement, planning, or a target.
+			std::chrono::steady_clock::time_point lastProgress = started;
+			std::optional<Position> lastPosition;
 			std::chrono::steady_clock::time_point decisionStarted;
 			bool decisionActive = false;
 			bool terminal = false;
