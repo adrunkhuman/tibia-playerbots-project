@@ -14,6 +14,7 @@
 #include "playerbotcombatruntime.h"
 #include "playerbotcombattarget.h"
 #include "playerbotnavigationruntime.h"
+#include "playerbotnavigationsession.h"
 #include "playerbottransitcombat.h"
 #include "playerbottopology.h"
 #include "playerbothuntregions.h"
@@ -1151,6 +1152,50 @@ void mutableShovelPassages()
 	assert(!playerBotShovelPassage(470));
 	assert(!playerBotResolveShovelPassageAction(468, 482, true));
 	assert(!playerBotResolveShovelPassageAction(468, 470, true));
+}
+
+void floorChangeLandingOffset()
+{
+	// A ladder that lands one tile from the predicted tile replans from the
+	// actual landing without counting a step failure or blocking the ladder.
+	const auto now = std::chrono::steady_clock::now();
+	const auto timeout = std::chrono::seconds(2);
+	PlayerBotNavigationStep ladder;
+	ladder.action = PlayerBotNavigationAction::Use;
+	ladder.target = Position(100, 100, 8);
+	ladder.expectedPosition = Position(101, 100, 7);
+	PlayerBotNavigationStep onward;
+	onward.target = onward.expectedPosition = Position(102, 100, 7);
+	PlayerBotNavigationGoal goal;
+	goal.type = PlayerBotNavigationGoalType::Exact;
+	goal.position = onward.target;
+
+	PlayerBotNavigationSession session;
+	session.installRoute(goal, {ladder, onward});
+	session.beginMovement(ladder, now);
+	assert(session.observeMovement(Position(100, 100, 8), true, now, timeout, timeout) ==
+	       PlayerBotPendingMovementResult::Waiting);
+	assert(session.observeMovement(Position(101, 101, 7), true, now, timeout, timeout) ==
+	       PlayerBotPendingMovementResult::LandingOffset);
+	assert(session.routeEmpty() && session.stepFailureCount() == 0);
+	assert(session.activeBlockedPositions(now).empty());
+
+	// Further away, or on the wrong floor, still fails as before.
+	for (const Position& landing : {Position(103, 100, 7), Position(101, 101, 6)}) {
+		session.installRoute(goal, {ladder, onward});
+		session.beginMovement(ladder, now);
+		assert(session.observeMovement(landing, false, now, timeout, timeout) ==
+		       PlayerBotPendingMovementResult::Mismatch);
+	}
+	assert(session.stepFailureCount() == 2);
+
+	// Same-floor moves keep exact verification.
+	PlayerBotNavigationStep move;
+	move.target = move.expectedPosition = Position(101, 100, 7);
+	session.installRoute(goal, {move, onward});
+	session.beginMovement(move, now);
+	assert(session.observeMovement(Position(101, 101, 7), false, now, timeout, timeout) ==
+	       PlayerBotPendingMovementResult::Mismatch);
 }
 
 void navigationFailureAccounting()
@@ -2988,6 +3033,7 @@ int main()
 	modeledPatrolFailure();
 	mutableShovelPassages();
 	navigationFailureAccounting();
+	floorChangeLandingOffset();
 	transitCombat();
 	crowdDamageInflation();
 	adaptiveChallenge();

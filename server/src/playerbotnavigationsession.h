@@ -25,6 +25,8 @@ enum class PlayerBotPendingMovementResult : uint8_t {
 	Completed,
 	Waiting,
 	Mismatch,
+	// A floor change landed next to its predicted tile; replan from there.
+	LandingOffset,
 };
 
 struct PlayerBotNavigationOscillation {
