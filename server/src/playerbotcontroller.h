@@ -751,6 +751,9 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 			const char* cause = "none";
 			std::string blocker;
 		} lastStepFailure;
+		// Retargets a boarding step whose captain wandered since planning.
+		PlayerBotApproach boardingApproach;
+		uint32_t boardingApproachNpcId = 0;
 		uint32_t huntPotionReturnThreshold = playerbot::healthPotionReturnThreshold;
 		uint32_t huntPotionRestockTarget = playerbot::healthPotionSafetyTarget;
 		struct {
