@@ -104,16 +104,8 @@ namespace {
 
 	double projectedStaminaExperienceMultiplier(const Player& player, double availableHuntSeconds)
 	{
-		const uint16_t staminaMinutes = player.getStaminaMinutes();
-		if (staminaMinutes == 0) return 0;
-		if (!g_config.getBoolean(ConfigManager::STAMINA_SYSTEM)) return 1;
-		if (staminaMinutes > 2400 && player.isPremium() && availableHuntSeconds > 0) {
-			// The award callback can consume two minutes before it checks the premium threshold.
-			const double bonusSeconds = std::min(availableHuntSeconds,
-			                                     std::max<int32_t>(0, staminaMinutes - 2402) * 60.0);
-			return 1 + 0.5 * bonusSeconds / availableHuntSeconds;
-		}
-		return staminaMinutes <= 840 ? 0.5 : 1;
+		return playerBotHuntStaminaExperienceMultiplier(player.getStaminaMinutes(),
+		    g_config.getBoolean(ConfigManager::STAMINA_SYSTEM), player.isPremium(), availableHuntSeconds);
 	}
 
 	struct CachedSpawnBlock {
@@ -691,8 +683,11 @@ namespace {
 		region.staminaExperienceMultiplier = projectedStaminaExperienceMultiplier(player, region.availableHuntSeconds);
 		region.projectedExperience = region.experiencePerMinute * region.observedCorrection *
 		                             region.staminaExperienceMultiplier * region.availableHuntSeconds / 60.0;
+		// Route validation only replaces travel time, so zero travel bounds every
+		// validated score. The pruning in playerBotHuntCandidateCanBeatValidated
+		// relies on this staying an upper bound.
 		region.optimisticProjectedExperience = region.experiencePerMinute * region.observedCorrection *
-		                                       1.5 * huntDurationSeconds / 60.0;
+		    projectedStaminaExperienceMultiplier(player, huntDurationSeconds) * huntDurationSeconds / 60.0;
 		region.score = region.projectedExperience;
 		region.reconcileSupplies(planningProfile.supply.reserve);
 		if (!region.recoverySustainable()) {

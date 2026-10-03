@@ -100,19 +100,8 @@ namespace {
 
 	double projectedHuntStaminaMultiplier(const Player& player, double availableHuntSeconds)
 	{
-		const uint16_t staminaMinutes = player.getStaminaMinutes();
-		if (staminaMinutes == 0) {
-			return 0;
-		}
-		if (!g_config.getBoolean(ConfigManager::STAMINA_SYSTEM)) {
-			return 1;
-		}
-		if (staminaMinutes > 2400 && player.isPremium() && availableHuntSeconds > 0) {
-			const double bonusSeconds = std::min(availableHuntSeconds,
-			                                     std::max<int32_t>(0, staminaMinutes - 2402) * 60.0);
-			return 1 + 0.5 * bonusSeconds / availableHuntSeconds;
-		}
-		return staminaMinutes <= 840 ? 0.5 : 1;
+		return playerBotHuntStaminaExperienceMultiplier(player.getStaminaMinutes(),
+		    g_config.getBoolean(ConfigManager::STAMINA_SYSTEM), player.isPremium(), availableHuntSeconds);
 	}
 
 	PlayerBotHuntRuntimePlayerObservation huntPlayerObservation(Player& player)
