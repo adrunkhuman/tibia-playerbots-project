@@ -74,6 +74,7 @@ sh server/tests/playerbot_loot_contracts.sh
 sh server/tests/playerbot_equipment_purchase_contracts.sh
 lua server/tests/playerbot_door_passages_contracts.lua
 lua scripts/test-playerbot-fixture-isolation.lua
+lua scripts/test-playerbot-equipment-fixture.lua
 lua scripts/test-playerbot-hunt-fixture.lua
 lua scripts/test-playerbot-depot-fixture.lua
 lua scripts/test-playerbot-death-fixture.lua
