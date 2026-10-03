@@ -32,10 +32,10 @@
 // - Tile choice: free tiles before occupied ones, then caller cost. Occupied
 //   tiles stay eligible as a last resort (was depot-only).
 // - Creature on the path: walking sidesteps first (#217). Callers then detour
-//   around the blocked tiles; otherwise wait up to `blockedWaits` x 1 s (was
-//   service-only).
+//   around the blocked tiles; otherwise wait up to `blockedWaits` retries
+//   (1 s apart for service, one navigation retry for depot; was service-only).
 // - Provider moves: retarget to its live tiles up to `providerMoves` times
-//   (was sell-loot-only).
+//   (was sell-loot-only; boarding now follows a wandered captain too).
 // - Failed tile: reject it and try the next; give up after `rejectedTiles`
 //   rejections (was the depot discovery attempt limit). Depot exhaustion only
 //   defers and rescans, because a depot failure stops the controller.
@@ -56,9 +56,11 @@ struct PlayerBotApproachTile {
 	bool occupied = false;
 };
 
+// Equal tiles keep the caller's order, which may encode provider-specific
+// preferences such as speech range or direction diversity.
 inline bool playerBotApproachTileBefore(const PlayerBotApproachTile& left, const PlayerBotApproachTile& right)
 {
-	return std::tie(left.occupied, left.cost, left.position) < std::tie(right.occupied, right.cost, right.position);
+	return std::tie(left.occupied, left.cost) < std::tie(right.occupied, right.cost);
 }
 
 enum class PlayerBotApproachVerdict : uint8_t {
@@ -83,8 +85,10 @@ class PlayerBotApproach
 		}
 		const std::vector<PlayerBotApproachTile>& offered() const { return tiles; }
 
+		// The best tile not yet rejected, or none once the rejection bound is spent.
 		std::optional<Position> next() const
 		{
+			if (rejections >= PlayerBotApproachLimits::rejectedTiles) return std::nullopt;
 			for (const PlayerBotApproachTile& tile : tiles) {
 				if (!rejectedTiles.count(tile.position)) return tile.position;
 			}
@@ -103,7 +107,7 @@ class PlayerBotApproach
 			if (rejectedTiles.insert(tile).second) ++rejections;
 			blockedCount = 0;
 			outOfRangeWaits = 0;
-			return rejections >= PlayerBotApproachLimits::rejectedTiles || !next() ?
+			return !next() ?
 			    PlayerBotApproachVerdict::Exhausted : PlayerBotApproachVerdict::Continue;
 		}
 

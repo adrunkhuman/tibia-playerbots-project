@@ -13,6 +13,7 @@
 
 // Internal controller contract shared by the responsibility-specific playerbot implementation units.
 
+#include "playerbotapproach.h"
 #include "playerbot.h"
 #include "playerbothuntcoordinator.h"
 #include "playerbothunttiming.h"
@@ -198,6 +199,11 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		{
 			telemetry.emit(event, position, fields);
 		}
+		// One record per approach outcome for depot, service, sell-loot, and
+		// NPC-travel callers. `reason` names a stable cause.
+		void emitApproachResult(const char* caller, const char* result, const char* reason, const Position& position,
+		                        uint32_t providerId = 0, const std::optional<Position>& tile = std::nullopt,
+		                        const std::string& extra = {}) const;
 
 		void say(const Player& player, const std::string& text) const;
 		void setStage(ScenarioStage stage, const Position& position);
@@ -667,7 +673,6 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 			std::shared_ptr<PlayerBotHuntTravelWork> work;
 		};
 		std::optional<ServiceRouteSearch> serviceRouteSearch;
-		uint32_t serviceBlockedRouteWaits = 0;
 		uint64_t serviceRouteSerial = 0;
 		struct DepotSourceRouteSearch {
 			Position origin, destination, locker;

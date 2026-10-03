@@ -34,7 +34,6 @@ namespace {
 	constexpr size_t maximumServiceBankers = 2;
 	constexpr size_t maximumSellLootRouteValidationsPerDecision = 1;
 	// One-second waits; a refused step keeps its tile blocked for ten seconds.
-	constexpr uint32_t maximumServiceBlockedRouteWaits = 30;
 	constexpr uint32_t maximumSellLootBatch = 100;
 	constexpr uint32_t sellLootTravelTimeGoldPerMinute = 10;
 	constexpr std::chrono::seconds sellLootFailureCooldown(60);
@@ -1300,9 +1299,12 @@ void PlayerBotController::processService(Player* player, const Position& current
 				if (xOffset == 0 && yOffset == 0) continue;
 				const Position approach(npc->getPosition().x + xOffset, npc->getPosition().y + yOffset, npc->getPosition().z);
 				Tile* tile = g_game.map.getTile(approach);
-				if (tile && tile->queryAdd(0, *player, 1, 0) == RETURNVALUE_NOERROR) {
+				// Occupied tiles stay eligible as a last resort (see playerbotapproach.h).
+				if (tile && tile->queryAdd(0, *player, 1, FLAG_IGNOREBLOCKCREATURE) == RETURNVALUE_NOERROR) {
+					const Creature* occupant = tile->getTopCreature();
 					providerObservation.approaches.push_back({approach, static_cast<uint32_t>(
-						std::max(Position::getDistanceX(currentPosition, approach), Position::getDistanceY(currentPosition, approach)))});
+						std::max(Position::getDistanceX(currentPosition, approach), Position::getDistanceY(currentPosition, approach))),
+						occupant && occupant != player});
 				}
 			}
 			// Tiles behind a shop counter are never walkable. When any tile is, skip
@@ -1333,6 +1335,7 @@ void PlayerBotController::processService(Player* player, const Position& current
 				                                               Position::getDistanceY(npc->getPosition(), left.position));
 				const uint32_t rightProviderDistance = std::max(Position::getDistanceX(npc->getPosition(), right.position),
 				                                                Position::getDistanceY(npc->getPosition(), right.position));
+				if (left.occupied != right.occupied) return !left.occupied;
 				if (leftProviderDistance != rightProviderDistance) return leftProviderDistance > rightProviderDistance;
 				return left.distance != right.distance ? left.distance < right.distance : left.position < right.position;
 			});
@@ -1525,20 +1528,16 @@ void PlayerBotController::processService(Player* player, const Position& current
 			    playerBotNavigationRiskVerdict(riskProfile, detour.metrics) == PlayerBotNavigationRiskVerdict::Accepted) {
 				routePlan = std::move(detour);
 				validatedNpcTravel = false;
-			} else if (++serviceBlockedRouteWaits <= maximumServiceBlockedRouteWaits) {
-				emit("service_route_blocked", currentPosition,
-				     "\"result\":\"waiting\",\"npc_id\":" + std::to_string(command.providerId) +
-				         ",\"destination\":{\"x\":" + std::to_string(command.destination.x) +
-				         ",\"y\":" + std::to_string(command.destination.y) + ",\"z\":" +
-				         std::to_string(static_cast<uint16_t>(command.destination.z)) +
-				         "},\"waits\":" + std::to_string(serviceBlockedRouteWaits));
+			} else if (serviceWorkflow.approach().blocked() == PlayerBotApproachVerdict::Wait) {
+				emitApproachResult("service", "waiting", "route_blocked", currentPosition, command.providerId,
+				                   command.destination, ",\"waits\":" + std::to_string(serviceWorkflow.approach().blockedWaits()));
 				schedule(1000);
 				return;
 			} else {
 				routeBlocked = true;
 			}
 		}
-		if (!routeBlocked) serviceBlockedRouteWaits = 0;
+		if (!routeBlocked) serviceWorkflow.approach().unblocked();
 		const auto* quote = sellingLocalLoot ? &*serviceWorkflow.liquidation() : nullptr;
 		const bool quoteAllowed = !quote || (routePlan.metrics.fare <= quote->maximumFare &&
 		    (quote->maximumRouteSteps == 0 || routePlan.metrics.steps <= quote->maximumRouteSteps));
@@ -1757,22 +1756,17 @@ void PlayerBotController::processService(Player* player, const Position& current
 				schedule(1000);
 				return;
 			}
-			emit(wait == PlayerBotServiceProviderWait::Released ? "service_provider_approach_released" :
-			         "service_provider_approach_rejected", currentPosition,
-			     "\"reason\":\"provider_out_of_range\",\"npc_id\":" + std::to_string(command.providerId) +
-			         ",\"provider_position\":{\"x\":" + std::to_string(provider->getPosition().x) +
-			         ",\"y\":" + std::to_string(provider->getPosition().y) + ",\"z\":" +
-			         std::to_string(static_cast<uint16_t>(provider->getPosition().z)) + "}");
+			emitApproachResult("service", wait == PlayerBotServiceProviderWait::Released ? "released" : "rejected",
+			                   "provider_out_of_range", currentPosition, command.providerId, currentPosition,
+			                   ",\"provider_position\":{\"x\":" + std::to_string(provider->getPosition().x) +
+			                       ",\"y\":" + std::to_string(provider->getPosition().y) + ",\"z\":" +
+			                       std::to_string(static_cast<uint16_t>(provider->getPosition().z)) + "}");
 			resetNavigation();
 			schedule(SCHEDULER_MINTICKS);
 			return;
 		}
 		if (const std::optional<Position> rejected = serviceWorkflow.rejectSelectedApproach()) {
-			emit("service_provider_approach_rejected", currentPosition,
-			     "\"reason\":\"route_unavailable\",\"npc_id\":" + std::to_string(command.providerId) +
-			         ",\"destination\":{\"x\":" + std::to_string(rejected->x) +
-			         ",\"y\":" + std::to_string(rejected->y) + ",\"z\":" +
-			         std::to_string(static_cast<uint16_t>(rejected->z)) + "}");
+			emitApproachResult("service", "rejected", "route_unavailable", currentPosition, command.providerId, rejected);
 			resetNavigation();
 		}
 		schedule(SCHEDULER_MINTICKS);

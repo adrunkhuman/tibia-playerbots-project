@@ -953,6 +953,16 @@ PlayerBotNavigationRoutePlan PlayerBotController::planNavigationRoute(Player& pl
 	return routePlan;
 }
 
+void PlayerBotController::emitApproachResult(const char* caller, const char* result, const char* reason,
+	const Position& position, uint32_t providerId, const std::optional<Position>& tile, const std::string& extra) const
+{
+	std::string fields = std::string("\"caller\":") + jsonString(caller) + ",\"result\":" + jsonString(result) +
+	                     ",\"reason\":" + jsonString(reason) + ",\"npc_id\":" + std::to_string(providerId) + ",\"tile\":";
+	fields += tile ? "{\"x\":" + std::to_string(tile->x) + ",\"y\":" + std::to_string(tile->y) + ",\"z\":" +
+	                 std::to_string(static_cast<uint16_t>(tile->z)) + '}' : std::string("null");
+	emit("approach_result", position, fields + extra);
+}
+
 bool PlayerBotController::rerouteValidatedPaidApproach(Player& player, PlayerBotNavigationRoutePlan& route,
 	const std::set<Position>& blockedPositions) const
 {

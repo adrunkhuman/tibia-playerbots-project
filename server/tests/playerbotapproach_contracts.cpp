@@ -16,6 +16,10 @@ void occupiedTilesAreLastResort()
 {
 	Approach approach;
 	approach.offer({{north, 1, true}, {east, 5, false}, {south, 3, false}});
+	// Equal tiles keep the caller's order.
+	Approach ranked;
+	ranked.offer({{east, 1}, {north, 1}});
+	assert(ranked.next() == east);
 	assert(approach.next() == south);
 	approach.reject(*approach.next(), "route_unavailable");
 	assert(approach.next() == east);
@@ -44,7 +48,7 @@ void partlyUnreachableTiles()
 	crowded.offer({{north, 1}, {east, 2}, {south, 3}, {west, 4}, {far, 5}});
 	for (const Position& tile : {north, east, south}) assert(crowded.reject(tile, "approach_occupied") == Verdict::Continue);
 	assert(crowded.reject(west, "approach_occupied") == Verdict::Exhausted);
-	assert(crowded.next() == far);
+	assert(!crowded.next());
 	// Repeating a rejection does not spend the bound twice.
 	Approach repeated;
 	repeated.offer({{north, 1}, {east, 2}});
