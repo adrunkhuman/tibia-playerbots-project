@@ -18,6 +18,8 @@
 #include "playerbothuntcoordinator.h"
 #include "playerbothunttiming.h"
 #include "playerbothunttravelpolicy.h"
+#include "playerbothunttravelevidence.h"
+#include "playerbothuntrouteretention.h"
 #include "playerbotdepotworkflow.h"
 #include "playerboteconomy.h"
 #include "playerbotequipmentpolicy.h"
@@ -444,7 +446,11 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		                                  const std::set<Position>& blockedPositions) const;
 		std::optional<PlayerBotNavigationRoutePlan> advanceHuntTravelRoute(Player& player,
 		    const PlayerBotHuntRouteRequest& request, const Position& source, PlayerBotHuntRouteTiming& timing,
-		    uint64_t transportReserve, bool sellEconomy, PlayerBotNavigationRoutePlan* walkingAlternative = nullptr);
+		    uint64_t transportReserve, bool sellEconomy, PlayerBotNavigationRoutePlan* walkingAlternative = nullptr,
+		    std::shared_ptr<PlayerBotHuntTravelEvidence>* completedEvidence = nullptr);
+		bool huntTravelEvidenceValid(Player& player, const Position& source, const Position& destination,
+		                             PlayerBotHuntTravelEvidence& evidence);
+		bool huntTravelExitValid(Player& player, const PlayerBotHuntTravelEvidence& evidence) const;
 		PlayerBotNavigationRoutePlan planHuntTravelRoute(Player& player, const Position& source,
 		                                                 const Position& destination,
 		                                                 const std::set<Position>& blockedPositions = {},
@@ -726,9 +732,18 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 			std::vector<PlayerBotNavigationStep> outboundOffers; // Boats on the validated outbound itinerary.
 			PlayerBotHuntRouteTiming timing; // Summed over turns for rejection telemetry.
 			std::shared_ptr<PlayerBotHuntTravelWork> work;
+			std::shared_ptr<PlayerBotHuntTravelEvidence> outboundEvidence;
 			PlayerBotRouteChanges::Watch watch;
 			std::string outboundFacts;
 		};
+		struct SelectedHuntRoute {
+			Position source, destination;
+			uint64_t revision = 0, variant = 0;
+			PlayerBotNavigationRoutePlan plan;
+			PlayerBotHuntRouteEvidence evidence;
+		};
+		PlayerBotHuntRouteRetention<SelectedHuntRoute> huntRouteRetention;
+		std::optional<SelectedHuntRoute> selectedHuntRoute;
 		std::optional<HuntPatrolRouteSearch> huntPatrolRouteSearch;
 		uint64_t huntPatrolRouteSerial = 0;
 		std::optional<Position> huntPatrolValidationDestination;

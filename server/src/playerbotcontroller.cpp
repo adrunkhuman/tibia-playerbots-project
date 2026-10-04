@@ -448,6 +448,8 @@ void PlayerBotController::cancelHuntPlanning(const char* reason, const Position&
 	PlayerBotPlanningBudget& budget = playerBotHuntPlanningBudget();
 	if (!budget.isActive(playerId)) budget.cancel(playerId, PlayerBotPlanningBudget::Clock::now());
 	huntTravelWork.reset();
+	huntRouteRetention.clear();
+	selectedHuntRoute.reset();
 	flushHuntPlanningSlice();
 	const PlayerBotHuntRuntimeOutcome outcome = huntCoordinator.cancelPlanning();
 	if (telemetry.terminalLogged() || outcome.planningPass == 0) return;
