@@ -170,6 +170,16 @@ function Assert-DoorPassageEvents {
 			throw "Door passage fixture failed $field."
 		}
 	}
+	$stableEvents = @(ConvertFrom-PlayerbotLogs -Logs $Logs | Where-Object { $_.event -eq "stable_approaches_contract" })
+	if ($stableEvents.Count -ne 1) {
+		throw "Stable approach fixture emitted $($stableEvents.Count) contract events."
+	}
+	foreach ($field in @("selection", "revalidation", "floor_change_rejected", "occupied_eligible",
+		"blocked_rejected", "teleport_traversal")) {
+		if ($stableEvents[0].$field -ne $true) {
+			throw "Stable approach fixture failed $field."
+		}
+	}
 }
 
 function Assert-SvargrondLocalRouteRecoveryEvents {

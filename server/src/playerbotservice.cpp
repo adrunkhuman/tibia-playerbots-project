@@ -113,7 +113,7 @@ bool PlayerBotController::planSellLootTrip(Player& player, uint16_t currentDepot
 			if (!x && !y) continue;
 			const Position target(provider.x + x, provider.y + y, provider.z);
 			Tile* tile = g_game.map.getTile(target);
-			if (!tile || tile->queryAdd(0, player, 1, FLAG_IGNOREBLOCKCREATURE) != RETURNVALUE_NOERROR) continue;
+			if (!playerBotStableApproachTile(tile, player)) continue;
 			const auto coarseDistance = topology.distanceTo(distances, target);
 			approaches.push_back({target, coarseDistance.has_value(), coarseDistance.value_or(UINT32_MAX),
 				playerBotNavigationDistance(start, target), static_cast<uint8_t>(approachDirection(provider, target))});
@@ -168,7 +168,7 @@ bool PlayerBotController::planSellLootTrip(Player& player, uint16_t currentDepot
 					if (xOffset == 0 && yOffset == 0) continue;
 					const Position approach(locker.x + xOffset, locker.y + yOffset, locker.z);
 					Tile* tile = g_game.map.getTile(approach);
-					if (!tile || tile->queryAdd(0, player, 1, FLAG_IGNOREBLOCKCREATURE) != RETURNVALUE_NOERROR) continue;
+					if (!playerBotStableApproachTile(tile, player)) continue;
 					const uint32_t distance = playerBotNavigationDistance(position, approach);
 					if (distance < sourceDistance) {
 						sourceDistance = distance;
@@ -1322,7 +1322,7 @@ void PlayerBotController::processService(Player* player, const Position& current
 				const Position approach(npc->getPosition().x + xOffset, npc->getPosition().y + yOffset, npc->getPosition().z);
 				Tile* tile = g_game.map.getTile(approach);
 				// Occupied tiles stay eligible as a last resort (see playerbotapproach.h).
-				if (tile && tile->queryAdd(0, *player, 1, FLAG_IGNOREBLOCKCREATURE) == RETURNVALUE_NOERROR) {
+				if (playerBotStableApproachTile(tile, *player)) {
 					const Creature* occupant = tile->getTopCreature();
 					providerObservation.approaches.push_back({approach, static_cast<uint32_t>(
 						std::max(Position::getDistanceX(currentPosition, approach), Position::getDistanceY(currentPosition, approach))),
@@ -1984,7 +1984,7 @@ bool PlayerBotController::discoverDepot(Player& player, const Position& currentP
 					if (!findDepotLocker(locker, depot->getDepotId(), lockerItemId)) continue;
 					++result.inScopeCandidates;
 					Tile* approach = g_game.map.getTile(huntReturnDestination);
-					if (!approach || approach->queryAdd(0, player, 1, FLAG_IGNOREBLOCKCREATURE) != RETURNVALUE_NOERROR) continue;
+					if (!playerBotStableApproachTile(approach, player)) continue;
 					++result.standableCandidates;
 					result.candidates.push_back({depot->getDepotId(), lockerItemId, locker, huntReturnDestination, 0});
 				}
@@ -2009,7 +2009,7 @@ bool PlayerBotController::discoverDepot(Player& player, const Position& currentP
 				const Position approach(lockerPosition.x + xOffset, lockerPosition.y + yOffset, lockerPosition.z);
 				if (sellLootPlan && approach != sellLootPlan->sourceApproach) continue;
 				Tile* tile = g_game.map.getTile(approach);
-				if (!tile || tile->queryAdd(0, player, 1, FLAG_IGNOREBLOCKCREATURE) != RETURNVALUE_NOERROR) continue;
+				if (!playerBotStableApproachTile(tile, player)) continue;
 				++result.standableCandidates;
 				const std::optional<uint32_t> routeCost = topology.distanceTo(
 					distances, PlayerBotNavigationGoal::exact(approach));
@@ -2077,7 +2077,7 @@ bool PlayerBotController::discoverDepot(Player& player, const Position& currentP
 		Tile* tile = g_game.map.getTile(candidate.approachPosition);
 		const bool valid = fixtureDepot.synthetic ||
 			(findDepotLocker(candidate.lockerPosition, candidate.depotId, lockerItemId) && lockerItemId == candidate.lockerItemId &&
-			 tile && tile->queryAdd(0, player, 1, FLAG_IGNOREBLOCKCREATURE) == RETURNVALUE_NOERROR);
+			 playerBotStableApproachTile(tile, player));
 		const auto startedAt = std::chrono::steady_clock::now();
 		PlayerBotNavigationRoutePlan routePlan;
 		const bool remoteLiquidation = valid && candidate.approachPosition != currentPosition &&

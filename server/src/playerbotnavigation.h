@@ -46,6 +46,10 @@ inline uint32_t playerBotNavigationDistance(const Position& from, const Position
 	       Position::getDistanceZ(from, destination) * 20;
 }
 
+// Exact interaction goals must leave the player on the tile. Occupied tiles
+// remain eligible for the caller's bounded wait/retry policy, not for movement.
+bool playerBotStableApproachTile(const Tile* tile, const Player& player);
+
 bool playerBotIsTraversableDoor(const Item& item);
 std::optional<uint16_t> playerBotPassageOpenItemId(const Item& item);
 std::optional<uint32_t> playerBotPassageMinimumLevel(const Item& item);

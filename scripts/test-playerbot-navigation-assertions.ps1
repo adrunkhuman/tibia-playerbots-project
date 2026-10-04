@@ -327,4 +327,27 @@ Assert-Rejected "Closed shovel passage ignored missing tool" {
     Assert-MutablePortalRouteEvents -Logs (ConvertTo-FixtureLogs $invalidMutablePortal)
 } "Mutable portal route failed."
 
+$doorContract = @{ event = "door_passages_contract"; reloaded = $true; ordinary_descriptor = $true;
+    window_rejected = $true; unregistered_aid_fallback = $true; ordinary_aid_denied = $true;
+    uid_precedence = $true; level_denied = $true; house_denied = $true; static_aid_denied = $true;
+    navigator_used_door = $true; movable_height_excluded = $true; fixed_height_door_alternatives = $true;
+    fixed_height_teleport_alternative = $true }
+$stableContract = @{ event = "stable_approaches_contract"; selection = $true; revalidation = $true;
+    floor_change_rejected = $true; occupied_eligible = $true; blocked_rejected = $true; teleport_traversal = $true }
+Assert-DoorPassageEvents -Logs (ConvertTo-FixtureLogs @($doorContract, $stableContract))
+foreach ($field in @("selection", "revalidation", "floor_change_rejected", "occupied_eligible",
+    "blocked_rejected", "teleport_traversal")) {
+    $failedContract = $stableContract.Clone()
+    $failedContract[$field] = $false
+    Assert-Rejected "Stable approach contract $field" {
+        Assert-DoorPassageEvents -Logs (ConvertTo-FixtureLogs @($doorContract, $failedContract))
+    } "Stable approach fixture failed $field."
+}
+Assert-Rejected "Missing stable approach contract" {
+    Assert-DoorPassageEvents -Logs (ConvertTo-FixtureLogs @($doorContract))
+} "Stable approach fixture emitted 0 contract events."
+Assert-Rejected "Duplicate stable approach contract" {
+    Assert-DoorPassageEvents -Logs (ConvertTo-FixtureLogs @($doorContract, $stableContract, $stableContract))
+} "Stable approach fixture emitted 2 contract events."
+
 "Playerbot navigation assertion regression PASS"

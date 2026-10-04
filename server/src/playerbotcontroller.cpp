@@ -1091,7 +1091,7 @@ std::optional<PlayerBotNavigationRoutePlan> PlayerBotController::planNpcTravelRo
 				const Position approach(edge.npc->getPosition().x + xOffset, edge.npc->getPosition().y + yOffset,
 				                        edge.npc->getPosition().z);
 				Tile* tile = g_game.map.getTile(approach);
-				if (!tile || tile->queryAdd(0, player, 1, FLAG_IGNOREBLOCKCREATURE) != RETURNVALUE_NOERROR) continue;
+				if (!playerBotStableApproachTile(tile, player)) continue;
 				const uint32_t approachDistance = playerBotNavigationDistance(states[stateIndex], approach);
 				const std::optional<uint32_t> portalDistance = PlayerBotTopology::instance().distanceTo(
 				    *coarseDistanceCache[stateIndex], approach);
@@ -1428,7 +1428,7 @@ std::vector<Position> PlayerBotController::huntDepotExitCandidates(Player& playe
 					if (xOffset == 0 && yOffset == 0) continue;
 					const Position approach(locker.x + xOffset, locker.y + yOffset, locker.z);
 					Tile* tile = g_game.map.getTile(approach);
-					if (!tile || tile->queryAdd(0, player, 1, FLAG_IGNOREBLOCKCREATURE) != RETURNVALUE_NOERROR) continue;
+					if (!playerBotStableApproachTile(tile, player)) continue;
 					const auto topologyCost = PlayerBotTopology::instance().distanceTo(distances, approach);
 					Candidate candidate{approach, topologyCost.value_or(static_cast<uint32_t>(
 					    playerBotNavigationDistance(source, approach))), topologyCost.has_value()};
@@ -1475,7 +1475,7 @@ std::vector<Position> PlayerBotController::huntSupplyExitCandidates(Player& play
 				const Position approach(npc->getPosition().x + xOffset, npc->getPosition().y + yOffset,
 				                        npc->getPosition().z);
 				Tile* tile = g_game.map.getTile(approach);
-				if (!tile || tile->queryAdd(0, player, 1, FLAG_IGNOREBLOCKCREATURE) != RETURNVALUE_NOERROR) continue;
+				if (!playerBotStableApproachTile(tile, player)) continue;
 				const auto topologyCost = PlayerBotTopology::instance().distanceTo(distances, approach);
 				Candidate candidate{approach, topologyCost.value_or(static_cast<uint32_t>(
 				    playerBotNavigationDistance(source, approach))), topologyCost.has_value()};

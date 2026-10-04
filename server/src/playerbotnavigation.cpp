@@ -196,6 +196,14 @@ namespace {
 
 }
 
+bool playerBotStableApproachTile(const Tile* tile, const Player& player)
+{
+	// queryAdd alone permits tiles that redirect entry. Do not use PATHFINDING:
+	// its extra blocker rules would change approach admission beyond stability.
+	return tile && !tile->hasFlag(TILESTATE_FLOORCHANGE | TILESTATE_TELEPORT) &&
+	       tile->queryAdd(0, player, 1, FLAG_IGNOREBLOCKCREATURE) == RETURNVALUE_NOERROR;
+}
+
 const Item* playerBotShovelPassageItem(const Tile& tile, uint16_t passageItemId)
 {
 	const auto expected = passageItemId == 0 ? std::nullopt : playerBotShovelPassage(passageItemId);

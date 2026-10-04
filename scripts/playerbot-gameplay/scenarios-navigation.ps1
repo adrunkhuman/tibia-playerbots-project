@@ -19,7 +19,7 @@
 			Invoke-Compose down --volumes --remove-orphans
 			$env:PLAYERBOT_GAMEPLAY_MODE = "door_passages"
 			Invoke-Compose up --detach
-			$doorLogs = Wait-ForPlayerbotEvent -Predicate { $_.event -eq "door_passages_contract" }
+			$doorLogs = Wait-ForPlayerbotEvent -Predicate { $_.event -eq "stable_approaches_contract" }
 			Assert-DoorPassageEvents -Logs $doorLogs
 		}
 	}
