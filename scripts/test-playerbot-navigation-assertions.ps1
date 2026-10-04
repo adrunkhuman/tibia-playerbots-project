@@ -331,10 +331,18 @@ $doorContract = @{ event = "door_passages_contract"; reloaded = $true; ordinary_
     window_rejected = $true; unregistered_aid_fallback = $true; ordinary_aid_denied = $true;
     uid_precedence = $true; level_denied = $true; house_denied = $true; static_aid_denied = $true;
     navigator_used_door = $true; movable_height_excluded = $true; fixed_height_door_alternatives = $true;
-    fixed_height_teleport_alternative = $true }
+    fixed_height_teleport_alternative = $true; coarse_danger_reuse = $true;
+    coarse_danger_rejection = $true; coarse_danger_dependencies = $true }
 $stableContract = @{ event = "stable_approaches_contract"; selection = $true; revalidation = $true;
     floor_change_rejected = $true; occupied_eligible = $true; blocked_rejected = $true; teleport_traversal = $true }
 Assert-DoorPassageEvents -Logs (ConvertTo-FixtureLogs @($doorContract, $stableContract))
+foreach ($field in @("coarse_danger_reuse", "coarse_danger_rejection", "coarse_danger_dependencies")) {
+    $failedContract = $doorContract.Clone()
+    $failedContract[$field] = $false
+    Assert-Rejected "Coarse danger contract $field" {
+        Assert-DoorPassageEvents -Logs (ConvertTo-FixtureLogs @($failedContract, $stableContract))
+    } "Door passage fixture failed $field."
+}
 foreach ($field in @("selection", "revalidation", "floor_change_rejected", "occupied_eligible",
     "blocked_rejected", "teleport_traversal")) {
     $failedContract = $stableContract.Clone()

@@ -654,6 +654,9 @@ std::vector<playerbot::PlayerBotFixtureEvent> playerbot::PlayerBotFixtureDriver:
 	bool movableHeightExcluded = false;
 	bool fixedHeightDoorAlternatives = false;
 	bool fixedHeightTeleportAlternative = false;
+	bool coarseDangerReuse = false;
+	bool coarseDangerRejection = false;
+	bool coarseDangerDependencies = false;
 	bool stableApproachSelection = false;
 	bool stableApproachRevalidation = false;
 	bool stableApproachFloorChange = false;
@@ -735,6 +738,38 @@ std::vector<playerbot::PlayerBotFixtureEvent> playerbot::PlayerBotFixtureDriver:
 		    topology.route(fixedSource, fixedUpper, {}, false, false, player.getLevel()).has_value() &&
 		    PlayerBotNavigator().resolveMove(player, fixedSource, DIRECTION_EAST, {}, fixedStep) &&
 		    fixedStep.expectedPosition == fixedNeighbor;
+		// The isolated upper tile has one incoming crossing. It is sampled once
+		// by that edge, plus the existing final-cost and final-peak queries.
+		PlayerBotNavigationCostPolicy dangerPolicy;
+		unsigned upperSamples = 0;
+		double upperDanger = 0.02;
+		double approachDanger = 0.01;
+		dangerPolicy.expectedHealthLossPerSecond = [&](const Position& position) {
+			PlayerBotRouteChanges::read(position);
+			if (position == fixedUpper) { ++upperSamples; return upperDanger; }
+			return approachDanger;
+		};
+		PlayerBotRouteChanges::Watch dangerWatch;
+		{
+			PlayerBotRouteChanges::Scope scope(dangerWatch);
+			const auto itinerary = topology.routeToAny(fixedSource, {fixedUpper}, {}, false, false,
+			    player.getLevel(), &dangerPolicy);
+			coarseDangerReuse = itinerary && itinerary->portals.size() == 1 && upperSamples == 3 &&
+			    itinerary->dangerCost == 500 && itinerary->maximumHealthLossPerSecond == 0.02;
+		}
+		coarseDangerDependencies = dangerWatch.valid();
+		PlayerBotRouteChanges::changed(fixedUpper);
+		coarseDangerDependencies = coarseDangerDependencies &&
+		    dangerWatch.check() == PlayerBotRouteChanges::Reason::ChangedTile;
+		upperDanger = 0.09;
+		upperSamples = 0;
+		coarseDangerRejection = !topology.routeToAny(fixedSource, {fixedUpper}, {}, false, false,
+		    player.getLevel(), &dangerPolicy) && upperSamples == 1;
+		approachDanger = 0.09;
+		upperSamples = 0;
+		coarseDangerRejection = coarseDangerRejection &&
+		    !topology.routeToAny(fixedSource, {fixedUpper}, {}, false, false, player.getLevel(), &dangerPolicy) &&
+		    upperSamples == 0; // Preserve the peak gate's short-circuit reads.
 		upperDoor = upperDoor ? g_game.transformItem(upperDoor, ordinaryDoorId + 1) : nullptr;
 		fixedHeightDoorAlternatives = fixedHeightDoorAlternatives && upperDoor &&
 		    PlayerBotNavigator().resolveMove(player, fixedSource, DIRECTION_EAST, {}, fixedStep) &&
@@ -786,7 +821,10 @@ std::vector<playerbot::PlayerBotFixtureEvent> playerbot::PlayerBotFixtureDriver:
 	       << ",\"navigator_used_door\":" << boolField(navigatorUsedDoor)
 	       << ",\"movable_height_excluded\":" << boolField(movableHeightExcluded)
 	       << ",\"fixed_height_door_alternatives\":" << boolField(fixedHeightDoorAlternatives)
-	       << ",\"fixed_height_teleport_alternative\":" << boolField(fixedHeightTeleportAlternative);
+	       << ",\"fixed_height_teleport_alternative\":" << boolField(fixedHeightTeleportAlternative)
+	       << ",\"coarse_danger_reuse\":" << boolField(coarseDangerReuse)
+	       << ",\"coarse_danger_rejection\":" << boolField(coarseDangerRejection)
+	       << ",\"coarse_danger_dependencies\":" << boolField(coarseDangerDependencies);
 	std::ostringstream stableFields;
 	stableFields << "\"selection\":" << boolField(stableApproachSelection)
 	             << ",\"revalidation\":" << boolField(stableApproachRevalidation)
