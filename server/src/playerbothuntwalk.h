@@ -157,6 +157,14 @@ public:
 			}
 			const bool reached = std::find(goals.begin(), goals.end(), current) != goals.end();
 			if (!playerBotNavigationRiskAccepts(policy.risk, summary.dangerCost, summary.maximumHealthLossPerSecond) && !unrestricted) {
+				// The live prefix confirms what the coarse estimate already said:
+				// this leg exceeds the risk budget. Live sampling found no safe
+				// detour for such legs, only full node-limit searches. Report
+				// unknown and let transport choose another leg.
+				if (!playerBotNavigationRiskAccepts(policy.risk, itinerary->dangerCost, itinerary->maximumHealthLossPerSecond)) {
+					fallbackReason = "unsafe_itinerary";
+					return result = PlayerBotNavigationResult::NodeLimit;
+				}
 				fallback(timing, "unsafe_prefix");
 			} else if (reached) {
 				return result = PlayerBotNavigationResult::Reached;
