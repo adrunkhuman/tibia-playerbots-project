@@ -67,6 +67,10 @@ struct PlayerBotTopologyPortal {
 	uint16_t itemId = 0;
 	uint16_t expectedItemId = 0;
 	uint32_t minimumLevel = 0;
+	// Ladders and rope spots land on the first free tile in the script's order.
+	// Edges to later landings keep connectivity verdicts safe, but a route over
+	// one fails live validation every time, so itineraries use only this one.
+	bool expectedLanding = true;
 };
 
 struct PlayerBotTopologyRoute {
