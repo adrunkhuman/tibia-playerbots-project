@@ -20,6 +20,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <map>
 #include <memory>
 #include <optional>
@@ -161,6 +162,9 @@ struct PlayerBotHuntRegion {
 	double staminaExperienceMultiplier = 1;
 	double projectedExperience = 0;
 	double optimisticProjectedExperience = 0;
+	// Best score this candidate could reach while fitting its supply budget;
+	// negative when no hunt length fits. Infinity means not computed.
+	double optimisticFittingExperience = std::numeric_limits<double>::infinity();
 	double threatRatio = 0;
 	double rawThreatRatio = 0;
 	double corridorDangerRatio = 0;
@@ -563,6 +567,28 @@ inline std::vector<PlayerBotHuntRegion> playerBotHuntRouteCandidates(
 	return result;
 }
 
+// Route validation can only add travel to the zero-travel estimate, and its
+// potion reserve never drops below the planning floor, so a candidate fits
+// afterwards only at a hunt length that fits now. Potions needed grow with hunt
+// length apart from small regeneration and spell-cast steps; probing a coarse
+// grid and allowing one extra step keeps this an upper bound.
+inline double playerBotHuntOptimisticFittingExperience(const PlayerBotHuntRegion& region, double durationSeconds,
+                                                       double peakExperiencePerSecond)
+{
+	constexpr int steps = 24;
+	PlayerBotHuntRegion probe = region;
+	for (int step = steps; step >= 0; --step) {
+		const double huntSeconds = durationSeconds * step / steps;
+		probe.availableHuntSeconds = huntSeconds;
+		probe.estimatedTravelSeconds = durationSeconds - huntSeconds;
+		probe.reconcileSupplies(region.supplyProfile.reserve);
+		if (!probe.supplyBudget.fits) continue;
+		if (step == steps) return region.optimisticProjectedExperience;
+		return peakExperiencePerSecond * durationSeconds * (step + 1) / steps;
+	}
+	return -1;
+}
+
 inline bool playerBotHuntCandidateCanBeatValidated(
     const PlayerBotHuntRegion& candidate, const PlayerBotHuntRegion& validated)
 {
@@ -571,9 +597,12 @@ inline bool playerBotHuntCandidateCanBeatValidated(
 	// an incumbent that already fits. Compare that best case with the candidate's
 	// no-travel XP bound before spending another route budget.
 	if (!validated.supplyBudget.fits) return true;
+	// A fitting incumbent outranks every non-fitting result, so the candidate
+	// must fit after validation to win.
+	if (candidate.optimisticFittingExperience < 0) return false;
 	if (validated.cashPressure && candidate.coinGoldPerMinute > validated.coinGoldPerMinute) return true;
 	if (validated.cashPressure && candidate.coinGoldPerMinute < validated.coinGoldPerMinute) return false;
-	return candidate.optimisticProjectedExperience >= validated.score;
+	return std::min(candidate.optimisticProjectedExperience, candidate.optimisticFittingExperience) >= validated.score;
 }
 
 inline size_t playerBotNextHuntCandidateToValidate(

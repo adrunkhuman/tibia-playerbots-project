@@ -694,6 +694,11 @@ namespace {
 			region.suitable = false;
 			region.rejectionReason = "recovery_hunt_not_sustainable";
 		}
+		// The multiplier at the first hunted second is the highest any shorter hunt
+		// can average, so it bounds the XP rate at every fitting hunt length.
+		if (region.suitable) region.optimisticFittingExperience = playerBotHuntOptimisticFittingExperience(region,
+		    huntDurationSeconds, region.experiencePerMinute * region.observedCorrection *
+		    projectedStaminaExperienceMultiplier(player, 1) / 60.0);
 		region.reachable = withinPlanningScope;
 		region.travelSteps = estimatedTravelSteps;
 		return region;

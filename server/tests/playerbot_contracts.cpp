@@ -951,6 +951,38 @@ void incrementalHuntValidationPipeline()
 	assert(playerBotNextHuntCandidateToValidate(sparseCompetition, 1, &earlyWinner) ==
 	       sparseCompetition.size());
 
+	// Against a fitting incumbent, a candidate must fit to win. Travel only
+	// shortens the hunt, so its XP is bounded by the longest hunt that fits.
+	PlayerBotHuntRegion supplyLimited;
+	supplyLimited.suitable = supplyLimited.reachable = true;
+	supplyLimited.supplyProfile.potions = 6; // five routine potions above the reserve of one
+	supplyLimited.supplyProfile.potionHealing = 100;
+	supplyLimited.expectedDamagePerSecond = 1;
+	supplyLimited.combatFraction = 1;
+	supplyLimited.availableHuntSeconds = 2400;
+	supplyLimited.optimisticProjectedExperience = 2400;
+	supplyLimited.reconcileSupplies(1);
+	assert(!supplyLimited.supplyBudget.fits); // 24 potions needed for the full hunt
+	// 500 s fits exactly; one generous 100 s grid step bounds it at 600 XP.
+	supplyLimited.optimisticFittingExperience = playerBotHuntOptimisticFittingExperience(supplyLimited, 2400, 1);
+	assert(supplyLimited.optimisticFittingExperience == 600);
+	PlayerBotHuntRegion fittingIncumbent;
+	fittingIncumbent.supplyBudget.fits = true;
+	fittingIncumbent.score = 601;
+	assert(!playerBotHuntCandidateCanBeatValidated(supplyLimited, fittingIncumbent));
+	fittingIncumbent.score = 600;
+	assert(playerBotHuntCandidateCanBeatValidated(supplyLimited, fittingIncumbent));
+	PlayerBotHuntRegion fitsFully = supplyLimited;
+	fitsFully.supplyProfile.potions = 30;
+	assert(playerBotHuntOptimisticFittingExperience(fitsFully, 2400, 1) == fitsFully.optimisticProjectedExperience);
+	supplyLimited.supplyProfile.potions = 1; // only the reserve: no hunt length fits
+	supplyLimited.optimisticFittingExperience = playerBotHuntOptimisticFittingExperience(supplyLimited, 2400, 1);
+	assert(supplyLimited.optimisticFittingExperience < 0);
+	fittingIncumbent.score = 0;
+	assert(!playerBotHuntCandidateCanBeatValidated(supplyLimited, fittingIncumbent));
+	fittingIncumbent.supplyBudget.fits = false; // a non-fitting incumbent can still be displaced
+	assert(playerBotHuntCandidateCanBeatValidated(supplyLimited, fittingIncumbent));
+
 	// The full-duration stamina bound dominates every shorter available hunt,
 	// so validated travel can never lift a skipped candidate above it.
 	for (const uint16_t stamina : {0, 500, 840, 841, 2400, 2401, 2402, 2403, 2410, 2520}) {
