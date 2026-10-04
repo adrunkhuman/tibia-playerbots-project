@@ -2,6 +2,7 @@
 
 #include "playerbotfixturedriver.h"
 
+#include "playerbotapproach.h"
 #include "playerbotdepotworkflow.h"
 #include "playerbothuntregions.h"
 #include "playerbotnavigation.h"
@@ -14,6 +15,7 @@
 #include "game.h"
 #include "house.h"
 #include "item.h"
+#include "monster.h"
 #include "player.h"
 #include "tile.h"
 #include "teleport.h"
@@ -652,7 +654,63 @@ std::vector<playerbot::PlayerBotFixtureEvent> playerbot::PlayerBotFixtureDriver:
 	bool movableHeightExcluded = false;
 	bool fixedHeightDoorAlternatives = false;
 	bool fixedHeightTeleportAlternative = false;
+	bool stableApproachSelection = false;
+	bool stableApproachRevalidation = false;
+	bool stableApproachFloorChange = false;
+	bool stableApproachOccupancy = false;
+	bool stableApproachBlocked = false;
 	if (reloaded) {
+		Tile* ordinary = g_game.map.getTile(teleportExit);
+		Tile* redirect = g_game.map.getTile(teleportEntry);
+		// Both admit the player, but only the ordinary tile can be an exact
+		// conversation/depot goal. Give the teleport the better cost to catch
+		// accidental admission before any caller-specific ranking.
+		PlayerBotApproach approach;
+		std::vector<PlayerBotApproachTile> stableTiles;
+		for (const auto& candidate : std::vector<PlayerBotApproachTile>{{teleportEntry, 0}, {teleportExit, 100}, {teleportSource, 200}}) {
+			if (playerBotStableApproachTile(g_game.map.getTile(candidate.position), player)) stableTiles.push_back(candidate);
+		}
+		approach.offer(std::move(stableTiles));
+		stableApproachSelection = redirect && ordinary &&
+		    redirect->queryAdd(0, player, 1, FLAG_IGNOREBLOCKCREATURE) == RETURNVALUE_NOERROR &&
+		    !playerBotStableApproachTile(redirect, player) && approach.next() == teleportExit &&
+		    !playerBotStableApproachTile(nullptr, player);
+
+		// A route candidate can change after the scan, even at the same
+		// coordinate. Revalidation must reject it, then allow it after removal.
+		approach.select(teleportExit);
+		Item* changed = Item::CreateItem(teleportId);
+		if (ordinary && changed && changed->getTeleport()) {
+			changed->getTeleport()->setDestPos(teleportSource);
+			ordinary->internalAddThing(changed);
+			const Position selected = *approach.selected();
+			if (!playerBotStableApproachTile(g_game.map.getTile(selected), player)) {
+				approach.reject(selected, "route_unavailable");
+				stableApproachRevalidation = !approach.selected() && approach.next() == teleportSource;
+			}
+			ordinary->removeThing(changed, 1);
+			g_game.ReleaseItem(changed);
+			stableApproachRevalidation = stableApproachRevalidation && playerBotStableApproachTile(ordinary, player);
+		} else if (changed) {
+			g_game.ReleaseItem(changed);
+		}
+		if (ordinary) {
+			ordinary->setFlag(TILESTATE_FLOORCHANGE_DOWN);
+			stableApproachFloorChange =
+			    ordinary->queryAdd(0, player, 1, FLAG_IGNOREBLOCKCREATURE) == RETURNVALUE_NOERROR &&
+			    !playerBotStableApproachTile(ordinary, player);
+			ordinary->resetFlag(TILESTATE_FLOORCHANGE_DOWN);
+			ordinary->setFlag(TILESTATE_BLOCKSOLID);
+			stableApproachBlocked = !playerBotStableApproachTile(ordinary, player);
+			ordinary->resetFlag(TILESTATE_BLOCKSOLID);
+			std::unique_ptr<Monster> blocker(Monster::createMonster("Rat"));
+			if (blocker) {
+				ordinary->internalAddThing(blocker.get());
+				stableApproachOccupancy = ordinary->queryAdd(0, player, 1, 0) != RETURNVALUE_NOERROR &&
+				    playerBotStableApproachTile(ordinary, player);
+				ordinary->removeThing(blocker.get(), 0);
+			}
+		}
 		staticActionDenied = std::none_of(PlayerBotTopology::instance().portals().begin(),
 		                                  PlayerBotTopology::instance().portals().end(), [&](const PlayerBotTopologyPortal& portal) {
 			                                  return portal.itemId == ordinaryDoorId && portal.target == Position(origin.x + 2, origin.y + 2, origin.z);
@@ -729,7 +787,14 @@ std::vector<playerbot::PlayerBotFixtureEvent> playerbot::PlayerBotFixtureDriver:
 	       << ",\"movable_height_excluded\":" << boolField(movableHeightExcluded)
 	       << ",\"fixed_height_door_alternatives\":" << boolField(fixedHeightDoorAlternatives)
 	       << ",\"fixed_height_teleport_alternative\":" << boolField(fixedHeightTeleportAlternative);
-	return {{"door_passages_contract", fields.str()}};
+	std::ostringstream stableFields;
+	stableFields << "\"selection\":" << boolField(stableApproachSelection)
+	             << ",\"revalidation\":" << boolField(stableApproachRevalidation)
+	             << ",\"floor_change_rejected\":" << boolField(stableApproachFloorChange)
+	             << ",\"occupied_eligible\":" << boolField(stableApproachOccupancy)
+	             << ",\"blocked_rejected\":" << boolField(stableApproachBlocked)
+	             << ",\"teleport_traversal\":" << boolField(fixedHeightTeleportAlternative);
+	return {{"door_passages_contract", fields.str()}, {"stable_approaches_contract", stableFields.str()}};
 }
 
 std::vector<playerbot::PlayerBotFixtureEvent> playerbot::PlayerBotFixtureDriver::runShovelPassagesContract(Player& player)

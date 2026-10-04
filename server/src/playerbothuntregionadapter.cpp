@@ -63,14 +63,6 @@ namespace {
 		return averageDamage / 2.0;
 	}
 
-	bool stableHuntApproach(Tile* tile, Player& player)
-	{
-		// A floor change or teleport can accept a player without leaving them on
-		// the tile. Patrol goals must be positions the navigator can finish on.
-		return tile && !tile->hasFlag(TILESTATE_FLOORCHANGE | TILESTATE_TELEPORT) &&
-		       tile->queryAdd(0, player, 1, FLAG_IGNOREBLOCKCREATURE) == RETURNVALUE_NOERROR;
-	}
-
 	std::optional<Position> nearestApproach(Player& player, const Position& spawnPosition,
 	                                       const PlayerBotTopologyDistances* topologyDistances = nullptr)
 	{
@@ -80,7 +72,7 @@ namespace {
 			for (int32_t y = -1; y <= 1; ++y) {
 				if (x == 0 && y == 0) continue;
 				Position candidate(spawnPosition.x + x, spawnPosition.y + y, spawnPosition.z);
-				if (!stableHuntApproach(g_game.map.getTile(candidate), player)) continue;
+				if (!playerBotStableApproachTile(g_game.map.getTile(candidate), player)) continue;
 				if (topologyDistances && !PlayerBotTopology::instance().distanceTo(*topologyDistances, candidate)) continue;
 				const uint32_t geometricDistance = Position::getDistanceX(player.getPosition(), candidate) +
 				                                   Position::getDistanceY(player.getPosition(), candidate);
@@ -95,7 +87,7 @@ namespace {
 			}
 		}
 		if (bestDistance != std::numeric_limits<uint32_t>::max()) return best;
-		if (stableHuntApproach(g_game.map.getTile(spawnPosition), player) &&
+		if (playerBotStableApproachTile(g_game.map.getTile(spawnPosition), player) &&
 		    (!topologyDistances || PlayerBotTopology::instance().distanceTo(*topologyDistances, spawnPosition))) {
 			return spawnPosition;
 		}
