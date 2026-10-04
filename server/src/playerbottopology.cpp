@@ -124,6 +124,13 @@ PlayerBotTopology& PlayerBotTopology::instance()
 	return topology;
 }
 
+PlayerBotTopology::~PlayerBotTopology()
+{
+	// Static teardown can destroy this singleton before Actions, whose destructor
+	// still publishes route invalidations.
+	PlayerBotRouteChanges::setGeometryObserver(nullptr);
+}
+
 void PlayerBotTopology::invalidate()
 {
 	++topologyGeneration;
