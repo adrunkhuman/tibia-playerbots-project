@@ -753,19 +753,21 @@ std::optional<PlayerBotTopologyItinerary> PlayerBotTopology::routeToAny(
 			    portal.minimumLevel > playerLevel) continue;
 			// These endpoints must actually be visited. Their peak danger is a
 			// necessary safety test, unlike estimated exposure over a whole sector.
-			if (costPolicy && (costPolicy->dangerAt(portal.approach) > costPolicy->risk.maximumHealthLossPerSecond ||
-			    costPolicy->dangerAt(portal.destination) > costPolicy->risk.maximumHealthLossPerSecond)) continue;
+			const double approachDanger = costPolicy ? costPolicy->dangerAt(portal.approach) : 0;
+			if (costPolicy && approachDanger > costPolicy->risk.maximumHealthLossPerSecond) continue;
+			const double destinationDanger = costPolicy ? costPolicy->dangerAt(portal.destination) : 0;
+			if (costPolicy && destinationDanger > costPolicy->risk.maximumHealthLossPerSecond) continue;
 			const uint64_t edgeDanger = costPolicy ?
-			    uint64_t(costPolicy->dangerCost(portal.approach, costPolicy->topologyExposureMs)) +
-			        costPolicy->dangerCost(portal.destination, costPolicy->topologyExposureMs) : 0;
+			    uint64_t(costPolicy->dangerCostForSample(approachDanger, costPolicy->topologyExposureMs)) +
+			        costPolicy->dangerCostForSample(destinationDanger, costPolicy->topologyExposureMs) : 0;
 			const uint32_t danger = static_cast<uint32_t>(std::min<uint64_t>(edgeDanger, UINT32_MAX));
 			const uint64_t next = cost + topologyEdgeMovementCost + danger;
 			if (next >= costs[edge.destinationNode]) continue;
 			costs[edge.destinationNode] = next;
 			dangerCosts[edge.destinationNode] = static_cast<uint32_t>(std::min<uint64_t>(
 			    uint64_t(dangerCosts[current]) + danger, UINT32_MAX));
-			maximumDangers[edge.destinationNode] = std::max(maximumDangers[current], costPolicy ?
-			    std::max(costPolicy->dangerAt(portal.approach), costPolicy->dangerAt(portal.destination)) : 0);
+			maximumDangers[edge.destinationNode] = std::max(maximumDangers[current],
+			    std::max(approachDanger, destinationDanger));
 			parents[edge.destinationNode] = Parent{current, portal};
 			open.emplace(next, edge.destinationNode);
 		}

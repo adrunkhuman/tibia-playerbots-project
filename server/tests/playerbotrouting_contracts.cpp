@@ -80,6 +80,50 @@ PlayerBotPathSearch gridPath(const PlayerBotNavigationGoal& goal, bool guided, u
 	return search;
 }
 
+void dangerSampleContracts()
+{
+	const Position position(100, 100, 7);
+	PlayerBotNavigationCostPolicy policy;
+	assert(policy.dangerCost(position, 16000) == 0);
+	assert(policy.dangerCostForSample(0.02, 16000) == 0);
+	unsigned samples = 0;
+	double danger = 0;
+	policy.expectedHealthLossPerSecond = [&](const Position& sampled) {
+		assert(sampled == position);
+		++samples;
+		PlayerBotRouteChanges::read(sampled);
+		return danger;
+	};
+	for (const double multiplier : {0.0, -1.0, 0.5, 1000.0}) {
+		policy.risk.healthLossCost = multiplier;
+		for (const double value : {-0.1, 0.0, 0.000001, 0.02, 1e100}) {
+			danger = value;
+			for (const uint32_t exposure : {0u, 1u, 1000u, 16000u, UINT32_MAX}) {
+				const double loss = std::max(0.0, danger) * exposure / 1000.0;
+				const auto expected = multiplier <= 0 ? 0 : static_cast<uint32_t>(
+				    std::min<double>(UINT32_MAX, std::ceil(loss * multiplier)));
+				const auto before = samples;
+				assert(policy.dangerCostForSample(danger, exposure) == expected);
+				assert(samples == before);
+				assert(policy.dangerCost(position, exposure) == expected);
+				assert(samples == before + (multiplier > 0 ? 1u : 0u));
+			}
+		}
+	}
+	policy.risk.healthLossCost = 1000;
+	danger = 0.02;
+	PlayerBotRouteChanges::Watch watch;
+	{
+		PlayerBotRouteChanges::Scope scope(watch);
+		const double sampled = policy.dangerAt(position);
+		assert(policy.dangerCostForSample(sampled, 1) == 1); // Round up, not truncate.
+		assert(policy.dangerCostForSample(sampled, 16000) == 320);
+	}
+	assert(watch.valid());
+	PlayerBotRouteChanges::changed(position);
+	assert(watch.check() == PlayerBotRouteChanges::Reason::ChangedTile);
+}
+
 void huntCoarseVerdictContracts()
 {
 	using Verdict = PlayerBotHuntCoarseVerdict;
@@ -912,6 +956,7 @@ void invalidationAndCancellation()
 int main()
 {
 	resumedPaths();
+	dangerSampleContracts();
 	huntCoarseVerdictContracts();
 	ordinaryWalkingContracts();
 	peakDangerPathContracts();

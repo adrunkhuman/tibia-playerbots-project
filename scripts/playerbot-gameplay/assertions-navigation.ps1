@@ -165,7 +165,8 @@ function Assert-DoorPassageEvents {
 	$event = $events[0]
 	foreach ($field in @("reloaded", "ordinary_descriptor", "window_rejected", "unregistered_aid_fallback",
 		"ordinary_aid_denied", "uid_precedence", "level_denied", "house_denied", "static_aid_denied", "navigator_used_door",
-		"movable_height_excluded", "fixed_height_door_alternatives", "fixed_height_teleport_alternative")) {
+		"movable_height_excluded", "fixed_height_door_alternatives", "fixed_height_teleport_alternative",
+		"coarse_danger_reuse", "coarse_danger_rejection", "coarse_danger_dependencies")) {
 		if ($event.$field -ne $true) {
 			throw "Door passage fixture failed $field."
 		}

@@ -12,9 +12,11 @@
 #define FS_PLAYERBOTNAVIGATION_H
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <deque>
 #include <functional>
+#include <limits>
 #include <optional>
 #include <ostream>
 #include <set>
@@ -261,7 +263,18 @@ struct PlayerBotNavigationCostPolicy {
 	{
 		return expectedHealthLossPerSecond ? expectedHealthLossPerSecond(position) : 0;
 	}
-	uint32_t dangerCost(const Position& position, uint32_t exposureMs) const;
+	uint32_t dangerCost(const Position& position, uint32_t exposureMs) const
+	{
+		return enabled() ? dangerCostForSample(dangerAt(position), exposureMs) : 0;
+	}
+	// Reuse a sample within synchronous work; dangerAt still records its dependencies.
+	uint32_t dangerCostForSample(double healthLossPerSecond, uint32_t exposureMs) const
+	{
+		if (!enabled()) return 0;
+		const double expectedHealthLoss = std::max(0.0, healthLossPerSecond) * exposureMs / 1000.0;
+		return static_cast<uint32_t>(std::min<double>(std::numeric_limits<uint32_t>::max(),
+		                                                std::ceil(expectedHealthLoss * risk.healthLossCost)));
+	}
 };
 
 struct PlayerBotNavigationCostSummary {

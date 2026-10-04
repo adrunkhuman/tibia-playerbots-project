@@ -227,14 +227,6 @@ Item* playerBotShovelPassageItem(Tile& tile, uint16_t passageItemId)
 	    static_cast<const Tile&>(tile), passageItemId));
 }
 
-uint32_t PlayerBotNavigationCostPolicy::dangerCost(const Position& position, uint32_t exposureMs) const
-{
-	if (!enabled()) return 0;
-	const double expectedHealthLoss = std::max(0.0, dangerAt(position)) * exposureMs / 1000.0;
-	return static_cast<uint32_t>(std::min<double>(std::numeric_limits<uint32_t>::max(),
-	                                                std::ceil(expectedHealthLoss * risk.healthLossCost)));
-}
-
 bool playerBotResolveWalkTransition(const Position& from, Direction direction, PlayerBotWalkTransition& transition,
                                     bool fixedHeightOnly, bool assumeOpenDoors, bool ignoreHeight)
 {
