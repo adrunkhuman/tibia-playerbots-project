@@ -137,6 +137,7 @@ class PlayerBotTopology
 {
 	public:
 		static PlayerBotTopology& instance();
+		~PlayerBotTopology();
 
 		void build(const Map& map);
 		void invalidate();

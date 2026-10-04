@@ -15430,16 +15430,16 @@ int LuaScriptInterface::luaActionOnUse(lua_State* L)
 int LuaScriptInterface::luaActionRegister(lua_State* L)
 {
 	// action:register()
-	Action* action = getUserdata<Action>(L, 1);
-	if (action) {
+	Action** actionPtr = getRawUserdata<Action>(L, 1);
+	if (actionPtr && *actionPtr) {
+		Action* action = *actionPtr;
 		if (!action->isScripted()) {
 			pushBoolean(L, false);
 			return 1;
 		}
+		// registerLuaEvent copies the action and deletes this instance.
 		pushBoolean(L, g_actions->registerLuaEvent(action));
-		action->getActionIdRange().clear();
-		action->getItemIdRange().clear();
-		action->getUniqueIdRange().clear();
+		*actionPtr = nullptr;
 	} else {
 		lua_pushnil(L);
 	}
@@ -15819,22 +15819,21 @@ int LuaScriptInterface::luaMoveEventType(lua_State* L)
 int LuaScriptInterface::luaMoveEventRegister(lua_State* L)
 {
 	// moveevent:register()
-	MoveEvent* moveevent = getUserdata<MoveEvent>(L, 1);
-	if (moveevent) {
+	MoveEvent** moveeventPtr = getRawUserdata<MoveEvent>(L, 1);
+	if (moveeventPtr && *moveeventPtr) {
+		MoveEvent* moveevent = *moveeventPtr;
 		if ((moveevent->getEventType() == MOVE_EVENT_EQUIP || moveevent->getEventType() == MOVE_EVENT_DEEQUIP) && moveevent->getSlot() == SLOTP_WHEREEVER) {
 			uint32_t id = moveevent->getItemIdRange().at(0);
 			ItemType& it = Item::items.getItemType(id);
 			moveevent->setSlot(it.slotPosition);
 		}
+		// Both registration paths copy the event and delete this instance.
 		if (!moveevent->isScripted()) {
 			pushBoolean(L, g_moveEvents->registerLuaFunction(moveevent));
-			return 1;
+		} else {
+			pushBoolean(L, g_moveEvents->registerLuaEvent(moveevent));
 		}
-		pushBoolean(L, g_moveEvents->registerLuaEvent(moveevent));
-		moveevent->clearItemIdRange();
-		moveevent->clearActionIdRange();
-		moveevent->clearUniqueIdRange();
-		moveevent->clearPosList();
+		*moveeventPtr = nullptr;
 	} else {
 		lua_pushnil(L);
 	}
