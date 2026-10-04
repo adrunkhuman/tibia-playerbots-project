@@ -367,6 +367,7 @@ void PlayerBotTopology::build(const Map& map)
 					PlayerBotTopologyPortal portal{approach, target, destination, DIRECTION_NONE,
 					                                  transition.action, transition.itemId,
 					                                  transition.expectedItemId};
+					portal.expectedLanding = destination == destinations.front();
 					addEdge(sourceNode->second, destinationNode->second, portal);
 				}
 			}
@@ -659,7 +660,7 @@ std::optional<PlayerBotTopologyRoute> PlayerBotTopology::route(
 			if (blockedPositions.find(edge.portal.approach) != blockedPositions.end() ||
 			    blockedPositions.find(edge.portal.target) != blockedPositions.end() ||
 			    blockedPositions.find(edge.portal.destination) != blockedPositions.end()) continue;
-			if (!canTraversePortal(liveMap, edge.portal, canUseRope, canUseShovel) ||
+			if (!edge.portal.expectedLanding || !canTraversePortal(liveMap, edge.portal, canUseRope, canUseShovel) ||
 			    edge.portal.minimumLevel > playerLevel) continue;
 			const uint64_t edgeDanger = costPolicy ?
 			    static_cast<uint64_t>(costPolicy->dangerCost(edge.portal.approach, costPolicy->topologyExposureMs)) +
@@ -741,7 +742,7 @@ std::optional<PlayerBotTopologyItinerary> PlayerBotTopology::routeToAny(
 			const auto& portal = edge.portal;
 			if (blockedPositions.count(portal.approach) || blockedPositions.count(portal.target) ||
 			    blockedPositions.count(portal.destination) ||
-			    !canTraversePortal(liveMap, portal, canUseRope, canUseShovel) ||
+			    !portal.expectedLanding || !canTraversePortal(liveMap, portal, canUseRope, canUseShovel) ||
 			    portal.minimumLevel > playerLevel) continue;
 			// These endpoints must actually be visited. Their peak danger is a
 			// necessary safety test, unlike estimated exposure over a whole sector.
