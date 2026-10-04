@@ -322,8 +322,12 @@ std::optional<PlayerBotNavigationRoutePlan> PlayerBotController::advanceHuntTrav
 		}
 		if (!w.local) {
 			if (!final) targets.erase(std::remove_if(targets.begin(), targets.end(), [&](Position target) {
+				// A teleport moves whoever steps on it, so nobody can stand there to
+				// talk. The topology omits it too; keeping it as a goal hides a
+				// provable disconnection behind a full detailed search.
 				Tile* tile = g_game.map.getTile(target);
-				return !tile || tile->queryAdd(0, player, 1, FLAG_IGNOREBLOCKCREATURE) != RETURNVALUE_NOERROR;
+				return !tile || tile->hasFlag(TILESTATE_TELEPORT) ||
+				       tile->queryAdd(0, player, 1, FLAG_IGNOREBLOCKCREATURE) != RETURNVALUE_NOERROR;
 			}), targets.end());
 			if (targets.empty()) return PlayerBotTransportSegment{};
 			if (w.npcNodes >= playerBotNavigationMaximumExpandedNodes)
