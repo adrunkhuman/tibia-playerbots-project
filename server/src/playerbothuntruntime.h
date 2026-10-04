@@ -165,6 +165,7 @@ enum class PlayerBotHuntPatrolCommand : uint8_t {
 	WaitAtWaypoint,
 	SkipWaypoint,
 	RegionExhausted,
+	PlanningIncomplete,
 };
 
 struct PlayerBotHuntPatrolOutcome {
@@ -175,6 +176,8 @@ struct PlayerBotHuntPatrolOutcome {
 	const char* reason = nullptr;
 	uint32_t stepFailures = 0;
 	uint32_t routeFailures = 0;
+	uint32_t planningIncompleteAttempts = 0;
+	std::chrono::milliseconds retryAfter{0};
 	uint64_t elapsedMs = 0;
 	uint64_t expandedNodes = 0;
 	std::optional<PlayerBotHuntRuntimeCooldownCommand> cooldown;
@@ -186,7 +189,7 @@ inline PlayerBotNavigationRuntimeOutcome playerBotHuntRejectedPatrolPreflight(
 	PlayerBotNavigationRuntimeOutcome outcome;
 	outcome.plan = plan;
 	outcome.plan.attempted = true;
-	outcome.routeUnavailable = true;
+	outcome.routeUnavailable = plan.result != PlayerBotNavigationResult::NodeLimit || routeUnsafe;
 	outcome.routeUnsafe = routeUnsafe;
 	return outcome;
 }
@@ -290,6 +293,7 @@ class PlayerBotHuntRuntime
 		size_t patrolIndex = 0;
 		bool singleWaypointReached = false;
 		uint32_t patrolRouteFailures = 0;
+		uint32_t patrolPlanningIncompletes = 0;
 		uint32_t patrolWaypointSkips = 0;
 		uint64_t patrolFailureExpandedNodes = 0;
 		uint32_t scopeExhaustions = 0;

@@ -7,6 +7,7 @@
 #include "playerbotroutechanges.h"
 #include "playerbottransportsearch.h"
 #include "playerbothunttravelpolicy.h"
+#include "playerbothunttravelevidence.h"
 #include "groups.h"
 #include "guild.h"
 
@@ -17,10 +18,37 @@ namespace {
 	constexpr uint64_t localNodesPerTurn = 512;
 	constexpr uint32_t graphOperationsPerTurn = 1024;
 	constexpr std::chrono::milliseconds graphSliceTime(8);
-	using OfferFact = std::tuple<uint32_t, Position, Position, uint32_t, uint32_t, bool, std::vector<std::string>>;
-	using ActorFact = std::tuple<uint32_t, int32_t, int32_t, int32_t, int32_t, int32_t, float,
-	                             uint64_t, bool, bool, bool, bool, uint32_t, uint32_t, bool,
-	                             uint64_t, uint32_t, uint32_t, Position>;
+	using OfferFact = PlayerBotHuntTravelEvidence::Offer;
+	using ActorFact = PlayerBotHuntTravelEvidence::Actor;
+
+	ActorFact actorFacts(Player& player, const PlayerBotCombatProfile& combat, bool rope, bool shovel) {
+		return {combat.level, combat.maximumHealth, combat.armor, combat.defense, combat.attack,
+		    combat.attackSkill, combat.attackFactor, player.getMoney() + player.getBankBalance(),
+		    player.isPremium(), player.isPzLocked(), rope, shovel,
+		    player.getStepDuration(), player.getStepDuration(DIRECTION_NORTHEAST), player.getGroup() && player.getGroup()->access,
+		    player.getGroup() ? player.getGroup()->flags : 0, player.getGuild() ? player.getGuild()->getId() : 0,
+		    player.getGuildRank() ? player.getGuildRank()->id : 0, player.getPosition()};
+	}
+
+	using UnavailableOffers = std::map<std::pair<uint32_t, Position>, std::chrono::steady_clock::time_point>;
+	std::vector<OfferFact> offerFacts(Player& player, Position source, uint64_t money, bool walkingOnly,
+	                                  const UnavailableOffers& unavailableOffers) {
+		std::vector<OfferFact> offers;
+		if (!walkingOnly && !player.isPzLocked()) {
+			for (Npc* npc : playerBotNpcProviders(g_game.getNpcs(), PlayerBotNpcCapability::Travel, source)) {
+				for (const auto& offer : npc->getTravelOffers()) {
+					if (!playerBotNpcTravelOfferEligible(player.getLevel(), player.isPremium(), money, offer.level,
+					    offer.premium, offer.price, offer.hasOpaqueCondition, offer.hasOpaqueAction) || offer.destination == source) continue;
+					const auto unavailable = unavailableOffers.find({npc->getID(), offer.destination});
+					if (unavailable != unavailableOffers.end() && unavailable->second > std::chrono::steady_clock::now()) continue;
+					offers.emplace_back(npc->getID(), npc->getPosition(), offer.destination, offer.price, offer.level,
+					                    offer.premium, offer.dialogue);
+				}
+			}
+		}
+		std::sort(offers.begin(), offers.end());
+		return offers;
+	}
 
 	bool safe(const PlayerBotNavigationRoutePlan& p, const PlayerBotNavigationRiskProfile& risk) {
 		return p.metrics.result == PlayerBotNavigationResult::Reached &&
@@ -112,10 +140,56 @@ struct PlayerBotHuntTravelWork {
 	}
 };
 
+bool PlayerBotController::huntTravelExitValid(Player& player, const PlayerBotHuntTravelEvidence& evidence) const
+{
+	using Exit = PlayerBotHuntTravelEvidence::Exit;
+	if (evidence.exit == Exit::None) return true;
+	const Position approach = evidence.destination;
+	if (!playerBotStableApproachTile(g_game.map.getTile(approach), player)) return false;
+	if (evidence.exit == Exit::Depot) {
+		for (const auto& [depotId, lockers] : g_game.map.getDepotLockerPositions()) {
+			for (const Position& locker : lockers) {
+				if (locker == approach || !Position::areInRange<1, 1, 0>(locker, approach)) continue;
+				uint16_t itemId = 0;
+				if (findDepotLocker(locker, depotId, itemId)) return true;
+			}
+		}
+		return false;
+	}
+	const uint16_t potionId = recoveryPotionItemId(player.getVocationId());
+	for (const auto& [id, npc] : g_game.getNpcs()) {
+		(void)id;
+		if (!npc || !playerBotNpcHasCapability(*npc, PlayerBotNpcCapability::Shop) ||
+		    npc->getPosition() == approach || !Position::areInRange<3, 3, 0>(npc->getPosition(), approach)) continue;
+		if (std::any_of(npc->getShopOffers().begin(), npc->getShopOffers().end(), [potionId](const ShopInfo& offer) {
+			return offer.itemId == potionId && offer.buyPrice != 0;
+		})) return true;
+	}
+	return false;
+}
+
+bool PlayerBotController::huntTravelEvidenceValid(Player& player, const Position& source,
+    const Position& destination, PlayerBotHuntTravelEvidence& evidence)
+{
+	const auto combat = equipmentPolicy.combatProfile(PlayerBotEquipmentAdapter::player(player),
+	                                                 PlayerBotEquipmentAdapter::loadout(player));
+	const bool rope = g_game.findItemOfType(&player, ropeItemId, true) != nullptr;
+	const bool shovel = g_game.findItemOfType(&player, shovelToolItemId, true) != nullptr;
+	if (!evidence.validContext(source, destination, actorFacts(player, combat, rope, shovel),
+	    PlayerBotTopology::instance().generation(), PlayerBotHuntRegionPlanner::getCacheRevision(), riskProfile)) return false;
+	if (evidence.paid && !evidence.validOffers(offerFacts(player, source, playerBotHuntTransportFunds(
+	    player.getMoney() + player.getBankBalance(), evidence.transportReserve), evidence.walkingOnly, unavailableTravelOffers))) return false;
+	if (!huntTravelExitValid(player, evidence)) return false;
+	PlayerBotRouteChanges::absorb(evidence.watch);
+	return true;
+}
+
 std::optional<PlayerBotNavigationRoutePlan> PlayerBotController::advanceHuntTravelRoute(
 	Player& player, const PlayerBotHuntRouteRequest& request, const Position& source, PlayerBotHuntRouteTiming& timing,
-	uint64_t transportReserve, bool sellEconomy, PlayerBotNavigationRoutePlan* walkingAlternative)
+	uint64_t transportReserve, bool sellEconomy, PlayerBotNavigationRoutePlan* walkingAlternative,
+	std::shared_ptr<PlayerBotHuntTravelEvidence>* completedEvidence)
 {
+	if (completedEvidence) completedEvidence->reset();
 	const auto began = std::chrono::steady_clock::now();
 	timing.requestSequence = request.sequence;
 	const auto combat = equipmentPolicy.combatProfile(PlayerBotEquipmentAdapter::player(player),
@@ -125,26 +199,8 @@ std::optional<PlayerBotNavigationRoutePlan> PlayerBotController::advanceHuntTrav
 	const uint64_t funds = player.getMoney() + player.getBankBalance();
 	const uint64_t money = playerBotHuntTransportFunds(funds, transportReserve);
 	timing.transportSpendableFunds = money;
-	const ActorFact actor{combat.level, combat.maximumHealth, combat.armor, combat.defense, combat.attack,
-	    combat.attackSkill, combat.attackFactor, funds, player.isPremium(), player.isPzLocked(), rope, shovel,
-	    player.getStepDuration(), player.getStepDuration(DIRECTION_NORTHEAST), player.getGroup() && player.getGroup()->access,
-	    player.getGroup() ? player.getGroup()->flags : 0, player.getGuild() ? player.getGuild()->getId() : 0,
-	    player.getGuildRank() ? player.getGuildRank()->id : 0, player.getPosition()};
-	std::vector<OfferFact> offers;
-	if (!request.walkingOnly && !player.isPzLocked()) {
-		for (Npc* npc : playerBotNpcProviders(g_game.getNpcs(), PlayerBotNpcCapability::Travel, source)) {
-			for (const auto& offer : npc->getTravelOffers()) {
-				if (!playerBotNpcTravelOfferEligible(player.getLevel(), player.isPremium(), money, offer.level,
-				    offer.premium, offer.price, offer.hasOpaqueCondition, offer.hasOpaqueAction) || offer.destination == source) continue;
-				const auto unavailable = unavailableTravelOffers.find({npc->getID(), offer.destination});
-				if (unavailable != unavailableTravelOffers.end() && unavailable->second > std::chrono::steady_clock::now()) continue;
-				offers.emplace_back(npc->getID(), npc->getPosition(), offer.destination, offer.price, offer.level,
-				                    offer.premium, offer.dialogue);
-			}
-		}
-	}
-	// Canonical order makes NPC provider iteration changes irrelevant.
-	std::sort(offers.begin(), offers.end());
+	const ActorFact actor = actorFacts(player, combat, rope, shovel);
+	const auto offers = offerFacts(player, source, money, request.walkingOnly, unavailableTravelOffers);
 	const uint64_t generation = PlayerBotTopology::instance().generation();
 	const uint64_t riskRevision = PlayerBotHuntRegionPlanner::getCacheRevision();
 	const bool sameRequest = huntTravelWork && huntTravelWork->sameRequest(request, source, transportReserve, sellEconomy, riskProfile);
@@ -201,6 +257,18 @@ std::optional<PlayerBotNavigationRoutePlan> PlayerBotController::advanceHuntTrav
 	}
 	const auto work = huntTravelWork; // Keep the scoped tile observer alive through return.
 	auto& w = *work;
+	auto retainEvidence = [&](const PlayerBotNavigationRoutePlan& route) {
+		if (!completedEvidence || !safe(route, riskProfile)) return;
+		auto evidence = std::make_shared<PlayerBotHuntTravelEvidence>();
+		evidence->source = w.source; evidence->destination = w.destination;
+		evidence->actor = w.actor; evidence->topologyGeneration = w.topologyGeneration;
+		evidence->riskRevision = w.riskRevision; evidence->transportReserve = w.transportReserve;
+		evidence->risk = w.riskProfile; evidence->watch = w.watch;
+		evidence->paid = route.metrics.firstNpcTravelOffer.has_value();
+		evidence->walkingOnly = w.walkingOnly;
+		if (evidence->paid) { evidence->offers = w.offers; evidence->providers = w.providerValidation; }
+		*completedEvidence = std::move(evidence);
+	};
 	if (!w.transport) {
 		// NPC movement/offers cannot invalidate the independent walking frontier.
 		w.offers = offers;
@@ -222,6 +290,7 @@ std::optional<PlayerBotNavigationRoutePlan> PlayerBotController::advanceHuntTrav
 				auto result = std::move(w.walking);
 				result.metrics.result = playerBotHuntAggregateRouteResult(result.metrics.result,
 				    result.metrics.dangerCost, result.metrics.maximumHealthLossPerSecond, true, riskProfile);
+				retainEvidence(result);
 				huntTravelWork.reset();
 				return result;
 			}
@@ -299,6 +368,7 @@ std::optional<PlayerBotNavigationRoutePlan> PlayerBotController::advanceHuntTrav
 		if (w.preferSafeWalking && safe(w.walking, riskProfile) && !w.walking.steps.empty()) {
 			if (walkingAlternative) *walkingAlternative = w.walking;
 			PlayerBotNavigationRoutePlan route = std::move(w.walking);
+			retainEvidence(route);
 			huntTravelWork.reset();
 			return route;
 		}
@@ -403,6 +473,7 @@ std::optional<PlayerBotNavigationRoutePlan> PlayerBotController::advanceHuntTrav
 	}
 	result.metrics.result = playerBotHuntAggregateRouteResult(result.metrics.result,
 	    result.metrics.dangerCost, result.metrics.maximumHealthLossPerSecond, w.transport->incomplete, riskProfile);
+	retainEvidence(result);
 	huntTravelWork.reset();
 	return result;
 }

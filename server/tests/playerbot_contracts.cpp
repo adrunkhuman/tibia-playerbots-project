@@ -20,6 +20,8 @@
 #include "playerbothuntregions.h"
 #include "playerbothuntruntime.h"
 #include "playerbothunttravelpolicy.h"
+#include "playerbothunttravelevidence.h"
+#include "playerbothuntrouteretention.h"
 #include "playerbotinventorypolicy.h"
 #include "playerbotsupplyrecovery.h"
 #include "playerbottelemetry.h"
@@ -660,6 +662,343 @@ void routeSelectionContracts()
 	assert(!playerBotHuntTravelAffordable(UINT64_MAX, UINT64_MAX, UINT64_MAX, 1, 0));
 }
 
+void selectedRouteRetention()
+{
+	struct Evidence {
+		PlayerBotNavigationRoutePlan plan;
+		std::shared_ptr<int> lifetime;
+	};
+	PlayerBotHuntRouteRetention<Evidence> retained;
+	retained.begin(10, 1);
+	PlayerBotHuntRouteSelection selector({routeFixture(1, 100), routeFixture(2, 99)});
+	std::weak_ptr<int> firstLifetime, secondLifetime;
+	PlayerBotHuntRouteResult result;
+	for (int turns = 0; !result.terminal && turns < 12; ++turns) {
+		const auto request = selector.next();
+		auto facts = routeFacts();
+		if (request.stage == PlayerBotHuntRouteStage::Outbound) {
+			auto& evidence = retained.outbound(request.sequence);
+			// A yield keeps the exact current request; it does not refill evidence.
+			assert(&evidence == &retained.outbound(request.sequence));
+			evidence.lifetime = std::make_shared<int>(request.to.x);
+			const bool first = request.to == routeFixture(1).destination;
+			(first ? firstLifetime : secondLifetime) = evidence.lifetime;
+			PlayerBotNavigationStep boarding;
+			boarding.action = PlayerBotNavigationAction::NpcTravel;
+			boarding.npcId = request.to.x;
+			boarding.expectedPosition = request.to;
+			boarding.price = 5;
+			boarding.dialogue = {"hi", "passage", "yes"};
+			PlayerBotNavigationStep walk;
+			walk.action = PlayerBotNavigationAction::Move;
+			walk.target = walk.expectedPosition = Position(101, 99, 7);
+			evidence.plan.steps = {walk, boarding};
+			evidence.plan.metrics.result = PlayerBotNavigationResult::Reached;
+			evidence.plan.metrics.steps = 265; // Full itinerary; only the first leg is executable.
+			evidence.plan.metrics.fare = 5;
+			facts.travelSeconds = first ? 30 : 10; // Detailed costs change the winner.
+			facts.approaches = {Position(200, 100, 7)};
+		}
+		result = selector.observe(request, facts);
+		assert(result.accepted);
+		if (result.completedCandidate) retained.complete(*result.completedCandidate);
+	}
+	assert(result.terminal && result.selectedRouteRegion && result.selectedRouteRegion->atlasVariantId == 2);
+	assert(firstLifetime.expired() && !secondLifetime.expired());
+	auto winner = retained.take(*result.selectedRouteRegion);
+	assert(winner && winner->plan.steps.size() == 2 && winner->plan.metrics.fare == 5 && winner->plan.metrics.steps == 265);
+	assert(winner->plan.steps.front().action == PlayerBotNavigationAction::Move &&
+	       winner->plan.steps.front().expectedPosition == Position(101, 99, 7));
+	const auto& boarding = winner->plan.steps.back();
+	assert(boarding.npcId == 102 && boarding.expectedPosition == routeFixture(2).destination &&
+	       boarding.price == 5 && boarding.dialogue == std::vector<std::string>({"hi", "passage", "yes"}));
+	assert(!retained.take(*result.selectedRouteRegion)); // One-shot handoff.
+	winner.reset();
+	assert(secondLifetime.expired());
+
+	auto valid = routeFixture(3);
+	valid.routeValidated = true;
+	retained.begin(20, 1);
+	retained.outbound(1).lifetime = std::make_shared<int>(1);
+	std::weak_ptr<int> best = retained.pending()->lifetime;
+	retained.complete(valid);
+	retained.outbound(2).lifetime = std::make_shared<int>(2);
+	std::weak_ptr<int> rejected = retained.pending()->lifetime;
+	auto invalid = routeFixture(4, 1000);
+	invalid.routeValidated = true;
+	invalid.rejectionReason = "travel_fare_breaks_recovery_reserve";
+	retained.complete(invalid);
+	assert(rejected.expired() && !best.expired()); // Outbound success alone never wins.
+	retained.outbound(3).lifetime = std::make_shared<int>(3);
+	std::weak_ptr<int> tied = retained.pending()->lifetime;
+	retained.complete(valid);
+	assert(tied.expired() && !best.expired()); // Match the selector's strict preference.
+	auto mismatched = valid;
+	++mismatched.atlasVariantId;
+	assert(!retained.take(mismatched) && best.expired());
+	for (int field = 0; field < 3; ++field) {
+		retained.begin(21, 1);
+		retained.outbound(1);
+		retained.complete(valid);
+		mismatched = valid;
+		if (field == 0) ++mismatched.id;
+		if (field == 1) ++mismatched.atlasRevision;
+		if (field == 2) ++mismatched.destination.x;
+		assert(!retained.take(mismatched));
+	}
+	for (int change = 0; change < 3; ++change) {
+		retained.begin(30, 1);
+		retained.outbound(1).lifetime = std::make_shared<int>(1);
+		std::weak_ptr<int> pending = retained.pending()->lifetime;
+		retained.complete(valid);
+		retained.outbound(2).lifetime = std::make_shared<int>(2);
+		std::weak_ptr<int> current = retained.pending()->lifetime;
+		if (change == 0) retained.clear(); // Cancellation/terminal lifecycle.
+		else retained.begin(change == 1 ? 31 : 30, change == 2 ? 2 : 1);
+		assert(pending.expired() && current.expired() && !retained.take(valid));
+	}
+}
+
+void selectedRouteEvidence()
+{
+	using Evidence = PlayerBotHuntTravelEvidence;
+	using Changes = PlayerBotRouteChanges;
+	Evidence evidence;
+	evidence.source = Position(100, 100, 7);
+	evidence.destination = Position(500, 500, 7);
+	evidence.topologyGeneration = 7;
+	evidence.riskRevision = 8;
+	evidence.actor = Evidence::Actor{10, 150, 20, 20, 20, 20, 1.0f, 500, true, false, true, true,
+	    100, 150, false, 0, 1, 1, evidence.source};
+	auto valid = [&](Evidence& snapshot) {
+		return snapshot.validContext(evidence.source, evidence.destination, evidence.actor, 7, 8, evidence.risk);
+	};
+	assert(valid(evidence));
+	assert(!evidence.validContext(Position(101, 100, 7), evidence.destination, evidence.actor, 7, 8, evidence.risk));
+	assert(!evidence.validContext(evidence.source, Position(501, 500, 7), evidence.actor, 7, 8, evidence.risk));
+	assert(!evidence.validContext(evidence.source, evidence.destination, evidence.actor, 9, 8, evidence.risk));
+	assert(!evidence.validContext(evidence.source, evidence.destination, evidence.actor, 7, 9, evidence.risk));
+	auto checkActor = [&](const Evidence::Actor& actor) {
+		assert(!evidence.validContext(evidence.source, evidence.destination, actor, 7, 8, evidence.risk));
+	};
+	auto actor = evidence.actor;
+	std::get<0>(actor)++; checkActor(actor); // Level/combat.
+	actor = evidence.actor; std::get<1>(actor)++; checkActor(actor);
+	actor = evidence.actor; std::get<7>(actor)--; checkActor(actor); // Funds/reserve eligibility.
+	actor = evidence.actor; std::get<8>(actor) = false; checkActor(actor); // Premium.
+	actor = evidence.actor; std::get<9>(actor) = true; checkActor(actor); // PZ lock.
+	actor = evidence.actor; std::get<10>(actor) = false; checkActor(actor); // Rope.
+	actor = evidence.actor; std::get<11>(actor) = false; checkActor(actor); // Shovel.
+	actor = evidence.actor; std::get<12>(actor)++; checkActor(actor); // Speed.
+	actor = evidence.actor; std::get<15>(actor)++; checkActor(actor); // Permissions.
+	actor = evidence.actor; std::get<16>(actor)++; checkActor(actor); // Guild.
+	actor = evidence.actor; std::get<18>(actor) = Position(101, 100, 7); checkActor(actor);
+	for (int field = 0; field < 3; ++field) {
+		auto risk = evidence.risk;
+		if (field == 0) risk.healthLossCost++;
+		if (field == 1) risk.maximumRouteHealthLoss += 0.01;
+		if (field == 2) risk.maximumHealthLossPerSecond += 0.01;
+		assert(!evidence.validContext(evidence.source, evidence.destination, evidence.actor, 7, 8, risk));
+	}
+
+	const Position firstBoat(101, 100, 7), laterBoat(400, 400, 7), laterWalk(450, 450, 7), other(99, 99, 7);
+	evidence.paid = true;
+	evidence.offers = {{1, firstBoat, Position(300, 300, 7), 10, 8, true, {"hi", "yes"}},
+	                   {2, laterBoat, evidence.destination, 20, 8, true, {"hi", "yes"}}};
+	evidence.providers.reset({{1, firstBoat}, {2, laterBoat}});
+	evidence.providers.use(1);
+	evidence.providers.use(2); // A later paid leg must retain its provider anchor too.
+	assert(evidence.validOffers(evidence.offers));
+	auto offers = evidence.offers;
+	std::get<1>(offers[1]).x++;
+	assert(evidence.validOffers(offers)); // Tolerate wandering without drifting anchors.
+	std::get<1>(offers[1]).x += 2;
+	assert(!evidence.validOffers(offers));
+	offers = evidence.offers; offers.pop_back(); assert(!evidence.validOffers(offers)); // Removed/opaque/ineligible/failed offer.
+	offers = evidence.offers; std::get<2>(offers[1]).x++; assert(!evidence.validOffers(offers));
+	offers = evidence.offers; std::get<3>(offers[1])++; assert(!evidence.validOffers(offers));
+	offers = evidence.offers; std::get<4>(offers[1])++; assert(!evidence.validOffers(offers));
+	offers = evidence.offers; std::get<5>(offers[1]) = false; assert(!evidence.validOffers(offers));
+	offers = evidence.offers; std::get<6>(offers[1]).push_back("changed"); assert(!evidence.validOffers(offers));
+	assert(evidence.validOffers(evidence.offers));
+	// The executable route ends at the first boat, but safety proof reads the
+	// later walk as well. Dependencies survive slices and completed snapshots.
+	{
+		Changes::Scope scope(evidence.watch);
+		Changes::read(firstBoat);
+	}
+	{
+		Changes::Scope scope(evidence.watch);
+		Changes::read(laterWalk);
+	}
+	Evidence startedBeforeYield;
+	{
+		Changes::Scope scope(startedBeforeYield.watch);
+		Changes::read(firstBoat);
+	}
+	Changes::changed(firstBoat);
+	{
+		Changes::Scope scope(startedBeforeYield.watch);
+		Changes::read(laterBoat);
+	}
+	assert(!startedBeforeYield.watch.valid()); // A resumed scope cannot reset original evidence.
+	// Start a fresh independent completed proof for the later-leg checks below.
+	evidence.watch = Changes::Watch();
+	{
+		Changes::Scope scope(evidence.watch);
+		Changes::read(firstBoat);
+		Changes::read(laterWalk);
+	}
+	Evidence completed = evidence;
+	Changes::changed(other);
+	assert(valid(completed));
+	Changes::changed(laterWalk);
+	assert(!valid(completed) && !valid(evidence));
+	assert(!valid(completed)); // Checking stale evidence must not reset it.
+	Evidence epoch;
+	Changes::invalidate();
+	assert(!epoch.watch.valid());
+	Evidence overflow;
+	for (int i = 0; i < 4097; ++i) Changes::changed(other);
+	assert(!overflow.watch.valid());
+}
+
+void selectedRouteLegProofs()
+{
+	using Evidence = PlayerBotHuntTravelEvidence;
+	using Changes = PlayerBotRouteChanges;
+	using Stage = PlayerBotHuntRouteStage;
+	const Position origin(100, 100, 7), hunt(133, 100, 7), depot(200, 100, 7), supplier(300, 100, 7);
+	const Position rejectedDepot(201, 100, 7), rejectedSupplier(301, 100, 7);
+	const Position outboundTile(110, 100, 7), abandonedTile(111, 100, 7), rejectedTile(210, 100, 7);
+	const Evidence::Actor actor{10, 150, 20, 20, 20, 20, 1.0f, 500, true, false, true, true,
+	    100, 150, false, 0, 1, 1, origin};
+	const PlayerBotNavigationRiskProfile risk;
+	std::map<uint32_t, std::vector<Evidence::Offer>> liveOffers;
+	auto proof = [&](Position from, Position to, uint32_t provider, Position tile) {
+		auto evidence = std::make_shared<Evidence>();
+		evidence->source = from;
+		evidence->destination = to;
+		evidence->actor = actor; // Actual actor origin, not the synthetic leg's source.
+		evidence->topologyGeneration = 7;
+		evidence->riskRevision = 8;
+		evidence->risk = risk;
+		evidence->paid = provider != 0;
+		if (provider) {
+			const Position anchor(static_cast<uint16_t>(400 + provider), 100, 7);
+			evidence->offers = {{provider, anchor, to, 10, 8, true, {"hi", "yes"}}};
+			evidence->providers.reset({{provider, anchor}});
+			evidence->providers.use(provider);
+			liveOffers[provider] = evidence->offers;
+		}
+		Changes::Scope dependencies(evidence->watch);
+		Changes::read(tile);
+		return evidence;
+	};
+	auto validate = [&](Evidence& leg) {
+		if (!leg.validContext(leg.source, leg.destination, actor, 7, 8, risk)) return false;
+		return !leg.paid || leg.validOffers(liveOffers.at(std::get<0>(leg.offers.front())));
+	};
+	struct Candidate { PlayerBotHuntRouteEvidence evidence; };
+	PlayerBotHuntRouteRetention<Candidate> retained;
+	retained.begin(10, 8);
+	PlayerBotHuntRouteSelection selector({routeFixture(33)});
+	PlayerBotHuntRouteResult result;
+	std::weak_ptr<Evidence> rejectedProof;
+	for (int turns = 0; !result.terminal && turns < 12; ++turns) {
+		const auto request = selector.next();
+		auto observation = routeFacts();
+		std::shared_ptr<Evidence> completed;
+		if (request.stage == Stage::Outbound) {
+			auto& current = retained.outbound(request.sequence);
+			// The same request invalidates and rebuilds its work. Its abandoned
+			// watch must not survive in the eventual completed candidate proof.
+			auto abandoned = proof(origin, hunt, 0, abandonedTile);
+			Changes::changed(abandonedTile);
+			assert(!validate(*abandoned));
+			assert(&current == &retained.outbound(selector.next().sequence));
+			completed = proof(origin, hunt, 0, outboundTile);
+			assert(validate(*completed));
+			observation.approaches = {rejectedDepot, depot};
+		} else if (request.stage == Stage::Depot) {
+			if (request.to == rejectedDepot) {
+				auto failed = proof(hunt, rejectedDepot, 3, rejectedTile);
+				rejectedProof = failed;
+				retained.pending()->evidence.accept(Stage::Depot, false, failed);
+				assert(!retained.pending()->evidence.depot);
+				observation.reached = false;
+			} else {
+				completed = proof(hunt, depot, 1, Position(220, 100, 7));
+				observation.potionReserve = 10;
+				observation.supplyProfile.potions = 0;
+			}
+		} else if (request.stage == Stage::DiscoverSupply) {
+			assert(rejectedProof.expired());
+			Changes::changed(rejectedTile); // A rejected alternative is not a prerequisite.
+			observation.approaches = {rejectedSupplier, supplier};
+		} else if (request.stage == Stage::Supplier) {
+			if (request.to == rejectedSupplier) {
+				observation.reached = false;
+				assert(!retained.pending()->evidence.supplier);
+			} else completed = proof(depot, supplier, 2, Position(320, 100, 7));
+		}
+		result = selector.observe(request, observation);
+		assert(result.accepted);
+		retained.pending()->evidence.accept(request.stage, result.accepted, completed);
+		if (result.completedCandidate) retained.complete(*result.completedCandidate);
+	}
+	assert(result.terminal && result.selectedRouteRegion);
+	auto selected = retained.take(*result.selectedRouteRegion);
+	assert(selected && selected->evidence.valid(validate));
+	auto& legs = selected->evidence;
+	assert(!legs.outbound->paid && legs.depot->paid && legs.supplier->paid);
+	assert(legs.depot->source == hunt && legs.supplier->source == depot);
+	assert(std::get<18>(legs.depot->actor) == origin && std::get<18>(legs.supplier->actor) == origin);
+
+	// Each required paid leg must check offers/providers even though outbound
+	// walking has no provider facts. No tile or NPC-generation change occurs.
+	for (uint32_t provider : {1u, 2u}) {
+		const auto original = liveOffers.at(provider);
+		std::get<1>(liveOffers[provider].front()).x += 3;
+		assert(validate(*legs.outbound) && !legs.valid(validate));
+		liveOffers[provider] = original;
+		assert(legs.valid(validate));
+		std::get<3>(liveOffers[provider].front())++;
+		assert(!legs.valid(validate)); // Fare/offer semantics, independent of tile changes.
+		liveOffers[provider] = original;
+		liveOffers[provider].clear();
+		assert(!legs.valid(validate)); // Removed, opaque, ineligible or failed offer.
+		liveOffers[provider] = original;
+		assert(legs.valid(validate));
+	}
+	// Selected stable-approach/locker dependencies can be attached to the
+	// successful endpoint proof without importing the entire discovery scan.
+	const Position locker(200, 101, 7);
+	{
+		Changes::Scope endpointDependencies(legs.depot->watch);
+		Changes::read(locker);
+	}
+	Changes::changed(locker);
+	assert(!legs.valid(validate));
+	legs.accept(Stage::Depot, true, proof(hunt, depot, 1, Position(220, 100, 7)));
+	assert(legs.valid(validate));
+	// Replacing one leg never refreshes a stale earlier successful leg.
+	Changes::changed(outboundTile);
+	legs.accept(Stage::Supplier, true, proof(depot, supplier, 2, Position(321, 100, 7)));
+	assert(!legs.valid(validate));
+	legs.accept(Stage::Outbound, true, proof(origin, hunt, 0, outboundTile));
+	assert(legs.valid(validate));
+	legs.supplier.reset();
+	assert(legs.supplierRequired && !legs.valid(validate));
+	PlayerBotHuntRouteEvidence missingDepot;
+	missingDepot.accept(Stage::Outbound, true, legs.outbound);
+	assert(!missingDepot.valid(validate));
+	missingDepot.accept(Stage::Depot, true, legs.depot);
+	assert(missingDepot.valid(validate)); // A supplier is optional only when never required.
+	missingDepot.accept(Stage::Supplier, true, nullptr);
+	assert(!missingDepot.valid(validate)); // A missing accepted endpoint proof cannot escape.
+}
+
 void routeTurnContracts()
 {
 	const Position depot(200, 100, 7), supplier(300, 100, 7);
@@ -1164,6 +1503,65 @@ void modeledPatrolFailure()
 	assert(passed.command == PlayerBotHuntPatrolCommand::SkipWaypoint && !passed.cooldown);
 	assert(inside.region()->patrolPoints == points && inside.patrolTarget().destination == points[1]);
 	assert(inside.observePatrolNavigation(failure, now, 3, 3).command == PlayerBotHuntPatrolCommand::RegionExhausted);
+}
+
+void incompletePatrolPreflight()
+{
+	const Position destination(100, 100, 7);
+	auto region = routeFixture(42);
+	region.destination = destination;
+	region.patrolPoints = {destination};
+	region.viability.reachableSpawns = 4;
+	PlayerBotHuntRuntimePlayerObservation player;
+	player.maximumHealth = player.health = 100;
+	const auto now = std::chrono::steady_clock::time_point{};
+	PlayerBotNavigationPlanMetrics metrics;
+	metrics.result = PlayerBotNavigationResult::NodeLimit;
+	metrics.expandedNodes = 100000;
+	auto incomplete = playerBotHuntRejectedPatrolPreflight(metrics, false);
+	assert(incomplete.plan.attempted && !incomplete.routeUnavailable && !incomplete.routeUnsafe);
+	PlayerBotHuntRuntime runtime({destination});
+	runtime.selectPlanningRegion(region, player, now);
+	// Turn, node and request/provider-restart caps all produce the same unknown
+	// evidence. Even legacy callers setting routeUnavailable cannot cool a hunt.
+	for (int i = 1; i <= 2; ++i) {
+		incomplete.routeUnavailable = i == 2;
+		const auto outcome = runtime.observePatrolNavigation(incomplete, now, 3, 3);
+		assert(outcome.command == PlayerBotHuntPatrolCommand::Continue && !outcome.cooldown);
+		assert(outcome.planningIncompleteAttempts == unsigned(i) && outcome.routeFailures == 0);
+		assert(outcome.retryAfter == std::chrono::seconds(i));
+	}
+	PlayerBotNavigationRuntimeOutcome reached;
+	reached.destinationReached = true;
+	assert(runtime.observePatrolNavigation(reached, now, 3, 3).command == PlayerBotHuntPatrolCommand::WaypointReached);
+	assert(runtime.active() && runtime.region()->patrolPoints == region.patrolPoints);
+	for (int i = 1; i <= 4; ++i) {
+		const auto outcome = runtime.observePatrolNavigation(incomplete, now, 3, 3);
+		assert(outcome.planningIncompleteAttempts == unsigned(std::min(i, 3)) && !outcome.cooldown);
+		assert(outcome.routeFailures == 0 && outcome.stepFailures == 0);
+		assert(outcome.command == (i < 3 ? PlayerBotHuntPatrolCommand::Continue : PlayerBotHuntPatrolCommand::PlanningIncomplete));
+		assert(runtime.region()->patrolPoints == region.patrolPoints);
+	}
+	// Confirmed failures keep the ordinary three-attempt cooldown, separately
+	// from incompletes. Successful arrival/activation resets both budgets.
+	runtime.selectPlanningRegion(region, player, now);
+	metrics.result = PlayerBotNavigationResult::Unreachable;
+	const auto failure = playerBotHuntRejectedPatrolPreflight(metrics, false);
+	assert(failure.routeUnavailable);
+	assert(runtime.observePatrolNavigation(incomplete, now, 3, 3).planningIncompleteAttempts == 1);
+	for (int i = 1; i <= 3; ++i) {
+		const auto outcome = runtime.observePatrolNavigation(failure, now, 3, 3);
+		assert(outcome.command == (i < 3 ? PlayerBotHuntPatrolCommand::Continue : PlayerBotHuntPatrolCommand::RegionExhausted));
+		if (i == 3) assert(outcome.routeFailures == 3 && outcome.cooldown && outcome.cooldown->variantId == 42);
+	}
+	runtime.selectPlanningRegion(region, player, now);
+	metrics.result = PlayerBotNavigationResult::Reached;
+	const auto unsafe = playerBotHuntRejectedPatrolPreflight(metrics, true);
+	const auto outcome = runtime.observePatrolNavigation(unsafe, now, 3, 1);
+	assert(outcome.command == PlayerBotHuntPatrolCommand::RegionExhausted && outcome.cooldown);
+	runtime.selectPlanningRegion(region, player, now);
+	incomplete.stepFailureCount = 3;
+	assert(runtime.observePatrolNavigation(incomplete, now, 3, 3).command == PlayerBotHuntPatrolCommand::RegionExhausted);
 }
 
 void mutableShovelPassages()
@@ -3042,11 +3440,15 @@ int main()
 	huntCandidateTelemetryDeltas();
 	incrementalHuntValidationPipeline();
 	routeSelectionContracts();
+	selectedRouteRetention();
+	selectedRouteEvidence();
+	selectedRouteLegProofs();
 	routeTurnContracts();
 	routeDurationRefreshContracts();
 	routeRuntimeContracts();
 	lootArithmeticMemo();
 	modeledPatrolFailure();
+	incompletePatrolPreflight();
 	mutableShovelPassages();
 	navigationFailureAccounting();
 	floorChangeLandingOffset();

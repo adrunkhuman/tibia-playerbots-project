@@ -496,6 +496,21 @@ PlayerBotHuntPatrolOutcome PlayerBotHuntRuntime::observePatrolNavigation(const P
 		outcome.waypoint = static_cast<uint32_t>(patrolIndex);
 		return outcome;
 	}
+	if (navigation.plan.attempted && navigation.plan.result == PlayerBotNavigationResult::NodeLimit &&
+	    !navigation.routeUnsafe && !navigation.oscillation && navigation.stepFailureCount < repeatedStepLimit) {
+		if (patrolFailureTarget != outcome.destination) resetPatrolFailures();
+		patrolFailureTarget = outcome.destination;
+		// Missing evidence has its own finite retry budget. It never establishes
+		// unreachability, removes a waypoint, or issues a variant cooldown.
+		constexpr uint32_t maximumIncompleteAttempts = 3;
+		patrolPlanningIncompletes = std::min(patrolPlanningIncompletes + 1, maximumIncompleteAttempts);
+		outcome.planningIncompleteAttempts = patrolPlanningIncompletes;
+		outcome.reason = "planning_incomplete";
+		outcome.retryAfter = std::chrono::milliseconds(1000 * patrolPlanningIncompletes);
+		if (patrolPlanningIncompletes == maximumIncompleteAttempts)
+			outcome.command = PlayerBotHuntPatrolCommand::PlanningIncomplete;
+		return outcome;
+	}
 	if (navigation.plan.attempted && navigation.routeUnavailable) {
 		if (patrolFailureTarget != outcome.destination) resetPatrolFailures();
 		patrolFailureTarget = outcome.destination;
@@ -539,6 +554,7 @@ PlayerBotHuntPatrolOutcome PlayerBotHuntRuntime::observePatrolNavigation(const P
 void PlayerBotHuntRuntime::resetPatrolFailures()
 {
 	patrolRouteFailures = 0;
+	patrolPlanningIncompletes = 0;
 	patrolFailureExpandedNodes = 0;
 	patrolFailureTarget = Position();
 	patrolFailureStarted = {};
