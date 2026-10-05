@@ -11,6 +11,7 @@
 #include "otpch.h"
 
 #include "player.h"
+#include "playerbotequipmentadapter.h"
 #include "playerbotinventorypolicy.h"
 
 #include "container.h"
@@ -145,12 +146,36 @@ uint32_t PlayerBotInventoryPolicy::protectedItemReserve(const Player& player, ui
 	return 0;
 }
 
+namespace {
+	uint16_t throwingWeaponSupplyItem(const Player& player)
+	{
+		const PlayerBotEquipmentPolicy policy;
+		const PlayerBotEquipmentPlayerSnapshot facts = PlayerBotEquipmentAdapter::player(player);
+		if (!policy.managesEquipment(facts)) return 0;
+		const PlayerBotEquipmentLoadout loadout = PlayerBotEquipmentAdapter::loadout(player);
+		// This runs every hunt turn; scan containers only while unarmed.
+		const uint16_t wielded = policy.throwingWeaponSupplyItem(facts, loadout, {});
+		if (wielded != 0 || policy.weaponReady(facts, loadout)) return wielded;
+		std::vector<PlayerBotEquipmentItemSnapshot> carried;
+		for (int32_t slot = CONST_SLOT_FIRST; slot <= CONST_SLOT_LAST; ++slot) {
+			const Item* root = player.getInventoryItem(static_cast<slots_t>(slot));
+			const Container* container = root ? root->getContainer() : nullptr;
+			if (!container) continue;
+			for (ContainerIterator it = container->iterator(); it.hasNext(); it.advance()) {
+				carried.push_back(PlayerBotEquipmentAdapter::item(**it));
+			}
+		}
+		return policy.throwingWeaponSupplyItem(facts, loadout, carried);
+	}
+}
+
 PlayerBotSupplyStocks PlayerBotInventoryPolicy::additionalSupplyStocks(const Player& player)
 {
 	PlayerBotSupplyStocks stocks;
 	for (const PlayerBotSupplyKind kind : playerBotSupplyKinds) {
 		if (kind == PlayerBotSupplyKind::HealthPotion) continue;
-		const PlayerBotSupplyRule rule = playerBotSupplyRule(kind, player.getVocationId());
+		const PlayerBotSupplyRule rule = kind == PlayerBotSupplyKind::ThrowingWeapon ?
+		    playerBotThrowingWeaponRule(throwingWeaponSupplyItem(player)) : playerBotSupplyRule(kind, player.getVocationId());
 		if (rule.active()) stocks.push_back({rule, static_cast<const Cylinder&>(player).getItemTypeCount(rule.itemId)});
 	}
 	return stocks;

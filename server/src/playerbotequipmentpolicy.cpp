@@ -154,6 +154,34 @@ bool PlayerBotEquipmentPolicy::isStyleWeapon(const PlayerBotEquipmentPlayerSnaps
 	       inFamily(playerBotCombatStyle(player.vocationId).weapons, item.weaponType) && (item.left || item.right);
 }
 
+bool PlayerBotEquipmentPolicy::isThrowingWeapon(const PlayerBotEquipmentPlayerSnapshot& player,
+	const PlayerBotEquipmentItemSnapshot& item) const
+{
+	return item.weaponType == PlayerBotEquipmentWeaponType::Distance && !launcher(item) && item.breakChance != 0 &&
+	       isStyleWeapon(player, item);
+}
+
+uint16_t PlayerBotEquipmentPolicy::throwingWeaponSupplyItem(const PlayerBotEquipmentPlayerSnapshot& player,
+	const PlayerBotEquipmentLoadout& loadout, const std::vector<PlayerBotEquipmentItemSnapshot>& carried) const
+{
+	for (slots_t hand : {left, right}) {
+		const auto& item = loadout.items[static_cast<uint8_t>(hand)];
+		if (item.itemId != 0 && isThrowingWeapon(player, item)) return item.itemId;
+	}
+	if (weaponReady(player, loadout)) return 0;
+	uint16_t selected = 0;
+	int32_t selectedBenefit = 0;
+	for (const auto& item : carried) {
+		if (!isThrowingWeapon(player, item)) continue;
+		const auto upgrade = evaluateUpgrade(player, loadout, item);
+		if (upgrade && upgrade->benefit > selectedBenefit) {
+			selected = item.itemId;
+			selectedBenefit = upgrade->benefit;
+		}
+	}
+	return selected;
+}
+
 bool PlayerBotEquipmentPolicy::weaponReady(const PlayerBotEquipmentPlayerSnapshot& player,
 	const PlayerBotEquipmentLoadout& loadout) const
 {

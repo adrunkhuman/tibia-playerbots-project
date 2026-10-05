@@ -508,3 +508,37 @@ function F.verifySlottedLoot(playerId, sellerAvailable, attempts)
     print(sellerAvailable and "PLAYERBOT_GAMEPLAY_TEST SLOTTED_LOOT_SELLER_PASS" or
         "PLAYERBOT_GAMEPLAY_TEST SLOTTED_LOOT_NO_SELLER_PASS")
 end
+
+-- Removing the one-spear hand stack stands in for its last 3% break after the bot
+-- leaves for its hunt; the backpack spare must then be equipped.
+function F.breakHandSpear(playerId, x, y, z, attempts)
+    local player = Player(playerId)
+    assert(player and not player:isRemoved(), "Bot One disappeared before the spear break")
+    if player:getPosition():getDistance(Position(x, y, z)) < 3 then
+        assert(attempts > 0, "spear break fixture never left the depot to hunt")
+        addEvent(F.breakHandSpear, 250, playerId, x, y, z, attempts - 1)
+        return
+    end
+    local spear = player:getSlotItem(CONST_SLOT_LEFT)
+    assert(spear and spear:getId() == F.spearItemId and player:getItemCount(F.spearItemId) == 2,
+        "spear break fixture changed its spears before the break")
+    assert(spear:remove(), "spear break fixture could not break the wielded spear")
+    print("PLAYERBOT_GAMEPLAY_TEST SPEAR_BREAK_BROKEN")
+    addEvent(F.verifySpearRestock, 500, playerId, "spear_break", 480)
+end
+
+function F.verifySpearRestock(playerId, mode, attempts)
+    local player = Player(playerId)
+    assert(player and not player:isRemoved(), "Bot One disappeared during spear fixture")
+    local left = player:getSlotItem(CONST_SLOT_LEFT)
+    local right = player:getSlotItem(CONST_SLOT_RIGHT)
+    local hand = left and left:getId() == F.spearItemId and left or right and right:getId() == F.spearItemId and right
+    -- Bought spears auto-stack onto the wielded spear, so the whole target is in hand.
+    local complete = hand and hand:getCount() == 7 and player:getItemCount(F.spearItemId) == 7
+    if not complete and attempts > 0 then
+        addEvent(F.verifySpearRestock, 500, playerId, mode, attempts - 1)
+        return
+    end
+    assert(complete, mode .. ": Paladin did not restock to a 7-spear stack in hand")
+    print("PLAYERBOT_GAMEPLAY_TEST " .. string.upper(mode) .. "_PASS")
+end

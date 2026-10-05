@@ -104,4 +104,37 @@ $events = @(New-ToolReplenishmentFixture); Test-ToolReplenishmentFixture ($event
 $events = @(New-ToolReplenishmentFixture $true); $events[0].item_id = 2120
 Test-ToolReplenishmentFixture $events $true $true
 
-Write-Host 'Food-capacity, low-wealth, and tool-replenishment assertion regressions passed.'
+function New-SpareSpearFixture([string]$Mode) {
+    $events = @(@{ event = 'action_result'; action = 'hunt_cycle'; result = 'started' })
+    if ($Mode -eq 'break') {
+        $events += @{ event = 'action_result'; action = 'equip_readiness'; result = 'success'; item_id = 2389; slot = 6 }
+        $events += @{ event = 'hunt_region_outcome'; region_id = 1; reason = 'throwing_weapon_exhausted' }
+    } else {
+        $events += @{ event = 'phase'; reason = 'throwing_weapon_exhausted' }
+    }
+    $events += @{ event = 'action_result'; action = 'buy_throwing_weapons'; result = 'success'; item_id = 2389; count = 6 }
+    $events += @{ event = 'action_result'; action = 'hunt_cycle'; result = 'started' }
+    return $events
+}
+function Test-SpareSpearFixture([array]$Events, [string]$Mode, [bool]$Reject) {
+    $logs = ($Events | ForEach-Object {
+        $_.component = 'playerbot'; $_.bot = 'Bot One'
+        $_ | ConvertTo-Json -Compress
+    }) -join "`n"
+    try { Assert-SpareSpearEvents -Logs $logs -Mode $Mode }
+    catch { if ($Reject) { return }; throw }
+    if ($Reject) { throw "Invalid spare-spear $Mode fixture unexpectedly passed." }
+}
+foreach ($mode in @('restock', 'break')) {
+    Test-SpareSpearFixture (New-SpareSpearFixture $mode) $mode $false
+    # Reject a hunt that does not resume after the purchase, a short purchase, and a missing end reason.
+    Test-SpareSpearFixture (New-SpareSpearFixture $mode | Select-Object -SkipLast 1) $mode $true
+    $events = @(New-SpareSpearFixture $mode); $events[-2].count = 5; Test-SpareSpearFixture $events $mode $true
+    $events = @(New-SpareSpearFixture $mode | Where-Object { $_.reason -ne 'throwing_weapon_exhausted' })
+    Test-SpareSpearFixture $events $mode $true
+}
+# The spare must be equipped before the hunt ends.
+$events = @(New-SpareSpearFixture 'break'); $events[1], $events[2] = $events[2], $events[1]
+Test-SpareSpearFixture $events 'break' $true
+
+Write-Host 'Food-capacity, low-wealth, tool-replenishment, and spare-spear assertion regressions passed.'

@@ -61,7 +61,8 @@ function F.login.onLogin(player)
         mode == "magic_training_exact_full" or mode == "magic_training_restart" or mode == "magic_training_absent" or
         mode == "magic_training_expired" or mode == "magic_training_post_hunt" or mode == "magic_training_post_hunt_no_overflow" or
         mode == "svargrond_local_route_recovery" or mode == "navigation_fare_rejection" or
-        mode == "navigation_risk_rejection" or mode == "door_passages",
+        mode == "navigation_risk_rejection" or mode == "door_passages" or mode == "spear_restock" or
+        mode == "spear_break",
         "unknown PLAYERBOT_GAMEPLAY_MODE: " .. mode)
     if mode == "equipment_shadow" or mode == "equipment_shadow_unaffordable" or mode == "equipment_shadow_no_upgrade" or
         mode == "equipment_buy" or mode == "equipment_buy_resume" or mode == "equipment_buy_space" or
@@ -213,6 +214,47 @@ function F.login.onLogin(player)
         if mode == "equipment_buy_provider_moved" then
             local start = player:getPosition()
             addEvent(F.moveEquipmentProvider, 100, player:getId(), start.x, start.y, start.z, 0)
+        end
+        print("PLAYERBOT_GAMEPLAY_TEST " .. string.upper(mode) .. "_START")
+        return true
+    end
+    if mode == "spear_restock" or mode == "spear_break" then
+        -- A level-8 spear Paladin at the Thais depot. Restock wields its only spear,
+        -- below the spare floor. Break keeps one spare in the backpack, as looted
+        -- spears are, and loses its wielded stack once the hunt has started.
+        local breaking = mode == "spear_break"
+        local thais = Town(F.thaisTownId)
+        assert(player:getLevel() == 8 and player:setVocation(3) and thais and player:setTown(thais) and
+            player:teleportTo(F.thaisDepotPosition), "spear fixture could not place the Thais Paladin")
+        F.selectHealthPotion(player)
+        for _, slot in ipairs({CONST_SLOT_HEAD, CONST_SLOT_ARMOR, CONST_SLOT_RIGHT, CONST_SLOT_LEFT, CONST_SLOT_LEGS, CONST_SLOT_FEET}) do
+            local item = player:getSlotItem(slot)
+            if item then assert(item:remove(), "spear fixture could not clear slot " .. slot) end
+        end
+        F.removeAll(player, F.spearItemId)
+        for _, equipment in ipairs({
+            {2457, CONST_SLOT_HEAD}, {2463, CONST_SLOT_ARMOR}, {2525, CONST_SLOT_RIGHT},
+            {F.spearItemId, CONST_SLOT_LEFT}, {2647, CONST_SLOT_LEGS}, {2643, CONST_SLOT_FEET}
+        }) do
+            assert(player:addItem(equipment[1], 1, false, 1, equipment[2]),
+                "spear fixture could not equip slot " .. equipment[2])
+        end
+        local backpack = player:getSlotItem(CONST_SLOT_BACKPACK)
+        assert(backpack, "spear fixture requires a backpack")
+        if breaking then assert(backpack:addItem(F.spearItemId, 1), "spear fixture could not add the spare") end
+        F.removeAllHealthPotions(player)
+        assert(player:addItem(F.potionItemId, 20), "spear fixture could not normalize healing supplies")
+        F.removeAll(player, ITEM_GOLD_COIN)
+        -- Capacity and funds cover the full spare target, so only spear stock limits the hunt.
+        assert(backpack:addItem(ITEM_GOLD_COIN, 100) and player:setBankBalance(100) and player:setCapacity(100000),
+            "spear fixture could not fund the spare target")
+        assert(player:getItemCount(F.spearItemId) == (breaking and 2 or 1), "spear fixture seeded the wrong spear count")
+        F.suppressNearbyMonsters(player:getId())
+        if breaking then
+            local start = player:getPosition()
+            addEvent(F.breakHandSpear, 500, player:getId(), start.x, start.y, start.z, 240)
+        else
+            addEvent(F.verifySpearRestock, 500, player:getId(), mode, 480)
         end
         print("PLAYERBOT_GAMEPLAY_TEST " .. string.upper(mode) .. "_START")
         return true

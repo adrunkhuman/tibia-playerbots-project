@@ -221,7 +221,10 @@ bool PlayerBotController::ensureCombatReady(Player* player, const Position& posi
 		return false;
 	}
 	if (readiness.recovery == "service") {
-		beginService(player, position, "combat_readiness_service");
+		const PlayerBotSupplyStock* exhausted = readinessInput.suppliesReady ? nullptr :
+		    playerBotExhaustedSupply(supplyStocks(*player));
+		beginService(player, position,
+		    exhausted ? playerBotSupplyExhaustedReason(exhausted->rule.kind) : "combat_readiness_service");
 		schedule(navigationInterval);
 		return false;
 	}

@@ -195,6 +195,14 @@ class PlayerBotEquipmentPolicy
 		                          const PlayerBotEquipmentItemSnapshot& item) const;
 		bool isStyleWeapon(const PlayerBotEquipmentPlayerSnapshot& player,
 		                   const PlayerBotEquipmentItemSnapshot& item) const;
+		// A style weapon that is thrown itself and can break, such as a spear.
+		bool isThrowingWeapon(const PlayerBotEquipmentPlayerSnapshot& player,
+		                      const PlayerBotEquipmentItemSnapshot& item) const;
+		// The throwing weapon whose spares are stocked: the wielded one or, with no
+		// style weapon in hand, the carried one readiness would equip. Zero if none.
+		uint16_t throwingWeaponSupplyItem(const PlayerBotEquipmentPlayerSnapshot& player,
+		                                  const PlayerBotEquipmentLoadout& loadout,
+		                                  const std::vector<PlayerBotEquipmentItemSnapshot>& carried) const;
 		bool weaponReady(const PlayerBotEquipmentPlayerSnapshot& player, const PlayerBotEquipmentLoadout& loadout) const;
 		bool armorReady(const PlayerBotEquipmentPlayerSnapshot& player, const PlayerBotEquipmentLoadout& loadout) const;
 		// True when the candidate fills a missing weapon or armor requirement.

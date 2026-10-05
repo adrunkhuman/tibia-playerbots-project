@@ -4,6 +4,7 @@ F.botName = "Bot One"
 F.depotPosition = Position(32105, 32195, 8)
 F.depotTilePosition = Position(32105, 32196, 8)
 F.thaisTownId = 2
+F.thaisDepotPosition = Position(32354, 32226, 7)
 F.carlinTownId = 4
 F.carlinTemplePosition = Position(32360, 31782, 7)
 F.supplyRecoveryHuntCenter = Position(32437, 31627, 8)
