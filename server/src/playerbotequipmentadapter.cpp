@@ -7,6 +7,9 @@
 #include "container.h"
 #include "item.h"
 #include "player.h"
+#include "weapons.h"
+
+extern Weapons* g_weapons;
 
 namespace {
 	PlayerBotEquipmentWeaponType weaponType(WeaponType_t type)
@@ -41,7 +44,13 @@ namespace {
 		result.left = (type.slotPosition & SLOTP_LEFT) != 0;
 		result.right = (type.slotPosition & SLOTP_RIGHT) != 0;
 		result.twoHanded = (type.slotPosition & SLOTP_TWO_HAND) != 0;
+		result.ammoSlot = (type.slotPosition & SLOTP_AMMO) != 0;
 		result.weaponType = weaponType(type.weaponType);
+		result.ammoType = static_cast<uint8_t>(type.ammoType);
+		result.shootRange = type.shootRange;
+		result.hitChance = type.hitChance;
+		result.maxHitChance = type.maxHitChance;
+		if (const Weapon* weapon = g_weapons->getWeapon(itemId)) result.breakChance = weapon->getBreakChance();
 		result.armor = type.armor;
 		result.defense = type.defense;
 		result.extraDefense = type.extraDefense;
@@ -66,6 +75,8 @@ PlayerBotEquipmentItemSnapshot PlayerBotEquipmentAdapter::item(const Item& item)
 	result.armor = item.getArmor();
 	result.defense = item.getDefense();
 	result.attack = item.getAttack();
+	result.hitChance = item.getHitChance();
+	result.shootRange = item.getShootRange();
 	result.count = item.getItemCount();
 	result.container = item.getContainer() != nullptr;
 	return result;

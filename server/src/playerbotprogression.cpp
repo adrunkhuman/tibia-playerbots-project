@@ -225,6 +225,20 @@ bool PlayerBotController::ensureCombatReady(Player* player, const Position& posi
 		schedule(navigationInterval);
 		return false;
 	}
+	if (readiness.recovery == "acquire_weapon" || readiness.recovery == "acquire_armor") {
+		auto repair = readinessRepairFailures < maximumProgressionAttempts ?
+		    evaluateEquipmentOffers(*player, position) : std::nullopt;
+		if (repair && repair->rule == PlayerBotEquipmentDecisionRule::ReadinessRepair) {
+			beginEquipmentPurchase(*player, position, std::move(*repair));
+			schedule(SCHEDULER_MINTICKS);
+			return false;
+		}
+		const std::string missing = readiness.recovery == "acquire_weapon" ?
+		    std::string("missing_") + PlayerBotEquipmentPolicy::weaponRequirement(playerFacts) : "missing_legal_armor";
+		emitCombatReadiness(*player, position, "failed", readiness.recovery, missing, readinessInput.minimumFreeCapacity);
+		stop(("combat_readiness_" + missing).c_str(), position);
+		return false;
+	}
 	if (readiness.recovery == "acquire_backpack") {
 		auto backpack = evaluateEquipmentOffers(*player, position);
 		if (backpack && backpack->backpackAcquisition) {

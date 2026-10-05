@@ -47,6 +47,7 @@ const playerbot::PlayerBotTestPolicy& playerbot::playerBotTestPolicyFromEnvironm
 			 std::strcmp(gameplayMode, "equipment_buy_provider_moved") == 0 ||
 			 std::strcmp(gameplayMode, "equipment_buy_provider_unreachable") == 0 ||
 			 std::strcmp(gameplayMode, "equipment_buy_rejected") == 0 ||
+			 std::strcmp(gameplayMode, "equipment_buy_spear") == 0 ||
 			 std::strcmp(gameplayMode, "equipment_tools") == 0 ||
 			 std::strcmp(gameplayMode, "equipment_tools_nested") == 0 ||
 			 std::strcmp(gameplayMode, "slotted_loot_seller") == 0 ||

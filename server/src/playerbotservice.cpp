@@ -533,6 +533,7 @@ bool PlayerBotController::planSellLootTrip(Player& player, uint16_t currentDepot
 		facts.precision(17);
 		facts << combat.level << ':' << combat.maximumHealth << ':' << combat.armor << ':' << combat.defense
 		      << ':' << combat.attack << ':' << combat.attackSkill << ':' << combat.attackFactor
+		      << ':' << combat.hitChance << ':' << combat.blockedByShield
 		      << ':' << player.getMoney() << ':' << player.getBankBalance() << ':' << player.isPremium()
 		      << ':' << player.isPzLocked() << ':' << player.getStepDuration() << ':' << player.getStepDuration(DIRECTION_NORTHEAST)
 		      << ':' << (g_game.findItemOfType(&player, ropeItemId, true) != nullptr)

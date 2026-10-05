@@ -27,7 +27,8 @@ namespace {
 		    player.isPremium(), player.isPzLocked(), rope, shovel,
 		    player.getStepDuration(), player.getStepDuration(DIRECTION_NORTHEAST), player.getGroup() && player.getGroup()->access,
 		    player.getGroup() ? player.getGroup()->flags : 0, player.getGuild() ? player.getGuild()->getId() : 0,
-		    player.getGuildRank() ? player.getGuildRank()->id : 0, player.getPosition()};
+		    player.getGuildRank() ? player.getGuildRank()->id : 0, player.getPosition(), combat.hitChance,
+		    combat.blockedByShield};
 	}
 
 	using UnavailableOffers = std::map<std::pair<uint32_t, Position>, std::chrono::steady_clock::time_point>;

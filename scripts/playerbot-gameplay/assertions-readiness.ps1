@@ -133,7 +133,7 @@ function Assert-EquipmentOfferEvents {
 }
 
 function Assert-EquipmentPurchaseEvents {
-	param([string]$Logs, [switch]$Rejected, [switch]$Restart, [switch]$Resume, [switch]$ProviderMoved)
+	param([string]$Logs, [switch]$Rejected, [switch]$Restart, [switch]$Resume, [switch]$ProviderMoved, [switch]$Spear)
 
 	$events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
 	$purchases = @($events | Where-Object {
@@ -176,6 +176,21 @@ function Assert-EquipmentPurchaseEvents {
 		if ($selections.Count -ne 1 -or $purchases.Count -ne 0 -or $equips.Count -ne 1 -or
 			$results.Count -ne 1 -or $results[0].result -ne "success" -or $terminal.Count -ne 0) {
 			throw "Persisted equipment purchase state was not reconstructed as an equip-only goal."
+		}
+		return
+	}
+	if ($Spear) {
+		# An unarmed Paladin repairs readiness with the cheapest legal throwing weapon.
+		$objectives = @($events | Where-Object {
+			$_.event -eq "strategy_objective_result" -and $_.item_id -eq 2389 -and $_.rule -eq "fills_readiness_gap" -and $_.result -eq "success"
+		})
+		if ($objectives.Count -ne 1 -or $purchases.Count -ne 1 -or $purchases[0].item_id -ne 2389 -or
+			$equips.Count -ne 1 -or $equips[0].item_id -ne 2389 -or $results.Count -ne 1 -or
+			$results[0].result -ne "success" -or $terminal.Count -ne 0) {
+			$trace = @($events | Where-Object {
+				$_.event -in @("combat_readiness", "goal_selection", "strategy_objective_result", "action_failure", "terminal")
+			} | ForEach-Object { $_ | ConvertTo-Json -Compress -Depth 4 }) -join "; "
+			throw "Unarmed Paladin did not buy and equip a spear as readiness repair. objectives=$($objectives.Count), purchases=$($purchases.Count), equips=$($equips.Count), results=$($results.Count), terminal=$($terminal.Count). trace=[$trace]"
 		}
 		return
 	}

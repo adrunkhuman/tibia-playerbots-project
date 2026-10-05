@@ -2202,6 +2202,7 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 			facts.precision(17);
 			facts << combat.level << ':' << combat.maximumHealth << ':' << combat.armor << ':' << combat.defense
 			      << ':' << combat.attack << ':' << combat.attackSkill << ':' << combat.attackFactor
+			      << ':' << combat.hitChance << ':' << combat.blockedByShield
 			      << ':' << player->getMoney() << ':' << player->getBankBalance() << ':' << player->isPremium()
 			      << ':' << player->isPzLocked() << ':' << player->getStepDuration()
 			      << ':' << player->getStepDuration(DIRECTION_NORTHEAST)

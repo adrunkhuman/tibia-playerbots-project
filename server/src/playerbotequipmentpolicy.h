@@ -30,7 +30,7 @@ enum class PlayerBotEquipmentWeaponType : uint8_t {
 // low level equal skills favor higher-attack melee weapons, so a Paladin would
 // never train distance.
 enum class PlayerBotWeaponFamily : uint8_t {
-	None, Melee,
+	None, Melee, Distance,
 };
 
 struct PlayerBotCombatStyle {
@@ -45,6 +45,7 @@ constexpr PlayerBotCombatStyle playerBotCombatStyle(uint16_t vocationId)
 	switch (vocationId) {
 		// Rookgaard characters fight melee before the Oracle assigns a vocation.
 		case 0: return {PlayerBotWeaponFamily::Melee, false};
+		case 3: return {PlayerBotWeaponFamily::Distance, true};
 		case 4: return {PlayerBotWeaponFamily::Melee, true};
 		default: return {};
 	}
@@ -62,6 +63,16 @@ struct PlayerBotEquipmentItemSnapshot {
 	int32_t attack = 0;
 	std::vector<uint16_t> vocationIds;
 	PlayerBotEquipmentWeaponType weaponType = PlayerBotEquipmentWeaponType::None;
+	// Engine Ammo_t value; zero is none. A distance weapon with an ammo type is
+	// a launcher that fires matching ammunition from the ammo slot.
+	uint8_t ammoType = 0;
+	uint8_t shootRange = 1;
+	// Distance hit chance as loaded: a nonzero hitChance is fixed (or a launcher's
+	// bonus), maxHitChance selects the engine's formula tier or a flat chance.
+	int8_t hitChance = 0;
+	int32_t maxHitChance = -1;
+	// Percent chance that one attack consumes a throwing weapon.
+	uint8_t breakChance = 0;
 	bool pickupable = false;
 	bool removed = false;
 	bool premiumRequired = false;
@@ -72,6 +83,7 @@ struct PlayerBotEquipmentItemSnapshot {
 	bool left = false;
 	bool right = false;
 	bool twoHanded = false;
+	bool ammoSlot = false;
 	bool container = false;
 	bool inContainer = false;
 	bool equipped = false;
@@ -184,6 +196,10 @@ class PlayerBotEquipmentPolicy
 		bool isStyleWeapon(const PlayerBotEquipmentPlayerSnapshot& player,
 		                   const PlayerBotEquipmentItemSnapshot& item) const;
 		bool weaponReady(const PlayerBotEquipmentPlayerSnapshot& player, const PlayerBotEquipmentLoadout& loadout) const;
+		bool armorReady(const PlayerBotEquipmentPlayerSnapshot& player, const PlayerBotEquipmentLoadout& loadout) const;
+		// True when the candidate fills a missing weapon or armor requirement.
+		bool fillsReadinessGap(const PlayerBotEquipmentPlayerSnapshot& player, const PlayerBotEquipmentLoadout& loadout,
+		                       const PlayerBotEquipmentItemSnapshot& candidate) const;
 		static const char* weaponRequirement(const PlayerBotEquipmentPlayerSnapshot& player);
 		bool isCombatEquipment(const PlayerBotEquipmentItemSnapshot& item) const;
 		std::optional<PlayerBotEquipmentUpgrade> evaluateUpgrade(const PlayerBotEquipmentPlayerSnapshot& player,

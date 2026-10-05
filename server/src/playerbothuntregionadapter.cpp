@@ -58,9 +58,9 @@ namespace {
 	{
 		const int32_t maximumDamage = Weapons::getMaxWeaponDamage(profile.level, profile.attackSkill, profile.attack,
 		                                                            profile.attackFactor);
-		const double averageDamage = std::max(1.0, maximumDamage / 2.0 - monsterType.info.armor * 0.25 -
-		                                             monsterType.info.defense * 0.15);
-		return averageDamage / 2.0;
+		const double shieldMitigation = profile.blockedByShield ? monsterType.info.defense * 0.15 : 0.0;
+		const double averageDamage = std::max(1.0, maximumDamage / 2.0 - monsterType.info.armor * 0.25 - shieldMitigation);
+		return averageDamage * (profile.hitChance / 100.0) / 2.0;
 	}
 
 	std::optional<Position> nearestApproach(Player& player, const Position& spawnPosition,

@@ -19,12 +19,13 @@
 struct PlayerBotDangerSampleKey {
 	uint64_t atlasRevision;
 	Position position;
-	std::array<uint32_t, 7> combat;
+	std::array<uint32_t, 10> combat;
 
 	PlayerBotDangerSampleKey(uint64_t revision, Position tile, const PlayerBotCombatProfile& profile)
 	    : atlasRevision(revision), position(tile), combat{profile.level, static_cast<uint32_t>(profile.maximumHealth),
 	      static_cast<uint32_t>(profile.armor), static_cast<uint32_t>(profile.defense),
-	      static_cast<uint32_t>(profile.attack), static_cast<uint32_t>(profile.attackSkill), factorBits(profile.attackFactor)} {}
+	      static_cast<uint32_t>(profile.attack), static_cast<uint32_t>(profile.attackSkill), factorBits(profile.attackFactor),
+	      static_cast<uint32_t>(profile.hitChance), profile.blockedByShield, profile.attackRange} {}
 
 	bool operator==(const PlayerBotDangerSampleKey& other) const {
 		return atlasRevision == other.atlasRevision && position == other.position && combat == other.combat;
