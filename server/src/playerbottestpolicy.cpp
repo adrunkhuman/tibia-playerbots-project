@@ -83,6 +83,7 @@ const playerbot::PlayerBotTestPolicy& playerbot::playerBotTestPolicyFromEnvironm
 			 std::strcmp(gameplayMode, "readiness_ready") == 0 || std::strcmp(gameplayMode, "readiness_upgrade") == 0 ||
 			 std::strcmp(gameplayMode, "readiness_missing_weapon") == 0 || std::strcmp(gameplayMode, "readiness_supplies") == 0 ||
 			 std::strcmp(gameplayMode, "readiness_food_capacity") == 0 ||
+			 std::strcmp(gameplayMode, "spear_restock") == 0 || std::strcmp(gameplayMode, "spear_break") == 0 ||
 			 std::strcmp(gameplayMode, "readiness_retention") == 0 || std::strcmp(gameplayMode, "spell_use") == 0 ||
 			 std::strcmp(gameplayMode, "magic_training_hunt") == 0 ||
 			 std::strcmp(gameplayMode, "magic_training_post_hunt") == 0 ||
@@ -104,6 +105,8 @@ const playerbot::PlayerBotTestPolicy& playerbot::playerBotTestPolicyFromEnvironm
 		                               std::strcmp(gameplayMode, "mainland_reward") != 0 &&
 		                               std::strcmp(gameplayMode, "carlin_local_service") != 0 &&
 		                               std::strcmp(gameplayMode, "readiness_supplies") != 0 &&
+		                               std::strcmp(gameplayMode, "spear_restock") != 0 &&
+		                               std::strcmp(gameplayMode, "spear_break") != 0 &&
 		                               std::strcmp(gameplayMode, "spell_training") != 0 &&
 		                               std::strcmp(gameplayMode, "spell_training_low_supplies") != 0 &&
 		                               std::strcmp(gameplayMode, "spell_training_low_supplies_unaffordable") != 0 &&

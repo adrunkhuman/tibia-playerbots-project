@@ -209,6 +209,22 @@
 			$supplyLogs = Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST READINESS_SUPPLIES_PASS'
 			Assert-CombatReadinessEvents -Logs $supplyLogs -Mode "supplies"
 		}
+		Invoke-Scenario -Name "paladin_spear_restock" -DefaultTimeoutSeconds 300 -Body {
+			Invoke-Compose down --volumes --remove-orphans
+			$env:PLAYERBOT_GAMEPLAY_MODE = "spear_restock"
+			Invoke-Compose up --detach
+			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST SPEAR_RESTOCK_PASS' | Out-Null
+			$restockLogs = Wait-ForSpearRestockHunt
+			Assert-SpareSpearEvents -Logs $restockLogs -Mode "restock"
+		}
+		Invoke-Scenario -Name "paladin_spear_break" -DefaultTimeoutSeconds 360 -Body {
+			Invoke-Compose down --volumes --remove-orphans
+			$env:PLAYERBOT_GAMEPLAY_MODE = "spear_break"
+			Invoke-Compose up --detach
+			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST SPEAR_BREAK_PASS' | Out-Null
+			$breakLogs = Wait-ForSpearRestockHunt
+			Assert-SpareSpearEvents -Logs $breakLogs -Mode "break"
+		}
 		Invoke-Scenario -Name "combat_readiness_no_food" -DefaultTimeoutSeconds 60 -Body {
 			Invoke-Compose down --volumes --remove-orphans
 			$env:PLAYERBOT_GAMEPLAY_MODE = "readiness_no_food"

@@ -440,9 +440,11 @@ std::optional<PlayerBotHuntRuntimeCompletion> PlayerBotHuntRuntime::complete(con
 		    player.supplyInterrupted);
 		for (const PlayerBotSupplyStock& before : supplyBaseline->player.supplies) {
 			const PlayerBotSupplyStock* after = playerBotSupplyStock(player.supplies, before.rule.kind);
-			if (!after || after->rule.itemId != before.rule.itemId) continue;
+			// A weapon-matched kind leaves the stock list once its last unit breaks.
+			if (after && after->rule.itemId != before.rule.itemId) continue;
+			const uint32_t remaining = after ? after->count : 0;
 			result.supplyDemand.push_back(policy.observeSupplyDemand(before.rule.kind,
-			    before.count > after->count ? before.count - after->count : 0, supplyDurationSeconds, player.supplyInterrupted));
+			    before.count > remaining ? before.count - remaining : 0, supplyDurationSeconds, player.supplyInterrupted));
 		}
 	} else {
 		result.supplyObservation.calibration = activeRegion->supplyCalibration;

@@ -2195,6 +2195,20 @@ void supplyCalibration()
 	assert(runtime.planningProfile({}).supplyGlobalLearning.samples == 1);
 	assert(!runtime.complete(player, start + std::chrono::seconds(121), 2400));
 
+	// The last unit of a weapon-matched kind leaves the stock list; it still counts as consumed.
+	PlayerBotHuntRuntime spearRuntime({});
+	PlayerBotHuntRuntimePlayerObservation spearPlayer = player;
+	spearPlayer.supplies = {{playerBotThrowingWeaponRule(2389), 3}};
+	spearRuntime.selectPlanningRegion(region, spearPlayer, start);
+	spearRuntime.enterHuntArea(spearPlayer, region.supplyProfile, start);
+	spearRuntime.sampleCombat({true, start + std::chrono::seconds(1), 100, 100, 100, 100, 1});
+	spearRuntime.sampleCombat({true, start + std::chrono::seconds(61), 100, 100, 100, 100, 1});
+	spearPlayer.supplies.clear();
+	const auto spearCompleted = spearRuntime.complete(spearPlayer, start + std::chrono::seconds(120), 2400);
+	assert(spearCompleted && spearCompleted->supplyDemand.size() == 1);
+	assert(spearCompleted->supplyDemand[0].kind == PlayerBotSupplyKind::ThrowingWeapon);
+	assert(spearCompleted->supplyDemand[0].consumed == 3 && spearCompleted->supplyDemand[0].updated);
+
 	// Outbound events are outside the supply frame. Arrival captures the swapped
 	// equipment context once; a duplicate waypoint arrival cannot reset evidence.
 	PlayerBotHuntRuntime arrivalRuntime({});
@@ -2813,12 +2827,36 @@ void typedSupplyStock()
 	assert(playerBotSupplyStockKey(stocks) != key);
 	assert(playerBotSupplyStockKey({{health, 7}}) == 7); // health-only key equals the potion count
 
-	// No current vocation activates mana potions or ammunition yet.
+	// No current vocation activates mana potions or ammunition yet; spares need a wielded weapon.
 	for (uint16_t vocation : {0, 1, 2, 3, 4, 8}) {
-		for (const PlayerBotSupplyKind kind : {PlayerBotSupplyKind::ManaPotion, PlayerBotSupplyKind::Ammunition}) {
+		for (const PlayerBotSupplyKind kind : {PlayerBotSupplyKind::ManaPotion, PlayerBotSupplyKind::Ammunition,
+		                                       PlayerBotSupplyKind::ThrowingWeapon}) {
 			assert(!playerBotSupplyRule(kind, vocation).active());
 		}
 	}
+
+	// Throwing-weapon counts include the wielded stack, so one carried spear means no spare.
+	assert(!playerBotThrowingWeaponRule(0).active());
+	const PlayerBotSupplyRule spears = playerBotThrowingWeaponRule(2389);
+	assert(spears.active() && spears.safetyFloor == 3 && spears.returnThreshold == 1 && spears.target == 7);
+	PlayerBotSupplyStocks paladinStocks{{health, 0}, {spears, 2}};
+	assert(!playerBotExhaustedSupply(paladinStocks)); // health returns through the healing interruption
+	deficit = playerBotMandatorySupplyDeficit(paladinStocks, false);
+	assert(deficit.first->rule.kind == PlayerBotSupplyKind::HealthPotion && deficit.missing == 3);
+	paladinStocks[0].count = 20;
+	deficit = playerBotMandatorySupplyDeficit(paladinStocks, false);
+	assert(deficit.first->rule.kind == PlayerBotSupplyKind::ThrowingWeapon && deficit.missing == 1);
+	assert(std::string(playerBotSupplyReserveReason(deficit.first->rule.kind)) == "throwing_weapon_reserve");
+	const uint64_t paladinKey = playerBotSupplyStockKey(paladinStocks);
+	paladinStocks[1].count = 1;
+	assert(playerBotSupplyStockKey(paladinStocks) != paladinKey);
+	assert(playerBotExhaustedSupply(paladinStocks) == &paladinStocks[1]);
+	assert(std::string(playerBotSupplyExhaustedReason(PlayerBotSupplyKind::ThrowingWeapon)) == "throwing_weapon_exhausted");
+	paladinStocks[1].rule.target = 0;
+	assert(!playerBotExhaustedSupply(paladinStocks)); // inactive kinds never end a hunt
+	// Every kind keeps its own key field.
+	assert(playerBotSupplyStockKey({{ammo, 1}}) != playerBotSupplyStockKey({{spears, 1}}));
+	assert(playerBotSupplyStockKey({{spears, 70000}}) == playerBotSupplyStockKey({{spears, 65535}}));
 
 	// Demand learning: higher use corrects at once, cheaper evidence needs a full outing.
 	PlayerBotSupplyDemand demand;
@@ -3670,6 +3708,21 @@ static void paladinLoadouts()
 	spare.item.inContainer = true;
 	const auto refill = policy.findCarriedUpgrade(paladin, broken, {spare});
 	assert(refill && static_cast<uint8_t>(refill->upgrade.slot) == 6);
+	// Spare stock follows the wielded throwing weapon, or the carried one readiness would equip.
+	assert(policy.isThrowingWeapon(paladin, spear) && !policy.isThrowingWeapon(paladin, shield));
+	assert(policy.throwingWeaponSupplyItem(paladin, loadout, {}) == spear.itemId);
+	assert(policy.throwingWeaponSupplyItem(paladin, broken, {shield, spear}) == spear.itemId);
+	assert(policy.throwingWeaponSupplyItem(paladin, broken, {royalSpear}) == 0); // level 24 cannot wield it
+	assert(policy.throwingWeaponSupplyItem(paladin, broken, {}) == 0);
+	paladin.level = 25;
+	assert(policy.throwingWeaponSupplyItem(paladin, broken, {spear, royalSpear}) == royalSpear.itemId);
+	paladin.level = 24;
+	auto unbreakable = spear;
+	unbreakable.breakChance = 0;
+	assert(!policy.isThrowingWeapon(paladin, unbreakable));
+	PlayerBotEquipmentPlayerSnapshot spearKnight = paladin;
+	spearKnight.vocationId = 4;
+	assert(policy.throwingWeaponSupplyItem(spearKnight, loadout, {}) == 0);
 
 	// Launchers are modeled but not acquired until #255.
 	auto bow = distanceItem(2456, 0, -1, 0);
@@ -3700,6 +3753,8 @@ static void paladinLoadouts()
 	assert(!policy.weaponReady(paladin, launcherLoadout));
 	launcherLoadout.items[10] = arrow;
 	assert(policy.weaponReady(paladin, launcherLoadout));
+	// A fed launcher stocks ammunition, not spare spears.
+	assert(!policy.isThrowingWeapon(paladin, bow) && policy.throwingWeaponSupplyItem(paladin, launcherLoadout, {spear}) == 0);
 	const auto bowProfile = policy.combatProfile(paladin, launcherLoadout);
 	assert(bowProfile.attack == 25 && bowProfile.hitChance == 91 && bowProfile.attackRange == 6 && !bowProfile.blockedByShield);
 	// A launcher's own hit bonus adds to its ammunition's chance.

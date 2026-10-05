@@ -284,3 +284,47 @@ function Assert-GoalArbitrationInterruptEvents {
         throw "Critical healing did not interrupt pickup and force service before reward claim. result=$($result.Count), critical_service=$($criticalService.Count), selection=$($selection.Count), claim=$($claim.Count)."
     }
 }
+
+# Waits for a hunt that starts after the spear purchase, not the pre-break hunt.
+function Wait-ForSpearRestockHunt {
+	$script:spearRestockBought = $false
+	return Wait-ForPlayerbotEvent {
+		if ($_.action -eq "buy_throwing_weapons" -and $_.result -eq "success") { $script:spearRestockBought = $true }
+		$script:spearRestockBought -and $_.action -eq "hunt_cycle" -and $_.result -eq "started"
+	}
+}
+
+function Assert-SpareSpearEvents {
+	param([string]$Logs, [ValidateSet("restock", "break")][string]$Mode)
+
+	$events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
+	for ($i = 0; $i -lt $events.Count; $i++) { $events[$i] | Add-Member -NotePropertyName log_index -NotePropertyValue $i -Force }
+	$buys = @($events | Where-Object {
+		$_.event -eq "action_result" -and $_.action -eq "buy_throwing_weapons" -and $_.result -eq "success" -and $_.item_id -eq 2389
+	})
+	$exhausted = @($events | Where-Object { $_.reason -eq "throwing_weapon_exhausted" })
+	$terminal = @($events | Where-Object { $_.event -eq "terminal" })
+	$bought = ($buys | Measure-Object -Property count -Sum).Sum
+	$resumed = @($events | Where-Object {
+		$_.event -eq "action_result" -and $_.action -eq "hunt_cycle" -and $_.result -eq "started" -and
+		$buys.Count -gt 0 -and $_.log_index -gt $buys[-1].log_index
+	})
+	$trace = { @($events | Where-Object {
+		$_.event -in @("combat_readiness", "hunt_region_outcome", "terminal") -or
+		$_.action -in @("equip_readiness", "buy_throwing_weapons", "hunt_cycle")
+	} | ForEach-Object { $_ | ConvertTo-Json -Compress -Depth 4 }) -join "; " }
+	if ($buys.Count -lt 1 -or $bought -ne 6 -or $resumed.Count -lt 1 -or $exhausted.Count -lt 1 -or
+		$exhausted[0].log_index -gt $buys[0].log_index -or $terminal.Count -ne 0) {
+		throw "Paladin spear $Mode did not end on exhausted spares, buy six spears, and resume hunting. buys=$($buys.Count), bought=$bought, exhausted=$($exhausted.Count), resumed=$($resumed.Count), terminal=$($terminal.Count). trace=[$(& $trace)]"
+	}
+	if ($Mode -eq "break") {
+		# The hand stack breaks mid-hunt: the backpack spare is equipped before the hunt ends.
+		$equips = @($events | Where-Object {
+			$_.event -eq "action_result" -and $_.action -eq "equip_readiness" -and $_.result -eq "success" -and $_.item_id -eq 2389
+		})
+		$outcomes = @($events | Where-Object { $_.event -eq "hunt_region_outcome" -and $_.reason -eq "throwing_weapon_exhausted" })
+		if ($equips.Count -lt 1 -or $outcomes.Count -ne 1 -or $equips[0].log_index -gt $outcomes[0].log_index) {
+			throw "Broken hand spear was not replaced by the carried spare before the hunt ended. equips=$($equips.Count), outcomes=$($outcomes.Count). trace=[$(& $trace)]"
+		}
+	}
+}

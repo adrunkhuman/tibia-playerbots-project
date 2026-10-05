@@ -1667,8 +1667,9 @@ void PlayerBotController::processService(Player* player, const Position& current
 		if (transaction.itemId != 0) {
 			const auto supply = std::find_if(observation.supplies.begin(), observation.supplies.end(),
 			    [&transaction](const PlayerBotServiceSupply& value) { return value.itemId == transaction.itemId; });
-			const char* action = sellingLocalLoot ? "sell" :
-			    supply != observation.supplies.end() && supply->kind == PlayerBotSupplyKind::Ammunition ? "buy_ammunition" : "buy_potions";
+			const PlayerBotSupplyKind kind = supply == observation.supplies.end() ? PlayerBotSupplyKind::HealthPotion : supply->kind;
+			const char* action = sellingLocalLoot ? "sell" : kind == PlayerBotSupplyKind::Ammunition ? "buy_ammunition" :
+			    kind == PlayerBotSupplyKind::ThrowingWeapon ? "buy_throwing_weapons" : "buy_potions";
 			emit("action_result", currentPosition, "\"action\":" + jsonString(action) + ",\"result\":\"success\",\"item_id\":" +
 			     std::to_string(transaction.itemId) + ",\"count\":" + std::to_string(transaction.amount) +
 			     ",\"carried_before\":" + std::to_string(transaction.money) + ",\"carried_after\":" +

@@ -17,11 +17,14 @@ enum class PlayerBotSupplyKind : uint8_t {
 	HealthPotion,
 	ManaPotion,
 	Ammunition,
+	// Units of the wielded throwing weapon, such as spears, beyond the one in use.
+	ThrowingWeapon,
 };
 
 // Survival priority: deficits are reported and floors are bought in this order.
-inline constexpr std::array<PlayerBotSupplyKind, 3> playerBotSupplyKinds{
+inline constexpr std::array<PlayerBotSupplyKind, 4> playerBotSupplyKinds{
 	PlayerBotSupplyKind::HealthPotion, PlayerBotSupplyKind::ManaPotion, PlayerBotSupplyKind::Ammunition,
+	PlayerBotSupplyKind::ThrowingWeapon,
 };
 
 inline const char* playerBotSupplyKindName(PlayerBotSupplyKind kind)
@@ -29,6 +32,7 @@ inline const char* playerBotSupplyKindName(PlayerBotSupplyKind kind)
 	switch (kind) {
 		case PlayerBotSupplyKind::ManaPotion: return "mana_potion";
 		case PlayerBotSupplyKind::Ammunition: return "ammunition";
+		case PlayerBotSupplyKind::ThrowingWeapon: return "throwing_weapon";
 		default: return "health_potion";
 	}
 }
@@ -39,6 +43,19 @@ inline const char* playerBotSupplyReserveReason(PlayerBotSupplyKind kind)
 	switch (kind) {
 		case PlayerBotSupplyKind::ManaPotion: return "mana_potion_reserve";
 		case PlayerBotSupplyKind::Ammunition: return "ammunition_reserve";
+		case PlayerBotSupplyKind::ThrowingWeapon: return "throwing_weapon_reserve";
+		default: return "healing_reserve";
+	}
+}
+
+// Hunt-end reason when a kind falls to its return threshold during a hunt.
+// Health potions keep their healing-triggered interruption instead.
+inline const char* playerBotSupplyExhaustedReason(PlayerBotSupplyKind kind)
+{
+	switch (kind) {
+		case PlayerBotSupplyKind::ManaPotion: return "mana_potion_exhausted";
+		case PlayerBotSupplyKind::Ammunition: return "ammunition_exhausted";
+		case PlayerBotSupplyKind::ThrowingWeapon: return "throwing_weapon_exhausted";
 		default: return "healing_reserve";
 	}
 }
@@ -59,13 +76,31 @@ inline constexpr uint16_t playerBotManaPotionItemId = 7620;
 
 // Base rule for kinds without a specialized controller policy. Every current
 // vocation has a zero target: Paladin values arrive with mana potion use (#252)
-// and ammunition (#232). Ammunition has no item until a weapon selects one.
+// and launcher ammunition (#255). Weapon-matched kinds have no item until the
+// loadout selects one.
 inline PlayerBotSupplyRule playerBotSupplyRule(PlayerBotSupplyKind kind, uint16_t /*vocationId*/)
 {
 	PlayerBotSupplyRule rule;
 	rule.kind = kind;
 	if (kind == PlayerBotSupplyKind::ManaPotion) rule.itemId = playerBotManaPotionItemId;
 	return rule;
+}
+
+// Throwing weapons stack: a break takes one unit off the stack in hand, and
+// purchases join that stack. Counts therefore include the wielded stack and
+// match carried item counts in service, deposit, and demand accounting. Spares
+// in containers (looted, or left over when the hand stack is full) are counted
+// too and equipped once the hand empties. A spear weighs 20 oz: the target
+// carries six spares, the floor two, and a hunt ends once one spear is left so
+// the last break cannot leave the bot unarmed in the hunt area.
+inline constexpr uint32_t playerBotThrowingWeaponReturnThreshold = 1;
+inline constexpr uint32_t playerBotThrowingWeaponSafetyFloor = 3;
+inline constexpr uint32_t playerBotThrowingWeaponTarget = 7;
+
+inline PlayerBotSupplyRule playerBotThrowingWeaponRule(uint16_t weaponItemId)
+{
+	return {PlayerBotSupplyKind::ThrowingWeapon, weaponItemId, playerBotThrowingWeaponSafetyFloor,
+	        playerBotThrowingWeaponReturnThreshold, weaponItemId == 0 ? 0 : playerBotThrowingWeaponTarget};
 }
 
 struct PlayerBotSupplyStock {
@@ -99,13 +134,25 @@ inline const PlayerBotSupplyStock* playerBotSupplyStock(const PlayerBotSupplySto
 	return found == stocks.end() ? nullptr : &*found;
 }
 
+// First active non-health kind at or below its return threshold. Health
+// potions return through the healing interruption, not this check.
+inline const PlayerBotSupplyStock* playerBotExhaustedSupply(const PlayerBotSupplyStocks& stocks)
+{
+	const auto found = std::find_if(stocks.begin(), stocks.end(), [](const PlayerBotSupplyStock& stock) {
+		return stock.rule.kind != PlayerBotSupplyKind::HealthPotion && stock.rule.active() &&
+		       stock.count <= stock.rule.returnThreshold;
+	});
+	return found == stocks.end() ? nullptr : &*found;
+}
+
 // Identifies a deferred restock: any count change re-enables the attempt.
 inline uint64_t playerBotSupplyStockKey(const PlayerBotSupplyStocks& stocks)
 {
+	constexpr uint32_t bits = 64 / playerBotSupplyKinds.size();
 	uint64_t key = 0;
 	for (const PlayerBotSupplyStock& stock : stocks) {
-		key |= static_cast<uint64_t>(std::min<uint32_t>(stock.count, (1U << 21) - 1))
-		       << (21 * static_cast<uint8_t>(stock.rule.kind));
+		key |= static_cast<uint64_t>(std::min<uint32_t>(stock.count, (1U << bits) - 1))
+		       << (bits * static_cast<uint8_t>(stock.rule.kind));
 	}
 	return key;
 }
