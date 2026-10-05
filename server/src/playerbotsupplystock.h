@@ -1,0 +1,189 @@
+/** Typed consumable stock: per-kind rules, mandatory floors, and learned hunt demand.
+ * Health potions keep their damage-model budget, route reserve, and stock target
+ * in the controller; this layer gives every kind the same floor/target/demand
+ * contract so later vocations add values rather than structure.
+ */
+#ifndef FS_PLAYERBOTSUPPLYSTOCK_H
+#define FS_PLAYERBOTSUPPLYSTOCK_H
+
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <vector>
+
+enum class PlayerBotSupplyKind : uint8_t {
+	HealthPotion,
+	ManaPotion,
+	Ammunition,
+};
+
+// Survival priority: deficits are reported and floors are bought in this order.
+inline constexpr std::array<PlayerBotSupplyKind, 3> playerBotSupplyKinds{
+	PlayerBotSupplyKind::HealthPotion, PlayerBotSupplyKind::ManaPotion, PlayerBotSupplyKind::Ammunition,
+};
+
+inline const char* playerBotSupplyKindName(PlayerBotSupplyKind kind)
+{
+	switch (kind) {
+		case PlayerBotSupplyKind::ManaPotion: return "mana_potion";
+		case PlayerBotSupplyKind::Ammunition: return "ammunition";
+		default: return "health_potion";
+	}
+}
+
+// Mandatory-service reason; the health name predates typed supplies.
+inline const char* playerBotSupplyReserveReason(PlayerBotSupplyKind kind)
+{
+	switch (kind) {
+		case PlayerBotSupplyKind::ManaPotion: return "mana_potion_reserve";
+		case PlayerBotSupplyKind::Ammunition: return "ammunition_reserve";
+		default: return "healing_reserve";
+	}
+}
+
+struct PlayerBotSupplyRule {
+	PlayerBotSupplyKind kind = PlayerBotSupplyKind::HealthPotion;
+	uint16_t itemId = 0;
+	// Below the floor, service is mandatory before the next hunt.
+	uint32_t safetyFloor = 0;
+	// Stock at or below this is hunt reserve, not routine supply.
+	uint32_t returnThreshold = 0;
+	uint32_t target = 0;
+
+	bool active() const { return itemId != 0 && target != 0; }
+};
+
+inline constexpr uint16_t playerBotManaPotionItemId = 7620;
+
+// Base rule for kinds without a specialized controller policy. Every current
+// vocation has a zero target: Paladin values arrive with mana potion use (#252)
+// and ammunition (#232). Ammunition has no item until a weapon selects one.
+inline PlayerBotSupplyRule playerBotSupplyRule(PlayerBotSupplyKind kind, uint16_t /*vocationId*/)
+{
+	PlayerBotSupplyRule rule;
+	rule.kind = kind;
+	if (kind == PlayerBotSupplyKind::ManaPotion) rule.itemId = playerBotManaPotionItemId;
+	return rule;
+}
+
+struct PlayerBotSupplyStock {
+	PlayerBotSupplyRule rule;
+	uint32_t count = 0;
+};
+
+// Ordered by playerBotSupplyKinds; inactive kinds may be omitted.
+using PlayerBotSupplyStocks = std::vector<PlayerBotSupplyStock>;
+
+struct PlayerBotSupplyDeficit {
+	const PlayerBotSupplyStock* first = nullptr;
+	uint32_t missing = 0;
+};
+
+inline PlayerBotSupplyDeficit playerBotMandatorySupplyDeficit(const PlayerBotSupplyStocks& stocks, bool recovery)
+{
+	PlayerBotSupplyDeficit deficit;
+	if (recovery) return deficit;
+	for (const PlayerBotSupplyStock& stock : stocks) {
+		if (!stock.rule.active() || stock.count >= stock.rule.safetyFloor) continue;
+		if (!deficit.first) deficit.first = &stock;
+		deficit.missing += stock.rule.safetyFloor - stock.count;
+	}
+	return deficit;
+}
+
+inline const PlayerBotSupplyStock* playerBotSupplyStock(const PlayerBotSupplyStocks& stocks, PlayerBotSupplyKind kind)
+{
+	const auto found = std::find_if(stocks.begin(), stocks.end(), [kind](const auto& stock) { return stock.rule.kind == kind; });
+	return found == stocks.end() ? nullptr : &*found;
+}
+
+// Identifies a deferred restock: any count change re-enables the attempt.
+inline uint64_t playerBotSupplyStockKey(const PlayerBotSupplyStocks& stocks)
+{
+	uint64_t key = 0;
+	for (const PlayerBotSupplyStock& stock : stocks) {
+		key |= static_cast<uint64_t>(std::min<uint32_t>(stock.count, (1U << 21) - 1))
+		       << (21 * static_cast<uint8_t>(stock.rule.kind));
+	}
+	return key;
+}
+
+// Same correction shape as health potion calibration: higher demand corrects
+// immediately; cheaper evidence blends in only after a full, uninterrupted outing.
+inline constexpr double playerBotSupplyDemandDownwardBlend = 0.20;
+
+struct PlayerBotSupplyDemand {
+	double unitsPerCombatSecond = 0;
+	uint32_t samples = 0;
+};
+
+struct PlayerBotSupplyDemandUpdate {
+	PlayerBotSupplyKind kind = PlayerBotSupplyKind::ManaPotion;
+	uint32_t consumed = 0;
+	PlayerBotSupplyDemand demand;
+	double observedUnitsPerCombatSecond = 0;
+	bool updated = false;
+	const char* reason = "insufficient_active_combat";
+};
+
+inline PlayerBotSupplyDemandUpdate playerBotObserveSupplyDemand(const PlayerBotSupplyDemand& prior, uint32_t consumed,
+    double activeCombatSeconds, bool fullOuting)
+{
+	PlayerBotSupplyDemandUpdate update;
+	update.consumed = consumed;
+	update.demand = prior;
+	if (activeCombatSeconds <= 0) return update;
+	update.observedUnitsPerCombatSecond = consumed / activeCombatSeconds;
+	if (update.observedUnitsPerCombatSecond > prior.unitsPerCombatSecond) {
+		update.demand.unitsPerCombatSecond = update.observedUnitsPerCombatSecond;
+		++update.demand.samples;
+		update.updated = true;
+		update.reason = "higher_observed_demand";
+		return update;
+	}
+	if (!fullOuting) {
+		update.reason = "partial_outing";
+		return update;
+	}
+	update.demand.unitsPerCombatSecond = prior.samples == 0 ? update.observedUnitsPerCombatSecond :
+	    prior.unitsPerCombatSecond * (1 - playerBotSupplyDemandDownwardBlend) +
+	    update.observedUnitsPerCombatSecond * playerBotSupplyDemandDownwardBlend;
+	++update.demand.samples;
+	update.updated = true;
+	update.reason = "safe_combat_evidence";
+	return update;
+}
+
+// Hunt-planning view of one non-health kind. Health potions keep their own
+// damage-model budget in PlayerBotSupplyBudget.
+struct PlayerBotSupplyKindProfile {
+	PlayerBotSupplyKind kind = PlayerBotSupplyKind::ManaPotion;
+	uint16_t itemId = 0;
+	uint32_t count = 0;
+	uint32_t returnThreshold = 0;
+	PlayerBotSupplyDemand demand;
+};
+
+struct PlayerBotSupplyKindBudget {
+	PlayerBotSupplyKind kind = PlayerBotSupplyKind::ManaPotion;
+	uint32_t count = 0;
+	uint32_t routine = 0;
+	double expected = 0;
+	bool fits = true;
+};
+
+inline PlayerBotSupplyKindBudget playerBotSupplyKindBudget(const PlayerBotSupplyKindProfile& profile, double combatSeconds)
+{
+	PlayerBotSupplyKindBudget budget;
+	budget.kind = profile.kind;
+	budget.count = profile.count;
+	budget.routine = profile.count > profile.returnThreshold ? profile.count - profile.returnThreshold : 0;
+	budget.expected = std::ceil(std::max(0.0, profile.demand.unitsPerCombatSecond) * std::max(0.0, combatSeconds));
+	budget.fits = (profile.count > profile.returnThreshold || profile.returnThreshold == 0) &&
+	              budget.expected <= budget.routine;
+	return budget;
+}
+
+#endif

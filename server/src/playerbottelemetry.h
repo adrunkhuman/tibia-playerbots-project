@@ -17,6 +17,7 @@
 #include <optional>
 #include <string>
 
+#include "playerbotsupplystock.h"
 #include "position.h"
 
 namespace playerbot {
@@ -79,6 +80,7 @@ namespace playerbot {
 		uint64_t carriedGold = 0;
 		uint64_t bankBalance = 0;
 		uint32_t healthPotions = 0;
+		PlayerBotSupplyStocks supplies;
 	};
 
 	class PlayerBotTelemetry

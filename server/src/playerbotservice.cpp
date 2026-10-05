@@ -1095,10 +1095,9 @@ void PlayerBotController::beginService(Player* player, const Position& position,
 void PlayerBotController::updateSupplyRecovery(const Player& player, const Position& position)
 {
 	const uint64_t funds = player.getMoney() + player.getBankBalance();
-	const uint32_t potions = inventoryPolicy.inventoryItemCount(player, recoveryPotionItemId(player.getVocationId()));
 	const bool wasActive = supplyRecovery.active();
-	supplyRecovery.restockBlocked(funds, potions);
-	const uint64_t spending = recoverySpendingReserve(player, healthPotionSafetyTarget);
+	supplyRecovery.restockBlocked(funds, playerBotSupplyStockKey(supplyStocks(player)));
+	const uint64_t spending = supplyFloorSpendingReserve(player);
 	const uint64_t budget = spending == UINT64_MAX ? spending : spending - carriedGoldReserve;
 	supplyRecovery.update(funds, budget);
 	if (wasActive == supplyRecovery.active()) return;
@@ -1206,10 +1205,11 @@ void PlayerBotController::processService(Player* player, const Position& current
 	observation.money = player->getMoney();
 	observation.bankBalance = player->getBankBalance();
 	observation.goldCoinWeight = Item::items[ITEM_GOLD_COIN].weight;
-	observation.healthPotionItemId = recoveryPotionItemId(player->getVocationId());
-	observation.healthPotionWeight = Item::items[observation.healthPotionItemId].weight;
-	observation.healthPotionReturnThreshold = huntPotionReturnThreshold;
-	observation.healthPotionRestockTarget = potionStockTarget(*player);
+	const PlayerBotSupplyStocks stocks = supplyStocks(*player);
+	for (const PlayerBotSupplyStock& stock : stocks) {
+		observation.supplies.push_back({stock.rule.kind, stock.rule.itemId, Item::items[stock.rule.itemId].weight,
+		                                stock.rule.returnThreshold, stock.rule.target, stock.rule.safetyFloor});
+	}
 	Item* serviceBackpackItem = player->getInventoryItem(CONST_SLOT_BACKPACK);
 	Container* serviceBackpack = serviceBackpackItem ? serviceBackpackItem->getContainer() : nullptr;
 	observation.actionAvailable = player->canDoAction();
@@ -1218,7 +1218,8 @@ void PlayerBotController::processService(Player* player, const Position& current
 	observation.maximumAttempts = maximumServiceAttempts;
 	observation.slottedSaleCooldownMs = static_cast<uint32_t>(
 		std::chrono::duration_cast<std::chrono::milliseconds>(unavailableDispositionCooldown).count());
-	std::set<uint16_t> relevantItemIds{observation.healthPotionItemId};
+	std::set<uint16_t> relevantItemIds;
+	for (const PlayerBotServiceSupply& supply : observation.supplies) relevantItemIds.insert(supply.itemId);
 	if (sellingLocalLoot) {
 		for (const PlayerBotServiceLiquidationBatch& batch : serviceWorkflow.liquidation()->batches) {
 			observation.inventoryCounts.emplace(batch.itemId, inventoryPolicy.inventoryItemCount(*player, batch.itemId));
@@ -1226,10 +1227,10 @@ void PlayerBotController::processService(Player* player, const Position& current
 			relevantItemIds.insert(batch.itemId);
 		}
 	}
-	observation.inventoryCounts.emplace(observation.healthPotionItemId,
-		inventoryPolicy.inventoryItemCount(*player, observation.healthPotionItemId));
-	observation.backpackSaleCounts.emplace(observation.healthPotionItemId,
-		inventoryPolicy.backpackSaleItemCount(*player, observation.healthPotionItemId));
+	for (const PlayerBotServiceSupply& supply : observation.supplies) {
+		observation.inventoryCounts.emplace(supply.itemId, inventoryPolicy.inventoryItemCount(*player, supply.itemId));
+		observation.backpackSaleCounts.emplace(supply.itemId, inventoryPolicy.backpackSaleItemCount(*player, supply.itemId));
+	}
 	std::vector<Npc*> serviceNpcs = playerBotNpcProviders(g_game.getNpcs(), PlayerBotNpcCapability::Shop, currentPosition);
 	for (const auto& entry : g_game.getNpcs()) {
 		Npc* npc = entry.second;
@@ -1276,7 +1277,8 @@ void PlayerBotController::processService(Player* player, const Position& current
 		bool retain = active || (banker && retainedBankers < maximumServiceBankers);
 		std::set<uint16_t> matchedItems;
 		for (const ShopInfo& offer : npc->getShopOffers()) {
-			const bool neededPurchase = offer.itemId == observation.healthPotionItemId && offer.buyPrice != 0;
+			const bool neededPurchase = offer.buyPrice != 0 && std::any_of(observation.supplies.begin(), observation.supplies.end(),
+			    [&offer](const PlayerBotServiceSupply& supply) { return supply.itemId == offer.itemId; });
 			const auto inventoryCount = observation.inventoryCounts.find(offer.itemId);
 			const auto backpackSaleCount = observation.backpackSaleCounts.find(offer.itemId);
 			const bool neededSale = sellingLocalLoot && offer.sellPrice != 0 &&
@@ -1658,7 +1660,10 @@ void PlayerBotController::processService(Player* player, const Position& current
 	if (command.verification && command.verification->result == PlayerBotServiceVerificationResult::Success && command.transaction) {
 		const PlayerBotServiceTransaction& transaction = *command.transaction;
 		if (transaction.itemId != 0) {
-			const char* action = sellingLocalLoot ? "sell" : "buy_potions";
+			const auto supply = std::find_if(observation.supplies.begin(), observation.supplies.end(),
+			    [&transaction](const PlayerBotServiceSupply& value) { return value.itemId == transaction.itemId; });
+			const char* action = sellingLocalLoot ? "sell" :
+			    supply != observation.supplies.end() && supply->kind == PlayerBotSupplyKind::Ammunition ? "buy_ammunition" : "buy_potions";
 			emit("action_result", currentPosition, "\"action\":" + jsonString(action) + ",\"result\":\"success\",\"item_id\":" +
 			     std::to_string(transaction.itemId) + ",\"count\":" + std::to_string(transaction.amount) +
 			     ",\"carried_before\":" + std::to_string(transaction.money) + ",\"carried_after\":" +
@@ -1695,12 +1700,16 @@ void PlayerBotController::processService(Player* player, const Position& current
 		}
 		if (command.outcome == PlayerBotServiceOutcome::InsufficientFunds) {
 			supplyRecovery.deferRestock(observation.money + observation.bankBalance,
-			    inventoryPolicy.inventoryItemCount(*player, observation.healthPotionItemId));
-			// Unaffordable potions degrade operation instead of stopping: hunt
+			    playerBotSupplyStockKey(supplyStocks(*player)));
+			const auto supply = std::find_if(observation.supplies.begin(), observation.supplies.end(),
+			    [&command](const PlayerBotServiceSupply& value) { return value.itemId == command.itemId; });
+			const PlayerBotSupplyKind kind = supply == observation.supplies.end() ? PlayerBotSupplyKind::HealthPotion : supply->kind;
+			const std::string reason = kind == PlayerBotSupplyKind::HealthPotion ? "insufficient_potion_funds" :
+			    "insufficient_" + std::string(playerBotSupplyKindName(kind)) + "_funds";
+			// Unaffordable supplies degrade operation instead of stopping: hunt
 			// and sell under supply recovery until loot funds a restock.
 			enterSupplyRecovery(currentPosition, observation.money + observation.bankBalance,
-			                    recoverySpendingReserve(*player, potionStockTarget(*player)),
-			                    "insufficient_potion_funds");
+			                    recoverySpendingReserve(*player, potionStockTarget(*player)), reason.c_str());
 			serviceWorkflow.reset();
 			if (fixtureDriver.progressionGoalLoop(true).selectGoal) {
 				selectTopLevelGoal(*player, currentPosition, "supply_recovery_potions_unaffordable");
@@ -1852,10 +1861,11 @@ void PlayerBotController::processService(Player* player, const Position& current
 		return;
 	}
 	if (command.type == PlayerBotServiceCommandType::Complete) {
-		const uint32_t potions = inventoryPolicy.inventoryItemCount(*player, observation.healthPotionItemId);
-		if (potions < healthPotionSafetyTarget &&
-		    !supplyRecovery.restockBlocked(player->getMoney() + player->getBankBalance(), potions)) {
-			supplyRecovery.deferRestock(player->getMoney() + player->getBankBalance(), potions);
+		const PlayerBotSupplyStocks completedStocks = supplyStocks(*player);
+		const uint64_t stockKey = playerBotSupplyStockKey(completedStocks);
+		if (playerBotMandatorySupplyDeficit(completedStocks, false).missing != 0 &&
+		    !supplyRecovery.restockBlocked(player->getMoney() + player->getBankBalance(), stockKey)) {
+			supplyRecovery.deferRestock(player->getMoney() + player->getBankBalance(), stockKey);
 			huntCoordinator.setSupplyRecovery(true);
 			emit("action_result", currentPosition,
 			     "\"action\":\"restock\",\"result\":\"deferred\",\"reason\":\"safety_stock_unmet\"");
@@ -1900,9 +1910,7 @@ bool PlayerBotController::findDepositableItem(const Player& player, Container* c
 			continue;
 		}
 		const uint32_t carried = inventoryPolicy.inventoryItemCount(player, item->getID());
-		const uint32_t reserve = item->getID() == recoveryPotionItemId(player.getVocationId()) ?
-			std::max(inventoryPolicy.protectedItemReserve(player, item->getID()), potionStockTarget(player)) :
-			inventoryPolicy.protectedItemReserve(player, item->getID());
+		const uint32_t reserve = carriedSupplyReserve(player, item->getID());
 		const uint32_t movable = item->isStackable() && carried > reserve ?
 			std::min<uint32_t>(item->getItemCount(), carried - reserve) : (carried > reserve ? 1 : 0);
 		if (movable != 0 && movable <= UINT8_MAX) {
@@ -2770,9 +2778,7 @@ void PlayerBotController::processDeposit(Player* player, const Position& current
 		depositItem = findActionableSlottedItem(*player, 0, sourceSlot);
 		if (depositItem) {
 			const uint32_t carried = inventoryPolicy.inventoryItemCount(*player, depositItem->getID());
-			const uint32_t reserve = depositItem->getID() == recoveryPotionItemId(player->getVocationId()) ?
-				std::max(inventoryPolicy.protectedItemReserve(*player, depositItem->getID()), potionStockTarget(*player)) :
-				inventoryPolicy.protectedItemReserve(*player, depositItem->getID());
+			const uint32_t reserve = carriedSupplyReserve(*player, depositItem->getID());
 			const uint32_t movable = depositItem->isStackable() && carried > reserve ?
 				std::min<uint32_t>(depositItem->getItemCount(), carried - reserve) : (carried > reserve ? 1 : 0);
 			count = static_cast<uint8_t>(std::min<uint32_t>(movable, UINT8_MAX));

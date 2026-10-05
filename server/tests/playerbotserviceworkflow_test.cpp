@@ -53,6 +53,20 @@ PlayerBotServiceCommand select(PlayerBotServiceWorkflow& workflow, PlayerBotServ
 	assert(command.type == PlayerBotServiceCommandType::NavigateProvider && command.destination == expected);
 	return command;
 }
+PlayerBotServiceObservation supplyShop(std::map<uint16_t, uint32_t> counts, uint64_t money,
+                                       std::vector<PlayerBotEconomyOffer> offers)
+{
+	PlayerBotServiceObservation observation;
+	observation.currentPosition = Position(1, 1, 7);
+	observation.shops.push_back({1, observation.currentPosition, std::move(offers)});
+	observation.providers.emplace(1, PlayerBotServiceProviderObservation{true, true, true, true});
+	observation.inventoryCounts = std::move(counts);
+	observation.freeCapacity = 100000;
+	observation.money = money;
+	observation.maximumAttempts = 3;
+	observation.supplies = {{PlayerBotSupplyKind::HealthPotion, 7618, 0, 1, 10}, {PlayerBotSupplyKind::ManaPotion, 7620, 0, 1, 10}};
+	return observation;
+}
 }
 
 int main()
@@ -107,6 +121,35 @@ int main()
 	const PlayerBotServiceCommand rejected = unreachable.advance(blocked, catalog, disposition);
 	assert(rejected.type == PlayerBotServiceCommandType::Wait && rejected.outcome == PlayerBotServiceOutcome::Retry &&
 	       rejected.providerId == sellerId);
+
+	// Typed supplies buy in priority order from one budget: health tops up
+	// first, then mana, which was below its floor.
+	{
+		PlayerBotServiceWorkflow supplies;
+		PlayerBotServiceObservation observation = supplyShop({{7618, 5}, {7620, 0}}, 1000, {{7618, 50, 0, 0}, {7620, 50, 0, 0}});
+		PlayerBotServiceCommand command = supplies.advance(observation, catalog, disposition);
+		assert(command.type == PlayerBotServiceCommandType::Buy && command.itemId == 7618 && command.amount == 5);
+		observation.inventoryCounts[7618] = 10;
+		observation.money = 750;
+		for (int step = 0; step < 4 && !(command.type == PlayerBotServiceCommandType::Buy && command.itemId == 7620); ++step) {
+			command = supplies.advance(observation, catalog, disposition);
+		}
+		assert(command.type == PlayerBotServiceCommandType::Buy && command.itemId == 7620 && command.amount == 10);
+
+		// A floor gold cannot cover fails service with InsufficientFunds.
+		PlayerBotServiceWorkflow poor;
+		const PlayerBotServiceCommand unaffordable = poor.advance(
+		    supplyShop({{7618, 10}, {7620, 0}}, 60, {{7618, 50, 0, 0}, {7620, 50, 0, 0}}), catalog, disposition);
+		assert(unaffordable.type == PlayerBotServiceCommandType::Fail &&
+		       unaffordable.outcome == PlayerBotServiceOutcome::InsufficientFunds);
+
+		// An active kind without a discovered offer cannot complete service.
+		PlayerBotServiceWorkflow unstocked;
+		const PlayerBotServiceCommand unavailable = unstocked.advance(
+		    supplyShop({{7618, 10}, {7620, 0}}, 1000, {{7618, 50, 0, 0}}), catalog, disposition);
+		assert(unavailable.type == PlayerBotServiceCommandType::Fail &&
+		       unavailable.outcome == PlayerBotServiceOutcome::Unavailable);
+	}
 
 	std::cout << "service workflow regression tests passed\n";
 }

@@ -69,8 +69,14 @@ void PlayerBotController::emitCombatReadiness(const Player& player, const Positi
 	       << ",\"item_id\":" << potionItemId
 	       << ",\"count\":" << inventoryPolicy.inventoryItemCount(player, potionItemId)
 	       << ",\"return_threshold\":" << huntPotionReturnThreshold
-	       << ",\"restock_target\":" << huntPotionRestockTarget << '}'
-	       << ",{\"name\":\"food\",\"required\":false,\"ready\":true"
+	       << ",\"restock_target\":" << huntPotionRestockTarget << '}';
+	for (const PlayerBotSupplyStock& stock : PlayerBotInventoryPolicy::additionalSupplyStocks(player)) {
+		fields << ",{\"name\":\"supply\",\"kind\":" << jsonString(playerBotSupplyKindName(stock.rule.kind))
+		       << ",\"ready\":" << (stock.count > stock.rule.returnThreshold ? "true" : "false")
+		       << ",\"item_id\":" << stock.rule.itemId << ",\"count\":" << stock.count
+		       << ",\"return_threshold\":" << stock.rule.returnThreshold << ",\"restock_target\":" << stock.rule.target << '}';
+	}
+	fields << ",{\"name\":\"food\",\"required\":false,\"ready\":true"
 	       << ",\"count\":" << food.count << ",\"preferred\":" << preferredFoodCount
 	       << ",\"reclaimable_weight\":" << food.weight
 	       << ",\"preference_utility\":" <<
@@ -88,9 +94,8 @@ void PlayerBotController::emitCombatReadiness(const Player& player, const Positi
 PlayerBotEquipmentReadinessInput PlayerBotController::equipmentReadinessInput(const Player& player) const
 {
 	const Item* backpack = player.getInventoryItem(CONST_SLOT_BACKPACK);
-	const uint16_t potionItemId = recoveryPotionItemId(player.getVocationId());
 	return {backpack && backpack->getContainer(),
-	        supplyRecovery.active() || inventoryPolicy.inventoryItemCount(player, potionItemId) > huntPotionReturnThreshold,
+	        supplyRecovery.active() || huntSuppliesReady(player),
 	        inventoryPolicy.huntFreeCapacity(player), returnCapacityThreshold};
 }
 
@@ -992,8 +997,8 @@ bool PlayerBotController::selectTopLevelGoal(Player& player, const Position& pos
 	const uint32_t potionCount = inventoryPolicy.inventoryItemCount(player, potionItemId);
 	updateSupplyRecovery(player, position);
 	huntPotionRestockTarget = potionStockTarget(player);
-	const uint32_t missingPotions = playerBotMandatoryPotionDeficit(
-	    potionCount, healthPotionSafetyTarget, supplyRecovery.active());
+	const PlayerBotSupplyStocks stocks = supplyStocks(player);
+	const PlayerBotSupplyDeficit supplyDeficit = playerBotMandatorySupplyDeficit(stocks, supplyRecovery.active());
 	const bool criticalHealing = survivalRuntime.needsHealing(survivalSnapshot(player)) &&
 	                             potionCount <= huntPotionReturnThreshold;
 	const auto requiredGoal = PlayerBotGoalPlanner::requiredGoal(
@@ -1040,7 +1045,8 @@ bool PlayerBotController::selectTopLevelGoal(Player& player, const Position& pos
 		departurePlanner.required(departureSnapshot(player)), departureEligible, departureFound,
 		player.getVocation()->getId() != 0, player.getLevel() < oracleMinimumLevel,
 		player.getLevel() > oracleMaximumLevel,
-		lowCapacity, criticalHealing, missingPotions, sellable,
+		lowCapacity, criticalHealing, supplyDeficit.missing,
+		supplyDeficit.first ? playerBotSupplyReserveReason(supplyDeficit.first->rule.kind) : "healing_reserve", sellable,
 		!supplyRecovery.active() && player.getMoney() != inventoryPolicy.desiredCarriedGold(player),
 		pickupCoolingDown, pickupFound, pickupUtility,
 		spellTrainingCoolingDown, spellTrainingFound,

@@ -139,7 +139,21 @@ uint32_t PlayerBotInventoryPolicy::protectedItemReserve(const Player& player, ui
 	if (itemId == recoveryPotionItemId(player.getVocationId())) {
 		return healthPotionAmmoTarget;
 	}
+	for (const PlayerBotSupplyStock& stock : additionalSupplyStocks(player)) {
+		if (stock.rule.itemId == itemId) return stock.rule.target;
+	}
 	return 0;
+}
+
+PlayerBotSupplyStocks PlayerBotInventoryPolicy::additionalSupplyStocks(const Player& player)
+{
+	PlayerBotSupplyStocks stocks;
+	for (const PlayerBotSupplyKind kind : playerBotSupplyKinds) {
+		if (kind == PlayerBotSupplyKind::HealthPotion) continue;
+		const PlayerBotSupplyRule rule = playerBotSupplyRule(kind, player.getVocationId());
+		if (rule.active()) stocks.push_back({rule, static_cast<const Cylinder&>(player).getItemTypeCount(rule.itemId)});
+	}
+	return stocks;
 }
 
 bool PlayerBotInventoryPolicy::isProtectedInventoryItem(const Item& item) const

@@ -292,7 +292,7 @@ PlayerBotServiceCommand PlayerBotServiceWorkflow::advanceSlottedSale(const Playe
 			pendingSlottedItem = 0;
 			pendingSlottedSlot = CONST_SLOT_WHEREEVER;
 			slottedMoveAttempts = 0;
-			serviceStage = PlayerBotServiceStage::BuyPotions;
+			serviceStage = PlayerBotServiceStage::BuySupplies;
 			return command;
 		}
 	}
@@ -331,7 +331,7 @@ PlayerBotServiceCommand PlayerBotServiceWorkflow::verifyShop(const PlayerBotServ
 			++liquidationPlan->nextBatch;
 			if (liquidationPlan->nextBatch >= liquidationPlan->batches.size()) {
 				liquidationPlan.reset();
-				serviceStage = PlayerBotServiceStage::BuyPotions;
+				serviceStage = PlayerBotServiceStage::BuySupplies;
 			}
 			serviceSession.reset();
 			if (!liquidationPlan) npcSession.reset();
@@ -434,7 +434,7 @@ PlayerBotServiceCommand PlayerBotServiceWorkflow::advanceImpl(const PlayerBotSer
 	observeProviders(observation.shops, observation.bankers);
 	if (serviceStage == PlayerBotServiceStage::Discover) {
 		serviceStage = serviceIntent == PlayerBotServiceIntent::ResupplyWithLocalSale ?
-			PlayerBotServiceStage::SellLoot : PlayerBotServiceStage::BuyPotions;
+			PlayerBotServiceStage::SellLoot : PlayerBotServiceStage::BuySupplies;
 	}
 	if (serviceStage == PlayerBotServiceStage::SellLoot) {
 		if (serviceSession.hasShopTransaction()) return verifyShop(observation, false);
@@ -442,7 +442,7 @@ PlayerBotServiceCommand PlayerBotServiceWorkflow::advanceImpl(const PlayerBotSer
 			const PlayerBotServiceLiquidationPlan& plan = *liquidationPlan;
 			if (plan.nextBatch >= plan.batches.size()) {
 				liquidationPlan.reset();
-				serviceStage = PlayerBotServiceStage::BuyPotions;
+				serviceStage = PlayerBotServiceStage::BuySupplies;
 				return advanceImpl(observation, catalog, disposition);
 			}
 			const PlayerBotServiceLiquidationBatch& batch = plan.batches[plan.nextBatch];
@@ -511,7 +511,7 @@ PlayerBotServiceCommand PlayerBotServiceWorkflow::advanceImpl(const PlayerBotSer
 				selectedUtility = utility;
 			}
 		}
-		if (!selected) { serviceStage = PlayerBotServiceStage::BuyPotions; return advanceImpl(observation, catalog, disposition); }
+		if (!selected) { serviceStage = PlayerBotServiceStage::BuySupplies; return advanceImpl(observation, catalog, disposition); }
 		targetProvider(selected->id);
 		PlayerBotServiceCommand focus = establishNpc(observation, true);
 		if (focus.type != PlayerBotServiceCommandType::None) return focus;
@@ -530,31 +530,48 @@ PlayerBotServiceCommand PlayerBotServiceWorkflow::advanceImpl(const PlayerBotSer
 		command.transaction = transaction;
 		return command;
 	}
-	if (serviceStage == PlayerBotServiceStage::BuyPotions) {
+	if (serviceStage == PlayerBotServiceStage::BuySupplies) {
 		if (serviceSession.hasShopTransaction()) return verifyShop(observation, true);
-		const uint16_t itemId = observation.healthPotionItemId;
-		const uint32_t count = observation.inventoryCounts.count(itemId) ? observation.inventoryCounts.at(itemId) : 0;
-		if (count >= observation.healthPotionRestockTarget) { serviceStage = PlayerBotServiceStage::Bank; return advanceImpl(observation, catalog, disposition); }
-		const PlayerBotEconomyProvider* selected = offerProvider(itemId, true, observation.currentPosition, catalog);
-		if (!selected) { serviceStage = PlayerBotServiceStage::Failed; return {PlayerBotServiceCommandType::Fail, PlayerBotServiceOutcome::Unavailable}; }
-		auto offer = std::find_if(selected->offers.begin(), selected->offers.end(), [itemId](const auto& value) { return value.itemId == itemId && value.buyPrice != 0; });
-		if (offer == selected->offers.end()) { serviceStage = PlayerBotServiceStage::Failed; return {PlayerBotServiceCommandType::Fail, PlayerBotServiceOutcome::Unavailable}; }
-		const auto restock = disposition.restock({count, observation.freeCapacity, observation.money, observation.bankBalance}, offer->buyPrice,
-		                                         observation.healthPotionWeight, observation.healthPotionReturnThreshold,
-		                                         observation.healthPotionRestockTarget, survivalRestock);
-		if (restock.insufficientFunds && !survivalRestock) { serviceStage = PlayerBotServiceStage::Failed; return {PlayerBotServiceCommandType::Fail, PlayerBotServiceOutcome::InsufficientFunds}; }
-		if (restock.amount == 0) { serviceStage = PlayerBotServiceStage::Bank; return advanceImpl(observation, catalog, disposition); }
-		targetProvider(selected->id);
-		PlayerBotServiceCommand focus = establishNpc(observation, true);
-		if (focus.type != PlayerBotServiceCommandType::None) return focus;
-		const uint32_t amount = std::min(restock.amount, maximumShopTransactionAmount);
-		const PlayerBotServiceTransaction transaction{itemId, amount, count, observation.money, observation.bankBalance,
-			offer->buyPrice, offer->subType};
-		serviceSession.beginShopTransaction(transaction);
-		PlayerBotServiceCommand command{PlayerBotServiceCommandType::Buy, PlayerBotServiceOutcome::Pending, selected->id, itemId, amount};
-		command.subType = offer->subType;
-		command.transaction = transaction;
-		return command;
+		std::vector<PlayerBotEconomySupplyRequest> requests;
+		std::vector<std::pair<const PlayerBotEconomyProvider*, const PlayerBotEconomyOffer*>> offers;
+		for (const PlayerBotServiceSupply& supply : observation.supplies) {
+			const uint32_t count = observation.inventoryCounts.count(supply.itemId) ? observation.inventoryCounts.at(supply.itemId) : 0;
+			requests.push_back({count, 0, supply.weight, supply.returnThreshold, supply.restockTarget, supply.safetyFloor});
+			offers.emplace_back(nullptr, nullptr);
+			if (count >= supply.restockTarget) continue;
+			const uint16_t itemId = supply.itemId;
+			const PlayerBotEconomyProvider* selected = offerProvider(itemId, true, observation.currentPosition, catalog);
+			if (!selected) { serviceStage = PlayerBotServiceStage::Failed; return {PlayerBotServiceCommandType::Fail, PlayerBotServiceOutcome::Unavailable}; }
+			auto offer = std::find_if(selected->offers.begin(), selected->offers.end(), [itemId](const auto& value) { return value.itemId == itemId && value.buyPrice != 0; });
+			if (offer == selected->offers.end()) { serviceStage = PlayerBotServiceStage::Failed; return {PlayerBotServiceCommandType::Fail, PlayerBotServiceOutcome::Unavailable}; }
+			requests.back().unitPrice = offer->buyPrice;
+			offers.back() = {selected, &*offer};
+		}
+		const auto restock = disposition.restockSupplies(requests, observation.freeCapacity, observation.money,
+		                                                 observation.bankBalance, survivalRestock);
+		for (size_t index = 0; index < restock.size(); ++index) {
+			if (restock[index].insufficientFunds) {
+				serviceStage = PlayerBotServiceStage::Failed;
+				PlayerBotServiceCommand command{PlayerBotServiceCommandType::Fail, PlayerBotServiceOutcome::InsufficientFunds};
+				command.itemId = observation.supplies[index].itemId;
+				return command;
+			}
+			if (restock[index].amount == 0) continue;
+			const auto [selected, offer] = offers[index];
+			targetProvider(selected->id);
+			PlayerBotServiceCommand focus = establishNpc(observation, true);
+			if (focus.type != PlayerBotServiceCommandType::None) return focus;
+			const uint32_t amount = std::min(restock[index].amount, maximumShopTransactionAmount);
+			const PlayerBotServiceTransaction transaction{offer->itemId, amount, requests[index].itemCount, observation.money,
+				observation.bankBalance, offer->buyPrice, offer->subType};
+			serviceSession.beginShopTransaction(transaction);
+			PlayerBotServiceCommand command{PlayerBotServiceCommandType::Buy, PlayerBotServiceOutcome::Pending, selected->id, offer->itemId, amount};
+			command.subType = offer->subType;
+			command.transaction = transaction;
+			return command;
+		}
+		serviceStage = PlayerBotServiceStage::Bank;
+		return advanceImpl(observation, catalog, disposition);
 	}
 	return advanceBank(observation, disposition);
 }

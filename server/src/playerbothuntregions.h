@@ -180,6 +180,7 @@ struct PlayerBotHuntRegion {
 	PlayerBotRecoveryPrediction recovery;
 	PlayerBotSupplyProfile supplyProfile;
 	PlayerBotSupplyBudget supplyBudget;
+	std::vector<PlayerBotSupplyKindBudget> supplyKindBudgets;
 	PlayerBotSupplyCalibration supplyCalibration;
 	PlayerBotSupplyGlobalLearning supplyGlobalLearning;
 	PlayerBotSupplyCapabilitySnapshot supplyCapability;
@@ -289,6 +290,11 @@ struct PlayerBotHuntRegion {
 			    recoveryRouteHealthLoss <= currentHealth - maximumHealth * 0.8) ||
 			    ((supplyProfile.potions > reserve || reserve == 0) &&
 			     supplyBudget.expectedPotions <= supplyBudget.routinePotions);
+		}
+		supplyKindBudgets.clear();
+		for (const PlayerBotSupplyKindProfile& kind : supplyProfile.kinds) {
+			supplyKindBudgets.push_back(playerBotSupplyKindBudget(kind, exposure));
+			supplyBudget.fits = supplyBudget.fits && supplyKindBudgets.back().fits;
 		}
 	}
 };

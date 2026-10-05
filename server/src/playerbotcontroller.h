@@ -329,8 +329,15 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		void finishOracleDeparture(Player* player, const Position& position, const char* result, const char* reason);
 
 		uint64_t recoverySpendingReserve(const Player& player, uint32_t target) const;
+		// Gold that lifts every active supply kind to its safety floor; unknown when a needed price is.
+		uint64_t supplyFloorSpendingReserve(const Player& player) const;
+		uint32_t cheapestShopPrice(const Player& player, uint16_t itemId) const;
 		uint32_t potionStockTarget(const Player& player, uint32_t returnReserve) const;
 		uint32_t potionStockTarget(const Player& player) const;
+		// Every active supply kind in priority order, health potions first.
+		PlayerBotSupplyStocks supplyStocks(const Player& player) const;
+		uint32_t carriedSupplyReserve(const Player& player, uint16_t itemId) const;
+		bool huntSuppliesReady(const Player& player) const;
 		uint64_t spellTrainingReserve(const Player& player, bool emergencyOnly = false) const;
 		void emitSpellCandidate(const Npc& npc, const NpcSpellOffer& offer, const Position& position, const char* result,
 		                        const char* reason, uint64_t reserve = 0, uint32_t travelSteps = 0,

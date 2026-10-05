@@ -421,6 +421,7 @@ playerbot::PlayerBotTelemetrySummary PlayerBotController::telemetrySummary() con
 		summary.carriedGold = player->getMoney();
 		summary.bankBalance = player->getBankBalance();
 		summary.healthPotions = inventoryPolicy.inventoryItemCount(*player, recoveryPotionItemId(player->getVocationId()));
+		summary.supplies = supplyStocks(*player);
 		if (player->getWalkDelay() > 0) summary.waitingReason = "walk_delay";
 		else if (!player->canDoAction()) summary.waitingReason = "action_delay";
 	}

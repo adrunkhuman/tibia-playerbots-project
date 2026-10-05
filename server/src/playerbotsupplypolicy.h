@@ -11,6 +11,9 @@
 #include <cstdint>
 #include <limits>
 #include <optional>
+#include <vector>
+
+#include "playerbotsupplystock.h"
 
 // Spawn-rate damage already includes every attacker's isolated fight. Only
 // concurrent exposure is additional; both totals must describe the same crowd.
@@ -35,6 +38,8 @@ struct PlayerBotSupplyProfile {
 	double healthInterval = 0;
 	uint32_t manaGain = 0;
 	double manaInterval = 0;
+	// Active non-health kinds; health potions use the damage model above.
+	std::vector<PlayerBotSupplyKindProfile> kinds;
 };
 
 inline constexpr std::size_t playerBotSupplyEquipmentSlotCount = 11;

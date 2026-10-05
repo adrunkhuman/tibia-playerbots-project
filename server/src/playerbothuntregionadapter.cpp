@@ -773,6 +773,9 @@ PlayerBotHuntPlanningProfile PlayerBotHuntRegionAdapter::planningProfile(const P
 	profile.supply.potions = profile.potionCount;
 	profile.supply.potionHealing = profile.potionMinimumHealing;
 	profile.supply.mana = profile.mana;
+	for (const PlayerBotSupplyStock& stock : playerbot::PlayerBotInventoryPolicy::additionalSupplyStocks(player)) {
+		profile.supply.kinds.push_back({stock.rule.kind, stock.rule.itemId, stock.count, stock.rule.returnThreshold, {}});
+	}
 	for (uint8_t slot = CONST_SLOT_FIRST; slot <= CONST_SLOT_LAST; ++slot) {
 		if (slot == CONST_SLOT_BACKPACK) continue;
 		if (const Item* item = player.getInventoryItem(static_cast<slots_t>(slot))) {

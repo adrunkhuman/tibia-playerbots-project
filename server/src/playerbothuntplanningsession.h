@@ -35,6 +35,7 @@ struct PlayerBotHuntPlanningSnapshot {
 	uint32_t potions = 0;
 	uint32_t mana = 0;
 	uint64_t funds = 0;
+	uint64_t supplyKey = 0;
 };
 
 struct PlayerBotHuntPlanningStart {

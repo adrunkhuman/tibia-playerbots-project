@@ -270,10 +270,9 @@ std::optional<PlayerBotController::EquipmentOfferEvaluation> PlayerBotController
 	const PlayerBotCombatProfile currentProfile = equipmentPolicy.combatProfile(playerFacts, currentLoadout);
 	const EquipmentHuntSummary currentHunts = equipmentHuntSummary(player, currentProfile);
 	Item* backpackItem = player.getInventoryItem(CONST_SLOT_BACKPACK);
-	const uint16_t potionItemId = recoveryPotionItemId(player.getVocationId());
 	const PlayerBotEquipmentReadinessInput readiness{
 		backpackItem && backpackItem->getContainer(),
-		inventoryPolicy.inventoryItemCount(player, potionItemId) > huntPotionReturnThreshold,
+		huntSuppliesReady(player),
 		inventoryPolicy.huntFreeCapacity(player),
 		returnCapacityThreshold,
 	};
@@ -865,14 +864,13 @@ void PlayerBotController::processEquipmentPurchase(Player* player, const Positio
 			const PlayerBotEquipmentPlayerSnapshot playerFacts = PlayerBotEquipmentAdapter::player(*player);
 			const EquipmentLoadout loadout = PlayerBotEquipmentAdapter::loadout(*player);
 			const EquipmentHuntSummary hunts = equipmentHuntSummary(*player, equipmentPolicy.combatProfile(playerFacts, loadout));
-			const uint16_t potionItemId = recoveryPotionItemId(player->getVocationId());
 			emit("action_result", position, "\"action\":" + jsonString(purchase.toolAcquisition ? "acquire_tool" : "equip_equipment") +
 				",\"result\":\"success\",\"npc_id\":" + std::to_string(purchase.npcId) + ",\"item_id\":" +
 				std::to_string(purchase.itemId) + ",\"slot\":" + std::to_string(purchase.slot) + ",\"tool_acquisition\":" +
 				(purchase.toolAcquisition ? "true" : "false") + ",\"combat_ready\":" +
 				(equipmentPolicy.loadoutReady(playerFacts, loadout,
 				    {player->getInventoryItem(CONST_SLOT_BACKPACK) && player->getInventoryItem(CONST_SLOT_BACKPACK)->getContainer(),
-				     inventoryPolicy.inventoryItemCount(*player, potionItemId) > huntPotionReturnThreshold,
+				     huntSuppliesReady(*player),
 				     inventoryPolicy.huntFreeCapacity(*player), returnCapacityThreshold}) ? "true" : "false") +
 				",\"suitable_regions\":" + std::to_string(hunts.suitableRegions) +
 				",\"displaced_items_preserved\":true");

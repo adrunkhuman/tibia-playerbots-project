@@ -304,6 +304,30 @@ uint32_t PlayerBotController::potionStockTarget(const Player& player) const
 	return potionStockTarget(player, huntPotionReturnThreshold);
 }
 
+PlayerBotSupplyStocks PlayerBotController::supplyStocks(const Player& player) const
+{
+	const uint16_t potionItemId = recoveryPotionItemId(player.getVocationId());
+	PlayerBotSupplyStocks stocks{{{PlayerBotSupplyKind::HealthPotion, potionItemId, healthPotionSafetyTarget,
+	                               huntPotionReturnThreshold, potionStockTarget(player)},
+	                              inventoryPolicy.inventoryItemCount(player, potionItemId)}};
+	for (const PlayerBotSupplyStock& stock : PlayerBotInventoryPolicy::additionalSupplyStocks(player)) stocks.push_back(stock);
+	return stocks;
+}
+
+uint32_t PlayerBotController::carriedSupplyReserve(const Player& player, uint16_t itemId) const
+{
+	const uint32_t reserve = inventoryPolicy.protectedItemReserve(player, itemId);
+	return itemId == recoveryPotionItemId(player.getVocationId()) ? std::max(reserve, potionStockTarget(player)) : reserve;
+}
+
+bool PlayerBotController::huntSuppliesReady(const Player& player) const
+{
+	const PlayerBotSupplyStocks stocks = supplyStocks(player);
+	return std::all_of(stocks.begin(), stocks.end(), [](const PlayerBotSupplyStock& stock) {
+		return !stock.rule.active() || stock.count > stock.rule.returnThreshold;
+	});
+}
+
 uint64_t PlayerBotController::spellTrainingReserve(const Player& player, bool emergencyOnly) const
 {
 	const uint16_t potionItemId = recoveryPotionItemId(player.getVocationId());
@@ -314,22 +338,36 @@ uint64_t PlayerBotController::spellTrainingReserve(const Player& player, bool em
 	return recoverySpendingReserve(player, reserveTarget);
 }
 
+uint32_t PlayerBotController::cheapestShopPrice(const Player& player, uint16_t itemId) const
+{
+	uint32_t price = std::numeric_limits<uint32_t>::max();
+	for (Npc* npc : playerBotNpcProviders(g_game.getNpcs(), PlayerBotNpcCapability::Shop, player.getPosition())) {
+		for (const ShopInfo& offer : npc->getShopOffers()) {
+			if (offer.itemId == itemId && offer.buyPrice != 0) price = std::min(price, offer.buyPrice);
+		}
+	}
+	return price;
+}
+
 uint64_t PlayerBotController::recoverySpendingReserve(const Player& player, uint32_t target) const
 {
 	const uint16_t potionItemId = recoveryPotionItemId(player.getVocationId());
-	const uint32_t potionCount = inventoryPolicy.inventoryItemCount(player, potionItemId);
-	uint32_t potionPrice = std::numeric_limits<uint32_t>::max();
-	for (Npc* npc : playerBotNpcProviders(g_game.getNpcs(), PlayerBotNpcCapability::Shop, player.getPosition())) {
-		for (const ShopInfo& offer : npc->getShopOffers()) {
-			if (offer.itemId == potionItemId && offer.buyPrice != 0) {
-				potionPrice = std::min(potionPrice, offer.buyPrice);
-			}
-		}
-	}
+	const uint32_t potionPrice = cheapestShopPrice(player, potionItemId);
 	if (potionPrice == std::numeric_limits<uint32_t>::max()) {
 		return std::numeric_limits<uint64_t>::max();
 	}
-	return playerBotRecoverySpendingReserve(potionCount, target, potionPrice, carriedGoldReserve);
+	return playerBotRecoverySpendingReserve(inventoryPolicy.inventoryItemCount(player, potionItemId), target, potionPrice,
+	                                        carriedGoldReserve);
+}
+
+uint64_t PlayerBotController::supplyFloorSpendingReserve(const Player& player) const
+{
+	std::vector<PlayerBotSupplyFloorCost> others;
+	for (const PlayerBotSupplyStock& stock : PlayerBotInventoryPolicy::additionalSupplyStocks(player)) {
+		others.push_back({stock.count, stock.rule.safetyFloor,
+		                  stock.count < stock.rule.safetyFloor ? cheapestShopPrice(player, stock.rule.itemId) : 0});
+	}
+	return playerBotSupplyFloorSpendingReserve(recoverySpendingReserve(player, healthPotionSafetyTarget), others);
 }
 
 void PlayerBotController::emitSpellCandidate(const Npc& npc, const NpcSpellOffer& offer, const Position& position,
@@ -363,7 +401,7 @@ bool PlayerBotController::findSpellTraining(Player& player, const Position& posi
 	const uint16_t baseVocationId = player.getVocation()->getFromVocation() == 0 ? vocationId :
 	                               player.getVocation()->getFromVocation();
 	const uint32_t potionCount = inventoryPolicy.inventoryItemCount(player, recoveryPotionItemId(vocationId));
-	const bool suppliesReady = potionCount > huntPotionReturnThreshold;
+	const bool suppliesReady = huntSuppliesReady(player);
 	std::vector<PlayerBotSpellOfferSnapshot> offers;
 	std::vector<std::deque<PlayerBotNavigationStep>> routes;
 	uint64_t remainingPathNodes = maximumSpellTrainerPathNodes;
@@ -501,7 +539,7 @@ bool PlayerBotController::findSpellTraining(Player& player, const Position& posi
 				const uint32_t routeReserve = recoveryPotionRouteReserve(vocationId, player.getMaxHealth(),
 				    trainerRoute.dangerCost, static_cast<uint32_t>(riskProfile.healthLossCost));
 				offers.back().potionReserve = std::max(huntPotionReturnThreshold, routeReserve);
-				offers.back().suppliesReady = potionCount > offers.back().potionReserve;
+				offers.back().suppliesReady = suppliesReady && potionCount > offers.back().potionReserve;
 			}
 			routes.push_back(trainerSteps);
 		}

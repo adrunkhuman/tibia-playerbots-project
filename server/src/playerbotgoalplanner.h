@@ -18,7 +18,9 @@ struct PlayerBotGoalPlannerSnapshot {
 
 	bool lowCapacity = false;
 	bool criticalHealing = false;
-	uint32_t missingPotions = 0;
+	uint32_t missingSupplies = 0;
+	// Names the highest-priority supply kind below its floor.
+	std::string supplyReserveReason = "healing_reserve";
 	uint32_t sellableItems = 0;
 	bool cashAdjustment = false;
 
