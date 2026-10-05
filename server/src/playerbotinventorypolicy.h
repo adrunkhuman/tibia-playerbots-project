@@ -15,6 +15,8 @@
 #include <functional>
 #include <map>
 
+#include "playerbotsupplystock.h"
+
 class Player;
 class Item;
 enum slots_t : uint8_t;
@@ -73,6 +75,8 @@ namespace playerbot {
 			static bool isFoodItem(uint16_t itemId);
 			static bool isCurrencyItem(uint16_t itemId);
 			static PlayerBotFoodInventory foodInventory(const Player& player);
+			// Active kinds other than health potions, whose policy lives in the controller.
+			static PlayerBotSupplyStocks additionalSupplyStocks(const Player& player);
 			uint32_t effectiveFreeCapacity(const Player& player) const;
 			uint32_t currencyInventoryWeight(const Player& player) const;
 			uint32_t huntFreeCapacity(const Player& player) const;

@@ -2,6 +2,7 @@
 #ifndef FS_PLAYERBOTECONOMY_H
 #define FS_PLAYERBOTECONOMY_H
 
+#include <algorithm>
 #include <cstdint>
 #include <map>
 #include <vector>
@@ -32,6 +33,15 @@ struct PlayerBotEconomyInventorySnapshot {
 struct PlayerBotEconomyRestockDecision {
 	uint32_t amount = 0;
 	bool insufficientFunds = false;
+};
+
+struct PlayerBotEconomySupplyRequest {
+	uint32_t itemCount = 0;
+	uint32_t unitPrice = 0;
+	uint32_t unitWeight = 0;
+	uint32_t returnThreshold = 0;
+	uint32_t restockTarget = 0;
+	uint32_t safetyFloor = 0;
 };
 
 struct PlayerBotProviderUtilityProfile {
@@ -95,6 +105,60 @@ class PlayerBotDispositionPolicy
 				amount = std::min(amount, inventory.freeCapacity / unitWeight);
 			}
 			return {amount, false};
+		}
+		// Several supply kinds share one cash and capacity budget. Every kind's
+		// floor (its safety floor, and at least one above its return threshold)
+		// is funded in priority order before any kind tops up to its target.
+		// Survival buys partial floors instead of failing. With one request and
+		// no safety floor this equals restock().
+		std::vector<PlayerBotEconomyRestockDecision> restockSupplies(
+		    const std::vector<PlayerBotEconomySupplyRequest>& requests, uint32_t freeCapacity, uint64_t money,
+		    uint64_t bankBalance, bool survival = false) const
+		{
+			std::vector<PlayerBotEconomyRestockDecision> decisions(requests.size());
+			uint64_t funds = money + bankBalance;
+			uint32_t capacity = freeCapacity;
+			auto take = [&](size_t index, uint32_t amount) {
+				const PlayerBotEconomySupplyRequest& request = requests[index];
+				if (request.unitWeight != 0) amount = std::min(amount, capacity / request.unitWeight);
+				decisions[index].amount += amount;
+				funds -= static_cast<uint64_t>(amount) * request.unitPrice;
+				capacity -= amount * request.unitWeight;
+			};
+			auto needed = [&](const PlayerBotEconomySupplyRequest& request) {
+				return request.unitPrice != 0 && request.itemCount < request.restockTarget;
+			};
+			for (size_t index = 0; index < requests.size(); ++index) {
+				const PlayerBotEconomySupplyRequest& request = requests[index];
+				if (!needed(request)) continue;
+				// An unbounded reserve keeps restock()'s unsigned arithmetic.
+				const bool unbounded = request.returnThreshold == UINT32_MAX;
+				const uint32_t floor = unbounded ? 0 : std::max(request.safetyFloor, request.returnThreshold + 1);
+				if (!unbounded && request.itemCount >= floor) continue;
+				const uint32_t requiredGap = unbounded ? request.returnThreshold + 1 - request.itemCount :
+				                                         floor - request.itemCount;
+				if (survival) {
+					take(index, static_cast<uint32_t>(std::min<uint64_t>({requiredGap,
+					    request.restockTarget - request.itemCount, funds / request.unitPrice})));
+					continue;
+				}
+				if (funds / request.unitPrice < requiredGap) {
+					decisions[index].insufficientFunds = true;
+					continue;
+				}
+				take(index, requiredGap);
+			}
+			for (size_t index = 0; index < requests.size(); ++index) {
+				const PlayerBotEconomySupplyRequest& request = requests[index];
+				const uint32_t count = request.itemCount + decisions[index].amount;
+				if (!needed(request) || decisions[index].insufficientFunds || count >= request.restockTarget) continue;
+				const uint32_t gap = request.restockTarget - count;
+				const uint64_t affordable = funds / request.unitPrice;
+				take(index, survival ? static_cast<uint32_t>(std::min<uint64_t>(gap, affordable)) :
+				    affordable >= gap ? gap : static_cast<uint32_t>(std::min<uint64_t>(
+				    gap, funds > carriedGoldReserve ? (funds - carriedGoldReserve) / request.unitPrice : 0)));
+			}
+			return decisions;
 		}
 		uint32_t bankWithdrawal(const PlayerBotEconomyInventorySnapshot& inventory, uint32_t coinWeight) const;
 };

@@ -50,6 +50,37 @@ namespace {
 		return result + ']';
 	}
 
+	std::string supplyKindBudgetsJson(const std::vector<PlayerBotSupplyKindBudget>& budgets)
+	{
+		std::ostringstream json;
+		json << '[';
+		for (size_t index = 0; index < budgets.size(); ++index) {
+			const PlayerBotSupplyKindBudget& budget = budgets[index];
+			json << (index == 0 ? "" : ",") << "{\"kind\":" << jsonString(playerBotSupplyKindName(budget.kind))
+			     << ",\"count\":" << budget.count << ",\"routine\":" << budget.routine
+			     << ",\"expected\":" << budget.expected << ",\"fits\":" << (budget.fits ? "true" : "false") << '}';
+		}
+		json << ']';
+		return json.str();
+	}
+
+	std::string supplyDemandJson(const std::vector<PlayerBotSupplyDemandUpdate>& updates)
+	{
+		std::ostringstream json;
+		json << '[';
+		for (size_t index = 0; index < updates.size(); ++index) {
+			const PlayerBotSupplyDemandUpdate& update = updates[index];
+			json << (index == 0 ? "" : ",") << "{\"kind\":" << jsonString(playerBotSupplyKindName(update.kind))
+			     << ",\"consumed\":" << update.consumed
+			     << ",\"observed_per_combat_minute\":" << update.observedUnitsPerCombatSecond * 60
+			     << ",\"per_combat_minute\":" << update.demand.unitsPerCombatSecond * 60
+			     << ",\"samples\":" << update.demand.samples << ",\"updated\":" << (update.updated ? "true" : "false")
+			     << ",\"reason\":" << jsonString(update.reason) << '}';
+		}
+		json << ']';
+		return json.str();
+	}
+
 	std::vector<PlayerBotNavigationStep> npcTravelSteps(const std::deque<PlayerBotNavigationStep>& steps)
 	{
 		std::vector<PlayerBotNavigationStep> result;
@@ -122,6 +153,7 @@ namespace {
 		observation.potions = static_cast<const Cylinder&>(player).getItemTypeCount(recoveryPotionItemId(player.getVocationId()));
 		observation.mana = player.getMana();
 		observation.funds = player.getMoney() + player.getBankBalance();
+		observation.supplies = PlayerBotInventoryPolicy::additionalSupplyStocks(player);
 		return observation;
 	}
 
@@ -238,7 +270,7 @@ PlayerBotSurvivalSnapshot PlayerBotController::survivalSnapshot(const Player& pl
 		}
 	}
 	snapshot.canDoAction = player.canDoAction();
-	snapshot.buyingPotions = serviceWorkflow.stage() == PlayerBotServiceStage::BuyPotions;
+	snapshot.buyingPotions = serviceWorkflow.stage() == PlayerBotServiceStage::BuySupplies;
 	snapshot.lootMovePending = huntCoordinator.hasPendingLootMove();
 	snapshot.progressionActive = progressionRuntime.session().active() != PlayerBotProgressionProcedure::None;
 	snapshot.progressionDeparture = progressionRuntime.session().active(PlayerBotProgressionProcedure::OracleDeparture);
@@ -893,6 +925,7 @@ void PlayerBotController::emitHuntRegionCandidate(const PlayerBotHuntRegion& reg
 	       << region.supplyAppliedPotionsPerCombatSecond * 60
 	       << ",\"supply_reserved_potions\":" << region.supplyBudget.reservedPotions
 	       << ",\"supply_routine_potions\":" << region.supplyBudget.routinePotions
+	       << ",\"supply_kinds\":" << supplyKindBudgetsJson(region.supplyKindBudgets)
 	       << ",\"threat_ratio\":" << region.threatRatio
 	       << ",\"raw_threat_ratio\":" << region.rawThreatRatio
 	       << ",\"corridor_danger_available\":" << (region.corridorDangerAvailable ? "true" : "false")
@@ -1209,6 +1242,7 @@ void PlayerBotController::finishHuntRegion(const Player& player, const Position&
 	       << completion->supplyObservation.levelAdjustedManaDebt
 	       << ",\"supply_potion_equivalent_demand\":"
 	       << completion->supplyObservation.potionEquivalentDemand
+	       << ",\"supply_demand\":" << supplyDemandJson(completion->supplyDemand)
 	       << ",\"kills\":" << combat.kills << ",\"damage_taken\":" << combat.damageTaken
 	       << ",\"active_combat_seconds\":" << combat.activeSeconds
 	       << ",\"active_combat_uptime\":" << (completion->durationSeconds == 0 ? 0 : combat.activeSeconds / completion->durationSeconds)

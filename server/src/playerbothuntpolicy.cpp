@@ -414,6 +414,20 @@ PlayerBotSupplyObservation PlayerBotHuntPolicy::observeSupplies(const PlayerBotH
 	return update;
 }
 
+PlayerBotSupplyDemandUpdate PlayerBotHuntPolicy::observeSupplyDemand(PlayerBotSupplyKind kind, uint32_t consumed,
+    uint64_t durationSeconds, bool interrupted)
+{
+	const auto combat = combatSummary();
+	const PlayerBotSupplyObservation guards;
+	const bool fullOuting = !interrupted && durationSeconds >= guards.minimumDurationSeconds &&
+	                        combat.activeSeconds >= guards.minimumActiveCombatSeconds && combat.kills >= guards.minimumKills;
+	PlayerBotSupplyDemand& demand = supplyDemands[static_cast<size_t>(kind)];
+	PlayerBotSupplyDemandUpdate update = playerBotObserveSupplyDemand(demand, consumed, combat.activeSeconds, fullOuting);
+	update.kind = kind;
+	demand = update.demand;
+	return update;
+}
+
 PlayerBotHuntPerformanceUpdate PlayerBotHuntPolicy::observePerformance(uint64_t variantId, uint64_t atlasRevision,
 	const PlayerBotHuntPerformanceSample& sample)
 {

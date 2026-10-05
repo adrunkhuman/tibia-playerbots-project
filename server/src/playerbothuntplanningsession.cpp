@@ -34,7 +34,7 @@ bool PlayerBotHuntPlanningSession::invalidated(const PlayerBotHuntPlanningSnapsh
 	return current.playerPosition != planningSnapshot.playerPosition || current.playerLevel != planningSnapshot.playerLevel ||
 	       current.currentHealth < planningSnapshot.currentHealth || current.staminaMinutes != planningSnapshot.staminaMinutes ||
 	       current.potions != planningSnapshot.potions || current.mana < planningSnapshot.mana ||
-	       current.funds != planningSnapshot.funds ||
+	       current.funds != planningSnapshot.funds || current.supplyKey != planningSnapshot.supplyKey ||
 	       current.topologyGeneration != planningSnapshot.topologyGeneration ||
 	       current.npcGeneration != planningSnapshot.npcGeneration ||
 	       current.canUseRope != planningSnapshot.canUseRope || current.canUseShovel != planningSnapshot.canUseShovel ||

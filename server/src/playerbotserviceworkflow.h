@@ -6,6 +6,7 @@
 #include "playerboteconomy.h"
 #include "playerbotnpcsession.h"
 #include "playerbotservicesession.h"
+#include "playerbotsupplystock.h"
 
 #include "player.h"
 
@@ -14,8 +15,9 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <vector>
 
-enum class PlayerBotServiceStage : uint8_t { Discover, SellLoot, BuyPotions, Bank, Complete, Failed };
+enum class PlayerBotServiceStage : uint8_t { Discover, SellLoot, BuySupplies, Bank, Complete, Failed };
 enum class PlayerBotServiceIntent : uint8_t { Resupply, ResupplyWithLocalSale };
 enum class PlayerBotServiceCommandType : uint8_t {
 	None, ValidateProviderRoute, NavigateProvider, Speak, Sell, Buy, DepositAll, Withdraw, OpenBackpack, MoveSlottedSale, Complete, Fail, Wait,
@@ -79,6 +81,15 @@ struct PlayerBotServiceCommand {
 	std::vector<PlayerBotServiceDiscovery> discoveries;
 };
 
+struct PlayerBotServiceSupply {
+	PlayerBotSupplyKind kind = PlayerBotSupplyKind::HealthPotion;
+	uint16_t itemId = 0;
+	uint32_t weight = 0;
+	uint32_t returnThreshold = PlayerBotDispositionPolicy::potionReturnThreshold;
+	uint32_t restockTarget = PlayerBotDispositionPolicy::potionRestockTarget;
+	uint32_t safetyFloor = 0;
+};
+
 // This is deliberately a value snapshot. It contains no Item, Container, Npc,
 // or Player pointers, so workflow decisions remain reproducible in fixtures.
 struct PlayerBotServiceObservation {
@@ -95,10 +106,8 @@ struct PlayerBotServiceObservation {
 	uint64_t money = 0;
 	uint64_t bankBalance = 0;
 	uint32_t goldCoinWeight = 0;
-	uint16_t healthPotionItemId = 0;
-	uint32_t healthPotionWeight = 0;
-	uint32_t healthPotionReturnThreshold = PlayerBotDispositionPolicy::potionReturnThreshold;
-	uint32_t healthPotionRestockTarget = PlayerBotDispositionPolicy::potionRestockTarget;
+	// Active supply kinds in purchase priority order.
+	std::vector<PlayerBotServiceSupply> supplies;
 	std::map<uint32_t, PlayerBotServiceProviderObservation> providers;
 	std::vector<PlayerBotServiceDiscovery> discoveries;
 	uint32_t maximumAttempts = 0;

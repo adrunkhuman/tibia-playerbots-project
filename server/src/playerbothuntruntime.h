@@ -48,6 +48,8 @@ struct PlayerBotHuntRuntimePlayerObservation {
 	uint32_t potions = 0;
 	uint32_t mana = 0;
 	uint64_t funds = 0;
+	// Active non-health supply kinds.
+	PlayerBotSupplyStocks supplies;
 	PlayerBotSupplyCapabilitySnapshot supplyCapability;
 	bool supplyInterrupted = false;
 };
@@ -144,6 +146,7 @@ struct PlayerBotHuntRuntimeCompletion {
 	PlayerBotHuntCombatSummary combat;
 	PlayerBotHuntPerformanceUpdate performance;
 	PlayerBotSupplyObservation supplyObservation;
+	std::vector<PlayerBotSupplyDemandUpdate> supplyDemand;
 	PlayerBotHuntChallengeUpdate challenge;
 	uint64_t durationSeconds = 0;
 	uint64_t experienceGained = 0;

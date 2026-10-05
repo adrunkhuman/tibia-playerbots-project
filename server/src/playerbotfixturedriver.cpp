@@ -310,10 +310,7 @@ std::vector<playerbot::PlayerBotFixtureEvent> playerbot::PlayerBotFixtureDriver:
 	serviceObservation.inventoryCounts.emplace(7618, 0);
 	serviceObservation.freeCapacity = 100000;
 	serviceObservation.money = 2000;
-	serviceObservation.healthPotionItemId = 7618;
-	serviceObservation.healthPotionWeight = 100;
-	serviceObservation.healthPotionReturnThreshold = 1;
-	serviceObservation.healthPotionRestockTarget = 150;
+	serviceObservation.supplies.push_back({PlayerBotSupplyKind::HealthPotion, 7618, 100, 1, 150});
 	serviceObservation.maximumAttempts = 3;
 	const PlayerBotServiceCommand largeRestock = service.advance(
 		serviceObservation, PlayerBotEconomyCatalog{}, PlayerBotDispositionPolicy{});

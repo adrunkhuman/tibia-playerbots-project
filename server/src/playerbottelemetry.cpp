@@ -116,11 +116,19 @@ void PlayerBotTelemetry::emitSummary(const Position& position, bool final, const
 		       << ",\"mana\":" << summary.mana << ",\"maximum_mana\":" << summary.maximumMana
 		       << ",\"level\":" << summary.level << ",\"free_capacity\":" << summary.freeCapacity
 		       << ",\"carried_gold\":" << summary.carriedGold << ",\"bank_balance\":" << summary.bankBalance
-		       << ",\"health_potions\":" << summary.healthPotions;
+		       << ",\"health_potions\":" << summary.healthPotions << ",\"supplies\":[";
+		for (size_t index = 0; index < summary.supplies.size(); ++index) {
+			const PlayerBotSupplyStock& stock = summary.supplies[index];
+			fields << (index == 0 ? "" : ",") << "{\"kind\":" << jsonString(playerBotSupplyKindName(stock.rule.kind))
+			       << ",\"item_id\":" << stock.rule.itemId << ",\"count\":" << stock.count
+			       << ",\"floor\":" << stock.rule.safetyFloor << ",\"return_threshold\":" << stock.rule.returnThreshold
+			       << ",\"target\":" << stock.rule.target << '}';
+		}
+		fields << ']';
 	} else {
 		fields << "null,\"maximum_health\":null,\"mana\":null,\"maximum_mana\":null"
 		       << ",\"level\":null,\"free_capacity\":null,\"carried_gold\":null"
-		       << ",\"bank_balance\":null,\"health_potions\":null";
+		       << ",\"bank_balance\":null,\"health_potions\":null,\"supplies\":null";
 	}
 	fields << ",\"target_id\":";
 	if (!summary.target) {

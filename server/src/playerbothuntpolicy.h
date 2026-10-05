@@ -134,6 +134,10 @@ class PlayerBotHuntPolicy
 
 		double challengeFrontier() const { return frontier; }
 		PlayerBotSupplyGlobalLearning supplyGlobalLearning() const { return globalSupplyLearning; }
+		PlayerBotSupplyDemand supplyDemand(PlayerBotSupplyKind kind) const { return supplyDemands[static_cast<size_t>(kind)]; }
+		// Uses the current combat evidence; call before it is reset.
+		PlayerBotSupplyDemandUpdate observeSupplyDemand(PlayerBotSupplyKind kind, uint32_t consumed,
+		                                                uint64_t durationSeconds, bool interrupted);
 		const std::map<uint64_t, PlayerBotHuntRegionPerformance>& regionPerformance() const { return performance; }
 
 	private:
@@ -141,6 +145,7 @@ class PlayerBotHuntPolicy
 		std::chrono::steady_clock::time_point lastSample;
 		std::map<uint64_t, PlayerBotHuntRegionPerformance> performance;
 		PlayerBotSupplyGlobalLearning globalSupplyLearning;
+		std::array<PlayerBotSupplyDemand, playerBotSupplyKinds.size()> supplyDemands{};
 		double frontier = 0.20;
 		uint8_t qualifyingHuntsToHold = 0;
 };

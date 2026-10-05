@@ -24,6 +24,7 @@
 #include "playerbothuntrouteretention.h"
 #include "playerbotinventorypolicy.h"
 #include "playerbotsupplyrecovery.h"
+#include "playerbotsupplystock.h"
 #include "playerbottelemetry.h"
 #include "playerbottestpolicy.h"
 #include "playerbotturnrouter.h"
@@ -2696,9 +2697,10 @@ void supplyRecoveryMode()
 	PlayerBotGoalPlanner planner;
 	PlayerBotGoalPlannerSnapshot goal;
 	for (uint32_t potions : {0U, 1U, 2U, 19U, 20U}) {
-		goal.missingPotions = playerBotMandatoryPotionDeficit(potions, 2, false);
+		const PlayerBotSupplyStocks stocks{{{PlayerBotSupplyKind::HealthPotion, 7618, 2, 1, 20}, potions}};
+		goal.missingSupplies = playerBotMandatorySupplyDeficit(stocks, false).missing;
 		assert(planner.serviceCandidate(goal).feasible == (potions < 2));
-		goal.missingPotions = playerBotMandatoryPotionDeficit(potions, 2, true);
+		goal.missingSupplies = playerBotMandatorySupplyDeficit(stocks, true).missing;
 		assert(!planner.serviceCandidate(goal).feasible);
 	}
 
@@ -2732,6 +2734,145 @@ void supplyRecoveryMode()
 	safer.threatRatio = 0.1;
 	xp.threatRatio = 0.4;
 	assert(playerBotPreferHuntRegion(safer, xp));
+}
+
+void typedSupplyStock()
+{
+	PlayerBotDispositionPolicy policy;
+	// One request reproduces the single-kind restock exactly, including the
+	// partial-reserve guard, the carried-gold reserve, and capacity limits.
+	for (uint32_t count : {0U, 1U, 2U, 5U, 20U}) {
+		for (uint64_t money : {0ULL, 44ULL, 45ULL, 90ULL, 136ULL, 146ULL, 900ULL, 2000ULL}) {
+			for (uint32_t capacity : {0U, 250U, 100000U}) {
+				for (uint32_t threshold : {0U, 1U, 3U, UINT32_MAX}) {
+					for (bool survival : {false, true}) {
+						const uint32_t target = playerbot::recoveryPotionRestockTargetForReserve(threshold);
+						const auto single = policy.restock({count, capacity, money, 7}, 45, 120, threshold, target, survival);
+						const auto typed = policy.restockSupplies({{count, 45, 120, threshold, target}}, capacity, money, 7, survival);
+						assert(typed.size() == 1 && typed[0].amount == single.amount &&
+						       typed[0].insufficientFunds == single.insufficientFunds);
+						if (threshold == 0) continue;
+						// The health floor of two never exceeds threshold plus one, so it changes nothing.
+						const auto health = policy.restockSupplies({{count, 45, 120, threshold, target, 2}}, capacity, money, 7, survival);
+						assert(health[0].amount == single.amount && health[0].insufficientFunds == single.insufficientFunds);
+					}
+				}
+			}
+		}
+	}
+
+	// Floors before targets: the second kind's floor is funded before the first tops up.
+	const std::vector<PlayerBotEconomySupplyRequest> pair{{0, 50, 0, 1, 20}, {0, 10, 0, 2, 50}};
+	auto restock = policy.restockSupplies(pair, 100000, 300, 0);
+	assert(restock[0].amount == 3 && restock[1].amount == 5); // 2x50 + 3x10 floors, then (300-130-100)/50 more
+	assert(!restock[0].insufficientFunds && !restock[1].insufficientFunds);
+	// Higher priority keeps its floor when gold covers only one floor.
+	restock = policy.restockSupplies(pair, 100000, 110, 0);
+	assert(restock[0].amount == 2 && restock[1].insufficientFunds && restock[1].amount == 0);
+	// Survival buys what gold affords, in priority order, without failing.
+	restock = policy.restockSupplies(pair, 100000, 110, 0, true);
+	assert(restock[0].amount == 2 && restock[1].amount == 1 && !restock[1].insufficientFunds);
+	// One capacity budget: heavy first-kind floors limit the second kind.
+	restock = policy.restockSupplies({{0, 1, 100, 1, 2}, {0, 1, 100, 1, 2}}, 300, 10000, 0);
+	assert(restock[0].amount == 2 && restock[1].amount == 1);
+	// A safety floor above threshold plus one is funded in full, or fails when unaffordable.
+	restock = policy.restockSupplies({{0, 50, 0, 1, 10, 3}}, 100000, 150, 0);
+	assert(restock[0].amount == 3 && !restock[0].insufficientFunds);
+	restock = policy.restockSupplies({{0, 50, 0, 1, 10, 3}}, 100000, 100, 0);
+	assert(restock[0].amount == 0 && restock[0].insufficientFunds);
+	// Survival keeps floors first under cash and under capacity contention.
+	const std::vector<PlayerBotEconomySupplyRequest> empty{{0, 50, 0, 1, 10, 2}, {0, 50, 0, 1, 10, 2}};
+	restock = policy.restockSupplies(empty, 100000, 200, 0);
+	assert(restock[0].amount == 2 && restock[1].amount == 2);
+	restock = policy.restockSupplies(empty, 100000, 200, 0, true);
+	assert(restock[0].amount == 2 && restock[1].amount == 2);
+	restock = policy.restockSupplies(empty, 100000, 150, 0, true);
+	assert(restock[0].amount == 2 && restock[1].amount == 1 && !restock[1].insufficientFunds);
+	restock = policy.restockSupplies({{0, 1, 100, 1, 10, 2}, {0, 1, 100, 1, 10, 2}}, 300, 10000, 0, true);
+	assert(restock[0].amount == 2 && restock[1].amount == 1);
+	// A satisfied or unpriced kind buys nothing.
+	restock = policy.restockSupplies({{20, 50, 0, 1, 20}, {0, 0, 0, 1, 20}}, 100000, 10000, 0);
+	assert(restock[0].amount == 0 && restock[1].amount == 0 && !restock[1].insufficientFunds);
+
+	const PlayerBotSupplyRule health{PlayerBotSupplyKind::HealthPotion, 7618, 2, 1, 20};
+	const PlayerBotSupplyRule mana{PlayerBotSupplyKind::ManaPotion, 7620, 3, 1, 10};
+	const PlayerBotSupplyRule ammo{PlayerBotSupplyKind::Ammunition, 2389, 2, 1, 6};
+	PlayerBotSupplyStocks stocks{{health, 5}, {mana, 1}, {ammo, 0}};
+	auto deficit = playerBotMandatorySupplyDeficit(stocks, false);
+	assert(deficit.first && deficit.first->rule.kind == PlayerBotSupplyKind::ManaPotion && deficit.missing == 4);
+	assert(std::string(playerBotSupplyReserveReason(deficit.first->rule.kind)) == "mana_potion_reserve");
+	assert(!playerBotMandatorySupplyDeficit(stocks, true).first);
+	stocks[1].rule.target = 0; // inactive kinds never demand service
+	deficit = playerBotMandatorySupplyDeficit(stocks, false);
+	assert(deficit.first->rule.kind == PlayerBotSupplyKind::Ammunition && deficit.missing == 2);
+	assert(playerBotSupplyStock(stocks, PlayerBotSupplyKind::Ammunition)->count == 0);
+	const uint64_t key = playerBotSupplyStockKey(stocks);
+	stocks[2].count = 1;
+	assert(playerBotSupplyStockKey(stocks) != key);
+	assert(playerBotSupplyStockKey({{health, 7}}) == 7); // health-only key equals the potion count
+
+	// No current vocation activates mana potions or ammunition yet.
+	for (uint16_t vocation : {0, 1, 2, 3, 4, 8}) {
+		for (const PlayerBotSupplyKind kind : {PlayerBotSupplyKind::ManaPotion, PlayerBotSupplyKind::Ammunition}) {
+			assert(!playerBotSupplyRule(kind, vocation).active());
+		}
+	}
+
+	// Demand learning: higher use corrects at once, cheaper evidence needs a full outing.
+	PlayerBotSupplyDemand demand;
+	auto update = playerBotObserveSupplyDemand(demand, 0, 0, true);
+	assert(!update.updated);
+	update = playerBotObserveSupplyDemand(demand, 0, 60, false);
+	assert(!update.updated && std::string(update.reason) == "partial_outing");
+	update = playerBotObserveSupplyDemand(demand, 12, 60, false);
+	assert(update.updated && update.demand.unitsPerCombatSecond == 0.2 && update.demand.samples == 1);
+	demand = update.demand;
+	update = playerBotObserveSupplyDemand(demand, 6, 60, false);
+	assert(!update.updated && update.demand.unitsPerCombatSecond == 0.2);
+	update = playerBotObserveSupplyDemand(demand, 6, 60, true);
+	assert(update.updated && std::abs(update.demand.unitsPerCombatSecond - 0.18) < 1e-12 && update.demand.samples == 2);
+	update = playerBotObserveSupplyDemand({}, 0, 120, true);
+	assert(update.updated && update.demand.unitsPerCombatSecond == 0 && update.demand.samples == 1);
+
+	// Hunt fit: stock above the return threshold must cover the learned demand.
+	PlayerBotSupplyKindProfile arrows{PlayerBotSupplyKind::Ammunition, 2544, 40, 5, {0.1, 3}};
+	assert(playerBotSupplyKindBudget(arrows, 300).fits && playerBotSupplyKindBudget(arrows, 300).expected == 30);
+	assert(!playerBotSupplyKindBudget(arrows, 400).fits);
+	arrows.count = 5;
+	assert(!playerBotSupplyKindBudget(arrows, 0).fits);
+
+	PlayerBotHuntRegion region = routeFixture(1);
+	region.availableHuntSeconds = 600;
+	region.combatFraction = 0.5;
+	region.reconcileSupplies(1);
+	assert(region.supplyBudget.fits && region.supplyKindBudgets.empty());
+	region.supplyProfile.kinds.push_back({PlayerBotSupplyKind::Ammunition, 2544, 40, 5, {0.2, 1}});
+	region.reconcileSupplies(1);
+	assert(!region.supplyBudget.fits && region.supplyKindBudgets.size() == 1 &&
+	       region.supplyKindBudgets[0].expected == 60 && !region.supplyKindBudgets[0].fits);
+	region.supplyProfile.kinds[0].count = 70;
+	region.reconcileSupplies(1);
+	assert(region.supplyBudget.fits && region.supplyKindBudgets[0].fits);
+
+	// Recovery stays active while any floor is unaffordable, not only health's.
+	const uint64_t healthStocked = playerBotRecoverySpendingReserve(20, 2, 50, 100);
+	assert(playerBotSupplyFloorSpendingReserve(healthStocked, {}) == healthStocked);
+	assert(playerBotSupplyFloorSpendingReserve(healthStocked, {{5, 2}}) == healthStocked); // unknown price, no deficit
+	const uint64_t withMana = playerBotSupplyFloorSpendingReserve(healthStocked, {{0, 2, 50}});
+	assert(withMana == 200);
+	PlayerBotSupplyRecoveryState recovering;
+	recovering.update(1, withMana - 100);
+	assert(recovering.active());
+	recovering.update(2, withMana - 100);
+	assert(recovering.active());
+	assert(playerBotSupplyFloorSpendingReserve(healthStocked, {{0, 2}}) == UINT64_MAX);
+	assert(playerBotSupplyFloorSpendingReserve(UINT64_MAX, {{0, 2, 50}}) == UINT64_MAX);
+
+	PlayerBotGoalPlanner planner;
+	PlayerBotGoalPlannerSnapshot goal;
+	goal.missingSupplies = 2;
+	goal.supplyReserveReason = playerBotSupplyReserveReason(PlayerBotSupplyKind::Ammunition);
+	assert(planner.serviceCandidate(goal).feasible && planner.serviceCandidate(goal).reason == "ammunition_reserve");
 }
 
 void navigationFixedObjective()
@@ -3113,12 +3254,12 @@ void recoverySpellPriority()
 	for (Goal goal : {Goal::PickupReward, Goal::BuyEquipment, Goal::SellLoot, Goal::Hunt, Goal::MagicTraining, Goal::Service}) {
 		assert(!candidate(goal).feasible && candidate(goal).reason == "deferred_recovery_spell");
 	}
-	snapshot.missingPotions = 2;
+	snapshot.missingSupplies = 2;
 	candidates = planner.candidates(snapshot);
 	assert(candidate(Goal::LearnSpell).feasible && candidate(Goal::LearnSpell).reason == "priority_recovery_spell");
 	assert(candidate(Goal::Service).feasible && candidate(Goal::Service).reason == "healing_reserve");
 	assert(!candidate(Goal::Hunt).feasible && candidate(Goal::Hunt).reason == "deferred_recovery_spell");
-	snapshot.missingPotions = 0;
+	snapshot.missingSupplies = 0;
 	snapshot.lowCapacity = true;
 	candidates = planner.candidates(snapshot);
 	assert(candidate(Goal::Service).feasible && candidate(Goal::Service).utility > candidate(Goal::LearnSpell).utility);
@@ -3457,6 +3598,7 @@ int main()
 	adaptiveChallenge();
 	sharedHuntPerformanceCalibration();
 	supplyRecoveryMode();
+	typedSupplyStock();
 	supplyCalibration();
 	globalAndLocalSupplyLearning();
 	navigationFixedObjective();

@@ -18,7 +18,7 @@ namespace {
 	constexpr int32_t oracleDepartureUtility = 950;
 	constexpr int32_t capacityServiceUtility = 900;
 	constexpr int32_t criticalHealingServiceUtility = 1000;
-	constexpr int32_t missingPotionUtility = 15;
+	constexpr int32_t missingSupplyUtility = 15;
 }
 
 PlayerBotGoalArbiter::GoalCandidate PlayerBotGoalPlanner::departureCandidate(const PlayerBotGoalPlannerSnapshot& snapshot) const
@@ -35,15 +35,15 @@ PlayerBotGoalArbiter::GoalCandidate PlayerBotGoalPlanner::departureCandidate(con
 PlayerBotGoalArbiter::GoalCandidate PlayerBotGoalPlanner::serviceCandidate(const PlayerBotGoalPlannerSnapshot& snapshot) const
 {
 	using Goal = PlayerBotGoalArbiter::TopLevelGoal;
-	const bool feasible = snapshot.criticalHealing || snapshot.lowCapacity || snapshot.missingPotions != 0 || snapshot.cashAdjustment;
+	const bool feasible = snapshot.criticalHealing || snapshot.lowCapacity || snapshot.missingSupplies != 0 || snapshot.cashAdjustment;
 	int32_t utility = feasible ? serviceGoalBaseUtility : 0;
-	utility += static_cast<int32_t>(snapshot.missingPotions) * missingPotionUtility;
+	utility += static_cast<int32_t>(snapshot.missingSupplies) * missingSupplyUtility;
 	utility += snapshot.cashAdjustment ? 10 : 0;
 	if (snapshot.lowCapacity) utility = std::max(utility, capacityServiceUtility);
 	if (snapshot.criticalHealing) utility = std::max(utility, criticalHealingServiceUtility);
 	return {Goal::Service, feasible, utility,
 	        snapshot.criticalHealing ? "critical_healing" : snapshot.lowCapacity ? "capacity" :
-	        snapshot.missingPotions != 0 ? "healing_reserve" : snapshot.cashAdjustment ? "cash_reserve" :
+	        snapshot.missingSupplies != 0 ? snapshot.supplyReserveReason : snapshot.cashAdjustment ? "cash_reserve" :
 	        "no_service_need"};
 }
 
@@ -86,7 +86,7 @@ std::vector<PlayerBotGoalArbiter::GoalCandidate> PlayerBotGoalPlanner::candidate
 				candidate.reason = "priority_recovery_spell";
 			} else if (candidate.goal != Goal::Departure &&
 			           !(candidate.goal == Goal::Service &&
-			             (snapshot.lowCapacity || snapshot.criticalHealing || snapshot.missingPotions != 0))) {
+			             (snapshot.lowCapacity || snapshot.criticalHealing || snapshot.missingSupplies != 0))) {
 				candidate.feasible = false;
 				candidate.reason = "deferred_recovery_spell";
 			}

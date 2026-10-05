@@ -46,7 +46,8 @@ PlayerBotHuntPlanningSnapshot PlayerBotHuntRuntime::snapshot(const PlayerBotHunt
 {
 	return {player.position, player.level, player.health, player.staminaMinutes, revision, player.topologyGeneration,
 	        player.npcGeneration, player.excludedVariants,
-	        player.canUseRope, player.canUseShovel, player.premium, player.potions, player.mana, player.funds};
+	        player.canUseRope, player.canUseShovel, player.premium, player.potions, player.mana, player.funds,
+	        playerBotSupplyStockKey(player.supplies)};
 }
 
 bool PlayerBotHuntRuntime::planningStartRequired(std::chrono::steady_clock::time_point now) const
@@ -235,6 +236,7 @@ const char* PlayerBotHuntRuntime::planningInvalidationReason(const PlayerBotHunt
 	if (current.potions != previous.potions) return "potions_changed";
 	if (current.mana < previous.mana) return "mana_decreased";
 	if (current.funds != previous.funds) return "funds_changed";
+	if (current.supplyKey != previous.supplyKey) return "supplies_changed";
 	if (current.canUseRope != previous.canUseRope || current.canUseShovel != previous.canUseShovel ||
 	    current.premium != previous.premium) return "travel_capability_changed";
 	return "hunt_cooldowns_changed";
@@ -375,6 +377,7 @@ PlayerBotHuntPlanningProfile PlayerBotHuntRuntime::planningProfile(PlayerBotHunt
 	profile.challengeFrontier = playerBotSupplyRecoveryChallengeFrontier(policy.challengeFrontier(), supplyRecoveryDegraded);
 	profile.supplyRecovery = supplyRecoveryDegraded;
 	profile.supplyGlobalLearning = policy.supplyGlobalLearning();
+	for (PlayerBotSupplyKindProfile& kind : profile.supply.kinds) kind.demand = policy.supplyDemand(kind.kind);
 	return profile;
 }
 
@@ -435,6 +438,12 @@ std::optional<PlayerBotHuntRuntimeCompletion> PlayerBotHuntRuntime::complete(con
 		result.supplyObservation = policy.observeSupplies(supplyRegion, player.supplyCapability,
 		    supplyDurationSeconds, player.health, player.maximumHealth, player.mana, player.potions,
 		    player.supplyInterrupted);
+		for (const PlayerBotSupplyStock& before : supplyBaseline->player.supplies) {
+			const PlayerBotSupplyStock* after = playerBotSupplyStock(player.supplies, before.rule.kind);
+			if (!after || after->rule.itemId != before.rule.itemId) continue;
+			result.supplyDemand.push_back(policy.observeSupplyDemand(before.rule.kind,
+			    before.count > after->count ? before.count - after->count : 0, supplyDurationSeconds, player.supplyInterrupted));
+		}
 	} else {
 		result.supplyObservation.calibration = activeRegion->supplyCalibration;
 		result.supplyObservation.staticPotionsPerCombatSecond =

@@ -4,8 +4,9 @@
 #include <algorithm>
 #include <cstdint>
 #include <limits>
+#include <vector>
 
-/** Degraded operation while a potion restock is unaffordable. The bot keeps
+/** Degraded operation while a supply restock is unaffordable. The bot keeps
  *  hunting and selling instead of stopping; region selection clamps toward
  *  safe, coin-income hunts until funds cover a restock again. */
 class PlayerBotSupplyRecoveryState
@@ -13,16 +14,17 @@ class PlayerBotSupplyRecoveryState
 	public:
 		bool active() const { return degraded || restockDeferred; }
 
-		void deferRestock(uint64_t funds, uint32_t potions)
+		// The stock key is playerBotSupplyStockKey(): any count change retries.
+		void deferRestock(uint64_t funds, uint64_t stockKey)
 		{
 			restockDeferred = true;
 			deferredFunds = funds;
-			deferredPotions = potions;
+			deferredStockKey = stockKey;
 		}
 
-		bool restockBlocked(uint64_t funds, uint32_t potions)
+		bool restockBlocked(uint64_t funds, uint64_t stockKey)
 		{
-			if (funds != deferredFunds || potions != deferredPotions) restockDeferred = false;
+			if (funds != deferredFunds || stockKey != deferredStockKey) restockDeferred = false;
 			return restockDeferred;
 		}
 
@@ -48,12 +50,27 @@ class PlayerBotSupplyRecoveryState
 		bool degraded = false;
 		bool restockDeferred = false;
 		uint64_t deferredFunds = 0;
-		uint32_t deferredPotions = 0;
+		uint64_t deferredStockKey = 0;
 };
 
-inline uint32_t playerBotMandatoryPotionDeficit(uint32_t potions, uint32_t safetyTarget, bool recovery)
+struct PlayerBotSupplyFloorCost {
+	uint32_t count = 0;
+	uint32_t floor = 0;
+	uint32_t price = std::numeric_limits<uint32_t>::max(); // max: no known offer
+};
+
+// Adds the floor cost of every non-health kind to the health recovery budget.
+// An unknown price matters only for a kind that is actually below its floor.
+inline uint64_t playerBotSupplyFloorSpendingReserve(uint64_t healthReserve, const std::vector<PlayerBotSupplyFloorCost>& others)
 {
-	return !recovery && potions < safetyTarget ? safetyTarget - potions : 0;
+	uint64_t reserve = healthReserve;
+	for (const PlayerBotSupplyFloorCost& cost : others) {
+		if (reserve == std::numeric_limits<uint64_t>::max()) break;
+		if (cost.count >= cost.floor) continue;
+		if (cost.price == std::numeric_limits<uint32_t>::max()) return std::numeric_limits<uint64_t>::max();
+		reserve += static_cast<uint64_t>(cost.floor - cost.count) * cost.price;
+	}
+	return reserve;
 }
 
 inline double playerBotSupplyRecoveryChallengeFrontier(double frontier, bool degraded)
