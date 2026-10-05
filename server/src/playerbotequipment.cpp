@@ -114,6 +114,7 @@ bool PlayerBotController::resumeBackpackUpgrade(Player& player, const Position& 
 	backpackUpgradeDepotId = static_cast<uint16_t>(depotId);
 	backpackUpgradeToken = token;
 	backpackUpgradeDepot.reset();
+	emitDepotDiscovery(playerbot::PlayerBotDepotTelemetry::Result::Cancelled, position, "backpack_upgrade_restored");
 	depotWorkflow.reset();
 	sellLootPlan.reset();
 	uint32_t matches = 0;
@@ -587,6 +588,7 @@ void PlayerBotController::beginEquipmentPurchase(Player& player, const Position&
 {
 	backpackUpgradeDepot.reset();
 	if (evaluation.bagUpgrade) {
+		emitDepotDiscovery(playerbot::PlayerBotDepotTelemetry::Result::Cancelled, position, "equipment_purchase_started");
 		depotWorkflow.reset();
 		sellLootPlan.reset();
 	}
@@ -635,6 +637,7 @@ void PlayerBotController::finishEquipmentPurchase(Player* player, const Position
 	         ",\"tool_acquisition\":" + (purchase.toolAcquisition ? "true" : "false") +
 	         ",\"result\":" + jsonString(result) + ",\"reason\":" + jsonString(reason));
 	const bool succeeded = std::strcmp(result, "success") == 0;
+	emitDepotDiscovery(playerbot::PlayerBotDepotTelemetry::Result::Cancelled, position, reason);
 	if (player) {
 		if (succeeded) {
 			Npc* npc = g_game.getNpcByID(purchase.npcId);
@@ -766,6 +769,8 @@ void PlayerBotController::processEquipmentPurchase(Player* player, const Positio
 			}
 		}
 		observation.depotReached = Position::areInRange<1, 1, 0>(position, backpackUpgradeDepot->approachPosition);
+		emitDepotDiscovery(observation.depotReached ? playerbot::PlayerBotDepotTelemetry::Result::Arrived :
+		    playerbot::PlayerBotDepotTelemetry::Result::Progress, position);
 		if (!observation.depotReached) {
 			if (!processNavigation(player, position, backpackUpgradeDepot->approachPosition)) {
 				observation.depotNavigationFailed = navigationRuntime.fixedTargetRouteFailureCount() >= maximumProgressionAttempts ||

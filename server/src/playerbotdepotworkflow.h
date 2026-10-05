@@ -83,8 +83,10 @@ struct PlayerBotDepotSnapshot {
 	bool hasRouteCandidate = false;
 	PlayerBotDepotCandidate routeCandidate;
 	bool validatingRiskFallback = false;
+	bool hasRiskFallback = false;
+	size_t candidateCount = 0, candidateOffset = 0;
 	bool hasPendingMove = false;
-	PlayerBotDepotMove pendingMove;
+	PlayerBotDepotMove pendingMove{};
 	uint32_t attempts = 0;
 	uint32_t indexedCandidates = 0;
 	uint32_t inScopeCandidates = 0;

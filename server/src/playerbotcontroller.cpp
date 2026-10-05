@@ -464,6 +464,7 @@ void PlayerBotController::stop(const char* reason, const Position& position)
 		return;
 	}
 
+	emitDepotDiscovery(playerbot::PlayerBotDepotTelemetry::Result::Cancelled, position, reason);
 	cancelHuntPlanning(reason, position);
 	const bool wasRunning = turnRouter.running();
 	const char* previous = turnRouter.stateName();
