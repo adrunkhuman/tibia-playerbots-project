@@ -13,7 +13,7 @@
 struct PlayerBotHuntTravelEvidence {
 	using Actor = std::tuple<uint32_t, int32_t, int32_t, int32_t, int32_t, int32_t, float,
 	                         uint64_t, bool, bool, bool, bool, uint32_t, uint32_t, bool,
-	                         uint64_t, uint32_t, uint32_t, Position>;
+	                         uint64_t, uint32_t, uint32_t, Position, int32_t, bool>;
 	using Offer = std::tuple<uint32_t, Position, Position, uint32_t, uint32_t, bool, std::vector<std::string>>;
 	Position source, destination;
 	Actor actor;

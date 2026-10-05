@@ -12,6 +12,12 @@ struct PlayerBotCombatProfile {
 	int32_t attack = 0;
 	int32_t attackSkill = 0;
 	float attackFactor = 1.0f;
+	// Percent of attacks that land. Melee always connects; distance attacks
+	// roll the fired item's hit chance first.
+	int32_t hitChance = 100;
+	// Distance attacks bypass the target's shield defense; only armor applies.
+	bool blockedByShield = true;
+	uint8_t attackRange = 1;
 };
 
 #endif

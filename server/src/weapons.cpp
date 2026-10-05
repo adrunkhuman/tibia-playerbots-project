@@ -46,8 +46,12 @@ const Weapon* Weapons::getWeapon(const Item* item) const
 	if (!item) {
 		return nullptr;
 	}
+	return getWeapon(item->getID());
+}
 
-	auto it = weapons.find(item->getID());
+const Weapon* Weapons::getWeapon(uint16_t itemId) const
+{
+	auto it = weapons.find(itemId);
 	if (it == weapons.end()) {
 		return nullptr;
 	}

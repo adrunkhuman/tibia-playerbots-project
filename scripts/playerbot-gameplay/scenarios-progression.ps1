@@ -366,6 +366,17 @@
 			}
 			Assert-EquipmentPurchaseEvents -Logs $rejectedLogs -Rejected
 		}
+		Invoke-Scenario -Name "equipment_purchase_spear" -DefaultTimeoutSeconds 240 -Body {
+			Invoke-Compose down --volumes --remove-orphans
+			$env:PLAYERBOT_GAMEPLAY_MODE = "equipment_buy_spear"
+			$env:PLAYERBOT_HUNT_DURATION_SECONDS = "900"
+			Invoke-Compose up --detach
+			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST EQUIPMENT_BUY_SPEAR_PASS' | Out-Null
+			$spearLogs = Wait-ForPlayerbotEvent {
+				$_.event -eq "goal_result" -and $_.goal -eq "buy_equipment" -and $_.result -eq "success"
+			}
+			Assert-EquipmentPurchaseEvents -Logs $spearLogs -Spear
+		}
 		Invoke-Scenario -Name "equipment_tool_replenishment" -DefaultTimeoutSeconds 300 -Body {
 			Invoke-Compose down --volumes --remove-orphans
 			$env:PLAYERBOT_GAMEPLAY_MODE = "equipment_tools"

@@ -53,7 +53,8 @@ function F.login.onLogin(player)
         mode == "equipment_buy" or mode == "equipment_buy_resume" or mode == "equipment_buy_space" or
         mode == "equipment_buy_provider_moved" or
         mode == "equipment_buy_provider_unreachable" or
-        mode == "equipment_buy_rejected" or mode == "equipment_tools" or mode == "equipment_tools_nested" or mode == "mainland_reward" or mode == "magic_training_haste" or
+        mode == "equipment_buy_rejected" or mode == "equipment_buy_spear" or mode == "equipment_tools" or
+        mode == "equipment_tools_nested" or mode == "mainland_reward" or mode == "magic_training_haste" or
         mode == "magic_training_great_light" or mode == "magic_training_light" or mode == "magic_training_refresh" or
         mode == "magic_training_reserve" or mode == "magic_training_failed" or mode == "magic_training_service" or
         mode == "magic_training_progression" or mode == "magic_training_hunt" or mode == "magic_training_pz" or
@@ -65,14 +66,19 @@ function F.login.onLogin(player)
     if mode == "equipment_shadow" or mode == "equipment_shadow_unaffordable" or mode == "equipment_shadow_no_upgrade" or
         mode == "equipment_buy" or mode == "equipment_buy_resume" or mode == "equipment_buy_space" or
         mode == "equipment_buy_provider_moved" or mode == "equipment_buy_provider_unreachable" or
-        mode == "equipment_buy_rejected" or mode == "equipment_tools" or mode == "equipment_tools_nested" then
+        mode == "equipment_buy_rejected" or mode == "equipment_buy_spear" or mode == "equipment_tools" or
+        mode == "equipment_tools_nested" then
+        local paladin = mode == "equipment_buy_spear"
+        if paladin then
+            assert(player:setVocation(3), "spear fixture could not select the Paladin vocation")
+        end
         if mode ~= "equipment_buy_provider_moved" then
             local thais = Town(F.thaisTownId)
             assert(thais and player:setTown(thais) and player:teleportTo(thais:getTemplePosition()),
                 "equipment fixture could not select Thais")
         end
-        assert(player:getLevel() == 8 and player:getVocation():getId() == 4,
-            "equipment shadow fixture did not load the level-8 mainland Knight")
+        assert(player:getLevel() == 8 and player:getVocation():getId() == (paladin and 3 or 4),
+            "equipment fixture did not load the level-8 mainland vocation")
         if mode == "equipment_tools" or mode == "equipment_tools_nested" then
             local nested = mode == "equipment_tools_nested"
             F.removeAll(player, F.ropeItemId)
@@ -111,7 +117,7 @@ function F.login.onLogin(player)
             if item then assert(item:remove(), "equipment fixture could not clear slot " .. slot) end
         end
         for _, itemId in ipairs({2457, 2463, 2525, 2376, 2647, 2643, F.starterArmorId, F.starterWeaponId,
-            F.equipmentPurchaseItemId, 2468, F.movedProviderPurchaseItemId}) do
+            F.equipmentPurchaseItemId, 2468, F.movedProviderPurchaseItemId, F.spearItemId}) do
             F.removeAll(player, itemId)
         end
         for _, equipment in ipairs({
@@ -122,8 +128,11 @@ function F.login.onLogin(player)
                 "equipment fixture could not restore slot " .. equipment[2])
         end
         local fixtureWeaponId = mode == "equipment_buy_provider_moved" and 2376 or F.starterWeaponId
-        assert(player:addItem(fixtureWeaponId, 1, false, 1, CONST_SLOT_LEFT),
-            "equipment fixture could not equip the starter weapon")
+        -- The Paladin starts unarmed: a missing weapon must be bought, not fatal.
+        if not paladin then
+            assert(player:addItem(fixtureWeaponId, 1, false, 1, CONST_SLOT_LEFT),
+                "equipment fixture could not equip the starter weapon")
+        end
         F.removeAll(player, F.potionItemId)
         -- Equipment spending must start with the full level-8 recovery stock,
         -- so the protected reserve stays at 100 gold rather than funding a restock.
@@ -151,8 +160,9 @@ function F.login.onLogin(player)
             local right = player:getSlotItem(CONST_SLOT_RIGHT)
             assert(left and left:remove() and right and right:remove(),
                 "equipment shadow fixture could not clear the one-handed loadout")
-            assert(player:addItem(2377, 1, false, 1, CONST_SLOT_LEFT),
-                "equipment shadow fixture could not equip the two-handed sword")
+            -- A level-8-legal two-handed weapon; an unwieldable one would be a readiness gap.
+            assert(player:addItem(F.broadswordItemId, 1, false, 1, CONST_SLOT_LEFT),
+                "equipment shadow fixture could not equip the broadsword")
         end
         assert(player:setBankBalance(100), "equipment fixture could not normalize the bank balance")
         if mode == "equipment_shadow" or mode == "equipment_shadow_no_upgrade" then
@@ -170,7 +180,8 @@ function F.login.onLogin(player)
             F.removeAll(player, F.equipmentPurchaseItemId)
             F.removeAll(player, ITEM_GOLD_COIN)
             local backpack = player:getSlotItem(CONST_SLOT_BACKPACK)
-            local surplus = mode == "equipment_buy_provider_moved" and 80 or 5
+            -- The Paladin surplus buys one spear (9-10 gold), never a pricier weapon.
+            local surplus = mode == "equipment_buy_provider_moved" and 80 or paladin and 10 or 5
             assert(player:getBankBalance() == 100 and backpack and backpack:addItem(ITEM_GOLD_COIN, surplus),
                 "equipment purchase fixture could not set the bounded surplus")
             if mode == "equipment_buy_space" then
@@ -184,8 +195,10 @@ function F.login.onLogin(player)
         local left = player:getSlotItem(CONST_SLOT_LEFT)
         local right = player:getSlotItem(CONST_SLOT_RIGHT)
         local armor = player:getSlotItem(CONST_SLOT_ARMOR)
-        assert(left and armor, "equipment shadow fixture lost required equipment")
-        if mode == "equipment_buy_space" then
+        assert((left or paladin) and armor, "equipment shadow fixture lost required equipment")
+        if paladin then
+            addEvent(F.verifySpearPurchase, 500, player:getId(), 360)
+        elseif mode == "equipment_buy_space" then
             addEvent(F.verifyEquipmentPurchaseSpace, 500, player:getId())
         elseif mode == "equipment_buy_provider_moved" then
             addEvent(F.verifyMovedProviderPurchase, 500, player:getId(), 360)
@@ -409,6 +422,10 @@ function F.login.onLogin(player)
         elseif mode == "readiness_missing_weapon" then
             F.removeAll(player, F.starterWeaponId)
             F.removeAll(player, F.pickupRewardId)
+            -- Without funds no weapon offer is affordable, so the missing weapon stays terminal.
+            local money = player:getMoney()
+            if money > 0 then assert(player:removeMoney(money), "missing-weapon fixture could not clear carried money") end
+            assert(player:setBankBalance(0), "missing-weapon fixture could not clear the bank balance")
             print("PLAYERBOT_GAMEPLAY_TEST READINESS_MISSING_WEAPON_START")
 		elseif mode == "readiness_supplies" then
 			local thais = Town(F.thaisTownId)

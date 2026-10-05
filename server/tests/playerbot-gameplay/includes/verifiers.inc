@@ -77,6 +77,26 @@ function F.verifyEquipmentPurchase(playerId, rejected, resumed, attempts)
     print("PLAYERBOT_GAMEPLAY_TEST EQUIPMENT_BUY" .. (rejected and "_REJECTED" or resumed and "_RESUME" or "") .. "_PASS")
 end
 
+function F.verifySpearPurchase(playerId, attempts)
+    local player = Player(playerId)
+    assert(player and not player:isRemoved(), "Bot One disappeared during spear purchase fixture")
+    local left = player:getSlotItem(CONST_SLOT_LEFT)
+    local right = player:getSlotItem(CONST_SLOT_RIGHT)
+    local spearInHand = left and left:getId() == F.spearItemId or right and right:getId() == F.spearItemId
+    local shieldKept = left and left:getId() == 2525 or right and right:getId() == 2525
+    local totalMoney = player:getMoney() + player:getBankBalance()
+    local complete = spearInHand and shieldKept and player:getItemCount(F.spearItemId) == 1 and
+        (totalMoney == 100 or totalMoney == 101)
+    if not complete and attempts > 0 then
+        addEvent(F.verifySpearPurchase, 500, playerId, attempts - 1)
+        return
+    end
+    assert(complete, "spear purchase fixture did not equip one bought spear beside the shield")
+    print("PLAYERBOT_GAMEPLAY_TEST EQUIPMENT_BUY_SPEAR_PASS")
+    -- The completed fixture pauses the controller, so no later telemetry flushes this marker.
+    io.flush()
+end
+
 function F.verifyToolReplenishment(playerId, attempts, nested)
     local player = Player(playerId)
     assert(player and not player:isRemoved(), "Bot One disappeared during tool replenishment")

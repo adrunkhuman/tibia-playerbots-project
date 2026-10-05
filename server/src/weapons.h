@@ -47,6 +47,7 @@ class Weapons final : public BaseEvents
 
 		void loadDefaults();
 		const Weapon* getWeapon(const Item* item) const;
+		const Weapon* getWeapon(uint16_t itemId) const;
 
 		static int32_t getMaxMeleeDamage(int32_t attackSkill, int32_t attackValue);
 		static int32_t getMaxWeaponDamage(uint32_t level, int32_t attackSkill, int32_t attackValue, float attackFactor);

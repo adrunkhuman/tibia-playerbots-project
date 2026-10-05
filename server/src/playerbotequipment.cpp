@@ -235,14 +235,18 @@ void PlayerBotController::emitEquipmentOffer(const Player& player, const Equipme
 	       << ",\"displaced_left_item_id\":" << (evaluation.displacedLeftItemId == 0 ? "null" : std::to_string(evaluation.displacedLeftItemId))
 	       << ",\"displaced_right_item_id\":" << (evaluation.displacedRightItemId == 0 ? "null" : std::to_string(evaluation.displacedRightItemId))
 	       << ",\"current\":{\"armor\":" << currentProfile.armor << ",\"defense\":" << currentProfile.defense
-	       << ",\"attack\":" << currentProfile.attack << ",\"suitable_regions\":" << currentHunts.suitableRegions
+	       << ",\"attack\":" << currentProfile.attack << ",\"hit_chance\":" << currentProfile.hitChance
+	       << ",\"attack_range\":" << static_cast<uint32_t>(currentProfile.attackRange)
+	       << ",\"suitable_regions\":" << currentHunts.suitableRegions
 	       << ",\"evaluated_regions\":" << currentHunts.evaluatedRegions
 	       << ",\"hunt_evaluation_truncated\":" << (currentHunts.truncated ? "true" : "false")
 	       << ",\"best_projected_experience\":" << currentHunts.bestProjectedExperience
 	       << ",\"lowest_threat_ratio\":" << currentHunts.lowestThreatRatio
 	       << ",\"combat_ready\":" << (evaluation.currentReady ? "true" : "false") << '}'
 	       << ",\"candidate\":{\"armor\":" << evaluation.profile.armor << ",\"defense\":" << evaluation.profile.defense
-	       << ",\"attack\":" << evaluation.profile.attack << ",\"suitable_regions\":" << evaluation.hunts.suitableRegions
+	       << ",\"attack\":" << evaluation.profile.attack << ",\"hit_chance\":" << evaluation.profile.hitChance
+	       << ",\"attack_range\":" << static_cast<uint32_t>(evaluation.profile.attackRange)
+	       << ",\"suitable_regions\":" << evaluation.hunts.suitableRegions
 	       << ",\"evaluated_regions\":" << evaluation.hunts.evaluatedRegions
 	       << ",\"hunt_evaluation_truncated\":" << (evaluation.hunts.truncated ? "true" : "false")
 	       << ",\"best_projected_experience\":" << evaluation.hunts.bestProjectedExperience
@@ -459,6 +463,12 @@ std::optional<PlayerBotController::EquipmentOfferEvaluation> PlayerBotController
 				return candidate.offer->itemId == ITEM_BACKPACK;
 			});
 		}
+		// A missing weapon or armor blocks hunting outright; keep its fillers in the bounded catalog.
+		if (!equipmentPolicy.weaponReady(playerFacts, currentLoadout) || !equipmentPolicy.armorReady(playerFacts, currentLoadout)) {
+			std::stable_partition(allCatalogOffers.begin(), allCatalogOffers.end(), [this, &playerFacts, &currentLoadout](const CatalogOffer& candidate) {
+				return equipmentPolicy.fillsReadinessGap(playerFacts, currentLoadout, PlayerBotEquipmentAdapter::item(candidate.offer->itemId));
+			});
+		}
 		std::stable_partition(allCatalogOffers.begin(), allCatalogOffers.end(), [&carriedCatalogItems, totalMoney, reserve](const CatalogOffer& candidate) {
 			const uint64_t price = candidate.offer->buyPrice;
 			return carriedCatalogItems.find(candidate.offer->itemId) != carriedCatalogItems.end() ||
@@ -610,6 +620,8 @@ void PlayerBotController::beginEquipmentPurchase(Player& player, const Position&
 	emit("strategy_selection", position, fields.str());
 	say(player, purchase.carried ? "Equipping a carried equipment upgrade." : purchase.toolAcquisition ?
 	                                      "Going to replenish a required travel tool." :
+	                                      purchase.rule == PlayerBotEquipmentDecisionRule::ReadinessRepair && !purchase.backpackAcquisition ?
+	                                      "Going to buy missing combat equipment." :
 	                                      "Going to buy a justified equipment upgrade.");
 }
 
@@ -636,6 +648,10 @@ void PlayerBotController::finishEquipmentPurchase(Player* player, const Position
 	         ",\"tool_acquisition\":" + (purchase.toolAcquisition ? "true" : "false") +
 	         ",\"result\":" + jsonString(result) + ",\"reason\":" + jsonString(reason));
 	const bool succeeded = std::strcmp(result, "success") == 0;
+	if (purchase.rule == PlayerBotEquipmentDecisionRule::ReadinessRepair && !purchase.backpackAcquisition &&
+	    !purchase.toolAcquisition) {
+		readinessRepairFailures = succeeded ? 0 : readinessRepairFailures + 1;
+	}
 	emitDepotDiscovery(playerbot::PlayerBotDepotTelemetry::Result::Cancelled, position, reason);
 	if (player) {
 		if (succeeded) {
@@ -650,7 +666,7 @@ void PlayerBotController::finishEquipmentPurchase(Player* player, const Position
 	const bool unresolvedPreservation = purchase.bagUpgrade && !succeeded && std::strncmp(reason, "old_bag_", 8) == 0;
 	const bool terminalFailure = unresolvedPreservation || std::strcmp(reason, "transaction_delta_mismatch") == 0;
 	progressionRuntime.completeEquipmentPurchase(succeeded,
-	    succeeded ? (purchase.backpackAcquisition || purchase.toolAcquisition ? std::chrono::steady_clock::duration::zero() :
+	    succeeded ? (purchase.rule == PlayerBotEquipmentDecisionRule::ReadinessRepair ? std::chrono::steady_clock::duration::zero() :
 	                 equipmentPurchaseSuccessCooldown) : equipmentPurchaseFailureCooldown);
 	if (player && purchase.bagUpgrade && !unresolvedPreservation) {
 		clearBackpackUpgradePersistence(*player, true);

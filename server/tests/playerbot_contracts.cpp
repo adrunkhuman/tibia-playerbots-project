@@ -770,7 +770,7 @@ void selectedRouteEvidence()
 	evidence.topologyGeneration = 7;
 	evidence.riskRevision = 8;
 	evidence.actor = Evidence::Actor{10, 150, 20, 20, 20, 20, 1.0f, 500, true, false, true, true,
-	    100, 150, false, 0, 1, 1, evidence.source};
+	    100, 150, false, 0, 1, 1, evidence.source, 100, true};
 	auto valid = [&](Evidence& snapshot) {
 		return snapshot.validContext(evidence.source, evidence.destination, evidence.actor, 7, 8, evidence.risk);
 	};
@@ -794,6 +794,8 @@ void selectedRouteEvidence()
 	actor = evidence.actor; std::get<15>(actor)++; checkActor(actor); // Permissions.
 	actor = evidence.actor; std::get<16>(actor)++; checkActor(actor); // Guild.
 	actor = evidence.actor; std::get<18>(actor) = Position(101, 100, 7); checkActor(actor);
+	actor = evidence.actor; std::get<19>(actor) = 76; checkActor(actor); // Distance hit chance.
+	actor = evidence.actor; std::get<20>(actor) = false; checkActor(actor);
 	for (int field = 0; field < 3; ++field) {
 		auto risk = evidence.risk;
 		if (field == 0) risk.healthLossCost++;
@@ -873,7 +875,7 @@ void selectedRouteLegProofs()
 	const Position rejectedDepot(201, 100, 7), rejectedSupplier(301, 100, 7);
 	const Position outboundTile(110, 100, 7), abandonedTile(111, 100, 7), rejectedTile(210, 100, 7);
 	const Evidence::Actor actor{10, 150, 20, 20, 20, 20, 1.0f, 500, true, false, true, true,
-	    100, 150, false, 0, 1, 1, origin};
+	    100, 150, false, 0, 1, 1, origin, 100, true};
 	const PlayerBotNavigationRiskProfile risk;
 	std::map<uint32_t, std::vector<Evidence::Offer>> liveOffers;
 	auto proof = [&](Position from, Position to, uint32_t provider, Position tile) {
@@ -3443,15 +3445,15 @@ static void backpackAcquisition()
 		acquisition = policy.standardBackpackAcquisition(knight, unchanged, true, 20, 20);
 		assert(!acquisition.eligible && std::string(acquisition.rejection) == "back_slot_not_upgradeable");
 	}
-	knight.vocationId = 3;
+	knight.vocationId = 2;
 	acquisition = policy.standardBackpackAcquisition(knight, 0, false, 0, 0);
 	assert(!acquisition.eligible && std::string(acquisition.rejection) == "unsupported_vocation");
 
 	PlayerBotEquipmentLoadout loadout;
 	PlayerBotEquipmentReadinessInput readiness{false, true, 10000, 100};
 	auto combat = policy.combatReadiness(PlayerBotEquipmentPlayerSnapshot{0, 0, 4}, loadout, false, readiness);
-	assert(combat.recovery.empty()); // Missing weapon remains the earlier, terminal readiness gap.
-	assert(combat.terminalReason == "missing_legal_melee_weapon");
+	// A missing weapon is bought before the backpack; the controller stops only without an offer.
+	assert(combat.recovery == "acquire_weapon" && combat.terminalReason.empty());
 	PlayerBotEquipmentItemSnapshot sword;
 	sword.itemId = 2376;
 	sword.weaponType = PlayerBotEquipmentWeaponType::Sword;
@@ -3465,6 +3467,9 @@ static void backpackAcquisition()
 	loadout.items[4] = armor;
 	combat = policy.combatReadiness(PlayerBotEquipmentPlayerSnapshot{0, 0, 4}, loadout, false, readiness);
 	assert(combat.recovery == "acquire_backpack" && combat.terminalReason.empty());
+	loadout.items[4] = {};
+	combat = policy.combatReadiness(PlayerBotEquipmentPlayerSnapshot{0, 0, 4}, loadout, false, readiness);
+	assert(combat.recovery == "acquire_armor" && combat.terminalReason.empty());
 }
 
 static void carriedShieldUpgrade()
@@ -3525,7 +3530,8 @@ static void combatStyles()
 {
 	static_assert(playerBotCombatStyle(4).managed && playerBotCombatStyle(4).weapons == PlayerBotWeaponFamily::Melee);
 	static_assert(!playerBotCombatStyle(0).managed && playerBotCombatStyle(0).weapons == PlayerBotWeaponFamily::Melee);
-	for (uint16_t unsupported : {uint16_t{1}, uint16_t{2}, uint16_t{3}, uint16_t{8}}) {
+	static_assert(playerBotCombatStyle(3).managed && playerBotCombatStyle(3).weapons == PlayerBotWeaponFamily::Distance);
+	for (uint16_t unsupported : {uint16_t{1}, uint16_t{2}, uint16_t{8}}) {
 		assert(!playerBotCombatStyle(unsupported).managed);
 		assert(playerBotCombatStyle(unsupported).weapons == PlayerBotWeaponFamily::None);
 	}
@@ -3551,24 +3557,176 @@ static void combatStyles()
 	player.vocationId = 4;
 	assert(policy.managesEquipment(player) && policy.loadoutReady(player, loadout, readiness));
 	assert(std::string(PlayerBotEquipmentPolicy::weaponRequirement(player)) == "legal_melee_weapon");
-	player.vocationId = 3;
+	player.vocationId = 2;
 	assert(!policy.managesEquipment(player) && !policy.weaponReady(player, loadout));
 	assert(policy.combatReadiness(player, {}, false, readiness).ready);
 	assert(std::string(PlayerBotEquipmentPolicy::weaponRequirement(player)) == "legal_weapon");
+	player.vocationId = 3;
+	assert(policy.managesEquipment(player) && !policy.weaponReady(player, loadout));
+	assert(std::string(PlayerBotEquipmentPolicy::weaponRequirement(player)) == "legal_distance_weapon");
 
 	player.vocationId = 4;
 	loadout.items[6].weaponType = PlayerBotEquipmentWeaponType::Distance;
 	assert(!policy.weaponReady(player, loadout));
-	assert(policy.combatReadiness(player, loadout, false, readiness).terminalReason == "missing_legal_melee_weapon");
+	assert(policy.combatReadiness(player, loadout, false, readiness).recovery == "acquire_weapon");
 	PlayerBotEquipmentLoadout empty;
 	auto evaluation = policy.evaluateCandidate(player, loadout.items[6], empty, {}, {}, false, readiness, 0, true,
 	    [](const PlayerBotCombatProfile&) { return PlayerBotEquipmentHuntSummary{}; });
 	assert(evaluation.rejection == "unsupported_weapon_type");
 }
 
+static PlayerBotEquipmentItemSnapshot distanceItem(uint16_t itemId, int32_t attack, int32_t maxHitChance, uint8_t breakChance,
+                                                 uint16_t minimumLevel = 0)
+{
+	PlayerBotEquipmentItemSnapshot item;
+	item.itemId = itemId;
+	item.weaponType = PlayerBotEquipmentWeaponType::Distance;
+	item.attack = attack;
+	item.maxHitChance = maxHitChance;
+	item.breakChance = breakChance;
+	item.minimumLevel = minimumLevel;
+	item.shootRange = 3;
+	item.left = item.right = item.pickupable = true;
+	return item;
+}
+
+static void paladinLoadouts()
+{
+	PlayerBotEquipmentPolicy policy;
+	PlayerBotEquipmentPlayerSnapshot paladin;
+	paladin.vocationId = 3;
+	paladin.level = 8;
+	paladin.distanceSkill = 20;
+	paladin.shieldSkill = 15;
+	const PlayerBotEquipmentReadinessInput readiness{true, true, 10000, 100};
+	const auto noHunts = [](const PlayerBotCombatProfile&) { return PlayerBotEquipmentHuntSummary{}; };
+	// Loaded 8.60 values: spear 25/76%/3%, hunting spear 32/80%/6% at 20, royal spear 35/80%/3% at 25.
+	const auto spear = distanceItem(2389, 25, 76, 3);
+	const auto huntingSpear = distanceItem(3965, 32, 80, 6, 20);
+	const auto royalSpear = distanceItem(7378, 35, 80, 3, 25);
+	PlayerBotEquipmentItemSnapshot shield;
+	shield.itemId = 2526;
+	shield.weaponType = PlayerBotEquipmentWeaponType::Shield;
+	shield.defense = 16;
+	shield.left = shield.right = shield.pickupable = true;
+	PlayerBotEquipmentItemSnapshot armor;
+	armor.itemId = 2467;
+	armor.armorSlot = armor.pickupable = true;
+	armor.armor = 6;
+
+	PlayerBotEquipmentLoadout loadout;
+	loadout.items[4] = armor;
+	loadout.items[5] = shield;
+	loadout.itemIds[5] = shield.itemId;
+	auto readinessResult = policy.combatReadiness(paladin, loadout, false, readiness);
+	assert(readinessResult.recovery == "acquire_weapon" && readinessResult.terminalReason.empty());
+	assert(policy.fillsReadinessGap(paladin, loadout, spear) && !policy.fillsReadinessGap(paladin, loadout, shield));
+	PlayerBotEquipmentItemSnapshot sword;
+	sword.itemId = 2376;
+	sword.weaponType = PlayerBotEquipmentWeaponType::Sword;
+	sword.attack = 14;
+	sword.left = sword.pickupable = true;
+	assert(!policy.fillsReadinessGap(paladin, loadout, sword));
+
+	// A spear has no defense, so it trades away fist defense; filling the weapon gap still wins.
+	const auto unarmed = policy.combatProfile(paladin, loadout);
+	auto evaluation = policy.evaluateCandidate(paladin, spear, loadout, unarmed, {}, false, readiness, 0, true, noHunts);
+	assert(evaluation.rejection.empty() && evaluation.rule == PlayerBotEquipmentDecisionRule::ReadinessRepair);
+	assert(static_cast<uint8_t>(evaluation.slot) == 6 && evaluation.candidateReady);
+	assert(evaluation.profile.hitChance == 76 && !evaluation.profile.blockedByShield && evaluation.profile.attackRange == 3);
+	assert(evaluation.profile.attack == 25 && evaluation.profile.attackSkill == 20);
+	assert(policy.evaluateCandidate(paladin, sword, loadout, unarmed, {}, false, readiness, 0, true, noHunts).rejection ==
+	       "unsupported_weapon_type");
+
+	loadout.items[6] = spear;
+	loadout.itemIds[6] = spear.itemId;
+	assert(policy.weaponReady(paladin, loadout) && policy.combatReadiness(paladin, loadout, false, readiness).ready);
+	const auto armed = policy.combatProfile(paladin, loadout);
+	assert(armed.defense == policy.combatProfile(paladin, [&] { auto copy = loadout; copy.items[6] = {}; return copy; }()).defense);
+
+	// Breakage is a cost trade-off: Hunting Spear hits harder but breaks twice as often.
+	paladin.level = 25;
+	const auto leveled = policy.combatProfile(paladin, loadout);
+	evaluation = policy.evaluateCandidate(paladin, huntingSpear, loadout, leveled, {}, true, readiness, 0, true, noHunts);
+	assert(evaluation.rejection == "ambiguous_tradeoff");
+	evaluation = policy.evaluateCandidate(paladin, royalSpear, loadout, leveled, {}, true, readiness, 0, true, noHunts);
+	assert(evaluation.rejection.empty() && evaluation.rule == PlayerBotEquipmentDecisionRule::ParetoImprovement);
+	assert(evaluation.profile.hitChance == 80);
+	PlayerBotEquipmentCarriedCandidate carriedHuntingSpear{huntingSpear, true};
+	carriedHuntingSpear.item.inContainer = true;
+	assert(!policy.findCarriedUpgrade(paladin, loadout, {carriedHuntingSpear}));
+	PlayerBotEquipmentCarriedCandidate carriedRoyalSpear{royalSpear, true};
+	carriedRoyalSpear.item.inContainer = true;
+	assert(policy.findCarriedUpgrade(paladin, loadout, {carriedRoyalSpear}));
+	paladin.level = 24;
+	assert(policy.evaluateCandidate(paladin, royalSpear, loadout, leveled, {}, true, readiness, 0, true, noHunts).rejection ==
+	       "level_ineligible");
+
+	// A broken hand spear leaves the slot empty; a carried spare refills it.
+	auto broken = loadout;
+	broken.items[6] = {};
+	broken.itemIds[6] = 0;
+	PlayerBotEquipmentCarriedCandidate spare{spear, true};
+	spare.item.inContainer = true;
+	const auto refill = policy.findCarriedUpgrade(paladin, broken, {spare});
+	assert(refill && static_cast<uint8_t>(refill->upgrade.slot) == 6);
+
+	// Launchers are modeled but not acquired until #255.
+	auto bow = distanceItem(2456, 0, -1, 0);
+	bow.ammoType = 2;
+	bow.shootRange = 6;
+	bow.twoHanded = true;
+	bow.right = false;
+	PlayerBotEquipmentItemSnapshot arrow;
+	arrow.itemId = 2544;
+	arrow.weaponType = PlayerBotEquipmentWeaponType::Ammo;
+	arrow.ammoType = 2;
+	arrow.attack = 25;
+	arrow.maxHitChance = 91;
+	arrow.ammoSlot = arrow.pickupable = true;
+	auto bolt = arrow;
+	bolt.itemId = 2543;
+	bolt.ammoType = 1;
+	bolt.attack = 30;
+	assert(policy.evaluateCandidate(paladin, bow, loadout, armed, {}, true, readiness, 0, true, noHunts).rejection ==
+	       "launcher_loadout_deferred");
+	PlayerBotEquipmentLoadout launcherLoadout;
+	launcherLoadout.items[4] = armor;
+	launcherLoadout.items[6] = bow;
+	// An unfed launcher is no weapon; a spear replaces it.
+	assert(!policy.weaponReady(paladin, launcherLoadout) && policy.fillsReadinessGap(paladin, launcherLoadout, spear));
+	assert(policy.combatProfile(paladin, launcherLoadout).hitChance == 0);
+	launcherLoadout.items[10] = bolt;
+	assert(!policy.weaponReady(paladin, launcherLoadout));
+	launcherLoadout.items[10] = arrow;
+	assert(policy.weaponReady(paladin, launcherLoadout));
+	const auto bowProfile = policy.combatProfile(paladin, launcherLoadout);
+	assert(bowProfile.attack == 25 && bowProfile.hitChance == 91 && bowProfile.attackRange == 6 && !bowProfile.blockedByShield);
+	// A launcher's own hit bonus adds to its ammunition's chance.
+	launcherLoadout.items[6].hitChance = 3;
+	assert(policy.combatProfile(paladin, launcherLoadout).hitChance == 94);
+
+	// Formula tiers apply when loaded data has no flat chance (WeaponDistance::useWeapon).
+	auto formula = loadout;
+	formula.items[6].maxHitChance = -1;
+	assert(policy.combatProfile(paladin, formula).hitChance == 21);
+	launcherLoadout.items[6].hitChance = 0;
+	launcherLoadout.items[10].maxHitChance = -1;
+	assert(policy.combatProfile(paladin, launcherLoadout).hitChance == 25);
+
+	// Melee keeps certain hits, so Knight comparisons are unchanged.
+	PlayerBotEquipmentPlayerSnapshot knight;
+	knight.vocationId = 4;
+	PlayerBotEquipmentLoadout melee;
+	melee.items[6] = sword;
+	const auto meleeProfile = policy.combatProfile(knight, melee);
+	assert(meleeProfile.hitChance == 100 && meleeProfile.blockedByShield && meleeProfile.attackRange == 1);
+}
+
 int main()
 {
 	backpackAcquisition();
+	paladinLoadouts();
 	carriedShieldUpgrade();
 	combatStyles();
 	toolReplenishmentPlannerGuards();

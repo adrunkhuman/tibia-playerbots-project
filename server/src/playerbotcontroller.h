@@ -595,6 +595,9 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		PlayerBotEquipmentProviderPlanner equipmentProviderPlanner;
 		std::optional<PlayerBotDepotCandidate> backpackUpgradeDepot;
 		int32_t backpackUpgradeToken = 0;
+		// Consecutive failed purchases of a missing weapon or armor. Readiness
+		// repair bypasses the goal cooldown, so this bounds the retries.
+		uint32_t readinessRepairFailures = 0;
 		uint16_t backpackUpgradeDepotId = 0;
 		size_t equipmentProviderScanOffset = 0;
 		size_t equipmentOfferScanOffset = 0;

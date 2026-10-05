@@ -14,6 +14,10 @@ namespace {
 	constexpr slots_t legs = slot(7);
 	constexpr slots_t feet = slot(8);
 	constexpr slots_t ring = slot(9);
+	constexpr slots_t ammo = slot(10);
+	// Combat closes to an adjacent tile; ranged positioning (#235) will supply
+	// the held distance. Flat-chance items ignore it.
+	constexpr uint32_t engagementDistance = 1;
 
 	bool melee(PlayerBotEquipmentWeaponType type)
 	{
@@ -25,9 +29,85 @@ namespace {
 	{
 		switch (family) {
 			case PlayerBotWeaponFamily::Melee: return melee(type);
+			case PlayerBotWeaponFamily::Distance: return type == PlayerBotEquipmentWeaponType::Distance;
 			case PlayerBotWeaponFamily::None: break;
 		}
 		return false;
+	}
+
+	bool launcher(const PlayerBotEquipmentItemSnapshot& item)
+	{
+		return item.weaponType == PlayerBotEquipmentWeaponType::Distance && item.ammoType != 0;
+	}
+
+	bool feeds(const PlayerBotEquipmentItemSnapshot& weapon, const PlayerBotEquipmentItemSnapshot& ammunition)
+	{
+		return ammunition.itemId != 0 && ammunition.weaponType == PlayerBotEquipmentWeaponType::Ammo &&
+		       ammunition.ammoType == weapon.ammoType;
+	}
+
+	// Mirrors WeaponDistance::useWeapon. The fired item is the throwing weapon
+	// itself, or a launcher's ammunition plus the launcher's hit bonus.
+	int32_t distanceHitChance(const PlayerBotEquipmentItemSnapshot& fired, int32_t launcherBonus, int32_t skillLevel,
+	                          uint32_t distance)
+	{
+		const uint32_t skill = static_cast<uint32_t>(std::max(0, skillLevel));
+		int32_t chance = fired.hitChance;
+		if (chance == 0) {
+			const int32_t maximum = fired.maxHitChance != -1 ? fired.maxHitChance : fired.ammoType != 0 ? 90 : 75;
+			if (maximum == 75) {
+				switch (distance) {
+					case 1: case 5: chance = std::min<uint32_t>(skill, 74) + 1; break;
+					case 2: chance = static_cast<int32_t>(std::min<uint32_t>(skill, 28) * 2.40f) + 8; break;
+					case 3: chance = static_cast<int32_t>(std::min<uint32_t>(skill, 45) * 1.55f) + 6; break;
+					case 4: chance = static_cast<int32_t>(std::min<uint32_t>(skill, 58) * 1.25f) + 3; break;
+					case 6: chance = static_cast<int32_t>(std::min<uint32_t>(skill, 90) * 0.80f) + 3; break;
+					case 7: chance = static_cast<int32_t>(std::min<uint32_t>(skill, 104) * 0.70f) + 2; break;
+					default: chance = fired.hitChance; break;
+				}
+			} else if (maximum == 90) {
+				switch (distance) {
+					case 1: case 5: chance = static_cast<int32_t>(std::min<uint32_t>(skill, 74) * 1.20f) + 1; break;
+					case 2: chance = static_cast<int32_t>(std::min<uint32_t>(skill, 28) * 3.20f); break;
+					case 3: chance = std::min<uint32_t>(skill, 45) * 2; break;
+					case 4: chance = static_cast<int32_t>(std::min<uint32_t>(skill, 58) * 1.55f); break;
+					case 6: case 7: chance = std::min<uint32_t>(skill, 90); break;
+					default: chance = fired.hitChance; break;
+				}
+			} else if (maximum == 100) {
+				switch (distance) {
+					case 1: case 5: chance = static_cast<int32_t>(std::min<uint32_t>(skill, 73) * 1.35f) + 1; break;
+					case 2: chance = static_cast<int32_t>(std::min<uint32_t>(skill, 30) * 3.20f) + 4; break;
+					case 3: chance = static_cast<int32_t>(std::min<uint32_t>(skill, 48) * 2.05f) + 2; break;
+					case 4: chance = static_cast<int32_t>(std::min<uint32_t>(skill, 65) * 1.50f) + 2; break;
+					case 6: chance = static_cast<int32_t>(std::min<uint32_t>(skill, 87) * 1.20f) - 4; break;
+					case 7: chance = static_cast<int32_t>(std::min<uint32_t>(skill, 90) * 1.10f) + 1; break;
+					default: chance = fired.hitChance; break;
+				}
+			} else {
+				chance = maximum;
+			}
+		}
+		return std::clamp(chance + launcherBonus, 0, 100);
+	}
+
+	// A launcher alone fires nothing; ammunition is judged with its launcher.
+	int32_t handHitChance(const PlayerBotEquipmentPlayerSnapshot& player, const PlayerBotEquipmentItemSnapshot& item)
+	{
+		if (item.weaponType != PlayerBotEquipmentWeaponType::Distance) return 100;
+		return launcher(item) ? 0 : distanceHitChance(item, 0, player.distanceSkill, engagementDistance);
+	}
+
+	// Consumed items per 100 attacks: a launcher spends one ammunition per shot,
+	// a throwing weapon breaks at its break chance, melee consumes nothing.
+	int32_t consumption(const PlayerBotEquipmentLoadout& loadout)
+	{
+		for (slots_t hand : {left, right}) {
+			const auto& item = loadout.items[static_cast<uint8_t>(hand)];
+			if (item.itemId == 0 || item.weaponType != PlayerBotEquipmentWeaponType::Distance) continue;
+			return launcher(item) ? 100 : item.breakChance;
+		}
+		return 0;
 	}
 
 	int32_t skill(const PlayerBotEquipmentPlayerSnapshot& player, PlayerBotEquipmentWeaponType type)
@@ -44,6 +124,13 @@ namespace {
 	int32_t maximumDamage(uint32_t level, int32_t skillLevel, int32_t attack, float factor)
 	{
 		return static_cast<int32_t>(std::round((level / 5) + (((((skillLevel / 4.) + 1) * (attack / 3.)) * 1.03) / factor)));
+	}
+
+	// Maximum damage scaled by hit chance, in hundredths.
+	int64_t expectedDamage(const PlayerBotCombatProfile& profile)
+	{
+		return static_cast<int64_t>(maximumDamage(profile.level, profile.attackSkill, profile.attack, profile.attackFactor)) *
+		       profile.hitChance;
 	}
 }
 
@@ -63,20 +150,49 @@ bool PlayerBotEquipmentPolicy::isLegalEquipmentItem(const PlayerBotEquipmentPlay
 bool PlayerBotEquipmentPolicy::isStyleWeapon(const PlayerBotEquipmentPlayerSnapshot& player,
 	const PlayerBotEquipmentItemSnapshot& item) const
 {
-	return isLegalEquipmentItem(player, item) && item.attack > 0 && inFamily(playerBotCombatStyle(player.vocationId).weapons, item.weaponType) &&
-	       (item.left || item.right);
+	return isLegalEquipmentItem(player, item) && (item.attack > 0 || launcher(item)) &&
+	       inFamily(playerBotCombatStyle(player.vocationId).weapons, item.weaponType) && (item.left || item.right);
 }
 
 bool PlayerBotEquipmentPolicy::weaponReady(const PlayerBotEquipmentPlayerSnapshot& player,
 	const PlayerBotEquipmentLoadout& loadout) const
 {
-	return isStyleWeapon(player, loadout.items[static_cast<uint8_t>(left)]) || isStyleWeapon(player, loadout.items[static_cast<uint8_t>(right)]);
+	const auto& ammunition = loadout.items[static_cast<uint8_t>(ammo)];
+	for (slots_t hand : {left, right}) {
+		const auto& item = loadout.items[static_cast<uint8_t>(hand)];
+		if (isStyleWeapon(player, item) && (!launcher(item) || (feeds(item, ammunition) && isLegalEquipmentItem(player, ammunition)))) {
+			return true;
+		}
+	}
+	return false;
+}
+
+bool PlayerBotEquipmentPolicy::armorReady(const PlayerBotEquipmentPlayerSnapshot& player,
+	const PlayerBotEquipmentLoadout& loadout) const
+{
+	const auto& item = loadout.items[static_cast<uint8_t>(armor)];
+	return item.itemId != 0 && isLegalEquipmentItem(player, item) && item.armorSlot && item.armor > 0;
+}
+
+bool PlayerBotEquipmentPolicy::fillsReadinessGap(const PlayerBotEquipmentPlayerSnapshot& player,
+	const PlayerBotEquipmentLoadout& loadout, const PlayerBotEquipmentItemSnapshot& candidate) const
+{
+	const bool weaponGap = !weaponReady(player, loadout);
+	const bool armorGap = !armorReady(player, loadout);
+	if (!weaponGap && !armorGap) return false;
+	PlayerBotEquipmentLoadout candidateLoadout = loadout;
+	slots_t target;
+	uint16_t replaced, displacedLeft, displacedRight;
+	std::string rejection;
+	if (!applyOffer(player, candidateLoadout, candidate, target, replaced, displacedLeft, displacedRight, rejection)) return false;
+	return (weaponGap && weaponReady(player, candidateLoadout)) || (armorGap && armorReady(player, candidateLoadout));
 }
 
 const char* PlayerBotEquipmentPolicy::weaponRequirement(const PlayerBotEquipmentPlayerSnapshot& player)
 {
 	switch (playerBotCombatStyle(player.vocationId).weapons) {
 		case PlayerBotWeaponFamily::Melee: return "legal_melee_weapon";
+		case PlayerBotWeaponFamily::Distance: return "legal_distance_weapon";
 		case PlayerBotWeaponFamily::None: break;
 	}
 	return "legal_weapon";
@@ -108,8 +224,14 @@ std::optional<PlayerBotEquipmentUpgrade> PlayerBotEquipmentPolicy::evaluateUpgra
 	int32_t currentValue = 0;
 	if (equipped.itemId != 0) {
 		currentValue = std::strcmp(metric, "armor") == 0 ? equipped.armor : std::strcmp(metric, "defense") == 0 ? equipped.defense : equipped.attack;
-		if (std::strcmp(metric, "attack") == 0 && maximumDamage(player.level, skill(player, candidate.weaponType), candidate.attack, player.attackFactor) <=
-		    maximumDamage(player.level, skill(player, equipped.weaponType), equipped.attack, player.attackFactor)) return std::nullopt;
+		if (std::strcmp(metric, "attack") == 0) {
+			const int64_t candidateDamage = static_cast<int64_t>(maximumDamage(player.level, skill(player, candidate.weaponType),
+			    candidate.attack, player.attackFactor)) * handHitChance(player, candidate);
+			const int64_t currentDamage = static_cast<int64_t>(maximumDamage(player.level, skill(player, equipped.weaponType),
+			    equipped.attack, player.attackFactor)) * handHitChance(player, equipped);
+			// Faster breakage is a cost trade-off, not a free upgrade.
+			if (candidateDamage <= currentDamage || candidate.breakChance > equipped.breakChance) return std::nullopt;
+		}
 	}
 	if (candidateValue <= currentValue) return std::nullopt;
 	return PlayerBotEquipmentUpgrade{target, candidateValue - currentValue, metric, currentValue, candidateValue};
@@ -155,6 +277,8 @@ bool PlayerBotEquipmentPolicy::applyOffer(const PlayerBotEquipmentPlayerSnapshot
 	else if (candidate.weaponType == PlayerBotEquipmentWeaponType::Shield) target = weapon(left) && !twoHanded(left) ? right : weapon(right) && !twoHanded(right) ? left : right;
 	else if (candidate.weaponType != PlayerBotEquipmentWeaponType::None && candidate.weaponType != PlayerBotEquipmentWeaponType::Ammo && (candidate.left || candidate.right)) {
 		if (managesEquipment(player) && !inFamily(playerBotCombatStyle(player.vocationId).weapons, candidate.weaponType)) { rejection = "unsupported_weapon_type"; return false; }
+		// Launchers need ammunition stock and a loadout-switching rule (#255).
+		if (managesEquipment(player) && launcher(candidate)) { rejection = "launcher_loadout_deferred"; return false; }
 		target = shield(left) ? right : shield(right) ? left : candidate.left ? left : right;
 	} else { rejection = "unsupported_slot"; return false; }
 	replacedItemId = candidate.twoHanded ? loadout.itemIds[static_cast<uint8_t>(left)] : loadout.itemIds[static_cast<uint8_t>(target)];
@@ -196,17 +320,25 @@ PlayerBotCombatProfile PlayerBotEquipmentPolicy::combatProfile(const PlayerBotEq
 	if (weapon) { defenseValue = weapon->defense + weapon->extraDefense; defenseSkill = skill(player, weapon->weaponType); }
 	if (shield) { defenseValue = weapon ? shield->defense + weapon->extraDefense : shield->defense; defenseSkill = player.shieldSkill; }
 	const int32_t defense = defenseSkill == 0 ? 1 : static_cast<int32_t>((defenseSkill / 4.0 + 2.23) * defenseValue * 0.15 * player.defenseFactor * player.defenseMultiplier);
-	return {player.level, player.maximumHealth, static_cast<int32_t>(armorValue * player.armorMultiplier), defense,
+	PlayerBotCombatProfile profile{player.level, player.maximumHealth, static_cast<int32_t>(armorValue * player.armorMultiplier), defense,
 	        weapon ? weapon->attack : 7, skill(player, weapon ? weapon->weaponType : PlayerBotEquipmentWeaponType::None), player.attackFactor};
+	if (weapon && weapon->weaponType == PlayerBotEquipmentWeaponType::Distance) {
+		profile.blockedByShield = false;
+		profile.attackRange = weapon->shootRange;
+		profile.hitChance = handHitChance(player, *weapon);
+		const auto& ammunition = itemAt(ammo);
+		if (launcher(*weapon) && feeds(*weapon, ammunition)) {
+			profile.attack += ammunition.attack;
+			profile.hitChance = distanceHitChance(ammunition, weapon->hitChance, player.distanceSkill, engagementDistance);
+		}
+	}
+	return profile;
 }
 
 bool PlayerBotEquipmentPolicy::loadoutReady(const PlayerBotEquipmentPlayerSnapshot& player, const PlayerBotEquipmentLoadout& loadout,
 	const PlayerBotEquipmentReadinessInput& readiness, uint32_t additionalWeight) const
 {
-	const auto& armorItem = loadout.items[static_cast<uint8_t>(armor)];
-	const bool weaponIsReady = weaponReady(player, loadout);
-	const bool armorReady = armorItem.itemId != 0 && isLegalEquipmentItem(player, armorItem) && armorItem.armorSlot && armorItem.armor > 0;
-	return weaponIsReady && armorReady && readiness.backpackReady && readiness.suppliesReady &&
+	return weaponReady(player, loadout) && armorReady(player, loadout) && readiness.backpackReady && readiness.suppliesReady &&
 	       static_cast<uint64_t>(readiness.effectiveFreeCapacity) >= static_cast<uint64_t>(readiness.minimumFreeCapacity) + additionalWeight;
 }
 
@@ -227,13 +359,14 @@ PlayerBotEquipmentReadiness PlayerBotEquipmentPolicy::combatReadiness(const Play
 {
 	PlayerBotEquipmentReadiness result;
 	if (!managesEquipment(player)) { result.ready = true; return result; }
-	const auto& armorItem = loadout.items[static_cast<uint8_t>(armor)];
 	const bool weaponIsReady = weaponReady(player, loadout);
-	const bool armorReady = armorItem.itemId != 0 && isLegalEquipmentItem(player, armorItem) && armorItem.armorSlot && armorItem.armor > 0;
+	const bool armorIsReady = armorReady(player, loadout);
 	if (carriedUpgrade) { result.recovery = "equip_carried"; return result; }
-	if (weaponIsReady && armorReady && readiness.backpackReady && readiness.suppliesReady && readiness.effectiveFreeCapacity >= readiness.minimumFreeCapacity) { result.ready = true; return result; }
-	if (!weaponIsReady) result.terminalReason = std::string("missing_") + weaponRequirement(player);
-	else if (!armorReady) result.terminalReason = "missing_legal_armor";
+	if (weaponIsReady && armorIsReady && readiness.backpackReady && readiness.suppliesReady && readiness.effectiveFreeCapacity >= readiness.minimumFreeCapacity) { result.ready = true; return result; }
+	// A missing weapon or armor is bought as readiness repair; the controller
+	// stops with the matching missing_* reason only when no offer can fill it.
+	if (!weaponIsReady) result.recovery = "acquire_weapon";
+	else if (!armorIsReady) result.recovery = "acquire_armor";
 	else if (!readiness.backpackReady) result.recovery = "acquire_backpack";
 	else result.recovery = "service";
 	return result;
@@ -257,11 +390,17 @@ PlayerBotEquipmentOfferEvaluation PlayerBotEquipmentPolicy::evaluateCandidate(co
 	evaluation.profile = combatProfile(player, candidateLoadout);
 	evaluation.hunts = huntSummary(evaluation.profile);
 	evaluation.candidateReady = loadoutReady(player, candidateLoadout, readiness, additionalWeight);
-	const int32_t currentMaximumDamage = maximumDamage(currentProfile.level, currentProfile.attackSkill, currentProfile.attack, currentProfile.attackFactor);
-	const int32_t candidateMaximumDamage = maximumDamage(evaluation.profile.level, evaluation.profile.attackSkill, evaluation.profile.attack, evaluation.profile.attackFactor);
-	const bool noWorse = evaluation.profile.armor >= currentProfile.armor && evaluation.profile.defense >= currentProfile.defense && candidateMaximumDamage >= currentMaximumDamage && evaluation.hunts.suitableRegions >= currentHunts.suitableRegions && evaluation.hunts.lowestThreatRatio <= currentHunts.lowestThreatRatio && evaluation.hunts.bestProjectedExperience >= currentHunts.bestProjectedExperience;
-	const bool better = evaluation.profile.armor > currentProfile.armor || evaluation.profile.defense > currentProfile.defense || candidateMaximumDamage > currentMaximumDamage || evaluation.hunts.suitableRegions > currentHunts.suitableRegions || evaluation.hunts.lowestThreatRatio < currentHunts.lowestThreatRatio || evaluation.hunts.bestProjectedExperience > currentHunts.bestProjectedExperience;
+	const int64_t currentDamage = expectedDamage(currentProfile);
+	const int64_t candidateDamage = expectedDamage(evaluation.profile);
+	const int32_t currentConsumption = consumption(currentLoadout);
+	const int32_t candidateConsumption = consumption(candidateLoadout);
+	const bool noWorse = evaluation.profile.armor >= currentProfile.armor && evaluation.profile.defense >= currentProfile.defense && candidateDamage >= currentDamage && candidateConsumption <= currentConsumption && evaluation.hunts.suitableRegions >= currentHunts.suitableRegions && evaluation.hunts.lowestThreatRatio <= currentHunts.lowestThreatRatio && evaluation.hunts.bestProjectedExperience >= currentHunts.bestProjectedExperience;
+	const bool better = evaluation.profile.armor > currentProfile.armor || evaluation.profile.defense > currentProfile.defense || candidateDamage > currentDamage || candidateConsumption < currentConsumption || evaluation.hunts.suitableRegions > currentHunts.suitableRegions || evaluation.hunts.lowestThreatRatio < currentHunts.lowestThreatRatio || evaluation.hunts.bestProjectedExperience > currentHunts.bestProjectedExperience;
+	const bool gapFilled = (!weaponReady(player, currentLoadout) && weaponReady(player, candidateLoadout)) ||
+	                       (!armorReady(player, currentLoadout) && armorReady(player, candidateLoadout));
 	if (currentReady && !evaluation.candidateReady) evaluation.rejection = "regresses_readiness";
+	// Filling a missing weapon or armor outranks every trade-off: without it the bot cannot hunt.
+	else if (gapFilled) evaluation.rule = PlayerBotEquipmentDecisionRule::ReadinessRepair;
 	else if (!noWorse) evaluation.rejection = better ? "ambiguous_tradeoff" : "non_improving";
 	else if (!better) evaluation.rejection = "non_improving";
 	else evaluation.rule = !currentReady && evaluation.candidateReady ? PlayerBotEquipmentDecisionRule::ReadinessRepair : evaluation.hunts.suitableRegions > currentHunts.suitableRegions ? PlayerBotEquipmentDecisionRule::UnlocksHunt : PlayerBotEquipmentDecisionRule::ParetoImprovement;
