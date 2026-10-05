@@ -21,6 +21,7 @@
 #include "playerbothunttravelevidence.h"
 #include "playerbothuntrouteretention.h"
 #include "playerbotdepotworkflow.h"
+#include "playerbotdepottelemetry.h"
 #include "playerboteconomy.h"
 #include "playerbotequipmentpolicy.h"
 #include "playerbotequipmentadapter.h"
@@ -501,6 +502,8 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		bool findDepotLocker(const Position& position, uint16_t expectedDepotId, uint16_t& lockerItemId) const;
 		bool depotApproachOccupied(const Player& player, const Position& approach) const;
 		bool discoverDepot(Player& player, const Position& currentPosition);
+		void emitDepotDiscovery(playerbot::PlayerBotDepotTelemetry::Result result, const Position& position,
+		                        const char* reason = "none");
 		bool depotApproachStalled(Player& player, const Position& currentPosition, const Position& approach,
 		                          const PlayerBotNavigationRuntimeOutcome* navigation);
 		bool openDepotLocker(Player& player, const PlayerBotDepotSnapshot& depot, const Position& currentPosition);
@@ -581,6 +584,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		PlayerBotSurvivalRuntime survivalRuntime;
 		PlayerBotSupplyRecoveryState supplyRecovery;
 		PlayerBotDepotWorkflow depotWorkflow;
+		playerbot::PlayerBotDepotTelemetry depotDiscoveryTelemetry;
 		int32_t lastDepotDiscoveryHealth = 0;
 		bool depotDiscoveryUnderAttack = false;
 		PlayerBotHuntCoordinator huntCoordinator;

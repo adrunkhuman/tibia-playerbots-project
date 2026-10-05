@@ -73,6 +73,7 @@ sh server/tests/playerbotguidedtree_contracts.sh
 sh server/tests/playerbotroutecache_contracts.sh
 sh server/tests/playerbotdangersamplekey_contracts.sh
 sh server/tests/playerbotplanningbudget_contracts.sh
+sh server/tests/playerbotdepottelemetry_contracts.sh
 sh server/tests/playerbot_loot_contracts.sh
 sh server/tests/playerbot_equipment_purchase_contracts.sh
 lua server/tests/playerbot_door_passages_contracts.lua
@@ -91,6 +92,14 @@ A zero exit status and each script's explicit pass marker are the pass signal. T
 ### Depot liquidation timing
 
 Follow one bot's depot visit across `sell_loot_plan` records: route work can span several turns. Pending calls for one candidate are merged until the scan reaches another candidate, finishes, or 5 seconds pass; `slices` counts the merged calls, and times and route counters are sums. `route_validations` stays per call, matching `route_validation_budget`. `snapshot_us` measures synchronous candidate construction; `walking_us` and `npc_us` are nested within `elapsed_us`, so do not add them. A budget denial reports `budget_wait_us` instead, at most once per 5 seconds; `suppressed_denials` counts the denials since the previous record. `sell_loot_approach` and `sell_loot_candidate` show approach retries and rejections; `action_result` with `action: "sell_loot_provider_route"` shows the execution route, quote, and rejection reason. `sell_loot_defer` marks an abandoned trip. The planning budget does not impose a hard latency bound on synchronous work.
+
+### Depot-discovery evidence
+
+`depot_discovery` follows one episode from its first scan through locker-approach arrival, failure, or cancellation. Group by `server_run_id`, `controller_id`, and `episode`. It emits a start, the first fallback and selection, and a closing record immediately. Other progress, including repeated fallback/selection transitions and rescans, shares one five-second throttle. Unchanged discovery counters emit nothing during ordinary travel; navigation and summary records already cover movement. It replaces the per-candidate `depot_discover` rejection and per-turn continuation records; existing successful selection and final action-failure records remain. It retains only the current snapshot and last completed validation, not a candidate history.
+
+Counters and timings are **cumulative within an episode**: take differences, not sums. `unknown_routes` replaces the `route_evidence_incomplete` count; it is not unsafe or unreachable. `accepted_routes` counts workflow acceptance, including forced-return exceptions; `last_route.safety_verdict` remains the risk-evidence verdict. `unexecutable_routes` includes invalid approaches, unaffordable fares, and incomplete/failed plans. `candidate_offset` is the number of candidates taken from the current scan, including its pending candidate; `candidate_count` excludes suppressed approaches. `scans`, `approach_failures`, and `selections` survive rescans and route selection, even when workflow `attempt` resets. `last_route` identifies the last completed candidate validation and its origin, result, evidence, risk verdict, fare, executability, preferred-exit and risk-fallback state. The top-level candidate can already be the next pending validation.
+
+`scan_us` covers world lookup and candidate ingestion/sorting. `route_active_us` sums elapsed validation/search slices, including remote-liquidation continuations; `route_slices` includes pending calls, while `route_validations` counts completed outcomes. `reported_expanded_nodes` sums completed plans' returned metrics, not every expansion in failed transport alternatives. `budget_retry_us` sums requested retry delays; `budget_wait_us` measures wall time from the first denial until admission, or the current record while still denied. Requested delays can overlap; do not add them to observed waiting. Neither elapsed work nor the five-second log throttle is a hard planning latency bound.
 
 ### Hunt-selection timing
 

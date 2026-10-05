@@ -1009,6 +1009,9 @@ void PlayerBotController::setCyclePhase(CyclePhase phase, const Position& positi
 		playerBotHuntPlanningBudget().cancel(playerId, std::chrono::steady_clock::now());
 	}
 	if (turnRouter.cyclePhase() == CyclePhase::ReturnToDepot && phase != CyclePhase::ReturnToDepot) {
+		if (phase != CyclePhase::DepositLoot) {
+			emitDepotDiscovery(playerbot::PlayerBotDepotTelemetry::Result::Cancelled, position, reason);
+		}
 		depotSourceRouteSearch.reset();
 	}
 	if (phase == CyclePhase::Hunt || phase == CyclePhase::DepositLoot) {
@@ -1026,6 +1029,7 @@ void PlayerBotController::setCyclePhase(CyclePhase phase, const Position& positi
 
 void PlayerBotController::beginReturn(Player* player, const Position& position, const char* reason)
 {
+	emitDepotDiscovery(playerbot::PlayerBotDepotTelemetry::Result::Cancelled, position, reason);
 	huntTravelBudgetPhase = HuntTravelBudgetPhase::ReturnToDepot;
 	huntExitValidationAttempted = false;
 	// The selected exit depot belongs to the hunt area. A hunt that ends before
@@ -1949,9 +1953,87 @@ bool PlayerBotController::depotApproachOccupied(const Player& player, const Posi
 	});
 }
 
+void PlayerBotController::emitDepotDiscovery(playerbot::PlayerBotDepotTelemetry::Result result,
+                                            const Position& position, const char* reason)
+{
+	if (telemetry.terminalLogged()) return;
+	depotDiscoveryTelemetry.observe(depotWorkflow.snapshot());
+	const auto record = depotDiscoveryTelemetry.report(std::chrono::steady_clock::now(), result);
+	if (!record) return;
+	using Result = playerbot::PlayerBotDepotTelemetry::Result;
+	using Intent = playerbot::PlayerBotDepotTelemetry::Intent;
+	const char* resultName = record->result == Result::Started ? "started" :
+	    record->result == Result::Fallback ? "fallback" : record->result == Result::Selected ? "selected" :
+	    record->result == Result::Arrived ? "arrived" : record->result == Result::Failed ? "failed" :
+	    record->result == Result::Cancelled ? "cancelled" : "progress";
+	const char* intentName = record->intent == Intent::Liquidation ? "liquidation" :
+	    record->intent == Intent::ForcedReturn ? "forced_return" : "optional";
+	const auto& counts = record->counters;
+	const auto& snapshot = record->snapshot;
+	std::ostringstream fields;
+	auto positionField = [&](const char* key, const Position& value) {
+		fields << ",\"" << key << "\":{\"x\":" << value.x << ",\"y\":" << value.y
+		       << ",\"z\":" << static_cast<uint32_t>(value.z) << '}';
+	};
+	fields << "\"episode\":" << record->episode << ",\"result\":" << jsonString(resultName)
+	       << ",\"reason\":" << jsonString(reason) << ",\"intent\":" << jsonString(intentName)
+	       << ",\"elapsed_us\":" << record->elapsedUs << ",\"scans\":" << counts.scans
+	       << ",\"scan_us\":" << counts.scanUs << ",\"route_slices\":" << counts.routeSlices
+	       << ",\"route_active_us\":" << counts.routeUs << ",\"route_validations\":" << counts.validations
+	       << ",\"accepted_routes\":" << counts.accepted << ",\"unknown_routes\":" << counts.unknown
+	       << ",\"unsafe_routes\":" << counts.unsafe << ",\"unexecutable_routes\":" << counts.unexecutable
+	       << ",\"reported_expanded_nodes\":" << counts.expandedNodes
+	       << ",\"budget_denials\":" << counts.budgetDenials << ",\"budget_retry_us\":" << counts.budgetRetryUs
+	       << ",\"budget_wait_us\":" << counts.budgetWaitUs << ",\"approach_failures\":" << counts.approachFailures
+	       << ",\"selections\":" << counts.selections << ",\"attempt\":" << snapshot.attempts
+	       << ",\"candidate_offset\":" << snapshot.candidateOffset << ",\"candidate_count\":" << snapshot.candidateCount
+	       << ",\"indexed\":" << snapshot.indexedCandidates << ",\"in_scope\":" << snapshot.inScopeCandidates
+	       << ",\"standable\":" << snapshot.standableCandidates << ",\"suppressed_approaches\":" << snapshot.suppressedApproaches
+	       << ",\"has_risk_fallback\":" << (snapshot.hasRiskFallback ? "true" : "false")
+	       << ",\"validating_risk_fallback\":" << (snapshot.validatingRiskFallback ? "true" : "false");
+	positionField("origin", record->origin);
+	positionField("hunt_exit", huntReturnDestination);
+	if (snapshot.hasRouteCandidate || snapshot.hasSelectedDepot) {
+		const auto& candidate = snapshot.hasRouteCandidate ? snapshot.routeCandidate : snapshot.selected;
+		fields << ",\"depot_id\":" << candidate.depotId << ",\"locker_item_id\":" << candidate.lockerItemId;
+		positionField("locker", candidate.lockerPosition);
+		positionField("approach", candidate.approachPosition);
+	}
+	if (record->route) {
+		const auto& route = *record->route;
+		fields << ",\"last_route\":{\"depot_id\":" << route.candidate.depotId
+		       << ",\"locker_item_id\":" << route.candidate.lockerItemId << ",\"candidate_offset\":" << route.candidateOffset
+		       << ",\"result\":" << jsonString(route.result == PlayerBotNavigationResult::Reached ? "reached" :
+		           route.result == PlayerBotNavigationResult::NodeLimit ? "node_limit" : "unreachable")
+		       << ",\"safety_verdict\":" << jsonString(route.verdict == PlayerBotNavigationRiskVerdict::Accepted ? "accepted" :
+		           route.verdict == PlayerBotNavigationRiskVerdict::Rejected ? "rejected" : "unknown")
+		       << ",\"danger_evidence\":" << jsonString(route.evidence == PlayerBotNavigationDangerEvidence::Detailed ? "detailed" : "coarse")
+		       << ",\"danger_cost\":" << route.dangerCost
+		       << ",\"maximum_health_loss_per_second\":" << route.maximumHealthLossPerSecond
+		       << ",\"fare\":" << route.fare << ",\"fare_accepted\":" << (route.fareAccepted ? "true" : "false")
+		       << ",\"executable\":" << (route.executable ? "true" : "false")
+		       << ",\"preferred_exit\":" << (route.preferredExit ? "true" : "false")
+		       << ",\"risk_fallback\":" << (route.riskFallback ? "true" : "false")
+		       << ",\"planner_kind\":" << jsonString(route.planner);
+		positionField("origin", route.origin);
+		positionField("locker", route.candidate.lockerPosition);
+		positionField("approach", route.candidate.approachPosition);
+		fields << '}';
+	}
+	emit("depot_discovery", position, fields.str());
+}
+
 bool PlayerBotController::discoverDepot(Player& player, const Position& currentPosition)
 {
 	const auto now = std::chrono::steady_clock::now();
+	using DepotTelemetry = playerbot::PlayerBotDepotTelemetry;
+	if (!depotDiscoveryTelemetry.active() && depotWorkflow.snapshot().stage == PlayerBotDepotStage::Discover) {
+		depotDiscoveryTelemetry.begin(now, currentPosition, sellLootPlan ? DepotTelemetry::Intent::Liquidation :
+		    huntTravelBudgetPhase == HuntTravelBudgetPhase::ReturnToDepot ? DepotTelemetry::Intent::ForcedReturn :
+		    DepotTelemetry::Intent::Optional);
+		emitDepotDiscovery(DepotTelemetry::Result::Started, currentPosition);
+	}
+	emitDepotDiscovery(DepotTelemetry::Result::Progress, currentPosition);
 	const PlayerBotFixtureDepotEndpoint fixtureDepot = fixtureDriver.depotEndpoint();
 	const int32_t health = player.getHealth();
 	if (lastDepotDiscoveryHealth > health) depotDiscoveryUnderAttack = true;
@@ -1963,8 +2045,16 @@ bool PlayerBotController::discoverDepot(Player& player, const Position& currentP
 		// A forced return must not keep evaluating lockers while the bot is taking damage.
 		observation.emergencyReturn = !sellLootPlan && huntTravelBudgetPhase == HuntTravelBudgetPhase::ReturnToDepot &&
 		    depotDiscoveryUnderAttack;
-		return depotWorkflow.advance(observation, depotRouteValidationsPerDecision, maximumDepotDiscoveryAttempts,
-		                             depotApproachSuppression);
+		const auto scanStarted = observation.scan.observed ? std::chrono::steady_clock::now() :
+		    std::chrono::steady_clock::time_point{};
+		auto command = depotWorkflow.advance(observation, depotRouteValidationsPerDecision, maximumDepotDiscoveryAttempts,
+		                                     depotApproachSuppression);
+		if (observation.scan.observed) {
+			depotDiscoveryTelemetry.scanBookkeeping(std::chrono::duration_cast<std::chrono::microseconds>(
+			    std::chrono::steady_clock::now() - scanStarted));
+		}
+		if (command.snapshot.validatingRiskFallback) emitDepotDiscovery(DepotTelemetry::Result::Fallback, currentPosition);
+		return command;
 	};
 	auto scan = [&](bool preferredExit = false) {
 		PlayerBotDepotScan result;
@@ -2032,6 +2122,13 @@ bool PlayerBotController::discoverDepot(Player& player, const Position& currentP
 		return result;
 	};
 
+	auto measuredScan = [&](bool preferredExit = false) {
+		const auto started = std::chrono::steady_clock::now();
+		auto result = scan(preferredExit);
+		depotDiscoveryTelemetry.scan(std::chrono::duration_cast<std::chrono::microseconds>(
+		    std::chrono::steady_clock::now() - started));
+		return result;
+	};
 	PlayerBotDepotCommand command = advance({});
 	bool preferredExit = command.type == PlayerBotDepotCommandType::Scan && !fixtureDepot.synthetic &&
 	    !sellLootPlan && huntTravelBudgetPhase == HuntTravelBudgetPhase::ReturnToDepot &&
@@ -2048,12 +2145,12 @@ bool PlayerBotController::discoverDepot(Player& player, const Position& currentP
 	}
 	if (command.type == PlayerBotDepotCommandType::Scan) {
 		PlayerBotDepotObservation observation;
-		observation.scan = scan(preferredExit);
+		observation.scan = measuredScan(preferredExit);
 		command = advance(observation);
 		if (preferredExit && command.type != PlayerBotDepotCommandType::ValidateRoute) {
 			depotWorkflow.reset();
 			command = advance({});
-			observation.scan = scan();
+			observation.scan = measuredScan();
 			command = advance(observation);
 			preferredExit = false;
 		}
@@ -2070,13 +2167,18 @@ bool PlayerBotController::discoverDepot(Player& player, const Position& currentP
 	while (command.type == PlayerBotDepotCommandType::ValidateRoute && command.snapshot.hasRouteCandidate &&
 	       routeValidations < depotRouteValidationsPerDecision) {
 		auto& budget = playerBotHuntPlanningBudget();
-		const auto admission = budget.request(playerId, std::chrono::steady_clock::now());
+		const auto requestedAt = std::chrono::steady_clock::now();
+		const auto admission = budget.request(playerId, requestedAt);
 		if (!admission.admitted) {
-			schedule(static_cast<uint32_t>(std::clamp<int64_t>(
+			const auto retry = std::chrono::milliseconds(std::clamp<int64_t>(
 			    std::chrono::duration_cast<std::chrono::milliseconds>(admission.wait).count(),
-			    blockedRouteRetryInterval, 5000)));
+			    blockedRouteRetryInterval, 5000));
+			depotDiscoveryTelemetry.denied(requestedAt, std::chrono::duration_cast<std::chrono::microseconds>(retry));
+			emitDepotDiscovery(DepotTelemetry::Result::Progress, currentPosition);
+			schedule(static_cast<uint32_t>(retry.count()));
 			return false;
 		}
+		depotDiscoveryTelemetry.admitted(requestedAt);
 		PlayerBotPlanningBudget::Charge charge(budget, playerId);
 		++routeValidations;
 		const PlayerBotDepotCandidate& candidate = command.snapshot.routeCandidate;
@@ -2133,6 +2235,9 @@ bool PlayerBotController::discoverDepot(Player& player, const Position& currentP
 				planned = advanceHuntTravelRoute(player, request, currentPosition, timing, reserve, true, &walking);
 			}
 			if (!planned && ++search.turns < maximumRouteSearchTurns) {
+				depotDiscoveryTelemetry.pending(std::chrono::duration_cast<std::chrono::microseconds>(
+				    std::chrono::steady_clock::now() - startedAt));
+				emitDepotDiscovery(DepotTelemetry::Result::Progress, currentPosition);
 				schedule(routeSearchContinuationInterval);
 				return false;
 			}
@@ -2198,16 +2303,23 @@ bool PlayerBotController::discoverDepot(Player& player, const Position& currentP
 		observation.expandedNodes = routePlan.metrics.expandedNodes;
 		observation.dangerCost = routePlan.metrics.dangerCost;
 		observation.maximumHealthLossPerSecond = routePlan.metrics.maximumHealthLossPerSecond;
-		if (!reached && executable) {
-			emit("action_result", currentPosition,
-			     "\"action\":\"depot_discover\",\"result\":\"rejected\",\"reason\":" +
-			         jsonString(verdict == PlayerBotNavigationRiskVerdict::Unknown ? "route_evidence_incomplete" : "route_unsafe") +
-			         ",\"danger_cost\":" +
-			         std::to_string(lastDangerCost) + ",\"maximum_health_loss_per_second\":" +
-			         std::to_string(lastMaximumHealthLossPerSecond) + ",\"planner_kind\":" +
-			         jsonString(lastPlannerKind) + ",\"danger_evidence\":" + jsonString(lastDangerEvidence) +
-			         ",\"safety_verdict\":" + jsonString(lastSafetyVerdict));
-		}
+		DepotTelemetry::Route routeEvidence;
+		routeEvidence.candidate = candidate;
+		routeEvidence.origin = currentPosition;
+		routeEvidence.candidateOffset = command.snapshot.candidateOffset;
+		routeEvidence.result = routePlan.metrics.result;
+		routeEvidence.evidence = routePlan.metrics.dangerEvidence;
+		routeEvidence.verdict = verdict;
+		routeEvidence.fare = routePlan.metrics.fare;
+		routeEvidence.dangerCost = lastDangerCost;
+		routeEvidence.maximumHealthLossPerSecond = lastMaximumHealthLossPerSecond;
+		routeEvidence.executable = executable;
+		routeEvidence.fareAccepted = fareAccepted;
+		routeEvidence.preferredExit = preferredExit;
+		routeEvidence.riskFallback = command.snapshot.validatingRiskFallback;
+		routeEvidence.planner = lastPlannerKind;
+		depotDiscoveryTelemetry.validated(std::move(routeEvidence), observation.routeResult, routePlan.metrics.expandedNodes,
+		    std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - startedAt));
 		if (reached) {
 			steps = std::move(routePlan.steps);
 		} else if (!preferredExit && routePlan.metrics.attempted &&
@@ -2228,7 +2340,7 @@ bool PlayerBotController::discoverDepot(Player& player, const Position& currentP
 			depotWorkflow.reset();
 			command = advance({});
 			PlayerBotDepotObservation fallback;
-			fallback.scan = scan();
+			fallback.scan = measuredScan();
 			command = advance(fallback);
 			preferredExit = false;
 		} else {
@@ -2236,17 +2348,7 @@ bool PlayerBotController::discoverDepot(Player& player, const Position& currentP
 		}
 	}
 	if (command.type == PlayerBotDepotCommandType::ValidateRoute) {
-		emit("action_result", currentPosition,
-		     "\"action\":\"depot_discover\",\"result\":\"continuing\",\"reason\":\"route_validation_budget_exhausted\",\"indexed\":" +
-		         std::to_string(command.snapshot.indexedCandidates) + ",\"in_scope\":" +
-		         std::to_string(command.snapshot.inScopeCandidates) + ",\"standable\":" +
-		         std::to_string(command.snapshot.standableCandidates) + ",\"route_validations\":" +
-		         std::to_string(routeValidations) + ",\"unsafe_routes\":" +
-		         std::to_string(command.snapshot.unsafeRouteCandidates) + ",\"danger_cost\":" +
-		         std::to_string(lastDangerCost) + ",\"maximum_health_loss_per_second\":" +
-		         std::to_string(lastMaximumHealthLossPerSecond) + ",\"planner_kind\":" +
-		         jsonString(lastPlannerKind) + ",\"danger_evidence\":" + jsonString(lastDangerEvidence) +
-		         ",\"safety_verdict\":" + jsonString(lastSafetyVerdict));
+		emitDepotDiscovery(DepotTelemetry::Result::Progress, currentPosition, "route_validation_budget_exhausted");
 		schedule(blockedRouteRetryInterval);
 		return false;
 	}
@@ -2255,6 +2357,7 @@ bool PlayerBotController::discoverDepot(Player& player, const Position& currentP
 			observeNavigationPlan(command.snapshot.selected.approachPosition, std::move(steps));
 		}
 		if (routeValidations == 0) return true; // Already selected; do not report another discovery every movement turn.
+		emitDepotDiscovery(DepotTelemetry::Result::Selected, currentPosition);
 		const PlayerBotDepotCandidate& depot = command.snapshot.selected;
 		std::ostringstream fields;
 		fields << "\"action\":\"depot_discover\",\"result\":\"success\",\"depot_id\":" << depot.depotId
@@ -2279,7 +2382,13 @@ bool PlayerBotController::discoverDepot(Player& player, const Position& currentP
 	if (command.type == PlayerBotDepotCommandType::Fail) {
 		const char* reason = command.snapshot.inScopeCandidates == 0 ? "no_local_locker" :
 		                     command.snapshot.standableCandidates == 0 ? "no_standable_approach" : "no_reachable_locker";
-		logActionFailure("depot_discover", reason, currentPosition);
+		// Temporary blocker recovery remains in this episode, rather than
+		// emitting a new failure/start pair on every retry.
+		const bool finalFailure = sellLootPlan || navigationRuntime.activeBlockedPositions(now).empty();
+		emitDepotDiscovery(finalFailure ? DepotTelemetry::Result::Failed : DepotTelemetry::Result::Progress,
+		                   currentPosition, reason);
+		if (finalFailure) logActionFailure("depot_discover", reason, currentPosition);
+		else telemetry.recordActionFailure();
 		if (sellLootPlan) {
 			deferSellLoot(player, currentPosition, reason);
 		} else if (!navigationRuntime.activeBlockedPositions(now).empty()) {
@@ -2335,6 +2444,7 @@ bool PlayerBotController::depotApproachStalled(Player& player, const Position& c
 	                   currentPosition, 0, approach);
 	// Depot exhaustion only defers: a depot failure stops the controller.
 	if (verdict == PlayerBotApproachVerdict::Exhausted) shared.reset();
+	depotDiscoveryTelemetry.approachFailed();
 	PlayerBotDepotObservation observation;
 	observation.currentPosition = currentPosition;
 	observation.now = std::chrono::steady_clock::now();
@@ -2538,6 +2648,7 @@ void PlayerBotController::processDeposit(Player* player, const Position& current
 	PlayerBotDepotObservation observation;
 	if (command.snapshot.hasSelectedDepot) {
 		observation.atApproach = fixtureDepot.synthetic || Position::areInRange<1, 1, 0>(currentPosition, command.snapshot.selected.lockerPosition);
+		if (observation.atApproach) emitDepotDiscovery(playerbot::PlayerBotDepotTelemetry::Result::Arrived, currentPosition);
 		if (observation.atApproach && huntTravelBudgetPhase == HuntTravelBudgetPhase::ReturnToDepot) {
 			huntTravelBudgetPhase = HuntTravelBudgetPhase::Supply;
 		}

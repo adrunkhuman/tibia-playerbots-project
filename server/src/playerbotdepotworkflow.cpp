@@ -273,6 +273,9 @@ PlayerBotDepotSnapshot PlayerBotDepotWorkflow::snapshot() const
 	result.hasRouteCandidate = routeCandidate.has_value();
 	if (routeCandidate) result.routeCandidate = *routeCandidate;
 	result.validatingRiskFallback = validatingRiskFallback;
+	result.hasRiskFallback = riskFallback.has_value();
+	result.candidateCount = discoveryCandidates.size();
+	result.candidateOffset = nextCandidateOffset;
 	result.hasPendingMove = session.hasPendingMove();
 	if (result.hasPendingMove) result.pendingMove = session.move();
 	result.attempts = session.attempts();
