@@ -354,7 +354,8 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		void finishMagicTraining(Player& player, const Position& position, const char* result, const char* reason);
 
 		uint32_t saleableItemCount(const Player& player) const;
-		bool planSellLootTrip(Player& player, uint16_t currentDepotId, const Position& position);
+		bool planSellLootTrip(Player& player, uint16_t currentDepotId, const Position& position,
+		                      std::chrono::steady_clock::duration* retryAfter = nullptr);
 		bool processSellLootWithdrawal(Player& player, const Position& position);
 		void deferSellLoot(Player& player, const Position& position, const char* reason);
 

@@ -79,13 +79,17 @@ bool PlayerBotController::sellLootManifestFits(Player& player, const Container& 
 	return true;
 }
 
-bool PlayerBotController::planSellLootTrip(Player& player, uint16_t currentDepotId, const Position& position)
+bool PlayerBotController::planSellLootTrip(Player& player, uint16_t currentDepotId, const Position& position,
+                                           std::chrono::steady_clock::duration* retryAfter)
 {
 	const auto began = std::chrono::steady_clock::now();
 	auto& budget = playerBotHuntPlanningBudget();
 	const auto admission = budget.request(playerId, began);
 	if (!admission.admitted) {
 		sellLootSearchPending = true;
+		// Round up so the head does not retry before it has earned credit.
+		if (retryAfter) *retryAfter = std::chrono::duration_cast<std::chrono::milliseconds>(
+		    admission.wait + std::chrono::microseconds(999));
 		if (const auto suppressed = sellLootBudgetRecords.admit(began)) {
 			emit("sell_loot_plan", position, "\"action\":\"sell_loot_plan\",\"result\":\"deferred\",\"reason\":\"planning_budget\",\"suppressed_denials\":" +
 			     std::to_string(*suppressed) + ",\"budget_wait_us\":" + std::to_string(admission.wait.count()) +
@@ -630,9 +634,8 @@ bool PlayerBotController::planSellLootTrip(Player& player, uint16_t currentDepot
 			       sourceMetrics.fare, sourceCost);
 			continue;
 		}
-		PlayerBotNavigationRoutePlan sellerWalkingRoute;
 		auto sellerPlan = chooseRoute(candidate.sourceDepotId == currentDepotId ? position : candidate.sourceApproach,
-		                              candidate.providerApproach, &sellerWalkingRoute);
+		                              candidate.providerApproach, nullptr);
 		if (!sellerPlan) break;
 		if (!safe(*sellerPlan)) {
 			const Position failedApproach = candidate.providerApproach;
@@ -671,74 +674,15 @@ bool PlayerBotController::planSellLootTrip(Player& player, uint16_t currentDepot
 			reject("seller_route_unavailable", sellerPlan->metrics.fare, 0, sellerPlan->metrics.dangerCost, cause);
 			continue;
 		}
-		bool sourceTravelUsed = usesTravel(*search.sourceRoute), sellerTravelUsed = usesTravel(*sellerPlan);
-		// Execution uses a different NPC planner. Confirm its quote only for a
-		// promising paid trip, retaining the validated walking alternative.
-		auto preferExecutable = [&](PlayerBotNavigationRoutePlan& chosen,
-		                            const PlayerBotNavigationRoutePlan* walking,
-		                            std::optional<PlayerBotNavigationRoutePlan> executable,
-		                            uint64_t priorFare) {
-			const bool paidAffordable = executable && executable->metrics.fare <= spendableFare &&
-			    priorFare <= spendableFare - executable->metrics.fare;
-			if (paidAffordable && safe(*executable) && (!walking || !safe(*walking) ||
-			    playerBotTransportRouteCost(executable->metrics.estimatedTravelSeconds, executable->metrics.fare,
-			        executable->metrics.dangerCost, true) <
-			    playerBotTransportRouteCost(walking->metrics.estimatedTravelSeconds, walking->metrics.fare,
-			        walking->metrics.dangerCost, true))) {
-				chosen = std::move(*executable);
-				return true;
-			}
-			if (!walking || !safe(*walking)) return false;
-			chosen = *walking;
-			return true;
-		};
-		if (sourceTravelUsed) {
-			auto executable = planNpcTravelRoute(player, position, candidate.sourceApproach, {},
-			    playerBotNavigationMaximumExpandedNodes, true, fareReserve, true);
-			if (!preferExecutable(*search.sourceRoute,
-			    search.sourceWalkingRoute ? &*search.sourceWalkingRoute : nullptr, std::move(executable), 0)) {
-				reject("source_execution_route_unavailable"); continue;
-			}
-			sourceTravelUsed = usesTravel(*search.sourceRoute);
-		}
-		if (sellerTravelUsed) {
-			auto executable = planNpcTravelRoute(player,
-			    candidate.sourceDepotId == currentDepotId ? position : candidate.sourceApproach,
-			    candidate.providerApproach, {}, playerBotNavigationMaximumExpandedNodes, true, fareReserve, true);
-			const auto paidSeller = executable && safe(*executable) ? executable : std::nullopt;
-			const bool selected = preferExecutable(*sellerPlan, &sellerWalkingRoute, std::move(executable),
-			    search.sourceRoute->metrics.fare);
-			const auto* walkingSource = search.sourceWalkingRoute ? &*search.sourceWalkingRoute : nullptr;
-			const bool alternateAvailable = sourceTravelUsed && walkingSource && safe(*walkingSource) &&
-			    paidSeller && paidSeller->metrics.fare <= spendableFare;
-			if (!selected && !alternateAvailable) {
-				reject("seller_execution_route_unavailable"); continue;
-			}
-			if (alternateAvailable) {
-				auto combinedCost = [&](const PlayerBotNavigationRoutePlan& source,
-				                        const PlayerBotNavigationRoutePlan& seller) {
-					if (source.metrics.fare > spendableFare || seller.metrics.fare > spendableFare - source.metrics.fare) {
-						return std::numeric_limits<double>::infinity();
-					}
-					const uint32_t danger = static_cast<uint32_t>(std::min<uint64_t>(UINT32_MAX,
-					    uint64_t(source.metrics.dangerCost) + seller.metrics.dangerCost));
-					if (!playerBotNavigationRiskAccepts(riskProfile, danger,
-					    std::max(source.metrics.maximumHealthLossPerSecond, seller.metrics.maximumHealthLossPerSecond))) {
-						return std::numeric_limits<double>::infinity();
-					}
-					return playerBotTransportRouteCost(source.metrics.estimatedTravelSeconds + seller.metrics.estimatedTravelSeconds,
-					    source.metrics.fare + seller.metrics.fare, danger, true);
-				};
-				if (combinedCost(*walkingSource, *paidSeller) <
-				    (selected ? combinedCost(*search.sourceRoute, *sellerPlan) : std::numeric_limits<double>::infinity())) {
-					*search.sourceRoute = *walkingSource;
-					*sellerPlan = *paidSeller;
-					sourceTravelUsed = false;
-					sellerTravelUsed = true;
-				}
-			}
-			if (!selected && sourceTravelUsed) { reject("combined_route_unsafe"); continue; }
-			sellerTravelUsed = usesTravel(*sellerPlan);
+		bool sourceTravelUsed = usesTravel(*search.sourceRoute);
+		const bool sellerTravelUsed = usesTravel(*sellerPlan);
+		// Both legs execute through this same sliced engine, so its quotes are the
+		// executable routes. Each leg checked fares alone; when two paid legs do not
+		// fit together, fall back to the validated walking source.
+		if (sourceTravelUsed && sellerTravelUsed && search.sourceWalkingRoute && safe(*search.sourceWalkingRoute) &&
+		    !huntTravelFareAffordable(player, search.sourceRoute->metrics.fare + sellerPlan->metrics.fare, huntTravelBudgetPhase)) {
+			*search.sourceRoute = *search.sourceWalkingRoute;
+			sourceTravelUsed = false;
 		}
 		auto sourceRoute = std::pair{std::move(*search.sourceRoute), sourceTravelUsed};
 		auto sellerRoute = std::pair{std::move(*sellerPlan), sellerTravelUsed};
@@ -798,6 +742,9 @@ bool PlayerBotController::planSellLootTrip(Player& player, uint16_t currentDepot
 		break;
 	}
 	sellLootSearchPending = !found && (boundingPending || search.next < candidateCount);
+	// Each slice is already bounded and charged to the shared budget. Waiting
+	// a full movement tick between slices made scans take minutes of wall time.
+	if (sellLootSearchPending && retryAfter) *retryAfter = std::chrono::milliseconds(1);
 	const auto candidateIndex = search.next;
 	const bool bounded = search.bounded;
 	const size_t pruned = search.pruned;
@@ -2817,8 +2764,9 @@ void PlayerBotController::processDeposit(Player* player, const Position& current
 				processSellLootWithdrawal(*player, currentPosition);
 				return;
 			}
+			std::chrono::steady_clock::duration saleRetryAfter{};
 			if (!saleCoolingDown && !sellLootPlan &&
-			    planSellLootTrip(*player, command.snapshot.selected.depotId, currentPosition)) {
+			    planSellLootTrip(*player, command.snapshot.selected.depotId, currentPosition, &saleRetryAfter)) {
 				if (sellLootPlan->sourceDepotId == command.snapshot.selected.depotId) {
 					processSellLootWithdrawal(*player, currentPosition);
 					return;
@@ -2832,7 +2780,8 @@ void PlayerBotController::processDeposit(Player* player, const Position& current
 				return;
 			}
 			if (sellLootSearchPending && !saleCoolingDown) {
-				schedule(SCHEDULER_MINTICKS);
+				const auto delay = std::chrono::duration_cast<std::chrono::milliseconds>(saleRetryAfter).count();
+				schedule(static_cast<uint32_t>(delay > 0 ? delay : SCHEDULER_MINTICKS));
 				return;
 			}
 			if (progressionRuntime.activeGoal() != TopLevelGoal::Service) {
