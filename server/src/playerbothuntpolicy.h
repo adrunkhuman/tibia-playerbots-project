@@ -137,7 +137,7 @@ class PlayerBotHuntPolicy
 		PlayerBotSupplyDemand supplyDemand(PlayerBotSupplyKind kind) const { return supplyDemands[static_cast<size_t>(kind)]; }
 		// Uses the current combat evidence; call before it is reset.
 		PlayerBotSupplyDemandUpdate observeSupplyDemand(PlayerBotSupplyKind kind, uint32_t consumed,
-		                                                uint64_t durationSeconds, bool interrupted);
+		                                                uint64_t durationSeconds, bool interrupted, double debt = 0);
 		const std::map<uint64_t, PlayerBotHuntRegionPerformance>& regionPerformance() const { return performance; }
 
 	private:

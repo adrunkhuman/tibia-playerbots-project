@@ -22,6 +22,7 @@ F.saleItemId = 2992
 F.smallHealthPotionItemId = 8704
 F.healthPotionItemId = 7618
 F.potionItemId = F.healthPotionItemId
+F.manaPotionItemId = 7620
 F.meatItemId = 2666
 F.emptyMonsterName = "Playerbot Empty Corpse"
 F.lootMonsterName = "Playerbot Loot Corpse"

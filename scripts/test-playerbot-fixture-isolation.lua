@@ -200,8 +200,8 @@ local function economicLogin(mode)
         local freeCapacity = capacity - 8000 -- Initial used capacity from the player double.
         assert(freeCapacity == 1000 and freeCapacity < 3000 and freeCapacity + 2500 == 3500)
     elseif mode == 'magic_training_progression' then
-        assert(money == 100 and bank == 500 and inventory[7618] == 10 and inventory[F.meatItemId] == 2)
-        assert(spells.Light and not spells['Great Light'] and not spells['Find Person'])
+        assert(money == 100 and bank == 1000 and inventory[7618] == 10 and inventory[F.meatItemId] == 2)
+        assert(spells.Light and spells['Light Healing'] and not spells['Great Light'] and not spells['Find Person'])
         assert(capacity == 10000 and mana == 1000 and scheduled == 0)
     else
         assert(bank == 23 and inventory[F.meatItemId] == 3 and scheduled == 0)

@@ -27,6 +27,8 @@ struct PlayerBotSurvivalSpellObservation {
 	bool learned = false;
 	bool targetReachable = false;
 	bool magicTrainingEligible = false;
+	bool vocationAllowed = false;
+	uint32_t level = 0;
 	uint32_t manaCost = 0;
 	PlayerBotSpellEnvelope envelope;
 };
@@ -42,6 +44,8 @@ struct PlayerBotSurvivalSnapshot {
 	uint16_t potionItemId = 0;
 	int32_t potionMaximumHealing = 0;
 	uint32_t potionCount = 0;
+	uint16_t manaPotionItemId = 0;
+	uint32_t manaPotionCount = 0;
 	uint32_t foodCount = 0;
 	uint32_t foodInventoryCount = 0;
 	uint32_t pendingFoodCount = 0;
@@ -99,6 +103,8 @@ struct PlayerBotSurvivalCommand {
 	std::optional<PlayerBotFoodVerification> foodVerification;
 	std::optional<PlayerBotSurvivalSpellCommand> spell;
 	std::string reason;
+	// Set when a spell was refused for mana; the reserve that applied.
+	std::optional<uint32_t> manaReserve;
 };
 
 struct PlayerBotSurvivalSpellVerification {
@@ -113,6 +119,7 @@ struct PlayerBotMagicTrainingCommand {
 	std::string words;
 	uint8_t priority = 0;
 	uint64_t cost = 0;
+	uint32_t reserve = 0;
 	bool refresh = false;
 	uint64_t manaBefore = 0;
 	uint64_t manaSpentBefore = 0;
@@ -128,9 +135,12 @@ class PlayerBotSurvivalRuntime
 {
 	public:
 		bool needsHealing(const PlayerBotSurvivalSnapshot& snapshot) const;
+		// Mana that offense, support, and magic training leave for the most
+		// expensive learned healing spell. Zero without a learned healing spell.
+		uint32_t healingManaReserve(const PlayerBotSurvivalSnapshot& snapshot) const;
 		bool hasPendingDefensiveWork() const;
 		uint16_t pendingFoodItemId() const;
-		void beginPotion(const PlayerBotSurvivalSnapshot& snapshot);
+		void beginPotion(const PlayerBotSurvivalSnapshot& snapshot, uint16_t itemId, const std::string& trigger);
 		PlayerBotSurvivalCommand decideHealing(const PlayerBotSurvivalSnapshot& snapshot,
 		                                      std::chrono::steady_clock::time_point now);
 		PlayerBotSurvivalCommand decideFood(const PlayerBotSurvivalSnapshot& snapshot,
@@ -156,6 +166,10 @@ class PlayerBotSurvivalRuntime
 		std::optional<PlayerBotMagicTrainingCommand> decideMagicTraining(const PlayerBotSurvivalSnapshot& snapshot) const;
 
 	private:
+		PlayerBotPotionAttempt potionObservation(const PlayerBotSurvivalSnapshot& snapshot, uint16_t itemId) const;
+		bool needsManaPotion(const PlayerBotSurvivalSnapshot& snapshot) const;
+		PlayerBotSurvivalCommand manaPotion(PlayerBotSurvivalCommand command, const PlayerBotSurvivalSnapshot& snapshot,
+		                                    const char* reason) const;
 		PlayerBotSurvivalCommand decideSpell(const PlayerBotSurvivalSnapshot& snapshot, const char* spellName,
 		                                    const char* need, std::chrono::steady_clock::time_point now);
 		PlayerBotRecoverySession recovery;

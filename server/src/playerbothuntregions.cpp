@@ -5,10 +5,6 @@
 
 #include "playerbothuntregionadapter.h"
 
-namespace {
-	constexpr uint32_t recoveryManaReserve = 20;
-}
-
 PlayerBotHuntPlanningProfile playerBotHuntPlanningProfile(const Player& player, const PlayerBotCombatProfile& combat,
 	                                                       double challengeFrontier)
 {
@@ -24,7 +20,9 @@ PlayerBotRecoveryPrediction playerBotPredictRecovery(const PlayerBotHuntPlanning
 	prediction.lightHealingLegal = profile.lightHealingLegal;
 	prediction.spellManaCost = profile.lightHealingManaCost;
 	prediction.spellCooldown = profile.lightHealingCooldown;
-	prediction.manaReserve = prediction.spellManaCost + recoveryManaReserve;
+	// Light Healing is the only modeled heal, so its cost is the runtime healing
+	// reserve; one more cast stays unspent for emergencies.
+	prediction.manaReserve = 2 * prediction.spellManaCost;
 	if (prediction.lightHealingLegal && prediction.spellManaCost != 0 && profile.mana > prediction.manaReserve) {
 		const uint32_t manaCasts = (profile.mana - prediction.manaReserve) / prediction.spellManaCost;
 		const uint32_t durationCasts = std::max<uint32_t>(1, static_cast<uint32_t>(std::floor(

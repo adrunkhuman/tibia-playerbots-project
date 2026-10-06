@@ -258,6 +258,9 @@ struct PlayerBotSupplyObservation {
 	double levelAdjustedHealthDebt = 0;
 	double levelAdjustedManaDebt = 0;
 	double potionEquivalentDemand = 0;
+	// Mana debt as mana potions, when the vocation stocks them; otherwise it is
+	// part of potionEquivalentDemand.
+	double manaPotionDebt = 0;
 	uint64_t minimumDurationSeconds = 120;
 	double minimumActiveCombatSeconds = 60;
 	uint32_t minimumKills = 3;
@@ -296,7 +299,9 @@ inline PlayerBotSupplyBudget playerBotSupplyBudget(const PlayerBotSupplyProfile&
 		return interval > 0 ? gain * std::floor(regenerationSeconds / interval) : 0.0;
 	};
 	result.regenerationHealing = std::min(result.expectedDamage, regenerated(profile.healthGain, profile.healthInterval));
-	const uint64_t manaReserve = static_cast<uint64_t>(profile.spellMana) + 20;
+	// The modeled spell is the only learned heal, so its cost is the runtime healing
+	// reserve; one more cast stays unspent for emergencies.
+	const uint64_t manaReserve = 2ULL * profile.spellMana;
 	if (profile.spellLegal && profile.spellMana > 0 && profile.spellInterval > 0 &&
 	    profile.maximumMana >= manaReserve + profile.spellMana) {
 		// One mana pool only: do not assume repeated refill/cast cycles or that

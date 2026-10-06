@@ -71,7 +71,7 @@ namespace {
 		for (size_t index = 0; index < updates.size(); ++index) {
 			const PlayerBotSupplyDemandUpdate& update = updates[index];
 			json << (index == 0 ? "" : ",") << "{\"kind\":" << jsonString(playerBotSupplyKindName(update.kind))
-			     << ",\"consumed\":" << update.consumed
+			     << ",\"consumed\":" << update.consumed << ",\"debt\":" << update.debt
 			     << ",\"observed_per_combat_minute\":" << update.observedUnitsPerCombatSecond * 60
 			     << ",\"per_combat_minute\":" << update.demand.unitsPerCombatSecond * 60
 			     << ",\"samples\":" << update.demand.samples << ",\"updated\":" << (update.updated ? "true" : "false")
@@ -245,6 +245,8 @@ PlayerBotSurvivalSnapshot PlayerBotController::survivalSnapshot(const Player& pl
 	snapshot.potionItemId = recoveryPotionItemId(player.getVocationId());
 	snapshot.potionMaximumHealing = recoveryPotionMaximumHealing(player.getVocationId());
 	snapshot.potionCount = inventoryPolicy.inventoryItemCount(player, snapshot.potionItemId);
+	snapshot.manaPotionItemId = playerBotManaPotionItemId;
+	snapshot.manaPotionCount = inventoryPolicy.inventoryItemCount(player, snapshot.manaPotionItemId);
 	snapshot.foodInventoryCount = inventoryPolicy.foodInventory(player).count;
 	if (const uint16_t pendingFoodId = survivalRuntime.pendingFoodItemId()) {
 		snapshot.pendingFoodCount = inventoryPolicy.inventoryItemCount(player, pendingFoodId);
@@ -312,6 +314,9 @@ PlayerBotSurvivalSnapshot PlayerBotController::survivalSnapshot(const Player& pl
 			spell.targetReachable = !engineSpell->getNeedTarget() ||
 			                        (target && !target->isRemoved() && engineSpell->canThrowSpell(&player, target));
 			spell.manaCost = engineSpell->getManaCost(&player);
+			spell.level = engineSpell->getLevel();
+			const VocSpellMap& vocations = engineSpell->getVocMap();
+			spell.vocationAllowed = vocations.empty() || vocations.count(player.getVocationId()) != 0;
 			spell.envelope = playerBotSpellEnvelope(player, descriptor);
 			spell.magicTrainingEligible = descriptor.magicTrainingSafe && descriptor.magicTrainingPriority != 0 &&
 			                              descriptor.magicTrainingEffect != PlayerBotTrainingEffect::None && spell.learned &&
@@ -332,6 +337,18 @@ void PlayerBotController::logHealResult(uint16_t itemId, const char* result, con
 					const PlayerBotPotionAttempt& after, const Position& position)
 {
 	std::ostringstream fields;
+	if (before.restoresMana) {
+		fields << "\"action\":\"restore_mana\",\"result\":" << jsonString(result)
+		       << ",\"method\":\"mana_potion\",\"item_id\":" << itemId
+		       << ",\"trigger\":" << jsonString(before.trigger) << ",\"objective\":" << jsonString(objectiveName())
+		       << ",\"state\":" << jsonString(turnRouter.stateName())
+		       << ",\"mana_before\":" << before.mana << ",\"mana_after\":" << after.mana
+		       << ",\"health_before\":" << before.health << ",\"health_after\":" << after.health
+		       << ",\"resource_before\":" << before.potionCount << ",\"resource_after\":" << after.potionCount;
+		if (reason) fields << ",\"reason\":" << jsonString(reason);
+		emit("action_result", position, fields.str());
+		return;
+	}
 	fields << "\"action\":\"heal\",\"result\":" << jsonString(result)
 	       << ",\"method\":" << jsonString(itemId == smallHealthPotionItemId ? "small_health_potion" : "health_potion")
 	       << ",\"item_id\":" << itemId
@@ -356,11 +373,12 @@ bool PlayerBotController::handleHealing(Player* player, const Position& currentP
 	if (command.potionVerification) {
 		const auto& verification = *command.potionVerification;
 		if (verification.result == PlayerBotPotionVerificationResult::Success) {
-			logHealResult(snapshot.potionItemId, "success", nullptr, verification.before, verification.after, currentPosition);
-			recordHuntRecovery(true);
+			logHealResult(verification.before.itemId, "success", nullptr, verification.before, verification.after, currentPosition);
+			// Hunt recovery evidence counts health potions only; mana potions have typed demand.
+			if (!verification.before.restoresMana) recordHuntRecovery(true);
 		} else {
 			telemetry.recordActionFailure();
-			logHealResult(snapshot.potionItemId, "failed", verification.result == PlayerBotPotionVerificationResult::IneffectiveRecovery ?
+			logHealResult(verification.before.itemId, "failed", verification.result == PlayerBotPotionVerificationResult::IneffectiveRecovery ?
 			              "ineffective_recovery" : "use_not_verified", verification.before, verification.after, currentPosition);
 		}
 	}
@@ -397,13 +415,24 @@ bool PlayerBotController::handleHealing(Player* player, const Position& currentP
 		}
 		return false;
 	}
-	cancelHuntPlanning("survival_action", currentPosition);
+	// A mana top-up is routine combat upkeep, not a recovery interruption.
+	if (command.reason != "healing_reserve") cancelHuntPlanning("survival_action", currentPosition);
 	Item* potion = g_game.findItemOfType(player, command.itemId, true);
 	if (!potion) {
 		return true;
 	}
 
-	survivalRuntime.beginPotion(survivalSnapshot(*player));
+	if (command.need == "mana") {
+		std::ostringstream fields;
+		fields << "\"action\":\"restore_mana\",\"result\":\"requested\",\"method\":\"mana_potion\",\"item_id\":" << command.itemId
+		       << ",\"reason\":" << jsonString(command.reason) << ",\"mana_before\":" << player->getMana()
+		       << ",\"mana_max\":" << player->getMaxMana() << ",\"mana_reserve\":" << command.manaReserve.value_or(0)
+		       << ",\"health_before\":" << player->getHealth() << ",\"health_max\":" << player->getMaxHealth()
+		       << ",\"resource_before\":" << snapshot.manaPotionCount;
+		emit("action_result", currentPosition, fields.str());
+	}
+	survivalRuntime.beginPotion(survivalSnapshot(*player), command.itemId,
+	                            command.need == "mana" ? command.reason : "health_threshold");
 	telemetry.recordActionAttempt();
 	g_game.playerUseWithCreature(playerId, Position(0xFFFF, 0, 0), 0, playerId, potion->getClientID());
 	return true;
@@ -1242,6 +1271,7 @@ void PlayerBotController::finishHuntRegion(const Player& player, const Position&
 	       << completion->supplyObservation.levelAdjustedManaDebt
 	       << ",\"supply_potion_equivalent_demand\":"
 	       << completion->supplyObservation.potionEquivalentDemand
+	       << ",\"supply_mana_potion_debt\":" << completion->supplyObservation.manaPotionDebt
 	       << ",\"supply_demand\":" << supplyDemandJson(completion->supplyDemand)
 	       << ",\"kills\":" << combat.kills << ",\"damage_taken\":" << combat.damageTaken
 	       << ",\"active_combat_seconds\":" << combat.activeSeconds

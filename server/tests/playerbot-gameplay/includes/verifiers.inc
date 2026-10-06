@@ -238,6 +238,40 @@ function F.verifySpellUse(playerId, attempts)
     print("PLAYERBOT_GAMEPLAY_TEST SPELL_USE_PASS")
 end
 
+-- Phase 1: healthy and hunting below the healing reserve, the bot tops up.
+function F.verifyManaTopUp(playerId, attempts)
+    local player = Player(playerId)
+    assert(player and not player:isRemoved(), "Bot One disappeared during the mana top-up")
+    if player:getItemCount(F.manaPotionItemId) ~= 1 and attempts > 0 then
+        addEvent(F.verifyManaTopUp, 250, playerId, attempts - 1)
+        return
+    end
+    assert(player:getItemCount(F.manaPotionItemId) == 1, "Bot One did not drink a mana potion below the healing reserve")
+    assert(player:getMana() >= 20, "the mana potion did not restore the healing reserve")
+    print("PLAYERBOT_GAMEPLAY_TEST MANA_TOP_UP_PASS")
+    -- Phase 2: no health potions and too little mana to heal; drink, then cast.
+    F.removeAllHealthPotions(player)
+    assert(player:addMana(10 - player:getMana()), "mana potion fixture could not lower mana below Light Healing")
+    -- At the threshold one Light Healing cast recovers, before the missing-supply return
+    -- starts a supply trip.
+    assert(player:setHealth(math.floor(player:getMaxHealth() * 0.6)), "mana potion fixture could not lower health")
+    addEvent(F.verifyManaPotionHealing, 250, playerId, 80)
+end
+
+function F.verifyManaPotionHealing(playerId, attempts)
+    local player = Player(playerId)
+    assert(player and not player:isRemoved(), "Bot One disappeared during mana potion healing")
+    local drank = player:getItemCount(F.manaPotionItemId) == 0
+    local recovered = player:getHealth() * 100 > player:getMaxHealth() * 60
+    if (not drank or not recovered) and attempts > 0 then
+        addEvent(F.verifyManaPotionHealing, 250, playerId, attempts - 1)
+        return
+    end
+    assert(drank, "Bot One did not drink a mana potion before healing")
+    assert(recovered, "Bot One did not heal above the configured health threshold")
+    print("PLAYERBOT_GAMEPLAY_TEST MANA_POTION_PASS")
+end
+
 function F.verifyHealing(playerId, attempts)
     local player = Player(playerId)
     assert(player and not player:isRemoved(), "Bot One disappeared during the healing test")

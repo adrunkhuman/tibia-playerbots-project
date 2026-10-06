@@ -73,10 +73,13 @@ struct PlayerBotSupplyRule {
 };
 
 inline constexpr uint16_t playerBotManaPotionItemId = 7620;
+// Lower bound of the datapack's mana potion roll (actions/scripts/other/potions.lua).
+inline constexpr uint32_t playerBotManaPotionMinimumMana = 75;
 
 // Base rule for kinds without a specialized controller policy. Every current
-// vocation has a zero target: Paladin values arrive with mana potion use (#252)
-// and launcher ammunition (#255). Weapon-matched kinds have no item until the
+// vocation has a zero target: Paladin mana potion values arrive with Paladin
+// healing (#234) and launcher ammunition with #255. Bots still drink carried
+// mana potions without a target. Weapon-matched kinds have no item until the
 // loadout selects one.
 inline PlayerBotSupplyRule playerBotSupplyRule(PlayerBotSupplyKind kind, uint16_t /*vocationId*/)
 {
@@ -169,20 +172,23 @@ struct PlayerBotSupplyDemand {
 struct PlayerBotSupplyDemandUpdate {
 	PlayerBotSupplyKind kind = PlayerBotSupplyKind::ManaPotion;
 	uint32_t consumed = 0;
+	double debt = 0;
 	PlayerBotSupplyDemand demand;
 	double observedUnitsPerCombatSecond = 0;
 	bool updated = false;
 	const char* reason = "insufficient_active_combat";
 };
 
+// Debt counts units the outing left unpaid, such as mana below its starting level.
 inline PlayerBotSupplyDemandUpdate playerBotObserveSupplyDemand(const PlayerBotSupplyDemand& prior, uint32_t consumed,
-    double activeCombatSeconds, bool fullOuting)
+    double activeCombatSeconds, bool fullOuting, double debt = 0)
 {
 	PlayerBotSupplyDemandUpdate update;
 	update.consumed = consumed;
+	update.debt = std::max(0.0, debt);
 	update.demand = prior;
 	if (activeCombatSeconds <= 0) return update;
-	update.observedUnitsPerCombatSecond = consumed / activeCombatSeconds;
+	update.observedUnitsPerCombatSecond = (consumed + update.debt) / activeCombatSeconds;
 	if (update.observedUnitsPerCombatSecond > prior.unitsPerCombatSecond) {
 		update.demand.unitsPerCombatSecond = update.observedUnitsPerCombatSecond;
 		++update.demand.samples;

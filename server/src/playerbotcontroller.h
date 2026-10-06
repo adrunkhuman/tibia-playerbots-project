@@ -242,7 +242,8 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		void verifySpellCast(Player& player, const Position& position);
 		void emitSpellCastEvent(const Position& position, const char* spellName, const char* words, const char* role,
 		                        const char* need, const char* result, const char* engineResult, const char* reason,
-		                        const PlayerBotSpellPendingCast* pending, const Player* player, const char* fallback) const;
+		                        const PlayerBotSpellPendingCast* pending, const Player* player, const char* fallback,
+		                        std::optional<uint32_t> manaReserve = std::nullopt) const;
 
 		void logEatSuccess(uint16_t itemId, uint32_t inventoryCount, int32_t foodTicks, const Position& position);
 

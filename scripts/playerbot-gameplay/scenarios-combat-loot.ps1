@@ -70,6 +70,16 @@
 			Assert-HealingEvents -Logs $healingLogs
 		}
 
+		Invoke-Scenario -Name "mana_potion" -DefaultTimeoutSeconds 90 -Body {
+			Invoke-Compose down --volumes --remove-orphans
+			$env:PLAYERBOT_GAMEPLAY_MODE = "mana_potion"
+			$env:PLAYERBOT_HUNT_DURATION_SECONDS = "900"
+			Invoke-Compose up --detach
+			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST MANA_POTION_PASS' | Out-Null
+			$manaLogs = Wait-ForLog -Pattern '"action":"cast_spell","result":"success".*"spell":"Light Healing"'
+			Assert-ManaPotionEvents -Logs $manaLogs
+		}
+
 		Invoke-Scenario -Name "healing_resupply" -DefaultTimeoutSeconds 90 -Body {
 			Invoke-Compose down --volumes --remove-orphans
 			$env:PLAYERBOT_GAMEPLAY_MODE = "healing_resupply"

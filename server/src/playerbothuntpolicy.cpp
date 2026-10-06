@@ -276,7 +276,10 @@ PlayerBotSupplyObservation PlayerBotHuntPolicy::observeSupplies(const PlayerBotH
 	const double potionHealing = std::max<double>(1, region.supplyProfile.potionHealing);
 	const double healthDebtPotions = update.levelAdjustedHealthDebt / potionHealing;
 	double manaDebtPotions = 0;
-	if (region.supplyProfile.spellLegal && region.supplyProfile.spellMana > 0 &&
+	const auto& kinds = region.supplyProfile.kinds;
+	if (std::any_of(kinds.begin(), kinds.end(), [](const auto& kind) { return kind.kind == PlayerBotSupplyKind::ManaPotion; })) {
+		update.manaPotionDebt = update.levelAdjustedManaDebt / playerBotManaPotionMinimumMana;
+	} else if (region.supplyProfile.spellLegal && region.supplyProfile.spellMana > 0 &&
 	    region.supplyProfile.spellHealing > 0) {
 		manaDebtPotions = update.levelAdjustedManaDebt * region.supplyProfile.spellHealing /
 		    (static_cast<double>(region.supplyProfile.spellMana) * potionHealing);
@@ -415,14 +418,14 @@ PlayerBotSupplyObservation PlayerBotHuntPolicy::observeSupplies(const PlayerBotH
 }
 
 PlayerBotSupplyDemandUpdate PlayerBotHuntPolicy::observeSupplyDemand(PlayerBotSupplyKind kind, uint32_t consumed,
-    uint64_t durationSeconds, bool interrupted)
+    uint64_t durationSeconds, bool interrupted, double debt)
 {
 	const auto combat = combatSummary();
 	const PlayerBotSupplyObservation guards;
 	const bool fullOuting = !interrupted && durationSeconds >= guards.minimumDurationSeconds &&
 	                        combat.activeSeconds >= guards.minimumActiveCombatSeconds && combat.kills >= guards.minimumKills;
 	PlayerBotSupplyDemand& demand = supplyDemands[static_cast<size_t>(kind)];
-	PlayerBotSupplyDemandUpdate update = playerBotObserveSupplyDemand(demand, consumed, combat.activeSeconds, fullOuting);
+	PlayerBotSupplyDemandUpdate update = playerBotObserveSupplyDemand(demand, consumed, combat.activeSeconds, fullOuting, debt);
 	update.kind = kind;
 	demand = update.demand;
 	return update;

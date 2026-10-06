@@ -37,7 +37,7 @@ function F.login.onLogin(player)
         end
     end
 	F.selectHealthPotion(player)
-    assert(mode == "transit_return" or mode == "mainland" or mode == "carlin_local_service" or mode == "cycle" or mode == "depot" or mode == "depot_risk_fallback" or mode == "slotted_loot_seller" or mode == "slotted_loot_no_seller" or mode == "sell_loot" or mode == "sell_loot_remote_depot" or mode == "navigation" or mode == "navigation_recovery" or mode == "carlin_service_route" or mode == "mutable_portal_route" or mode == "patrol_recovery" or mode == "target_approach" or mode == "target_approach_unreachable" or mode == "target_attacker_priority" or mode == "hunt_area_arrival" or mode == "remote_hunt" or mode == "corpse" or mode == "corpse_detour" or mode == "corpse_inaccessible" or mode == "death" or mode == "healing" or mode == "spell_use" or
+    assert(mode == "transit_return" or mode == "mainland" or mode == "carlin_local_service" or mode == "cycle" or mode == "depot" or mode == "depot_risk_fallback" or mode == "slotted_loot_seller" or mode == "slotted_loot_no_seller" or mode == "sell_loot" or mode == "sell_loot_remote_depot" or mode == "navigation" or mode == "navigation_recovery" or mode == "carlin_service_route" or mode == "mutable_portal_route" or mode == "patrol_recovery" or mode == "target_approach" or mode == "target_approach_unreachable" or mode == "target_attacker_priority" or mode == "hunt_area_arrival" or mode == "remote_hunt" or mode == "corpse" or mode == "corpse_detour" or mode == "corpse_inaccessible" or mode == "death" or mode == "healing" or mode == "mana_potion" or mode == "spell_use" or
         mode == "healing_resupply" or mode == "value" or mode == "cargo_currency" or mode == "cargo_partial" or
         mode == "cargo_nested" or mode == "cargo_protected" or mode == "progression" or mode == "progression_bundle" or
         mode == "progression_nested" or mode == "progression_resume" or mode == "progression_nested_resume" or
@@ -393,6 +393,10 @@ function F.login.onLogin(player)
         for _, spellName in ipairs(spells) do
             assert(player:learnSpell(spellName), "magic training fixture could not learn " .. spellName)
         end
+        -- The healing reserve comes from learned healing spells.
+        if mode == "magic_training_reserve" then
+            assert(player:learnSpell("Light Healing"), "magic training fixture could not learn Light Healing")
+        end
         local inProtectionZone = mode == "magic_training_pz"
         assert(player:teleportTo(inProtectionZone and thais:getTemplePosition() or Position(32084, 32144, 5)),
             "magic training fixture could not choose its safety context")
@@ -411,7 +415,9 @@ function F.login.onLogin(player)
         end
         if mode == "magic_training_reserve" then assert(player:addMana(39 - player:getMana()), "magic training fixture could not lower mana") end
         if mode == "magic_training_exact_full" then assert(player:addMana(990 - player:getMana()), "magic training fixture could not set exact-full forecast") end
-        if mode == "magic_training_post_hunt_no_overflow" then assert(player:addMana(990 - player:getMana()), "magic training post-hunt fixture could not set non-overflow mana") end
+        -- The deadline decision follows a depot walk of about 35 seconds; 900 mana stays below
+        -- overflow for that walk at 10 mana per 10 seconds. magic_training_exact_full covers 990.
+        if mode == "magic_training_post_hunt_no_overflow" then assert(player:addMana(900 - player:getMana()), "magic training post-hunt fixture could not set non-overflow mana") end
         if mode == "magic_training_refresh" then
             local haste = Condition(CONDITION_HASTE)
             haste:setParameter(CONDITION_PARAM_TICKS, 60000)
@@ -426,11 +432,14 @@ function F.login.onLogin(player)
             assert(player:setCapacity(1), "magic training service fixture could not require a depot return")
         elseif mode == "magic_training_progression" then
             player:forgetSpell("Find Person")
+            -- A learnable recovery spell defers every other goal; this case tests ordinary priority.
+            assert(player:learnSpell("Light Healing"), "magic training progression fixture could not learn Light Healing")
             F.removeAll(player, F.potionItemId)
             F.removeAll(player, F.meatItemId)
             assert(player:addItem(F.potionItemId, 10) and player:addItem(F.meatItemId, 2), "magic training progression fixture could not prepare service reserves")
-            assert(player:removeMoney(player:getMoney()) and player:addMoney(100) and player:setBankBalance(500), "magic training progression fixture could not normalize spell training funds")
-            assert(player:getMoney() == 100 and player:getBankBalance() == 500, "magic training progression fixture has the wrong service and spell-training reserves")
+            assert(player:removeMoney(player:getMoney()) and player:addMoney(100) and player:setBankBalance(1000), "magic training progression fixture could not normalize spell training funds")
+            -- Great Light (500) must clear the 550-gold reserve held once Light Healing is known.
+            assert(player:getMoney() == 100 and player:getBankBalance() == 1000, "magic training progression fixture has the wrong service and spell-training reserves")
             local trainer = Npc("Gregor")
             assert(trainer, "magic training progression fixture could not find Gregor")
             local trainerPosition = trainer:getPosition()
@@ -1027,6 +1036,25 @@ function F.login.onLogin(player)
         assert(player:setHealth(math.floor(player:getMaxHealth() * 0.5)), "healing fixture could not lower Bot One's health")
         addEvent(F.verifyHealing, 250, player:getId(), 40)
         print("PLAYERBOT_GAMEPLAY_TEST HEALING_START")
+        return true
+    end
+    if mode == "mana_potion" then
+        F.suppressNearbyMonsters(player:getId())
+        assert(player:setVocation(4), "mana potion fixture could not select Knight")
+        -- Phase 1 hunts with health potions so readiness does not divert to service.
+        F.selectHealthPotion(player)
+        F.removeAllHealthPotions(player)
+        assert(player:addItem(F.potionItemId, F.healingPotionCount), "mana potion fixture could not add health potions")
+        local requiredExperience = Game.getExperienceForLevel(20) - player:getExperience()
+        if requiredExperience > 0 then player:addExperience(requiredExperience) end
+        assert(player:getLevel() == 20, "mana potion fixture could not select the required level")
+        assert(player:learnSpell("Light Healing"), "mana potion fixture could not learn Light Healing")
+        F.removeAll(player, F.manaPotionItemId)
+        assert(player:addItem(F.manaPotionItemId, 2), "mana potion fixture could not add mana potions")
+        assert(player:setMaxMana(200), "mana potion fixture could not normalize mana")
+        assert(player:addMana(5 - player:getMana()), "mana potion fixture could not lower mana below the healing reserve")
+        addEvent(F.verifyManaTopUp, 250, player:getId(), 80)
+        print("PLAYERBOT_GAMEPLAY_TEST MANA_POTION_START")
         return true
     end
     if mode == "healing_resupply" then
