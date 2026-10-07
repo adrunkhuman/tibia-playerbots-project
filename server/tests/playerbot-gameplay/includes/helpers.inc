@@ -1,5 +1,98 @@
 local F = PlayerbotGameplayFixture
 
+function F.paladinFixtureEvidence(player, mode, phase)
+    print(string.format('{"component":"playerbot","event":"paladin_fixture","source":"lua_setup_verifier",' ..
+        '"scenario":"%s","phase":"%s","vocation":%d,"level":%d,"health":%d,"health_max":%d,' ..
+        '"mana":%d,"health_potions":%d,"mana_potions":%d,"spears":%d,"money":%d,' ..
+        '"learned_light":%s,"learned_intense":%s,"learned_ultimate":%s}',
+        mode, phase, player:getVocation():getId(), player:getLevel(), player:getHealth(), player:getMaxHealth(),
+        player:getMana(), player:getItemCount(F.healthPotionItemId), player:getItemCount(F.manaPotionItemId),
+        player:getItemCount(F.spearItemId), player:getMoney() + player:getBankBalance(),
+        tostring(player:hasLearnedSpell("Light Healing")), tostring(player:hasLearnedSpell("Intense Healing")),
+        tostring(player:hasLearnedSpell("Ultimate Healing"))))
+end
+
+function F.setupPaladinSpellFixture(player, mode)
+    local training = mode == "paladin_spell_training"
+    local supply = mode == "paladin_supply_restock"
+    local restarting = training and player:getStorageValue(F.spellTrainingStorage) == 1
+    -- Isolate rewards in setup, not discovery or policy. Restart must not repair state.
+    for _, storage in ipairs({F.mainlandRewardStorage, F.economicRewardStorage, F.nestedRewardStorage, F.pickupRewardStorage}) do
+        if restarting then
+            assert(player:getStorageValue(storage) == 1, "Paladin fixture isolation did not persist: " .. storage)
+        else
+            assert(player:setStorageValue(storage, 1), "Paladin fixture could not isolate reward " .. storage)
+        end
+    end
+    if restarting then
+        assert(player:getVocation():getId() == 3 and player:getLevel() == 9 and
+            player:hasLearnedSpell("Light Healing") and player:getMoney() + player:getBankBalance() == 130,
+            "Paladin paid spell did not persist")
+        F.suppressNearbyMonsters(player:getId())
+        F.paladinFixtureEvidence(player, mode, "restart")
+        assert(player:setStorageValue(F.fixtureReadyStorage, 1), "Paladin restart could not signal readiness")
+        print("PLAYERBOT_GAMEPLAY_TEST PALADIN_SPELL_TRAINING_RESTART_PASS")
+        return
+    end
+    local town = Town(F.thaisTownId)
+    assert(town and player:setTown(town) and player:setVocation(3), "Paladin fixture could not select Thais vocation")
+    F.selectHealthPotion(player)
+    local level = training and 9 or mode == "paladin_healing_fallback" and 11 or 20
+    local experience = Game.getExperienceForLevel(level) - player:getExperience()
+    if experience > 0 then player:addExperience(experience) end
+    assert(player:getLevel() == level, "Paladin fixture seeded the wrong level")
+    assert(player:setCapacity(100000), "Paladin fixture could not fund capacity")
+    -- Match the spear fixtures: clear the Knight hands, then equip spear/shield.
+    for _, slot in ipairs({CONST_SLOT_LEFT, CONST_SLOT_RIGHT}) do
+        local item = player:getSlotItem(slot)
+        if item then assert(item:remove(), "Paladin fixture could not clear a hand") end
+    end
+    F.removeAll(player, F.spearItemId)
+    assert(player:addItem(F.spearItemId, 7, false, 1, CONST_SLOT_LEFT) and
+        player:addItem(F.seedShieldId, 1, false, 1, CONST_SLOT_RIGHT), "Paladin fixture could not equip spear/shield")
+    F.removeAllHealthPotions(player)
+    F.removeAll(player, F.manaPotionItemId)
+    F.removeAll(player, F.meatItemId)
+    F.removeAll(player, F.saleItemId)
+    assert(player:addItem(F.healthPotionItemId, supply and 1 or 20) and
+        player:addItem(F.manaPotionItemId, supply and 1 or 20) and player:addItem(F.meatItemId, 2),
+        "Paladin fixture could not seed survival stock")
+    assert(player:removeMoney(player:getMoney()) and player:setBankBalance(0) and
+        player:addMoney(supply and 3000 or 300), "Paladin fixture could not seed funding")
+    for _, spell in ipairs({"Light Healing", "Intense Healing", "Ultimate Healing", "Light", "Great Light", "Find Person"}) do
+        player:forgetSpell(spell)
+    end
+    if not training then
+        local spells = mode == "paladin_healing_fallback" and {"Intense Healing"} or
+            mode == "paladin_healing_economy" and {"Light Healing", "Intense Healing", "Ultimate Healing"} or {"Light Healing"}
+        for _, spell in ipairs(spells) do assert(player:learnSpell(spell), "Paladin fixture could not learn " .. spell) end
+    end
+    -- One economical cast crosses the recovery boundary. Deeper wounds can
+    -- legitimately use the unchanged health-potion fallback during spell cooldown.
+    local woundedHealth = mode == "paladin_healing_fallback" and 100 or 119
+    assert(player:setMaxHealth(200) and player:setHealth((training or supply) and 200 or woundedHealth) and
+        player:setMaxMana(200) and player:addMana((mode == "paladin_mana_healing" and 5 or 200) - player:getMana()),
+        "Paladin fixture could not seed health/mana")
+    -- Full food timer, but no regeneration gains that could hide a potion or cast.
+    player:removeCondition(CONDITION_REGENERATION)
+    local food = Condition(CONDITION_REGENERATION, CONDITIONID_DEFAULT)
+    food:setParameter(CONDITION_PARAM_TICKS, 1200000)
+    assert(player:addCondition(food), "Paladin fixture could not fill the food timer")
+    local destination = F.thaisDepotPosition
+    if training or supply then
+        local npc = Npc(training and "Elane" or "Xodet")
+        assert(npc and not npc:isRemoved(), "Paladin fixture could not find its real provider")
+        local position = npc:getPosition()
+        destination = Position(position.x - 1, position.y, position.z)
+    end
+    assert(player:teleportTo(destination), "Paladin fixture could not reach its starting tile")
+    F.suppressNearbyMonsters(player:getId())
+    F.paladinFixtureEvidence(player, mode, "start")
+    addEvent(F.verifyPaladinSpellFixture, 100, player:getId(), mode, training and "purchase" or "recovery", 1800)
+    assert(player:setStorageValue(F.fixtureReadyStorage, 1), "Paladin fixture could not signal readiness")
+    print("PLAYERBOT_GAMEPLAY_TEST " .. string.upper(mode) .. "_START")
+end
+
 function F.PlayerbotThaisLockerDepotId()
     local tile = Tile(Position(32352, 32225, 7))
     assert(tile, "real Thais locker tile is unavailable")

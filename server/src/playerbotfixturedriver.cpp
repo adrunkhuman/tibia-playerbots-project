@@ -53,7 +53,29 @@ namespace {
 	}};
 }
 
-playerbot::PlayerBotFixtureDriver::PlayerBotFixtureDriver(const PlayerBotTestPolicy& policy) : policy(policy)
+namespace {
+	// Only these live fixtures need routing that is not represented by the older
+	// CLI aliases. This changes initialization/routing, never survival or offers.
+	playerbot::PlayerBotTestPolicy paladinFixturePolicy(playerbot::PlayerBotTestPolicy policy)
+	{
+		const char* mode = std::getenv("PLAYERBOT_GAMEPLAY_MODE");
+		if (!mode) return policy;
+		const bool training = std::strcmp(mode, "paladin_spell_training") == 0;
+		const bool supply = std::strcmp(mode, "paladin_supply_restock") == 0;
+		const bool healing = std::strcmp(mode, "paladin_healing_economy") == 0 ||
+		                     std::strcmp(mode, "paladin_mana_healing") == 0 ||
+		                     std::strcmp(mode, "paladin_healing_fallback") == 0;
+		if (!training && !supply && !healing) return policy;
+		policy.progressionEnabled = training || supply;
+		policy.continuousGoalSelection = training || supply;
+		policy.startInHunt = healing;
+		policy.fixedFixtureRoute = healing;
+		policy.deferProgressionFixtureInitialization = true;
+		return policy;
+	}
+}
+
+playerbot::PlayerBotFixtureDriver::PlayerBotFixtureDriver(const PlayerBotTestPolicy& policy) : policy(paladinFixturePolicy(policy))
 {
 	if (policy.forceRepeatedNavigationStepFailures) forcedNavigationStepFailuresRemaining = maximumRepeatedNavigationStepFailures;
 	if (policy.forceCorpseNavigationFailures) forcedNavigationStepFailuresRemaining = maximumCorpseNavigationFailures;
@@ -77,6 +99,13 @@ playerbot::PlayerBotFixtureHuntObservation playerbot::PlayerBotFixtureDriver::hu
 
 std::vector<Position> playerbot::PlayerBotFixtureDriver::huntPatrol() const
 {
+	const char* mode = std::getenv("PLAYERBOT_GAMEPLAY_MODE");
+	if (mode && (std::strcmp(mode, "paladin_healing_economy") == 0 ||
+	             std::strcmp(mode, "paladin_mana_healing") == 0 ||
+	             std::strcmp(mode, "paladin_healing_fallback") == 0)) {
+		// Stay on the seeded safe tile while normal hunt turns exercise recovery.
+		return {Position(32354, 32226, 7)};
+	}
 	if (policy.carlinServiceRouteFixture) return {carlinServiceApproach};
 	if (policy.mutablePortalRouteFixture) return {mutablePortalDestination};
 	return {fixtureHuntPatrol.begin(), fixtureHuntPatrol.end()};

@@ -1,4 +1,17 @@
 	if ($SpellTraining) {
+		Invoke-Scenario -Name 'paladin_spell_training' -DefaultTimeoutSeconds 180 -Body {
+			Invoke-Compose down --volumes --remove-orphans
+			$env:PLAYERBOT_GAMEPLAY_MODE = 'paladin_spell_training'
+			$env:PLAYERBOT_HUNT_DURATION_SECONDS = '900'
+			Invoke-Compose up --detach
+			$logs = Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST PALADIN_SPELL_TRAINING_PASS'
+			Assert-PaladinSpellFixtureEvents -Logs $logs -Scenario 'paladin_spell_training'
+			Invoke-Compose stop server
+			# Do not rerun provisioning: persistence must come from normal player saves.
+			Invoke-Compose up --detach --no-deps server
+			$restartLogs = Wait-ForLatestServerGenerationLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST PALADIN_SPELL_TRAINING_RESTART_PASS'
+			Assert-PaladinSpellFixtureEvents -Logs $restartLogs -Scenario 'paladin_spell_training' -Restart
+		}
 		foreach ($lowSupplyCase in @('spell_training_low_supplies', 'spell_training_low_supplies_unaffordable')) {
 			Invoke-Scenario -Name $lowSupplyCase -DefaultTimeoutSeconds 180 -Body {
 				Invoke-Compose down --volumes --remove-orphans
@@ -49,6 +62,19 @@
 			if ($trisha.Count -ne 1 -or $nearbyWrongVocation.Count -ne 0 -or
 				@($events | Where-Object { $_.event -eq "terminal" }).Count -ne 0) {
 				throw "The bounded spell trainer shortlist did not prioritize the statically relevant Knight trainer. trisha=$($trisha.Count), wrongVocation=$($nearbyWrongVocation.Count)."
+			}
+		}
+	}
+
+	if ($SpellUse -or $Healing) {
+		foreach ($paladinCase in @('paladin_healing_economy', 'paladin_mana_healing', 'paladin_healing_fallback', 'paladin_supply_restock')) {
+			Invoke-Scenario -Name $paladinCase -DefaultTimeoutSeconds 180 -Body {
+				Invoke-Compose down --volumes --remove-orphans
+				$env:PLAYERBOT_GAMEPLAY_MODE = $paladinCase
+				$env:PLAYERBOT_HUNT_DURATION_SECONDS = '900'
+				Invoke-Compose up --detach
+				$logs = Wait-ForLog -Pattern ('PLAYERBOT_GAMEPLAY_TEST ' + $paladinCase.ToUpperInvariant() + '_PASS')
+				Assert-PaladinSpellFixtureEvents -Logs $logs -Scenario $paladinCase
 			}
 		}
 	}

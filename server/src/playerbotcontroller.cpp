@@ -1455,7 +1455,8 @@ std::vector<Position> PlayerBotController::huntDepotExitCandidates(Player& playe
 	return approaches;
 }
 
-std::vector<Position> PlayerBotController::huntSupplyExitCandidates(Player& player, const Position& source) const
+std::vector<Position> PlayerBotController::huntSupplyExitCandidates(Player& player, const Position& source,
+    uint16_t itemId) const
 {
 	struct Candidate {
 		Position approach;
@@ -1466,12 +1467,12 @@ std::vector<Position> PlayerBotController::huntSupplyExitCandidates(Player& play
 	const bool canUseShovel = g_game.findItemOfType(&player, shovelToolItemId, true) != nullptr;
 	const PlayerBotTopologyDistances distances = PlayerBotTopology::instance().distancesFrom(
 	    source, canUseRope, canUseShovel, player.getLevel());
-	const uint16_t potionId = playerbot::recoveryPotionItemId(player.getVocationId());
+	if (itemId == 0) itemId = playerbot::recoveryPotionItemId(player.getVocationId());
 	std::vector<Candidate> candidates;
 	for (Npc* npc : playerBotNpcProviders(g_game.getNpcs(), PlayerBotNpcCapability::Shop, source)) {
-		const bool sellsPotion = std::any_of(npc->getShopOffers().begin(), npc->getShopOffers().end(),
-		    [potionId](const ShopInfo& offer) { return offer.itemId == potionId && offer.buyPrice != 0; });
-		if (!sellsPotion) continue;
+		const bool sellsSupplies = std::any_of(npc->getShopOffers().begin(), npc->getShopOffers().end(),
+		    [itemId](const ShopInfo& offer) { return offer.itemId == itemId && offer.buyPrice != 0; });
+		if (!sellsSupplies) continue;
 		std::optional<Candidate> best;
 		for (int32_t xOffset = -3; xOffset <= 3; ++xOffset) {
 			for (int32_t yOffset = -3; yOffset <= 3; ++yOffset) {

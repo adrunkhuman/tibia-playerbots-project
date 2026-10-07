@@ -27,6 +27,13 @@ enum class PlayerBotTrainingEffect : uint8_t {
 	Light,
 };
 
+struct PlayerBotHealingFormula {
+	double minimumMagicFactor = 0;
+	double maximumMagicFactor = 0;
+	double minimumBase = 0;
+	double maximumBase = 0;
+};
+
 struct PlayerBotSpellDescriptor {
 	const char* name;
 	const char* words;
@@ -36,6 +43,8 @@ struct PlayerBotSpellDescriptor {
 	uint8_t magicTrainingPriority = 0;
 	PlayerBotTrainingEffect magicTrainingEffect = PlayerBotTrainingEffect::None;
 	bool magicTrainingRefreshSafe = false;
+	// Bounds mirror the audited Lua callback; they never grant casting permission.
+	std::optional<PlayerBotHealingFormula> healingFormula = std::nullopt;
 };
 
 struct PlayerBotSpellEnvelope {
@@ -71,15 +80,21 @@ enum class PlayerBotSpellEvidence : uint8_t {
 };
 
 const PlayerBotSpellDescriptor* playerBotSpellDescriptor(const char* name);
-const std::array<PlayerBotSpellDescriptor, 6>& playerBotSpellDescriptors();
+const std::array<PlayerBotSpellDescriptor, 8>& playerBotSpellDescriptors();
 std::optional<uint8_t> playerBotSpellLearningPriority(const char* name);
 const char* playerBotSpellRoleName(PlayerBotSpellRole role);
+PlayerBotSpellEnvelope playerBotHealingEnvelope(uint32_t level, uint32_t magicLevel, const PlayerBotHealingFormula& formula);
 PlayerBotSpellEnvelope playerBotSpellEnvelope(const Player& player, const PlayerBotSpellDescriptor& descriptor);
 PlayerBotSpellEvidence playerBotClassifySpellObservation(PlayerBotSpellRole role, const PlayerBotSpellObservation& observation,
 	                                                      int32_t missingHealth, const PlayerBotSpellEnvelope& envelope);
 const char* playerBotSpellEvidenceName(PlayerBotSpellEvidence evidence);
 
 struct PlayerBotSpellProfile {
+	PlayerBotSpellEnvelope envelope;
+	bool matchesEnvelope(const PlayerBotSpellEnvelope& current) const {
+		return envelope.minimum == current.minimum && envelope.maximum == current.maximum &&
+		       envelope.durationMs == current.durationMs;
+	}
 	uint16_t accepted = 0;
 	uint16_t rejected = 0;
 	uint16_t ambiguous = 0;
@@ -98,7 +113,8 @@ class PlayerBotSpellCalibration
 		const PlayerBotSpellProfile& observe(const std::string& spell, const std::string& targetClass,
 		                                     const PlayerBotSpellEnvelope& envelope, PlayerBotSpellEvidence evidence,
 		                                     int32_t value);
-		const PlayerBotSpellProfile* find(const std::string& spell, const std::string& targetClass) const;
+		const PlayerBotSpellProfile* find(const std::string& spell, const std::string& targetClass,
+		                                 const PlayerBotSpellEnvelope& envelope) const;
 		double ranking(const std::string& spell, const std::string& targetClass, const PlayerBotSpellEnvelope& envelope) const;
 		size_t size() const;
 		void clear();

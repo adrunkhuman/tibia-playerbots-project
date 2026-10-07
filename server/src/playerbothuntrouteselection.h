@@ -26,6 +26,13 @@ struct PlayerBotHuntRouteRequest {
 	Position to;
 	uint32_t outboundDangerCost = 0;
 	uint32_t returnDangerCost = 0;
+	std::vector<uint16_t> requiredSupplyItems;
+	uint16_t supplyItemId = 0;
+};
+
+struct PlayerBotHuntSupplyApproaches {
+	uint16_t itemId = 0;
+	std::vector<Position> approaches;
 };
 
 // Immutable facts for exactly one pending request; no world queries in the selector.
@@ -41,6 +48,8 @@ struct PlayerBotHuntRouteObservation {
 	double staminaMultiplier = 1;
 	bool npcTravel = false;
 	std::vector<Position> approaches;
+	// One provider set per required item; different kinds may use different shops.
+	std::vector<PlayerBotHuntSupplyApproaches> supplyApproachGroups;
 	uint32_t potionReserve = 0;
 	PlayerBotSupplyProfile supplyProfile;
 	uint64_t funds = 0;
@@ -82,6 +91,9 @@ class PlayerBotHuntRouteSelection
 		size_t depotIndex = 0;
 		std::vector<Position> suppliers;
 		size_t supplierIndex = 0;
+		std::vector<PlayerBotHuntSupplyApproaches> supplyApproachGroups;
+		size_t supplyGroupIndex = 0;
+		Position supplySource;
 		std::optional<PlayerBotHuntRegion> best;
 		std::map<std::string, uint32_t> failureCounts;
 		std::vector<uint64_t> rejectedVariants;

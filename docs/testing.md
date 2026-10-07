@@ -28,6 +28,8 @@ Useful subsystem switches include `-Healing`, `-ValueLoot` (value replacement pl
 
 `-Scenario door_passages` also checks the shared stable-approach admission used by NPC boarding, hunt depot/supply exits, sell-loot source/seller selection, service providers, and depot scans/revalidation. A lower-cost teleport is rejected while an ordinary tile is selected; adding a teleport to the selected tile invalidates it. Floor changes and solid blockers are rejected, occupied ordinary tiles remain eligible, and the movement resolver still permits intentional teleport traversal. The same scenario checks coarse portal danger-sample reuse, unchanged cost/peak results, peak rejection, and tile-dependency invalidation. This tests loaded engine tiles, not every controller workflow independently.
 
+Paladin healing has exact scenarios `paladin_spell_training` (paid learning, casting, and restart), `paladin_healing_economy` (spell choice and reserve), `paladin_mana_healing`, `paladin_healing_fallback`, and `paladin_supply_restock`. They seed Bot One as a Paladin and do not provision Bot Three or establish sustained progression. `-SpellTraining`, `-SpellUse`, and `-Healing` include the relevant Paladin cases alongside Knight checks.
+
 `-Scenario deep_hunt_return` seeds a level-15 Knight at `(33101,31745,9)` and checks arrival at the planner-selected depot locker approach. It does not prove unattended hunt progression.
 
 `-SkipBuild` requires a known-current `angelion-server:latest` image and does not prove it matches the worktree. `-KeepStack` preserves the final stack for debugging. `-TimeoutSeconds` accepts 30–3600 seconds. Most focused scenarios use controlled state or destinations; map-derived planning modes improve integration evidence but still do not prove long-running progression.
@@ -40,6 +42,8 @@ The spell contract checks need neither Docker nor elevation:
 pwsh -File scripts/test-knight-spell-contract.ps1
 pwsh -File scripts/test-paladin-spell-contract.ps1
 ```
+
+The Paladin contract includes Food and Magic Shield at level 14 and Ultimate Healing at level 20. It checks both Paladin vocations, paid-learning requirements, and trainer coverage by town. Shared spell requirements also apply to eligible Druids and Sorcerers; this does not establish autonomous bot use of those spells.
 
 Run the assertion scripts relevant to the change:
 
@@ -60,6 +64,7 @@ On Linux, the C++ contract checks require a C++17 compiler. The survival checks 
 
 ```sh
 sh server/tests/playerbot_contracts.sh
+sh server/tests/playerbothealing_contracts.sh
 sh server/tests/playerbotsurvival_contracts.sh
 sh server/tests/playerbotlifecycle_contracts.sh
 sh server/tests/playerbotapproach_contracts.sh

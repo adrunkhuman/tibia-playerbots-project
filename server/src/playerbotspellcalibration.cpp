@@ -18,8 +18,13 @@ namespace {
 	constexpr int32_t maximumObservedValue = 60000;
 	constexpr uint16_t confidenceSamples = 8;
 
-	constexpr std::array<PlayerBotSpellDescriptor, 6> descriptors = {{
-		{"Light Healing", "exura", PlayerBotSpellRole::Healing},
+	constexpr std::array<PlayerBotSpellDescriptor, 8> descriptors = {{
+		{"Light Healing", "exura", PlayerBotSpellRole::Healing, false, 0, PlayerBotTrainingEffect::None, false,
+		 PlayerBotHealingFormula{1.4, 1.8, 8, 11}},
+		{"Intense Healing", "exura gran", PlayerBotSpellRole::Healing, false, 0, PlayerBotTrainingEffect::None, false,
+		 PlayerBotHealingFormula{3.2, 5.4, 20, 40}},
+		{"Ultimate Healing", "exura vita", PlayerBotSpellRole::Healing, false, 0, PlayerBotTrainingEffect::None, false,
+		 PlayerBotHealingFormula{6.8, 12.9, 42, 90}},
 		{"Haste", "utani hur", PlayerBotSpellRole::Support, true, 30, PlayerBotTrainingEffect::Haste, false},
 		{"Great Light", "utevo gran lux", PlayerBotSpellRole::Support, true, 20, PlayerBotTrainingEffect::Light, true},
 		{"Light", "utevo lux", PlayerBotSpellRole::Support, true, 10, PlayerBotTrainingEffect::Light, true},
@@ -47,7 +52,7 @@ const PlayerBotSpellDescriptor* playerBotSpellDescriptor(const char* name)
 	return it == descriptors.end() ? nullptr : &*it;
 }
 
-const std::array<PlayerBotSpellDescriptor, 6>& playerBotSpellDescriptors()
+const std::array<PlayerBotSpellDescriptor, 8>& playerBotSpellDescriptors()
 {
 	return descriptors;
 }
@@ -76,14 +81,19 @@ const char* playerBotSpellRoleName(PlayerBotSpellRole role)
 	return "unsupported";
 }
 
+PlayerBotSpellEnvelope playerBotHealingEnvelope(uint32_t level, uint32_t magicLevel, const PlayerBotHealingFormula& formula)
+{
+	return {static_cast<int32_t>(std::floor(level / 5.0 + magicLevel * formula.minimumMagicFactor + formula.minimumBase)),
+	        static_cast<int32_t>(std::floor(level / 5.0 + magicLevel * formula.maximumMagicFactor + formula.maximumBase)), 0};
+}
+
 PlayerBotSpellEnvelope playerBotSpellEnvelope(const Player& player, const PlayerBotSpellDescriptor& descriptor)
 {
 	// These mirror the audited Lua callbacks. The engine does not expose callback bounds.
 	const double level = player.getLevel();
 	if (descriptor.role == PlayerBotSpellRole::Healing) {
-		const double magicLevel = player.getMagicLevel();
-		return {static_cast<int32_t>(std::floor(level / 5 + magicLevel * 1.4 + 8)),
-		        static_cast<int32_t>(std::floor(level / 5 + magicLevel * 1.8 + 11)), 0};
+		if (!descriptor.healingFormula) return {};
+		return playerBotHealingEnvelope(player.getLevel(), player.getMagicLevel(), *descriptor.healingFormula);
 	}
 	if (descriptor.role == PlayerBotSpellRole::Support) {
 		return {33000, 33000, 33000};
@@ -156,6 +166,12 @@ const PlayerBotSpellProfile& PlayerBotSpellCalibration::observe(const std::strin
 		it = profiles.emplace(key, PlayerBotSpellProfile{}).first;
 	}
 	PlayerBotSpellProfile& profile = it->second;
+	// Samples are absolute effect values, so level, skill, or equipment growth
+	// invalidates them before either ranking or the sample cap can reuse them.
+	if (!profile.matchesEnvelope(envelope)) {
+		profile = {};
+		profile.envelope = envelope;
+	}
 	if (observationSequence == std::numeric_limits<uint32_t>::max()) {
 		for (auto& entry : profiles) entry.second.lastObserved = 0;
 		observationSequence = 0;
@@ -184,16 +200,17 @@ const PlayerBotSpellProfile& PlayerBotSpellCalibration::observe(const std::strin
 	return profile;
 }
 
-const PlayerBotSpellProfile* PlayerBotSpellCalibration::find(const std::string& spell, const std::string& targetClass) const
+const PlayerBotSpellProfile* PlayerBotSpellCalibration::find(const std::string& spell, const std::string& targetClass,
+	                                                          const PlayerBotSpellEnvelope& envelope) const
 {
 	auto it = profiles.find(profileKey(spell, targetClass));
-	return it == profiles.end() ? nullptr : &it->second;
+	return it == profiles.end() || !it->second.matchesEnvelope(envelope) ? nullptr : &it->second;
 }
 
 double PlayerBotSpellCalibration::ranking(const std::string& spell, const std::string& targetClass,
 	                                        const PlayerBotSpellEnvelope& envelope) const
 {
-	const PlayerBotSpellProfile* profile = find(spell, targetClass);
+	const PlayerBotSpellProfile* profile = find(spell, targetClass, envelope);
 	return profile && profile->confidence > 0 ? profile->ranking : (envelope.minimum + envelope.maximum) / 2.0;
 }
 

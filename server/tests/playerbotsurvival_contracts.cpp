@@ -32,6 +32,7 @@ PlayerBotSurvivalSnapshot snapshot()
 	healing.learned = true;
 	healing.targetReachable = true;
 	healing.vocationAllowed = true;
+	healing.requirementsMet = true;
 	healing.manaCost = healingCost;
 	healing.envelope = {10, 20, 0};
 	result.spells.push_back(healing);
@@ -314,6 +315,154 @@ void buyingPotionsAndHealthyTopups()
 		assert(runtime.decideHealing(state, now + std::chrono::seconds(1)).type == Command::None);
 	}
 }
+void healingFormulaBounds()
+{
+	for (const auto& expected : {std::make_pair("Light Healing", std::make_pair(17, 22)),
+	                           std::make_pair("Intense Healing", std::make_pair(36, 65)),
+	                           std::make_pair("Ultimate Healing", std::make_pair(73, 145))}) {
+		const auto* descriptor = playerBotSpellDescriptor(expected.first);
+		assert(descriptor && descriptor->healingFormula);
+		const auto envelope = playerBotHealingEnvelope(20, 4, *descriptor->healingFormula);
+		assert(envelope.minimum == expected.second.first && envelope.maximum == expected.second.second);
+	}
+}
+
+void economicalHealing()
+{
+	auto state = snapshot();
+	state.mana = 200;
+	state.spells.push_back({"Intense Healing", true, true, true, false, true, true, 11, 70, {36, 65, 0}});
+	state.spells.push_back({"Ultimate Healing", true, true, true, false, true, true, 20, 160, {73, 145, 0}});
+	state.spells.front().envelope = {17, 22, 0};
+	{
+		PlayerBotSurvivalRuntime runtime;
+		assert(runtime.healingManaReserve(state) == 20);
+		expectHealingSpell(runtime, runtime.decideHealing(state, now));
+		assert(!runtime.healingSpellWorthLearning(state, "Intense Healing"));
+		assert(!runtime.healingSpellWorthLearning(state, "Ultimate Healing"));
+	}
+	// Healthy mana equal to the economic reserve does not trigger a 160-mana top-up.
+	{
+		PlayerBotSurvivalRuntime runtime;
+		auto healthy = state;
+		healthy.health = 100;
+		healthy.hunting = true;
+		healthy.mana = 20;
+		assert(runtime.decideHealing(healthy, now).type == Command::None);
+	}
+	// Loaded cost changes can make a stronger heal economical, but not affordable yet.
+	state.spells[1].manaCost = 10;
+	{
+		PlayerBotSurvivalRuntime runtime;
+		assert(runtime.healingManaReserve(state) == 10);
+		state.mana = 5;
+		expectPotion(runtime.decideHealing(state, now), manaPotion);
+	}
+	state.spells[1].manaCost = 70;
+	state.spells.front().learned = false;
+	state.mana = 70;
+	{
+		PlayerBotSurvivalRuntime runtime;
+		assert(runtime.healingManaReserve(state) == 70);
+		assert(runtime.healingSpellWorthLearning(state, "Light Healing"));
+		const auto command = runtime.decideHealing(state, now);
+		assert(command.spell && command.spell->name == "Intense Healing");
+	}
+	for (int gate = 0; gate < 3; ++gate) {
+		PlayerBotSurvivalRuntime runtime;
+		auto gated = state;
+		if (gate == 0) gated.spells[1].requirementsMet = false;
+		if (gate == 1) gated.spells[1].vocationAllowed = false;
+		if (gate == 2) gated.spells[1].metadataMatches = false;
+		assert(runtime.healingManaReserve(gated) == 160);
+		assert(!runtime.healingSpellWorthLearning(gated, "Intense Healing"));
+	}
+	// Do not refill for an efficient but currently unaffordable heal while another can cast.
+	state.spells.front().learned = true;
+	state.spells.front().manaCost = 100;
+	state.spells.front().envelope = {200, 220, 0};
+	state.healthMaximum = 1000;
+	state.health = 500;
+	{
+		PlayerBotSurvivalRuntime runtime;
+		const auto command = runtime.decideHealing(state, now);
+		assert(command.spell && command.spell->name == "Intense Healing");
+	}
+}
+
+void calibratedHealingEconomy()
+{
+	PlayerBotSurvivalRuntime runtime;
+	auto state = snapshot();
+	state.healthMaximum = 1000;
+	state.health = 500;
+	state.mana = 200;
+	state.spells.push_back({"Intense Healing", true, true, true, false, true, true, 11, 70, {50, 100, 0}});
+	// Eight uncensored low rolls reverse the initial economy ranking. Learning,
+	// reserve, and cast choice must all use the same controller-local evidence.
+	for (int i = 0; i < 8; ++i) {
+		const auto time = now + std::chrono::seconds(i * 3);
+		const auto command = runtime.decideHealing(state, time);
+		assert(command.spell && command.spell->name == "Intense Healing");
+		assert(command.spell->pending.targetClass == "self");
+		runtime.beginEngineSpellCast();
+		runtime.observeHealthGain(true, true, 50);
+		runtime.endEngineSpellCast();
+		const auto verification = runtime.verifySpell({130, 550, 0, 0, true, time + std::chrono::milliseconds(100)});
+		assert(verification && verification->verification.success);
+	}
+	assert(runtime.healingManaReserve(state) == 20);
+	expectHealingSpell(runtime, runtime.decideHealing(state, now + std::chrono::seconds(30)));
+	state.spells[1].learned = false;
+	assert(!runtime.healingSpellWorthLearning(state, "Intense Healing"));
+}
+void healingCalibrationProgression()
+{
+	// Old absolute healing rolls must not make stronger spells look economical
+	// after level/magic growth, even once the old profile has filled its sample cap.
+	for (int samples : {8, 64}) {
+		PlayerBotSurvivalRuntime runtime;
+		auto state = snapshot();
+		state.level = 9;
+		state.magicLevel = 1;
+		state.healthMaximum = 1000;
+		state.health = 500;
+		state.mana = 200;
+		const auto* light = playerBotSpellDescriptor("Light Healing");
+		state.spells.front().envelope = playerBotHealingEnvelope(9, 1, *light->healingFormula);
+		PlayerBotSpellPendingCast oldCast;
+		for (int i = 0; i < samples; ++i) {
+			const auto time = now + std::chrono::seconds(i * 3);
+			const auto command = runtime.decideHealing(state, time);
+			expectHealingSpell(runtime, command);
+			oldCast = command.spell->pending;
+			runtime.beginEngineSpellCast();
+			runtime.observeHealthGain(true, true, 12);
+			runtime.endEngineSpellCast();
+			const auto outcome = runtime.verifySpell({180, 512, 0, 0, true, time + std::chrono::milliseconds(100)});
+			assert(outcome && outcome->verification.success && outcome->calibration.accepted == i + 1);
+		}
+		assert(runtime.calibrationRanking(oldCast) == 12);
+		state.level = 20;
+		state.magicLevel = 4;
+		state.spells.front().envelope = playerBotHealingEnvelope(20, 4, *light->healingFormula);
+		state.spells.push_back({"Intense Healing", true, false, true, false, true, true, 11, 70, {36, 65, 0}});
+		assert(!runtime.healingSpellWorthLearning(state, "Intense Healing"));
+		state.spells.back().learned = true;
+		assert(runtime.healingManaReserve(state) == 20);
+		const auto time = now + std::chrono::seconds(samples * 3 + 5);
+		const auto command = runtime.decideHealing(state, time);
+		expectHealingSpell(runtime, command);
+		assert(!runtime.calibrationProfile(command.spell->pending));
+		runtime.beginEngineSpellCast();
+		runtime.observeHealthGain(true, true, 19);
+		runtime.endEngineSpellCast();
+		const auto outcome = runtime.verifySpell({180, 519, 0, 0, true, time + std::chrono::milliseconds(100)});
+		assert(outcome && outcome->verification.success && outcome->calibration.accepted == 1);
+		assert(outcome->calibration.minimum == 19 && outcome->calibration.maximum == 19);
+		assert(outcome->rankingEstimate > 19 && outcome->rankingEstimate < 19.5);
+	}
+}
 } // namespace
 
 int main()
@@ -325,5 +474,9 @@ int main()
 	spellBlockersAndMissingSupplies();
 	actionAndRetryDelays();
 	buyingPotionsAndHealthyTopups();
+	healingFormulaBounds();
+	economicalHealing();
+	calibratedHealingEconomy();
+	healingCalibrationProgression();
 	std::cout << "playerbot survival contracts passed\n";
 }

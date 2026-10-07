@@ -316,6 +316,11 @@ PlayerBotSurvivalSnapshot PlayerBotController::survivalSnapshot(const Player& pl
 			spell.level = engineSpell->getLevel();
 			const VocSpellMap& vocations = engineSpell->getVocMap();
 			spell.vocationAllowed = vocations.empty() || vocations.count(player.getVocationId()) != 0;
+			spell.requirementsMet = engineSpell->isEnabled() && player.getLevel() >= engineSpell->getLevel() &&
+			                        player.getMagicLevel() >= engineSpell->getMagicLevel() &&
+			                        player.getSoul() >= engineSpell->getSoulCost() &&
+			                        (!engineSpell->isPremium() || player.isPremium()) &&
+			                        (!engineSpell->getNeedWeapon() || player.getWeapon(true));
 			spell.envelope = playerBotSpellEnvelope(player, descriptor);
 			spell.magicTrainingEligible = descriptor.magicTrainingSafe && descriptor.magicTrainingPriority != 0 &&
 			                              descriptor.magicTrainingEffect != PlayerBotTrainingEffect::None && spell.learned &&
@@ -1654,7 +1659,14 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 		} else if (request->stage == PlayerBotHuntRouteStage::DiscoverSupply) {
 			++discoveryChecks;
 			const auto discoveryStarted = std::chrono::steady_clock::now();
-			observation.approaches = huntSupplyExitCandidates(player, request->from);
+			auto requiredItems = playerBotSupplyExitShopItems(supplyStocks(player),
+			    recoveryPotionItemId(player.getVocationId()));
+			for (uint16_t itemId : request->requiredSupplyItems) {
+				if (std::find(requiredItems.begin(), requiredItems.end(), itemId) == requiredItems.end())
+					requiredItems.push_back(itemId);
+			}
+			for (uint16_t itemId : requiredItems)
+				observation.supplyApproachGroups.push_back({itemId, huntSupplyExitCandidates(player, request->from, itemId)});
 			supplierDiscoveryTime += std::chrono::steady_clock::now() - discoveryStarted;
 			++supplierDiscoveryCalls;
 		} else if (request->stage == PlayerBotHuntRouteStage::Final) {
@@ -1664,6 +1676,13 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 			observation.funds = player.getMoney() + player.getBankBalance();
 			observation.recoverySpendingReserve = recoverySpendingReserve(
 			    player, potionStockTarget(player, observation.potionReserve));
+			std::vector<PlayerBotSupplyFloorCost> otherFloorCosts;
+			for (const auto& stock : PlayerBotInventoryPolicy::additionalSupplyStocks(player)) {
+				otherFloorCosts.push_back({stock.count, stock.rule.safetyFloor,
+				    stock.count < stock.rule.safetyFloor ? cheapestShopPrice(player, stock.rule.itemId) : 0});
+			}
+			observation.recoverySpendingReserve = playerBotSupplyFloorSpendingReserve(
+			    observation.recoverySpendingReserve, otherFloorCosts);
 			observation.recoveryRouteHealthLoss =
 			    (static_cast<double>(request->outboundDangerCost) + request->returnDangerCost) *
 			    player.getMaxHealth() / riskProfile.healthLossCost;
@@ -1677,13 +1696,15 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 		if (retained && completedEvidence) {
 			if (request->stage == PlayerBotHuntRouteStage::Depot)
 				completedEvidence->exit = PlayerBotHuntTravelEvidence::Exit::Depot;
-			else if (request->stage == PlayerBotHuntRouteStage::Supplier)
+			else if (request->stage == PlayerBotHuntRouteStage::Supplier) {
 				completedEvidence->exit = PlayerBotHuntTravelEvidence::Exit::Supplier;
+				completedEvidence->supplyItemId = request->supplyItemId;
+			}
 			// Keep only the selected endpoint's discovery dependencies. Failed
 			// alternatives and earlier search attempts must not poison this proof.
 			PlayerBotRouteChanges::Scope endpointDependencies(completedEvidence->watch);
 			const bool endpointValid = huntTravelExitValid(player, *completedEvidence);
-			retained->evidence.accept(request->stage, true, endpointValid ? completedEvidence : nullptr);
+			retained->evidence.accept(request->stage, true, endpointValid ? completedEvidence : nullptr, request->supplyItemId);
 		}
 		if (routeResult.completedCandidate) {
 			huntRouteRetention.complete(*routeResult.completedCandidate);

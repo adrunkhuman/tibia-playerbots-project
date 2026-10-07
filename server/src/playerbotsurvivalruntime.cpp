@@ -8,6 +8,7 @@
 #include "playerbotsurvivalruntime.h"
 
 #include "playerbotinventorypolicy.h"
+#include "playerbothealingpolicy.h"
 
 #include <algorithm>
 
@@ -52,17 +53,43 @@ uint16_t PlayerBotSurvivalRuntime::pendingFoodItemId() const
 	return pending ? pending->itemId : 0;
 }
 
+const PlayerBotSurvivalSpellObservation* PlayerBotSurvivalRuntime::preferredHealingSpell(
+	const PlayerBotSurvivalSnapshot& snapshot, bool affordable, bool capOverheal) const
+{
+	const PlayerBotSurvivalSpellObservation* selected = nullptr;
+	const double missing = capOverheal ? std::max<int64_t>(0, static_cast<int64_t>(snapshot.healthMaximum) - snapshot.health) :
+	                                    std::numeric_limits<double>::max();
+	auto value = [&](const PlayerBotSurvivalSpellObservation& spell) {
+		return PlayerBotHealingSpellValue{spell.name, spell.manaCost, calibration.ranking(spell.name, "self", spell.envelope)};
+	};
+	for (const auto& spell : snapshot.spells) {
+		const auto* descriptor = playerBotSpellDescriptor(spell.name.c_str());
+		if (!descriptor || descriptor->role != PlayerBotSpellRole::Healing || !spell.metadataMatches || !spell.learned ||
+		    !spell.vocationAllowed || !spell.requirementsMet || !spell.targetReachable ||
+		    (affordable && snapshot.mana < spell.manaCost) || playerBotHealingEfficiency(value(spell), missing) <= 0) continue;
+		if (!selected || playerBotPreferHealingSpell(value(spell), value(*selected), missing)) selected = &spell;
+	}
+	return selected;
+}
+
+bool PlayerBotSurvivalRuntime::healingSpellWorthLearning(const PlayerBotSurvivalSnapshot& snapshot, const char* name) const
+{
+	const auto* candidate = spellObservation(snapshot, name);
+	const auto* descriptor = playerBotSpellDescriptor(name);
+	if (!candidate || !descriptor || descriptor->role != PlayerBotSpellRole::Healing || !candidate->metadataMatches ||
+	    !candidate->vocationAllowed || !candidate->requirementsMet) return false;
+	const PlayerBotHealingSpellValue value{candidate->name, candidate->manaCost,
+	    calibration.ranking(candidate->name, "self", candidate->envelope)};
+	if (playerBotHealingEfficiency(value) <= 0) return false;
+	const auto* learned = preferredHealingSpell(snapshot);
+	return !learned || playerBotHealingPurchaseImproves(value, {learned->name, learned->manaCost,
+	    calibration.ranking(learned->name, "self", learned->envelope)});
+}
+
 uint32_t PlayerBotSurvivalRuntime::healingManaReserve(const PlayerBotSurvivalSnapshot& snapshot) const
 {
-	uint32_t reserve = 0;
-	for (const PlayerBotSurvivalSpellObservation& spell : snapshot.spells) {
-		const PlayerBotSpellDescriptor* descriptor = playerBotSpellDescriptor(spell.name.c_str());
-		if (descriptor && descriptor->role == PlayerBotSpellRole::Healing && spell.metadataMatches && spell.learned &&
-		    spell.vocationAllowed) {
-			reserve = std::max(reserve, spell.manaCost);
-		}
-	}
-	return reserve;
+	const auto* preferred = preferredHealingSpell(snapshot);
+	return preferred ? preferred->manaCost : 0;
 }
 
 PlayerBotPotionAttempt PlayerBotSurvivalRuntime::potionObservation(const PlayerBotSurvivalSnapshot& snapshot, uint16_t itemId) const
@@ -118,7 +145,18 @@ PlayerBotSurvivalCommand PlayerBotSurvivalRuntime::decideHealing(const PlayerBot
 		command.reason = "critical_health";
 		return command;
 	}
-	spellAttempt = decideSpell(snapshot, "Light Healing", "recovery", now);
+	const auto* healing = preferredHealingSpell(snapshot, true, true);
+	if (!healing) healing = preferredHealingSpell(snapshot, false, true);
+	// Preserve a diagnostic candidate when no eligible learned heal exists.
+	if (!healing) {
+		const auto found = std::find_if(snapshot.spells.begin(), snapshot.spells.end(), [](const auto& spell) {
+			const auto* descriptor = playerBotSpellDescriptor(spell.name.c_str());
+			return descriptor && descriptor->role == PlayerBotSpellRole::Healing;
+		});
+		if (found != snapshot.spells.end()) healing = &*found;
+	}
+	spellAttempt = decideSpell(snapshot, healing ? healing->name.c_str() : "", "recovery", now);
+	if (!healing) spellAttempt.reason = "unsupported_metadata";
 	if (spellAttempt.type == PlayerBotSurvivalCommandType::CastSpell) {
 		spellAttempt.potionVerification = command.potionVerification;
 		return spellAttempt;
@@ -183,6 +221,7 @@ PlayerBotSurvivalCommand PlayerBotSurvivalRuntime::decideSpell(const PlayerBotSu
 	const PlayerBotSurvivalSpellObservation* spell = spellObservation(snapshot, descriptor->name);
 	if (!spell || !spell->metadataMatches) { command.reason = "unsupported_metadata"; return command; }
 	if (!spell->learned) { command.reason = "unlearned"; return command; }
+	if (!spell->vocationAllowed || !spell->requirementsMet) { command.reason = "ineligible"; return command; }
 	if (!snapshot.canDoAction || spells.hasPending() || !spells.canRetry(now)) return command;
 	const bool healingGroup = descriptor->role == PlayerBotSpellRole::Healing || descriptor->role == PlayerBotSpellRole::Support;
 	if (healingGroup ? snapshot.healingExhausted : snapshot.combatExhausted) { command.reason = "cooldown"; return command; }
@@ -204,12 +243,12 @@ PlayerBotSurvivalCommand PlayerBotSurvivalRuntime::decideSpell(const PlayerBotSu
 	pending.manaBefore = snapshot.mana;
 	pending.manaReserve = reserve;
 	pending.healthBefore = snapshot.health;
-	pending.targetId = snapshot.target.id;
+	pending.targetId = descriptor->role == PlayerBotSpellRole::Healing ? 0 : snapshot.target.id;
 	pending.targetHealthBefore = snapshot.target.health;
 	pending.missingHealth = snapshot.healthMaximum - snapshot.health;
 	pending.hasteTicksBefore = snapshot.hasteTicks;
 	pending.envelope = spell->envelope;
-	pending.targetClass = snapshot.target.targetClass;
+	pending.targetClass = descriptor->role == PlayerBotSpellRole::Healing ? "self" : snapshot.target.targetClass;
 	pending.otherRecovery = descriptor->role == PlayerBotSpellRole::Healing && snapshot.regenerationActive;
 	pending.observedAt = now;
 	spells.begin(pending);
@@ -258,7 +297,7 @@ PlayerBotSurvivalCommand PlayerBotSurvivalRuntime::decideOffensiveSpell(const Pl
 	for (const PlayerBotSpellDescriptor& descriptor : playerBotSpellDescriptors()) {
 		const PlayerBotSurvivalSpellObservation* spell = spellObservation(snapshot, descriptor.name);
 		if (&descriptor == preferred || !offensive(descriptor.role) || !spell || !spell->vocationAllowed || !castable(*spell)) continue;
-		const PlayerBotSpellProfile* profile = calibration.find(descriptor.name, kind);
+		const PlayerBotSpellProfile* profile = calibration.find(descriptor.name, kind, spell->envelope);
 		const double ranking = calibration.ranking(descriptor.name, kind, spell->envelope);
 		if (profile && profile->confidence >= 1.0 && ranking > selectedRanking) {
 			selected = &descriptor;
@@ -296,7 +335,7 @@ std::optional<PlayerBotSpellPendingCast> PlayerBotSurvivalRuntime::pendingSpell(
 void PlayerBotSurvivalRuntime::deferSpellRetry(std::chrono::steady_clock::time_point now) { spells.deferRetry(now, retryDelay); }
 std::optional<PlayerBotSpellProfile> PlayerBotSurvivalRuntime::calibrationProfile(const PlayerBotSpellPendingCast& pending) const
 {
-	if (const PlayerBotSpellProfile* profile = calibration.find(pending.name, pending.targetClass)) return *profile;
+	if (const PlayerBotSpellProfile* profile = calibration.find(pending.name, pending.targetClass, pending.envelope)) return *profile;
 	return std::nullopt;
 }
 double PlayerBotSurvivalRuntime::calibrationRanking(const PlayerBotSpellPendingCast& pending) const { return calibration.ranking(pending.name, pending.targetClass, pending.envelope); }

@@ -468,7 +468,8 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		                                                 PlayerBotHuntRouteTiming* timing = nullptr,
 		                                                 PlayerBotRouteIntent intent = PlayerBotRouteIntent::Optional) const;
 		std::vector<Position> huntDepotExitCandidates(Player& player, const Position& source) const;
-		std::vector<Position> huntSupplyExitCandidates(Player& player, const Position& source) const;
+		std::vector<Position> huntSupplyExitCandidates(Player& player, const Position& source,
+		                                             uint16_t itemId = 0) const;
 		uint64_t huntTravelReturnFareReserve(HuntTravelBudgetPhase phase) const;
 		uint64_t huntTravelRecoveryFundsReserve(const Player& player, HuntTravelBudgetPhase phase) const;
 		bool huntTravelFareAffordable(const Player& player, uint64_t fare,

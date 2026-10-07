@@ -5,6 +5,7 @@
 #include "playerbothuntrouteselection.h"
 #include "playerbotroutechanges.h"
 
+#include <map>
 #include <memory>
 #include <tuple>
 
@@ -25,6 +26,7 @@ struct PlayerBotHuntTravelEvidence {
 	bool paid = false, walkingOnly = false;
 	enum class Exit { None, Depot, Supplier };
 	Exit exit = Exit::None;
+	uint16_t supplyItemId = 0;
 
 	bool validContext(Position from, Position to, const Actor& liveActor, uint64_t topology,
 	                  uint64_t revision, const PlayerBotNavigationRiskProfile& liveRisk) {
@@ -50,25 +52,33 @@ struct PlayerBotHuntTravelEvidence {
 // Exactly the successful legs required by one candidate. A restarted request
 // replaces its proof; rejected alternatives and abandoned work are never merged.
 struct PlayerBotHuntRouteEvidence {
-	std::shared_ptr<PlayerBotHuntTravelEvidence> outbound, depot, supplier;
-	bool supplierRequired = false;
+	std::shared_ptr<PlayerBotHuntTravelEvidence> outbound, depot;
+	std::map<uint16_t, std::shared_ptr<PlayerBotHuntTravelEvidence>> suppliers;
 
 	void accept(PlayerBotHuntRouteStage stage, bool accepted,
-	            std::shared_ptr<PlayerBotHuntTravelEvidence> completed) {
+	            std::shared_ptr<PlayerBotHuntTravelEvidence> completed, uint16_t supplyItemId = 0) {
 		if (!accepted) return;
-		if (stage == PlayerBotHuntRouteStage::Supplier) supplierRequired = true;
+		if (stage == PlayerBotHuntRouteStage::Supplier) {
+			// A missing endpoint proof must invalidate this leg, not reuse an
+			// earlier supplier's proof. Retried requests replace only their item.
+			suppliers[supplyItemId] = std::move(completed);
+			return;
+		}
 		if (!completed) return;
 		switch (stage) {
 			case PlayerBotHuntRouteStage::Outbound: outbound = std::move(completed); break;
 			case PlayerBotHuntRouteStage::Depot: depot = std::move(completed); break;
-			case PlayerBotHuntRouteStage::Supplier: supplier = std::move(completed); break;
 			default: break;
 		}
 	}
 	template<class Validate>
 	bool valid(Validate validate) {
-		return outbound && depot && (!supplierRequired || supplier) &&
-		    validate(*outbound) && validate(*depot) && (!supplier || validate(*supplier));
+		if (!outbound || !depot || !validate(*outbound) || !validate(*depot)) return false;
+		for (auto& [itemId, supplier] : suppliers) {
+			(void)itemId;
+			if (!supplier || !validate(*supplier)) return false;
+		}
+		return true;
 	}
 };
 

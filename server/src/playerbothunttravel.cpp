@@ -157,13 +157,13 @@ bool PlayerBotController::huntTravelExitValid(Player& player, const PlayerBotHun
 		}
 		return false;
 	}
-	const uint16_t potionId = recoveryPotionItemId(player.getVocationId());
+	const uint16_t itemId = evidence.supplyItemId ? evidence.supplyItemId : recoveryPotionItemId(player.getVocationId());
 	for (const auto& [id, npc] : g_game.getNpcs()) {
 		(void)id;
 		if (!npc || !playerBotNpcHasCapability(*npc, PlayerBotNpcCapability::Shop) ||
 		    npc->getPosition() == approach || !Position::areInRange<3, 3, 0>(npc->getPosition(), approach)) continue;
-		if (std::any_of(npc->getShopOffers().begin(), npc->getShopOffers().end(), [potionId](const ShopInfo& offer) {
-			return offer.itemId == potionId && offer.buyPrice != 0;
+		if (std::any_of(npc->getShopOffers().begin(), npc->getShopOffers().end(), [itemId](const ShopInfo& offer) {
+			return offer.itemId == itemId && offer.buyPrice != 0;
 		})) return true;
 	}
 	return false;

@@ -291,14 +291,14 @@ bool PlayerBotController::tryOffensiveSpell(Player* player, const Position& curr
 
 uint32_t PlayerBotController::potionStockTarget(const Player& player, uint32_t returnReserve) const
 {
-	const Spell* lightHealing = g_spells ? g_spells->getSpellByName("Light Healing") : nullptr;
-	const uint32_t lightHealingLevel = lightHealing ? lightHealing->getLevel() : 9;
-	// Hold gold for Light Healing only once it is actually learnable. Below that
-	// level leftover gold buys hunt ammo so a 40-minute hunt is not stuck on
-	// two-flask trash spawns.
-	const bool saveGoldForLightHealing = !player.hasLearnedInstantSpell("Light Healing") &&
-	                                     player.getLevel() >= lightHealingLevel;
-	const uint32_t base = saveGoldForLightHealing ? healthPotionSafetyTarget : healthPotionAmmoTarget;
+	const auto snapshot = survivalSnapshot(player);
+	// Preserve survival floors while saving for a first usable heal. Below its
+	// loaded requirements, buy normal hunt stock instead of waiting on training.
+	const bool saveForHealing = !survivalRuntime.preferredHealingSpell(snapshot) &&
+	    std::any_of(snapshot.spells.begin(), snapshot.spells.end(), [&](const auto& spell) {
+		return !spell.learned && survivalRuntime.healingSpellWorthLearning(snapshot, spell.name.c_str());
+	});
+	const uint32_t base = saveForHealing ? healthPotionSafetyTarget : healthPotionAmmoTarget;
 	return recoveryPotionRestockTargetForReserve(returnReserve, base);
 }
 
@@ -337,8 +337,14 @@ uint64_t PlayerBotController::spellTrainingReserve(const Player& player, bool em
 	const uint32_t potionCount = inventoryPolicy.inventoryItemCount(player, potionItemId);
 	const uint32_t reserveTarget = emergencyOnly ?
 	    (huntPotionReturnThreshold == UINT32_MAX ? UINT32_MAX : huntPotionReturnThreshold + 1) : potionStockTarget(player);
-	if (emergencyOnly && potionCount >= reserveTarget) return carriedGoldReserve;
-	return recoverySpendingReserve(player, reserveTarget);
+	const uint64_t healthReserve = emergencyOnly && potionCount >= reserveTarget ? carriedGoldReserve :
+	                               recoverySpendingReserve(player, reserveTarget);
+	std::vector<PlayerBotSupplyFloorCost> others;
+	for (const auto& stock : PlayerBotInventoryPolicy::additionalSupplyStocks(player)) {
+		others.push_back({stock.count, stock.rule.safetyFloor,
+		    stock.count < stock.rule.safetyFloor ? cheapestShopPrice(player, stock.rule.itemId) : 0});
+	}
+	return playerBotSupplyFloorSpendingReserve(healthReserve, others);
 }
 
 uint32_t PlayerBotController::cheapestShopPrice(const Player& player, uint16_t itemId) const
@@ -405,6 +411,14 @@ bool PlayerBotController::findSpellTraining(Player& player, const Position& posi
 	                               player.getVocation()->getFromVocation();
 	const uint32_t potionCount = inventoryPolicy.inventoryItemCount(player, recoveryPotionItemId(vocationId));
 	const bool suppliesReady = huntSuppliesReady(player);
+	const auto spellSnapshot = survivalSnapshot(player);
+	auto healingOffer = [](const std::string& name) {
+		const auto* descriptor = playerBotSpellDescriptor(name.c_str());
+		return descriptor && descriptor->role == PlayerBotSpellRole::Healing;
+	};
+	auto worthwhile = [&](const std::string& name) {
+		return !healingOffer(name) || survivalRuntime.healingSpellWorthLearning(spellSnapshot, name.c_str());
+	};
 	std::vector<PlayerBotSpellOfferSnapshot> offers;
 	std::vector<std::deque<PlayerBotNavigationStep>> routes;
 	uint64_t remainingPathNodes = maximumSpellTrainerPathNodes;
@@ -412,7 +426,7 @@ bool PlayerBotController::findSpellTraining(Player& player, const Position& posi
 	auto hasRelevantOffer = [&](const Npc* trainer) {
 		return std::any_of(trainer->getSpellOffers().begin(), trainer->getSpellOffers().end(), [&](const NpcSpellOffer& offer) {
 			Spell* spell = g_spells ? g_spells->getSpellByName(offer.spellName) : nullptr;
-			return playerBotSpellLearningPriority(offer.spellName.c_str()) &&
+			return playerBotSpellLearningPriority(offer.spellName.c_str()) && worthwhile(offer.spellName) &&
 			       spell && spell->isInstant() && spell->isLearnable() && spell->getLevel() == offer.level &&
 			       spell->isPremium() == offer.premium && player.getLevel() >= offer.level &&
 			       (!offer.premium || player.isPremium()) && !player.hasLearnedInstantSpell(offer.spellName) &&
@@ -529,15 +543,17 @@ bool PlayerBotController::findSpellTraining(Player& player, const Position& posi
 			const bool levelEligible = player.getLevel() >= offer.level;
 			const bool premiumEligible = !offer.premium || player.isPremium();
 			const bool alreadyLearned = player.hasLearnedInstantSpell(offer.spellName);
-			const uint64_t offerReserve = offer.spellName == "Light Healing" ? healingReserve : reserve;
+			const bool worthLearning = worthwhile(offer.spellName);
+			const uint64_t offerReserve = healingOffer(offer.spellName) ? healingReserve : reserve;
 			const bool affordable = playerBotAffordableAfterReserve(totalMoney, offerReserve, offer.price);
 			const bool routeReachable = registryMatches && vocationEligible && levelEligible && premiumEligible &&
-			                            !alreadyLearned && suppliesReady && affordable && findTrainerApproach();
+			                            !alreadyLearned && worthLearning && suppliesReady && affordable && findTrainerApproach();
 			offers.push_back({npc->getID(), npc->getPosition(), npc->getName(), offer.spellName, offer.keyword,
 			                  offer.price, offer.level, offer.premium, inScope, registryMatches,
 			                  learningPriority.has_value(), learningPriority.value_or(UINT8_MAX), vocationEligible,
 			                  levelEligible, premiumEligible, alreadyLearned, suppliesReady,
 			                  trainerRoute, offerReserve});
+			offers.back().worthLearning = worthLearning;
 			if (routeReachable) {
 				const uint32_t routeReserve = recoveryPotionRouteReserve(vocationId, player.getMaxHealth(),
 				    trainerRoute.dangerCost, static_cast<uint32_t>(riskProfile.healthLossCost));
