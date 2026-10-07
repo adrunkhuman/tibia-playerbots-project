@@ -249,11 +249,10 @@ function F.verifyManaTopUp(playerId, attempts)
     assert(player:getItemCount(F.manaPotionItemId) == 1, "Bot One did not drink a mana potion below the healing reserve")
     assert(player:getMana() >= 20, "the mana potion did not restore the healing reserve")
     print("PLAYERBOT_GAMEPLAY_TEST MANA_TOP_UP_PASS")
-    -- Phase 2: no health potions and too little mana to heal; drink, then cast.
-    F.removeAllHealthPotions(player)
+    -- Phase 2: peaceful recovery with both potion types; prefer mana, then cast.
+    assert(player:getItemCount(F.potionItemId) == F.healingPotionCount, "mana top-up unexpectedly consumed a health potion")
     assert(player:addMana(10 - player:getMana()), "mana potion fixture could not lower mana below Light Healing")
-    -- At the threshold one Light Healing cast recovers, before the missing-supply return
-    -- starts a supply trip.
+    -- One cast crosses the recovery threshold, isolating the potion choice.
     assert(player:setHealth(math.floor(player:getMaxHealth() * 0.6)), "mana potion fixture could not lower health")
     addEvent(F.verifyManaPotionHealing, 250, playerId, 80)
 end
@@ -269,6 +268,7 @@ function F.verifyManaPotionHealing(playerId, attempts)
     end
     assert(drank, "Bot One did not drink a mana potion before healing")
     assert(recovered, "Bot One did not heal above the configured health threshold")
+    assert(player:getItemCount(F.potionItemId) == F.healingPotionCount, "peaceful mana-assisted recovery consumed a health potion")
     print("PLAYERBOT_GAMEPLAY_TEST MANA_POTION_PASS")
 end
 

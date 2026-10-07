@@ -13,6 +13,8 @@
 
 namespace {
 	constexpr int32_t healingHealthPercent = 60;
+	// Provisional rescue threshold: do not delay direct healing for mana or training.
+	constexpr int32_t criticalHealthPercent = 30;
 	constexpr int32_t meatFoodTicks = 108000;
 	constexpr int32_t maximumFoodSeconds = 1200;
 	constexpr uint32_t maximumEatFailures = 3;
@@ -108,14 +110,26 @@ PlayerBotSurvivalCommand PlayerBotSurvivalRuntime::decideHealing(const PlayerBot
 		command.type = PlayerBotSurvivalCommandType::Wait;
 		return command;
 	}
-	if (snapshot.healthMaximum - snapshot.health <= snapshot.potionMaximumHealing || snapshot.potionCount == 0) {
-		spellAttempt = decideSpell(snapshot, "Light Healing", "recovery", now);
-		if (spellAttempt.type == PlayerBotSurvivalCommandType::CastSpell) return spellAttempt;
+	const bool critical = static_cast<int64_t>(snapshot.health) * 100 <=
+	                      static_cast<int64_t>(snapshot.healthMaximum) * criticalHealthPercent;
+	if (critical && snapshot.potionCount != 0) {
+		command.type = PlayerBotSurvivalCommandType::UsePotion;
+		command.itemId = snapshot.potionItemId;
+		command.reason = "critical_health";
+		return command;
+	}
+	spellAttempt = decideSpell(snapshot, "Light Healing", "recovery", now);
+	if (spellAttempt.type == PlayerBotSurvivalCommandType::CastSpell) {
+		spellAttempt.potionVerification = command.potionVerification;
+		return spellAttempt;
+	}
+	// Reevaluate each turn: peaceful mana-assisted healing is not a promise to
+	// cast next turn if combat starts or health becomes critical.
+	if (spellAttempt.reason == "insufficient_mana_reserve" && snapshot.manaPotionItemId != 0 && snapshot.manaPotionCount != 0 &&
+	    (!snapshot.combatActive || snapshot.potionCount == 0)) {
+		return manaPotion(command, snapshot, "healing_spell_mana");
 	}
 	if (snapshot.potionCount == 0) {
-		if (spellAttempt.reason == "insufficient_mana_reserve" && snapshot.manaPotionItemId != 0 && snapshot.manaPotionCount != 0) {
-			return manaPotion(command, snapshot, "healing_spell_mana");
-		}
 		command.type = PlayerBotSurvivalCommandType::InterruptForService;
 		command.reason = "healing_supply_missing";
 		return command;

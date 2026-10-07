@@ -56,10 +56,11 @@ pwsh -File scripts/test-playerbot-magic-training-assertions.ps1
 pwsh -File scripts/test-playerbot-supply-assertions.ps1
 ```
 
-On Linux, the C++ contract checks require a C++17 compiler. Lua fixture checks require Lua or LuaJIT:
+On Linux, the C++ contract checks require a C++17 compiler. The survival checks compile the real spell and recovery runtimes and also need the server's development headers; `CPPFLAGS` can select a non-system Boost installation. Lua fixture checks require Lua or LuaJIT:
 
 ```sh
 sh server/tests/playerbot_contracts.sh
+sh server/tests/playerbotsurvival_contracts.sh
 sh server/tests/playerbotlifecycle_contracts.sh
 sh server/tests/playerbotapproach_contracts.sh
 sh server/tests/playerbothunttiming_contracts.sh

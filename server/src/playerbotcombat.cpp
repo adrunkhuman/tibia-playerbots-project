@@ -243,7 +243,6 @@ PlayerBotSurvivalSnapshot PlayerBotController::survivalSnapshot(const Player& pl
 	snapshot.level = player.getLevel();
 	snapshot.magicLevel = player.getBaseMagicLevel();
 	snapshot.potionItemId = recoveryPotionItemId(player.getVocationId());
-	snapshot.potionMaximumHealing = recoveryPotionMaximumHealing(player.getVocationId());
 	snapshot.potionCount = inventoryPolicy.inventoryItemCount(player, snapshot.potionItemId);
 	snapshot.manaPotionItemId = playerBotManaPotionItemId;
 	snapshot.manaPotionCount = inventoryPolicy.inventoryItemCount(player, snapshot.manaPotionItemId);
