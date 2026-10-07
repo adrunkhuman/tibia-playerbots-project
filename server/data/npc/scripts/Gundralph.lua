@@ -69,7 +69,7 @@ keywordHandler:addSpellKeyword({'summon','thundergiant'}, {npcHandler = npcHandl
 keywordHandler:addSpellKeyword({'terra','strike'}, {npcHandler = npcHandler, spellName = 'Terra Strike', price = 800, level = 13, vocation ={1,2}})
 keywordHandler:addSpellKeyword({'terra','wave'}, {npcHandler = npcHandler, spellName = 'Terra Wave', price = 2500, level = 38, vocation ={2}})
 keywordHandler:addSpellKeyword({'thunderstorm'}, {npcHandler = npcHandler, spellName = 'Thunderstorm', price = 1100, level = 28, vocation ={1}})
-keywordHandler:addSpellKeyword({'ultimate','healing'}, {npcHandler = npcHandler, spellName = 'Ultimate Healing', price = 1000, level = 30, vocation ={1,2}})
+keywordHandler:addSpellKeyword({'ultimate','healing'}, {npcHandler = npcHandler, spellName = 'Ultimate Healing', price = 1000, level = 20, vocation ={1,2}})
 keywordHandler:addSpellKeyword({'ultimate','healing','rune'}, {npcHandler = npcHandler, spellName = 'Ultimate Healing Rune', price = 1500, level = 24, vocation ={2}})
 keywordHandler:addSpellKeyword({'ultimate','light'}, {npcHandler = npcHandler, spellName = 'Ultimate Light', price = 1600, level = 26, vocation ={1,2}})
 keywordHandler:addKeyword({'attack', 'spells'}, StdModule.say, {npcHandler = npcHandler, text = "In this category I have '{Death Strike}', '{Energy Beam}', '{Energy Strike}', '{Energy Wave}', '{Fire Wave}', '{Flame Strike}', '{Great Energy Beam}', '{Ice Strike}', '{Ice Wave}', '{Terra Strike}' and '{Terra Wave}'."})

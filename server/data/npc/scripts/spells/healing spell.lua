@@ -22,7 +22,7 @@ local spells = {
 	[8474]={ buy =150, spell = "Cure Poison", name = "Cure Poison", vocations = {1,2,3,4,5,6,7,8}, level = 10, premium = 0},	
 	[7488]={ buy =800, spell = "Heal Friend", name = "Heal Friend", vocations = {2,6}, level = 18, premium = 0},
 	[2265]={ buy =350, spell = "Intense Healing", name = "Intense Healing", vocations = {1,2,3,4,5,6,7,8}, level = 11, premium = 0},
-	[2273]={ buy =1000, spell = "Ultimate Healing", name = "Ultimate Healing", vocations = {1,2,3,5,6,7}, level = 30, premium = 0},	
+	[2273]={ buy =1000, spell = "Ultimate Healing", name = "Ultimate Healing", vocations = {1,2,3,5,6,7}, level = 20, premium = 0},
 	[7588]={ buy =2100, spell = "Divine Healing", name = "Divine Healing", vocations = {3,7}, level = 35, premium = 1},
 	[8919]={ buy =2200, spell = "Mass Healing", name = "Mass Healing", vocations = {2,6}, level = 36, premium = 0},
 	[2640]={ buy =10000, spell = "Intense Recovery", name = "Intense Recovery", vocations = {3,4,7,8}, level = 100, premium = 0}

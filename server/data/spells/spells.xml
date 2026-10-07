@@ -143,11 +143,13 @@
 		<vocation name="Druid" />
 		<vocation name="Elder Druid" />
 	</instant>
-	<instant group="healing" name="Ultimate Healing" words="exura vita" level="30" mana="160" aggressive="0" selftarget="1" cooldown="1000" needlearn="0" script="healing/ultimate_healing.lua">
+	<instant group="healing" name="Ultimate Healing" words="exura vita" level="20" mana="160" aggressive="0" selftarget="1" cooldown="1000" needlearn="1" script="healing/ultimate_healing.lua">
 		<vocation name="Sorcerer" />
 		<vocation name="Druid" />
+		<vocation name="Paladin" />
 		<vocation name="Master Sorcerer" />
 		<vocation name="Elder Druid" />
+		<vocation name="Royal Paladin" />
 	</instant>
 
 	<!-- Support Spells -->
@@ -182,9 +184,11 @@
 		<vocation name="Royal Paladin" />
 		<vocation name="Elite Knight" />
 	</instant>
-	<instant group="support" name="Food" words="exevo pan" level="14" mana="120" soul="1" cooldown="2000" aggressive="0" needlearn="0" script="support/food.lua">
+	<instant group="support" name="Food" words="exevo pan" level="14" mana="120" soul="1" cooldown="2000" aggressive="0" needlearn="1" script="support/food.lua">
 		<vocation name="Druid" />
+		<vocation name="Paladin" />
 		<vocation name="Elder Druid" />
+		<vocation name="Royal Paladin" />
 	</instant>
 	<instant group="support" name="Great Light" words="utevo gran lux" level="13" mana="60" aggressive="0" selftarget="1" cooldown="2000" needlearn="1" script="support/great_light.lua">
 		<vocation name="Sorcerer" />
@@ -244,11 +248,13 @@
 		<vocation name="Royal Paladin" />
 		<vocation name="Elite Knight" />
 	</instant>
-	<instant group="support" name="Magic Shield" words="utamo vita" level="14" mana="50" aggressive="0" selftarget="1" cooldown="2000" needlearn="0" script="support/magic_shield.lua">
+	<instant group="support" name="Magic Shield" words="utamo vita" level="14" mana="50" aggressive="0" selftarget="1" cooldown="2000" needlearn="1" script="support/magic_shield.lua">
 		<vocation name="Sorcerer" />
 		<vocation name="Druid" />
+		<vocation name="Paladin" />
 		<vocation name="Master Sorcerer" />
 		<vocation name="Elder Druid" />
+		<vocation name="Royal Paladin" />
 	</instant>
 	<instant group="support" name="Protector" words="utamo tempo" level="55" mana="200" premium="1" aggressive="0" selftarget="1" cooldown="2000" needlearn="1" script="support/protector.lua">
 		<vocation name="Knight" />
@@ -363,8 +369,6 @@
 	<instant group="support" name="Blank Rune" words="adori blank" level="20" mana="50" soul="1" aggressive="0" cooldown="2000" needlearn="0" script="conjuring/blank_rune.lua">
 		<vocation name="Druid" />
 		<vocation name="Elder Druid" />
-		<vocation name="Paladin" />
-		<vocation name="Royal Paladin" />
 		<vocation name="Sorcerer" />
 		<vocation name="Master Sorcerer" />
 	</instant>
