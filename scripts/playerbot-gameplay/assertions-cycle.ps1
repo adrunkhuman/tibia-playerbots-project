@@ -349,6 +349,42 @@ function Assert-HealingEvents {
     }
 }
 
+function Assert-ManaPotionEvents {
+    param([string]$Logs)
+
+    $events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
+    $topUpIndex = -1
+    $healingManaIndex = -1
+    $healIndex = -1
+    for ($index = 0; $index -lt $events.Count; $index++) {
+        $event = $events[$index]
+        $drank = $event.event -eq "action_result" -and $event.action -eq "restore_mana" -and $event.result -eq "success" -and
+            $event.method -eq "mana_potion" -and $event.item_id -eq 7620 -and $event.mana_after -gt $event.mana_before -and
+            $event.resource_after -eq ($event.resource_before - 1)
+        if ($topUpIndex -lt 0 -and $drank -and $event.trigger -eq "healing_reserve") {
+            $topUpIndex = $index
+        } elseif ($topUpIndex -ge 0 -and $healingManaIndex -lt 0 -and $drank -and $event.trigger -eq "healing_spell_mana") {
+            $healingManaIndex = $index
+        } elseif ($healingManaIndex -ge 0 -and $healIndex -lt 0 -and $event.event -eq "action_result" -and
+            $event.action -eq "cast_spell" -and $event.result -eq "success" -and
+            $event.policy_candidate.spell -eq "Light Healing" -and $event.need -eq "recovery") {
+            $healIndex = $index
+        }
+    }
+    $requests = @($events | Where-Object {
+        $_.event -eq "action_result" -and $_.action -eq "restore_mana" -and $_.result -eq "requested" -and $_.mana_reserve -eq 20
+    })
+    $healthPotions = @($events | Where-Object { $_.event -eq "action_result" -and $_.action -eq "heal" -and $_.result -eq "success" })
+    $failures = @($events | Where-Object {
+        $_.event -eq "action_result" -and $_.action -eq "restore_mana" -and $_.result -eq "failed"
+    })
+    $terminal = @($events | Where-Object { $_.event -eq "terminal" })
+    if ($topUpIndex -lt 0 -or $healingManaIndex -lt 0 -or $healIndex -lt 0 -or $requests.Count -ne 2 -or
+        $healthPotions.Count -ne 0 -or $failures.Count -ne 0 -or $terminal.Count -ne 0) {
+        throw "Mana potion use failed. top_up=$topUpIndex, healing_mana=$healingManaIndex, heal=$healIndex, requests=$($requests.Count), health_potions=$($healthPotions.Count), failures=$($failures.Count), terminal=$($terminal.Count)."
+    }
+}
+
 function Assert-HealingResupplyEvents {
     param([string]$Logs)
 

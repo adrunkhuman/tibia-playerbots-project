@@ -18,20 +18,20 @@ function Assert-MagicTrainingEvents {
 		if ($requests.Count -eq 1 -and $failed.Count -eq 1 -and $goal.Count -eq 1 -and $continued.Count -eq 1) { return }
 		throw "Failed magic-training verification retried or did not reselect."
 	}
+	# The hunt deadline may end in Idle or in a depot return; either leaves the hunt.
+	$deadline = @($events | Where-Object { $_.event -eq "objective_transition" -and $_.from -eq "hunt" -and $_.reason -eq "hunt_deadline" })
 	if ($Mode -eq "post_hunt") {
-		$idle = @($events | Where-Object { $_.event -eq "objective_transition" -and $_.from -eq "hunt" -and $_.to -eq "idle" })
 		$selection = @($events | Where-Object { $_.event -eq "goal_selection" -and $_.decision_reason -eq "hunt_deadline" -and $_.to_goal -eq "magic_training" })
 		$continued = @($events | Where-Object { $_.event -eq "goal_selection" -and $_.decision_reason -eq "magic_training_complete" -and $_.from_goal -eq "magic_training" -and $_.to_goal -eq "hunt" })
 		$success = @($verified | Where-Object { $_.result -eq "success" -and $_.spell -eq "Haste" })
-		if ($idle.Count -ge 1 -and $selection.Count -eq 1 -and $requests.Count -eq 1 -and $success.Count -eq 1 -and $continued.Count -eq 1) { return }
-		throw "Post-hunt overflow did not transition Idle to one magic-training cast and back to Hunt."
+		if ($deadline.Count -ge 1 -and $selection.Count -eq 1 -and $requests.Count -eq 1 -and $success.Count -eq 1 -and $continued.Count -eq 1) { return }
+		throw "Post-hunt overflow did not leave the hunt for one magic-training cast and back to Hunt."
 	}
 	if ($Mode -eq "post_hunt_no_overflow") {
-		$idle = @($events | Where-Object { $_.event -eq "objective_transition" -and $_.from -eq "hunt" -and $_.to -eq "idle" })
 		$selection = @($events | Where-Object { $_.event -eq "goal_selection" -and $_.decision_reason -eq "hunt_deadline" -and $_.to_goal -eq "hunt" })
 		$guard = @($candidates | Where-Object { $_.decision_reason -eq "hunt_deadline" -and -not $_.feasible -and $_.reason -eq "next_tick_not_overflow" })
-		if ($idle.Count -ge 1 -and $selection.Count -ge 1 -and $guard.Count -ge 1 -and $actions.Count -eq 0) { return }
-		throw "Post-hunt non-overflow did not return from Idle directly to Hunt."
+		if ($deadline.Count -ge 1 -and $selection.Count -ge 1 -and $guard.Count -ge 1 -and $actions.Count -eq 0) { return }
+		throw "Post-hunt non-overflow did not return directly to Hunt."
 	}
 	if ($Mode -eq "restart") {
 		$online = @($events | Where-Object { $_.event -eq "lifecycle" -and $_.status -eq "online" })

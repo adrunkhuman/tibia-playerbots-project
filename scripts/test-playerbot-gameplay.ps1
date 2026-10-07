@@ -94,7 +94,7 @@ $scenarioCatalog = @(
 	"magic_training_pz", "magic_training_absent", "magic_training_expired", "magic_training_failed",
 	"magic_training_service", "magic_training_progression", "magic_training_post_hunt",
 	"magic_training_post_hunt_no_overflow", "magic_training_restart", "magic_training_hunt",
-	"corpse", "corpse_detour", "corpse_inaccessible", "death", "healing", "healing_resupply", "value",
+	"corpse", "corpse_detour", "corpse_inaccessible", "death", "healing", "mana_potion", "healing_resupply", "value",
 	"cargo_currency", "cargo_partial", "cargo_nested", "cargo_protected"
 )
 $scenarioCatalogSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
@@ -103,8 +103,8 @@ foreach ($scenarioName in $scenarioCatalog) {
 		throw "Duplicate gameplay scenario name: $scenarioName"
 	}
 }
-if ($scenarioCatalog.Count -ne 107) {
-	throw "The gameplay scenario catalog must contain 107 scenarios; found $($scenarioCatalog.Count)."
+if ($scenarioCatalog.Count -ne 108) {
+	throw "The gameplay scenario catalog must contain 108 scenarios; found $($scenarioCatalog.Count)."
 }
 $requestedScenarioNames = @($Scenario | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
 $exactScenarioSelection = $requestedScenarioNames.Count -gt 0

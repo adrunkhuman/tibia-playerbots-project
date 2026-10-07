@@ -1984,6 +1984,18 @@ void supplyCalibration()
 	    manaDebtRegion, manaDebtRegion.supplyCapability, 120, 100, 100, 80, 0, false);
 	assert(manaDebt.accepted && manaDebt.levelAdjustedManaDebt == 20);
 	assert(manaDebt.potionEquivalentDemand > 0);
+	assert(manaDebt.manaPotionDebt == 0);
+
+	// A vocation that stocks mana potions repays mana debt with them instead.
+	PlayerBotHuntPolicy manaPotionPolicy;
+	manaDebtRegion.supplyProfile.kinds.push_back({PlayerBotSupplyKind::ManaPotion, playerBotManaPotionItemId, 5, 1, {}});
+	manaPotionPolicy.observeCombat({true, 60, 100, 100, 80, 100, 1});
+	manaPotionPolicy.observeRecovery(false);
+	for (unsigned i = 0; i < 3; ++i) manaPotionPolicy.observeKill();
+	const auto manaPotionDebt = manaPotionPolicy.observeSupplies(
+	    manaDebtRegion, manaDebtRegion.supplyCapability, 120, 100, 100, 80, 0, false);
+	assert(manaPotionDebt.accepted && manaPotionDebt.potionEquivalentDemand == 0);
+	assert(std::abs(manaPotionDebt.manaPotionDebt - 20.0 / playerBotManaPotionMinimumMana) < 1e-12);
 
 	// Level restoration is netted before clipping, so only resources spent
 	// during the outing become debt.
@@ -2873,6 +2885,9 @@ void typedSupplyStock()
 	assert(update.updated && std::abs(update.demand.unitsPerCombatSecond - 0.18) < 1e-12 && update.demand.samples == 2);
 	update = playerBotObserveSupplyDemand({}, 0, 120, true);
 	assert(update.updated && update.demand.unitsPerCombatSecond == 0 && update.demand.samples == 1);
+	// Unpaid debt counts as demand alongside consumed units.
+	update = playerBotObserveSupplyDemand({}, 1, 60, true, 2);
+	assert(update.updated && update.debt == 2 && std::abs(update.demand.unitsPerCombatSecond - 0.05) < 1e-12);
 
 	// Hunt fit: stock above the return threshold must cover the learned demand.
 	PlayerBotSupplyKindProfile arrows{PlayerBotSupplyKind::Ammunition, 2544, 40, 5, {0.1, 3}};

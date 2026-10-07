@@ -444,7 +444,8 @@ std::optional<PlayerBotHuntRuntimeCompletion> PlayerBotHuntRuntime::complete(con
 			if (after && after->rule.itemId != before.rule.itemId) continue;
 			const uint32_t remaining = after ? after->count : 0;
 			result.supplyDemand.push_back(policy.observeSupplyDemand(before.rule.kind,
-			    before.count > remaining ? before.count - remaining : 0, supplyDurationSeconds, player.supplyInterrupted));
+			    before.count > remaining ? before.count - remaining : 0, supplyDurationSeconds, player.supplyInterrupted,
+			    before.rule.kind == PlayerBotSupplyKind::ManaPotion ? result.supplyObservation.manaPotionDebt : 0));
 		}
 	} else {
 		result.supplyObservation.calibration = activeRegion->supplyCalibration;

@@ -100,7 +100,7 @@ function Assert-SpellUseEvents {
 	$manaFallback = @($events | Where-Object {
 		$_.event -eq "action_result" -and $_.action -eq "cast_spell" -and $_.result -eq "skipped" -and
 		$_.policy_candidate.spell -eq "Whirlwind Throw" -and $_.reason -eq "insufficient_mana_reserve" -and
-		$_.fallback -eq "normal_melee" -and @($_.legal_candidates).Count -eq 0
+		$_.mana_reserve -eq 20 -and $_.fallback -eq "normal_melee" -and @($_.legal_candidates).Count -eq 0
 	})
 	$invalidLegalCandidates = @($events | Where-Object {
 		$_.event -eq "action_result" -and $_.action -eq "cast_spell" -and $_.engine_result -ne "accepted" -and

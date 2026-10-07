@@ -8,11 +8,18 @@
 #include <chrono>
 #include <cstdint>
 #include <optional>
+#include <string>
 
 struct PlayerBotPotionAttempt {
 	int32_t health = 0;
 	int32_t healthMaximum = 0;
+	// Count of the potion type in use, not of all potions.
 	uint32_t potionCount = 0;
+	uint32_t mana = 0;
+	uint16_t itemId = 0;
+	// Mana potions verify a mana gain instead of a health gain.
+	bool restoresMana = false;
+	std::string trigger = "health_threshold";
 };
 
 enum class PlayerBotPotionVerificationResult : uint8_t {
@@ -53,6 +60,7 @@ class PlayerBotRecoverySession
 {
 	public:
 		bool hasPendingPotion() const;
+		const PlayerBotPotionAttempt* pendingPotion() const;
 		void beginPotion(PlayerBotPotionAttempt attempt);
 		std::optional<PlayerBotPotionVerification> verifyPotion(PlayerBotPotionAttempt current,
 		                                                        std::chrono::steady_clock::time_point now,

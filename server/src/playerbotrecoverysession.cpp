@@ -12,6 +12,11 @@ bool PlayerBotRecoverySession::hasPendingPotion() const
 	return potionPending;
 }
 
+const PlayerBotPotionAttempt* PlayerBotRecoverySession::pendingPotion() const
+{
+	return potionPending ? &potionAttempt : nullptr;
+}
+
 void PlayerBotRecoverySession::beginPotion(PlayerBotPotionAttempt attempt)
 {
 	potionAttempt = attempt;
@@ -27,7 +32,8 @@ std::optional<PlayerBotPotionVerification> PlayerBotRecoverySession::verifyPotio
 	PlayerBotPotionVerification verification;
 	verification.before = potionAttempt;
 	verification.after = current;
-	verification.result = current.potionCount < potionAttempt.potionCount && current.health > potionAttempt.health ?
+	const bool recovered = potionAttempt.restoresMana ? current.mana > potionAttempt.mana : current.health > potionAttempt.health;
+	verification.result = current.potionCount < potionAttempt.potionCount && recovered ?
 		PlayerBotPotionVerificationResult::Success : current.potionCount < potionAttempt.potionCount ?
 		PlayerBotPotionVerificationResult::IneffectiveRecovery : PlayerBotPotionVerificationResult::UseNotVerified;
 	if (verification.result != PlayerBotPotionVerificationResult::Success) {

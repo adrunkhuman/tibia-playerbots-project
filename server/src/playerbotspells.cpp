@@ -22,7 +22,6 @@ using namespace playerbot;
 extern Spells* g_spells;
 
 namespace {
-	constexpr uint32_t magicTrainingEmergencyReserve = 20;
 	constexpr auto magicTrainingRetryDelay = std::chrono::seconds(2);
 	constexpr size_t maximumSpellTrainerRoutes = 4;
 	constexpr size_t maximumSpellTrainerApproaches = 8;
@@ -59,7 +58,8 @@ namespace {
 
 void PlayerBotController::emitSpellCastEvent(const Position& position, const char* spellName, const char* words, const char* role,
                                              const char* need, const char* result, const char* engineResult, const char* reason,
-                                              const PlayerBotSpellPendingCast* pending, const Player* player, const char* fallback) const
+                                              const PlayerBotSpellPendingCast* pending, const Player* player, const char* fallback,
+                                              std::optional<uint32_t> manaReserve) const
 {
 	std::ostringstream fields;
 	fields << "\"action\":\"cast_spell\",\"result\":" << jsonString(result)
@@ -117,6 +117,8 @@ void PlayerBotController::emitSpellCastEvent(const Position& position, const cha
 	if (reason) {
 		fields << ",\"reason\":" << jsonString(reason);
 	}
+	// Static per learned spell set, so skip throttling still sees few distinct records.
+	if (manaReserve) fields << ",\"mana_reserve\":" << *manaReserve;
 	fields << ",\"fallback\":" << (fallback ? jsonString(fallback) : "null");
 	if (!pending && std::strcmp(result, "skipped") == 0) {
 		// Walking and combat turns re-check spells several times a second; an
@@ -142,7 +144,8 @@ bool PlayerBotController::dispatchSpellCommand(Player& player, const Position& p
 		emitSpellCastEvent(position, descriptor ? descriptor->name : nullptr, descriptor ? descriptor->words : nullptr,
 		                   descriptor ? playerBotSpellRoleName(descriptor->role) : nullptr, command.need.empty() ? "unknown" : command.need.c_str(),
 		                   "skipped", "not_attempted", command.reason.c_str(), nullptr, &player,
-		                   descriptor ? fallbackForRole(descriptor->role, potionItemId) : fallbackForNeed(command.need.c_str(), potionItemId));
+		                   descriptor ? fallbackForRole(descriptor->role, potionItemId) : fallbackForNeed(command.need.c_str(), potionItemId),
+		                   command.manaReserve);
 		return false;
 	}
 	const auto& cast = *command.spell;
@@ -237,7 +240,7 @@ bool PlayerBotController::processMagicTraining(Player& player, const Position& p
 	        << ",\"mana_max\":" << player.getMaxMana() << ",\"mana_gain\":" << selected->manaGain
 	        << ",\"mana_tick_interval\":" << selected->manaTickInterval << ",\"mana_tick_remaining\":" << selected->manaTickRemaining
 	        << ",\"predicted_mana\":" << predictedMana << ",\"wasted_mana\":" << wastedMana
-	        << ",\"mana_cost\":" << selected->cost << ",\"emergency_reserve\":" << magicTrainingEmergencyReserve;
+	        << ",\"mana_cost\":" << selected->cost << ",\"emergency_reserve\":" << selected->reserve;
 	emit("action_result", position, request.str());
 	InstantSpell* spell = g_spells ? g_spells->getInstantSpellByName(selected->name) : nullptr;
 	if (!spell || spell->getWords() != selected->words) {
@@ -261,7 +264,7 @@ bool PlayerBotController::processMagicTraining(Player& player, const Position& p
 	       << ",\"mana_after\":" << manaAfter << ",\"mana_cost\":" << selected->cost << ",\"mana_delta\":" << manaDelta
 	       << ",\"mana_spent_before\":" << manaSpentBefore << ",\"mana_spent_after\":" << manaSpentAfter
 	       << ",\"magic_level_before\":" << magicLevelBefore << ",\"magic_level_after\":" << magicLevelAfter
-	       << ",\"emergency_reserve\":" << magicTrainingEmergencyReserve << ",\"mana_gain\":" << selected->manaGain
+	       << ",\"emergency_reserve\":" << selected->reserve << ",\"mana_gain\":" << selected->manaGain
 	       << ",\"mana_tick_interval\":" << selected->manaTickInterval << ",\"mana_tick_remaining\":" << selected->manaTickRemaining
 	       << ",\"predicted_mana\":" << predictedMana << ",\"wasted_mana\":" << wastedMana;
 	emit("action_result", position, result.str());
