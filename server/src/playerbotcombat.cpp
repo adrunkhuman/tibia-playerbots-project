@@ -510,9 +510,11 @@ bool PlayerBotController::attackVisibleMonster(Player* player, const Position& c
 		if (!target) {
 			continue;
 		}
-		if (!routeValidated && !Position::areInRange<1, 1, 0>(currentPosition, target->getPosition())) {
+		const uint8_t engagementRange = rangedAttackRange(*player);
+		if (!routeValidated && (currentPosition.z != target->getPosition().z ||
+		                        playerBotChebyshev(currentPosition, target->getPosition()) > engagementRange)) {
 			const PlayerBotNavigationRoutePlan route = planNavigationRoute(
-			    *player, PlayerBotNavigationGoal::withinRange(target->getPosition(), 1, 1), {},
+			    *player, PlayerBotNavigationGoal::withinRange(target->getPosition(), engagementRange, engagementRange), {},
 			    maximumTargetApproachExpandedNodes, true);
 			telemetry.recordPathfinding(route.metrics.elapsed, route.metrics.result == PlayerBotNavigationResult::Reached);
 			if (route.metrics.result != PlayerBotNavigationResult::Reached) {
@@ -718,6 +720,7 @@ void PlayerBotController::finishTraversalCombat(Player* player, const Position& 
 {
 	g_game.playerSetAttackedCreature(playerId, 0);
 	clearTraversalTarget(currentPosition, reason);
+	resetNavigation();
 	setStage(ScenarioStage::Traverse, currentPosition);
 }
 
@@ -781,9 +784,41 @@ void PlayerBotController::processTraversalCombat(Player* player, const Position&
 	if (target) observed = {true, target->isRemoved(), target->isDead(), player->canSee(target->getPosition()), player->canSeeCreature(target),
 	                        Position::areInRange<1, 1, 0>(currentPosition, target->getPosition()), target->getAttackedCreature() == player,
 	                        player->getAttackedCreature() == target, {target->getID(), target->getPosition(), target->getName()}};
-	if (target && !target->isRemoved() && !target->isDead() && observed.visible && observed.visibleCreature && !observed.adjacent) {
+	// Lifetime and last-known target position must advance even on movement turns.
+	const PlayerBotCombatDecision combat = huntCoordinator.advanceCombat(
+	    {currentPosition, std::chrono::steady_clock::now(), observed, {}});
+	if (combat.command == PlayerBotCombatCommand::BeginLoot) {
+		resetNavigation();
+		beginLoot(player, currentPosition, combat);
+		schedule(navigationInterval);
+		return;
+	}
+	if (combat.command == PlayerBotCombatCommand::Abandon) {
+		if (combat.reason && std::strcmp(combat.reason, "combat_timeout") == 0) {
+			logActionFailure("attack", combat.reason, currentPosition);
+		}
+		finishTraversalCombat(player, currentPosition, combat.reason ? combat.reason : "target_lost");
+		schedule(navigationInterval);
+		return;
+	}
+	const bool targetEngageable = target && observed.present && !observed.removed && !observed.dead &&
+	                              observed.visible && observed.visibleCreature && observed.attackedByPlayer;
+	const uint8_t weaponRange = targetEngageable ? rangedAttackRange(*player) : 1;
+	bool approachTarget = targetEngageable && !observed.adjacent;
+	uint8_t approachRange = 1;
+	if (targetEngageable && weaponRange > 1) {
+		const RangedTurn turn = positionRangedFight(player, currentPosition, *target, weaponRange);
+		if (turn.waiting || turn.action == PlayerBotRangedAction::Retreat) {
+			schedule(navigationDecisionDelay(*player));
+			return;
+		}
+		approachTarget = turn.action == PlayerBotRangedAction::Close;
+		approachRange = turn.approachRange;
+	}
+	if (approachTarget) {
 		PlayerBotNavigationRuntimeOutcome navigation;
-		if (!processNavigation(player, currentPosition, PlayerBotNavigationGoal::withinRange(target->getPosition(), 1, 1),
+		if (!processNavigation(player, currentPosition,
+		                       PlayerBotNavigationGoal::withinRange(target->getPosition(), approachRange, approachRange),
 		                       &navigation, maximumTargetApproachExpandedNodes, false, true)) {
 			if (navigation.routeUnavailable || navigation.oscillation) {
 				const uint32_t previousTargetId = target->getID();
@@ -797,21 +832,137 @@ void PlayerBotController::processTraversalCombat(Player* player, const Position&
 			return;
 		}
 	}
-	const PlayerBotCombatDecision decision = huntCoordinator.advanceCombat({currentPosition, std::chrono::steady_clock::now(), observed, {}});
-	if (decision.command == PlayerBotCombatCommand::BeginLoot) {
-		beginLoot(player, currentPosition, decision);
-	} else if (decision.command == PlayerBotCombatCommand::Abandon) {
-		if (decision.reason && std::strcmp(decision.reason, "combat_timeout") == 0) {
-			logActionFailure("attack", decision.reason, currentPosition);
+	if (targetEngageable && tryOffensiveSpell(player, currentPosition)) {
+		schedule(navigationDecisionDelay(*player));
+		return;
+	}
+	// A closing monster reaches a ranged bot within a step or two, so check sooner.
+	schedule(weaponRange > 1 && targetEngageable ? rangedPositionInterval : navigationInterval);
+}
+
+uint8_t PlayerBotController::rangedAttackRange(const Player& player) const
+{
+	if (fixtureDriver.rangedPositionDisabled()) return 1;
+	const Item* launcher = player.getWeapon(true);
+	if (!launcher || launcher->getWeaponType() != WEAPON_DISTANCE || !player.getWeapon()) return 1;
+	return std::max<uint8_t>(1, launcher->getShootRange());
+}
+
+PlayerBotController::RangedTurn PlayerBotController::positionRangedFight(Player* player, const Position& currentPosition,
+	                                                                     Creature& target, uint8_t range)
+{
+	const auto now = std::chrono::steady_clock::now();
+	const bool actionPending = player->getWalkDelay() > 0 || !player->canDoAction();
+	const auto pendingTile = rangedMovement.pendingMoveTarget();
+	const auto movement = rangedMovement.observeMovement(currentPosition, actionPending, now,
+	                                                     navigationStepTimeout, navigationBlockSuppression);
+	if (movement == PlayerBotPendingMovementResult::Waiting) return {PlayerBotRangedAction::Hold, 1, true};
+	if (pendingTile) {
+		std::ostringstream fields;
+		fields << "\"result\":\"" << (movement == PlayerBotPendingMovementResult::Completed ? "completed" : "failed")
+		       << "\",\"target_id\":" << target.getID() << ",\"tile\":{\"x\":" << pendingTile->x
+		       << ",\"y\":" << pendingTile->y << ",\"z\":" << static_cast<uint16_t>(pendingTile->z) << '}';
+		emit("ranged_position_step", currentPosition, fields.str());
+	}
+	PlayerBotRangedPositionInput input;
+	input.self = currentPosition;
+	input.target = target.getPosition();
+	input.range = range;
+	// Engine step durations include terrain and the near-target monster slowdown.
+	input.selfStepMs = player->getStepDuration();
+	input.targetStepMs = target.getStepDuration();
+	input.sightClear = g_game.canThrowObjectTo(currentPosition, input.target, true, true, range, range);
+	const uint32_t distance = playerBotChebyshev(currentPosition, input.target);
+	// Only a closing monster needs the neighbouring tiles; skip the work otherwise.
+	if (currentPosition.z == input.target.z && distance < range && input.targetStepMs >= input.selfStepMs &&
+	    movement != PlayerBotPendingMovementResult::Mismatch) {
+		SpectatorVec spectators;
+		g_game.map.getSpectators(spectators, currentPosition);
+		std::vector<Position> hostiles;
+		for (Creature* creature : spectators) {
+			const Monster* monster = creature->getMonster();
+			if (!monster || creature == &target || creature->isRemoved() || creature->isDead() || creature->getMaster() ||
+			    !monster->isHostile()) continue;
+			hostiles.push_back(creature->getPosition());
 		}
-		finishTraversalCombat(player, currentPosition, decision.reason ? decision.reason : "target_lost");
-	} else if (target) {
-		if (tryOffensiveSpell(player, currentPosition)) {
-			schedule(navigationDecisionDelay(*player));
-			return;
+		const PlayerBotNavigationCostPolicy costPolicy = navigationCostPolicy(*player);
+		const double currentDanger = costPolicy.dangerAt(currentPosition);
+		const bool confined = huntCoordinator.huntActive() && huntRegionReached;
+		// Cardinal tiles first: diagonal steps take longer.
+		static constexpr Direction directions[] = {DIRECTION_NORTH, DIRECTION_EAST, DIRECTION_SOUTH, DIRECTION_WEST,
+		                                           DIRECTION_NORTHEAST, DIRECTION_SOUTHEAST, DIRECTION_SOUTHWEST,
+		                                           DIRECTION_NORTHWEST};
+		const PlayerBotNavigator navigator;
+		const auto blocked = rangedMovement.activeBlockedPositions(now);
+		for (Direction direction : directions) {
+			PlayerBotNavigationStep step;
+			PlayerBotRangedTile tile;
+			tile.position = getNextPosition(direction, currentPosition);
+			const Tile* destination = g_game.map.getTile(tile.position);
+			tile.open = destination && !destination->getTopCreature() &&
+			            !destination->hasFlag(TILESTATE_FLOORCHANGE | TILESTATE_TELEPORT | TILESTATE_PROTECTIONZONE) &&
+			            navigator.resolveMove(*player, currentPosition, direction, blocked, step) &&
+			            step.expectedPosition == tile.position;
+			if (tile.open) {
+				tile.insideArea = !confined || huntCoordinator.insideHuntArea(tile.position, Map::maxClientViewportX,
+				                                                              Map::maxClientViewportX + 1,
+				                                                              Map::maxClientViewportY,
+				                                                              Map::maxClientViewportY + 1);
+				tile.hazardous = costPolicy.dangerAt(tile.position) > currentDanger;
+				tile.sightClear = g_game.canThrowObjectTo(tile.position, input.target, true, true, range, range);
+				tile.hostileNearby = std::any_of(hostiles.begin(), hostiles.end(), [&tile](const Position& hostile) {
+					return tile.position.z == hostile.z && playerBotChebyshev(tile.position, hostile) <= 2;
+				});
+			}
+			input.neighbours.push_back(tile);
 		}
 	}
-	schedule(navigationInterval);
+	PlayerBotRangedPositionDecision decision = playerBotRangedPosition(input);
+	if (movement == PlayerBotPendingMovementResult::Mismatch) {
+		decision.action = PlayerBotRangedAction::FightInPlace;
+		decision.reason = "retreat_failed";
+	}
+	// Local positioning owns movement until closing resumes. An old approach
+	// destination must not later be interpreted as a failed retreat landing.
+	if (decision.action != PlayerBotRangedAction::Close) navigationRuntime.reset();
+	RangedTurn turn;
+	turn.action = decision.action;
+	if (decision.action == PlayerBotRangedAction::Close) {
+		// With a blocked shot inside range, `range` is already "reached": step closer instead.
+		turn.approachRange = decision.distance > range ? range : static_cast<uint8_t>(std::max<uint32_t>(1, decision.distance - 1));
+	}
+	if (decision.action == PlayerBotRangedAction::Retreat) {
+		if (actionPending) return {PlayerBotRangedAction::Hold, 1, true};
+		PlayerBotNavigationStep step;
+		step.action = PlayerBotNavigationAction::Move;
+		step.direction = getDirectionTo(currentPosition, decision.tile);
+		step.target = step.expectedPosition = decision.tile;
+		if (executeNavigationStep(player, step)) {
+			rangedMovement.beginMovement(step, now);
+		} else {
+			rangedMovement.suppress(step.target, now + navigationBlockSuppression);
+			turn.action = PlayerBotRangedAction::FightInPlace;
+		}
+	}
+	const char* reason = turn.action == decision.action ? decision.reason : "retreat_failed";
+	if (decision.action == PlayerBotRangedAction::Retreat || lastRangedPosition.targetId != target.getID() ||
+	    lastRangedPosition.action != turn.action || lastRangedPosition.reason != reason) {
+		lastRangedPosition = {target.getID(), turn.action, reason};
+		static constexpr const char* names[] = {"hold", "retreat", "close", "fight_in_place"};
+		std::ostringstream fields;
+		fields << "\"action\":\"" << names[static_cast<uint8_t>(turn.action)] << "\",\"reason\":" << jsonString(reason)
+		       << ",\"target_id\":" << target.getID() << ",\"distance\":" << decision.distance
+		       << ",\"range\":" << static_cast<uint32_t>(range) << ",\"self_speed\":" << player->getSpeed()
+		       << ",\"target_speed\":" << target.getSpeed() << ",\"self_step_ms\":" << input.selfStepMs
+		       << ",\"target_step_ms\":" << input.targetStepMs << ",\"sight_clear\":"
+		       << (input.sightClear ? "true" : "false");
+		if (decision.action == PlayerBotRangedAction::Retreat) {
+			fields << ",\"tile\":{\"x\":" << decision.tile.x << ",\"y\":" << decision.tile.y << ",\"z\":"
+			       << static_cast<uint16_t>(decision.tile.z) << '}';
+		}
+		emit("ranged_position", currentPosition, fields.str());
+	}
+	return turn;
 }
 
 bool PlayerBotController::isActiveHuntCombat(const Player& player) const

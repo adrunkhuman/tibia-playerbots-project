@@ -65,6 +65,7 @@ namespace playerbot {
 			bool startInHunt() const { return policy.startInHunt; }
 			bool detailAllHuntCandidates() const { return policy.detailAllHuntCandidates; }
 			bool remoteHuntScenario() const { return policy.remoteHuntFixture; }
+			bool rangedPositionDisabled() const { return policy.rangedPositionDisabled; }
 			PlayerBotFixtureLocalRouteRecovery localRouteRecovery() const;
 			NavigationPreflightFixture navigationPreflightFixture() const { return policy.navigationPreflightFixture; }
 			Position navigationPreflightGoal() const;

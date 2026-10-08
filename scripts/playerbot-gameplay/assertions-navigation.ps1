@@ -710,3 +710,62 @@ function Assert-MainlandLoopEvents {
 		throw "Mainland loop failed. hunts=$($hunts.Count), deposits=$($deposits.Count), realDepot=$($realDepot.Count), trainingRoomDepot=$($trainingRoomDepot.Count), localSelections=$($selection.Count), remoteBuyerDeposits=$($remoteBuyerDeposit.Count), rookService=$($rookService.Count), terminal=$($terminal.Count)."
 	}
 }
+
+function Assert-RangedPositionEvents {
+	param([string]$Logs, [ValidateSet("control", "open", "corner")][string]$Case)
+
+	$events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
+	$results = [regex]::Matches($Logs, '(?m)^PLAYERBOT_GAMEPLAY_TEST RANGED_POSITION_RESULT (?<mode>\S+) damage=(?<damage>\d+) defeated=(?<defeated>\w+) seconds=(?<seconds>[\d.]+) target=(?<target>\d+) dealt=(?<dealt>\d+) hits=(?<hits>\d+) fight_ms=(?<fight>\d+) ranged_ms=(?<ranged>\d+) steps=(?<steps>\d+) displacement=(?<displacement>\d+) loot_before=(?<loot>\d+)\r?$')
+	if ($results.Count -ne 1) { throw "Ranged position ($Case) needs one complete observation; found $($results.Count)." }
+	$result = $results[0]
+	$expectedMode = @{ control = "ranged_position_control"; open = "ranged_position"; corner = "ranged_position_corner" }[$Case]
+	$targetId = [long]$result.Groups['target'].Value
+	$positions = @($events | Where-Object { $_.event -eq "ranged_position" -and $_.target_id -eq $targetId })
+	$retreats = @($positions | Where-Object { $_.action -eq "retreat" })
+	$fightInPlace = @($positions | Where-Object { $_.action -eq "fight_in_place" })
+	$terminal = @($events | Where-Object {
+		$_.event -in @("terminal", "death") -or
+		($_.event -eq "lifecycle" -and $_.status -in @("dead", "removed", "recovery_abandoned"))
+	})
+	$defeated = @($events | Where-Object { $_.event -eq "target_changed" -and $_.reason -eq "target_defeated" -and $_.previous_target_id -eq $targetId })
+	$fightMs = [long]$result.Groups['fight'].Value
+	$rangedMs = [long]$result.Groups['ranged'].Value
+	if ($result.Groups['mode'].Value -ne $expectedMode -or $targetId -eq 0 -or
+		$result.Groups['defeated'].Value -ne "true" -or $defeated.Count -ne 1 -or $terminal.Count -ne 0 -or
+		$fightMs -le 0 -or $fightMs -gt 90000 -or $rangedMs -gt $fightMs -or
+		[int]$result.Groups['dealt'].Value -ne 150 -or [int]$result.Groups['hits'].Value -ne 15) {
+		throw "Ranged position ($Case) did not complete normalized chaser combat. result=$($result.Value), defeats=$($defeated.Count), terminal=$($terminal.Count)."
+	}
+	$lootBefore = [long]$result.Groups['loot'].Value
+	$loot = @($events | Where-Object { $_.event -eq "action_result" -and $_.action -eq "loot" -and $_.result -eq "success" -and $_.item_id -eq 2148 })
+	if ($loot.Count -ne 1 -or $loot[0].sequence -le $defeated[0].sequence -or $loot[0].count -ne 1 -or
+		$loot[0].coin_gold_acquired -ne 1 -or $loot[0].inventory_count -ne ($lootBefore + 1)) {
+		throw "Ranged position ($Case) did not book the chaser's one gold coin after defeat. loot=$($loot.Count), before=$lootBefore."
+	}
+	$damage = [int]$result.Groups['damage'].Value
+	Write-Host "PLAYERBOT_GAMEPLAY_TEST RANGED_POSITION_DAMAGE case=$Case damage=$damage seconds=$($result.Groups['seconds'].Value) retreats=$($retreats.Count) ranged_ms=$rangedMs fight_ms=$fightMs"
+	switch ($Case) {
+		"control" {
+			if ($positions.Count -ne 0 -or $damage -le 0) { throw "Ranged position control must take chaser damage without positioning decisions." }
+			$script:rangedPositionControlDamage = $damage
+		}
+		"open" {
+			if ($retreats.Count -lt 1 -or [int]$result.Groups['steps'].Value -lt 1 -or
+				[int]$result.Groups['displacement'].Value -lt 1) {
+				throw "Ranged position open room needs executed displacement, not just retreat decisions. result=$($result.Value)."
+			}
+			if ($rangedMs * 2 -le $fightMs) {
+				throw "Ranged position open room spent no majority at non-adjacent in-range distance: $rangedMs/$fightMs ms."
+			}
+			if ($null -eq $script:rangedPositionControlDamage) { throw "Ranged position open room needs the control result; run both in one invocation." }
+			if ($damage -ge $script:rangedPositionControlDamage) {
+				throw "Ranged position took $damage damage; the control took $($script:rangedPositionControlDamage)."
+			}
+		}
+		"corner" {
+			if ($retreats.Count -ne 0 -or @($fightInPlace | Where-Object { $_.reason -eq "retreat_blocked" }).Count -lt 1) {
+				throw "Ranged position shallow wall did not fall back in place. retreats=$($retreats.Count), fightInPlace=$($fightInPlace.Count)."
+			}
+		}
+	}
+}

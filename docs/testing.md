@@ -30,6 +30,10 @@ Useful subsystem switches include `-Healing`, `-ValueLoot` (value replacement pl
 
 Paladin healing has exact scenarios `paladin_spell_training` (paid learning, casting, and restart), `paladin_healing_economy` (spell choice and reserve), `paladin_mana_healing`, `paladin_healing_fallback`, and `paladin_supply_restock`. They seed Bot One as a Paladin and do not provision Bot Three or establish sustained progression. `-SpellTraining`, `-SpellUse`, and `-Healing` include the relevant Paladin cases alongside Knight checks.
 
+Ranged positioning (#235) has `ranged_position_control` (the Paladin fights like a melee class), `ranged_position` (open room: observed displacement, more than half the fight at distance 2–3, and less damage than the control), and `ranged_position_corner` (a shallow wall blocks immediate retreats; must fall back with `retreat_blocked`). Select them with `-Focused -RangedPosition`; exact `-Scenario ranged_position` automatically includes its control. These disposable fixtures use an isolated synthetic arena with a 64-tile retreat runway, normalize spear hits/damage/breakage and chaser damage, count damage through health-change events rather than sampled health loss, and require the chaser's defeat and subsequent coin loot. They do not test wall sliding or natural combat rolls. Non-Docker fixture checks are `lua server/tests/playerbot_ranged_fixture_contracts.lua` and `pwsh -File server/tests/playerbot_ranged_fixture_assertions.ps1`.
+
+Each changed positioning decision or retreat request emits `ranged_position` with `action` (`hold`, `retreat`, `close`, `fight_in_place`), `reason`, `distance`, `range`, raw speeds, current cardinal step durations (`self_step_ms`, `target_step_ms`), and the requested retreat `tile`. `ranged_position_step` records observed `completed` or `failed` movement; a request alone is not displacement evidence.
+
 `-Scenario deep_hunt_return` seeds a level-15 Knight at `(33101,31745,9)` and checks arrival at the planner-selected depot locker approach. It does not prove unattended hunt progression.
 
 `-SkipBuild` requires a known-current `angelion-server:latest` image and does not prove it matches the worktree. `-KeepStack` preserves the final stack for debugging. `-TimeoutSeconds` accepts 30–3600 seconds. Most focused scenarios use controlled state or destinations; map-derived planning modes improve integration evidence but still do not prove long-running progression.
@@ -68,6 +72,7 @@ sh server/tests/playerbothealing_contracts.sh
 sh server/tests/playerbotsurvival_contracts.sh
 sh server/tests/playerbotlifecycle_contracts.sh
 sh server/tests/playerbotapproach_contracts.sh
+sh server/tests/playerbotrangedposition_contracts.sh
 sh server/tests/playerbothunttiming_contracts.sh
 sh server/tests/playerbotrouting_contracts.sh
 sh server/tests/playerbotselllootapproach_contracts.sh

@@ -245,7 +245,7 @@ function F.suppressNearbyMonsters(playerId)
             creature:getName() ~= F.nonlootableMonsterName and creature:getName() ~= F.containerDeathItemMonsterName and
             creature:getName() ~= F.valueMonsterName and creature:getName() ~= "Playerbot Food Cap Corpse" and
             creature:getName() ~= F.cargoCoinStackMonsterName and creature:getName() ~= F.spellTargetMonsterName and creature:getName() ~= F.corpseBlockerMonsterName and
-            creature:getName() ~= F.defensiveMonsterName then
+            creature:getName() ~= F.defensiveMonsterName and creature:getName() ~= F.meleeChaserName then
             creature:remove()
         end
     end

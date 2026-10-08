@@ -37,7 +37,7 @@ function F.login.onLogin(player)
         end
     end
 	F.selectHealthPotion(player)
-    assert(mode == "transit_return" or mode == "mainland" or mode == "carlin_local_service" or mode == "cycle" or mode == "depot" or mode == "depot_risk_fallback" or mode == "slotted_loot_seller" or mode == "slotted_loot_no_seller" or mode == "sell_loot" or mode == "sell_loot_remote_depot" or mode == "navigation" or mode == "navigation_recovery" or mode == "carlin_service_route" or mode == "mutable_portal_route" or mode == "patrol_recovery" or mode == "target_approach" or mode == "target_approach_unreachable" or mode == "target_attacker_priority" or mode == "hunt_area_arrival" or mode == "remote_hunt" or mode == "corpse" or mode == "corpse_detour" or mode == "corpse_inaccessible" or mode == "death" or mode == "healing" or mode == "mana_potion" or mode == "spell_use" or
+    assert(mode == "transit_return" or mode == "mainland" or mode == "carlin_local_service" or mode == "cycle" or mode == "depot" or mode == "depot_risk_fallback" or mode == "slotted_loot_seller" or mode == "slotted_loot_no_seller" or mode == "sell_loot" or mode == "sell_loot_remote_depot" or mode == "navigation" or mode == "navigation_recovery" or mode == "carlin_service_route" or mode == "mutable_portal_route" or mode == "patrol_recovery" or mode == "target_approach" or mode == "target_approach_unreachable" or mode == "target_attacker_priority" or mode == "ranged_position" or mode == "ranged_position_corner" or mode == "ranged_position_control" or mode == "hunt_area_arrival" or mode == "remote_hunt" or mode == "corpse" or mode == "corpse_detour" or mode == "corpse_inaccessible" or mode == "death" or mode == "healing" or mode == "mana_potion" or mode == "spell_use" or
         mode == "healing_resupply" or mode == "value" or mode == "cargo_currency" or mode == "cargo_partial" or
         mode == "cargo_nested" or mode == "cargo_protected" or mode == "progression" or mode == "progression_bundle" or
         mode == "progression_nested" or mode == "progression_resume" or mode == "progression_nested_resume" or
@@ -984,6 +984,47 @@ function F.login.onLogin(player)
 			return true
 		end
         print("PLAYERBOT_GAMEPLAY_TEST TARGET_APPROACH_START " .. monster:getId())
+        return true
+    end
+    if mode == "ranged_position" or mode == "ranged_position_corner" or mode == "ranged_position_control" then
+        -- A level-8 spear Paladin against one slower melee chaser. The shallow
+        -- wall fixture checks blocked retreat, not wall sliding or corner escape.
+        -- The control variant uses melee positioning with the same fixture spear.
+        assert(player:setVocation(3), "ranged position fixture could not select the Paladin vocation")
+        for _, slot in ipairs({CONST_SLOT_LEFT, CONST_SLOT_RIGHT}) do
+            local item = player:getSlotItem(slot)
+            if item then assert(item:remove(), "ranged position fixture could not clear a hand") end
+        end
+        F.removeAll(player, F.spearItemId)
+        assert(player:addItem(F.spearItemId, 7, false, 1, CONST_SLOT_LEFT) and
+            player:addItem(F.seedShieldId, 1, false, 1, CONST_SLOT_RIGHT), "ranged position fixture could not equip spear/shield")
+        assert(player:addHealth(player:getMaxHealth() - player:getHealth()) and
+            player:addMana(player:getMaxMana() - player:getMana()), "ranged position fixture could not restore health/mana")
+        player:removeCondition(CONDITION_MANASHIELD)
+        -- Full supplies keep the Paladin from leaving for the depot mid-fight.
+        F.removeAllHealthPotions(player)
+        F.removeAll(player, F.manaPotionItemId)
+        assert(player:addItem(F.healthPotionItemId, 5) and player:addItem(F.manaPotionItemId, 5) and player:setCapacity(100000),
+            "ranged position fixture could not normalize supplies")
+        print("PLAYERBOT_GAMEPLAY_TEST RANGED_POSITION_SUPPLIES " .. player:getItemCount(F.healthPotionItemId) .. " " .. player:getItemCount(F.manaPotionItemId))
+        local arena = F.createRangedArena()
+        assert(player:teleportTo(arena), "ranged position fixture could not enter its arena")
+        F.suppressNearbyMonsters(player:getId())
+        local position = player:getPosition()
+        if mode == "ranged_position_corner" then
+            for y = -1, 1 do
+                local wallPosition = Position(position.x - 1, position.y + y, position.z)
+                local tile = Tile(wallPosition)
+                if tile and tile:isWalkable() then
+                    assert(Game.createItem(1499, 1, wallPosition), "ranged position fixture could not seal the corner")
+                end
+            end
+        end
+        local monster = Game.createMonster(F.meleeChaserName, Position(position.x + (mode == "ranged_position_corner" and 3 or 5), position.y, position.z), true, true)
+        assert(monster, "ranged position fixture could not create its chaser")
+        F.startRangedPositionObservation(player, monster, mode)
+        assert(monster:selectTarget(player), "ranged position fixture could not select its chaser target")
+        print("PLAYERBOT_GAMEPLAY_TEST RANGED_POSITION_START " .. mode .. " " .. monster:getId())
         return true
     end
     if mode == "transit_return" then F.prepareTransitReturn(player); return true end

@@ -14,6 +14,7 @@
 // Internal controller contract shared by the responsibility-specific playerbot implementation units.
 
 #include "playerbotapproach.h"
+#include "playerbotrangedposition.h"
 #include "playerbot.h"
 #include "playerbothuntcoordinator.h"
 #include "playerbothunttiming.h"
@@ -66,6 +67,7 @@ extern ConfigManager g_config;
 
 namespace playerbot {
 	inline constexpr uint32_t navigationInterval = 1000;
+	inline constexpr uint32_t rangedPositionInterval = 400;
 	inline constexpr uint32_t huntRegionPathfindingCallsPerTurn = 1;
 	inline constexpr uint32_t huntRegionScoringCandidatesPerTurn = 32;
 	inline constexpr uint32_t blockedRouteRetryInterval = 500;
@@ -269,6 +271,17 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		void finishTraversalCombat(Player* player, const Position& currentPosition, const char* reason);
 
 		void processTraversalCombat(Player* player, const Position& currentPosition);
+
+		// Weapon range when the equipped weapon outranges melee, otherwise 1.
+		uint8_t rangedAttackRange(const Player& player) const;
+		// Position policy for ranged weapons (#235). `approachRange` is the
+		// distance to walk within when the action is Close.
+		struct RangedTurn {
+			PlayerBotRangedAction action = PlayerBotRangedAction::Hold;
+			uint8_t approachRange = 1;
+			bool waiting = false;
+		};
+		RangedTurn positionRangedFight(Player* player, const Position& currentPosition, Creature& target, uint8_t range);
 
 		EquipmentHuntSummary equipmentHuntSummary(Player& player, const PlayerBotCombatProfile& profile) const;
 		void emitEquipmentOffer(const Player& player, const EquipmentOfferEvaluation& evaluation,
@@ -732,7 +745,14 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		uint64_t serviceTopologyGeneration = 0;
 		PlayerBotNavigationRiskProfile riskProfile;
 		PlayerBotNavigationRuntime navigationRuntime;
+		// Local retreat acknowledgements and short-lived failed-tile suppression.
+		PlayerBotNavigationSession rangedMovement;
 		bool huntRegionReached = false;
+		struct RangedPositionRecord {
+			uint32_t targetId = 0;
+			PlayerBotRangedAction action = PlayerBotRangedAction::Hold;
+			std::string reason;
+		} lastRangedPosition;
 		HuntTravelBudgetPhase huntTravelBudgetPhase = HuntTravelBudgetPhase::None;
 		uint64_t huntExitFareReserve = 0;
 		uint32_t huntRecoveryPotionReserve = 0;

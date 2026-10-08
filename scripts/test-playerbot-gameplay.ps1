@@ -17,7 +17,7 @@ Runs value replacement, currency-versus-spear, partial-capacity, nested-destinat
 and protected full-slot cargo fixtures.
 
 .PARAMETER Scenario
-Runs only the named scenarios. Names must match the gameplay scenario catalog.
+Runs the named scenarios and their required controls. Names must match the gameplay scenario catalog.
 
 .PARAMETER ContinueOnFailure
 Captures diagnostics and continues with the next selected scenario after a failure.
@@ -31,6 +31,7 @@ param(
 	[int]$TimeoutSeconds = 300,
     [switch]$FullNavigation,
 	[switch]$TargetApproach,
+	[switch]$RangedPosition,
     [switch]$CorpseLoot,
     [switch]$DeathTelemetry,
 	[switch]$Healing,
@@ -88,7 +89,7 @@ $scenarioCatalog = @(
 	"equipment_offer_shadow_no_upgrade", "equipment_purchase", "equipment_purchase_resume", "equipment_purchase_provider_moved", "equipment_purchase_provider_unreachable", "equipment_purchase_space",
 	"equipment_purchase_rejected", "equipment_purchase_spear", "equipment_tool_replenishment", "equipment_tool_nested_inventory", "adaptive_challenge", "mainland_equipment_reward", "oracle_departure",
 		"oracle_level_eight_interrupt", "oracle_level_eight_recovery",
-		"navigation", "navigation_recovery", "svargrond_local_route_recovery", "navigation_fare_rejection", "navigation_risk_rejection", "door_passages", "carlin_service_route", "mutable_portal_route", "mutable_portal_open_no_shovel", "patrol_recovery", "target_approach", "target_approach_unreachable", "target_attacker_priority",
+		"navigation", "navigation_recovery", "svargrond_local_route_recovery", "navigation_fare_rejection", "navigation_risk_rejection", "door_passages", "carlin_service_route", "mutable_portal_route", "mutable_portal_open_no_shovel", "patrol_recovery", "target_approach", "target_approach_unreachable", "target_attacker_priority", "ranged_position_control", "ranged_position", "ranged_position_corner",
 	"paladin_spell_training", "paladin_healing_economy", "paladin_mana_healing", "paladin_healing_fallback", "paladin_supply_restock",
 	"spell_training", "spell_training_shortlist", "spell_training_low_supplies", "spell_training_low_supplies_unaffordable", "spell_use", "spell_calibration", "magic_training_haste", "magic_training_great_light",
 	"magic_training_light", "magic_training_refresh", "magic_training_reserve", "magic_training_exact_full",
@@ -104,8 +105,8 @@ foreach ($scenarioName in $scenarioCatalog) {
 		throw "Duplicate gameplay scenario name: $scenarioName"
 	}
 }
-if ($scenarioCatalog.Count -ne 113) {
-	throw "The gameplay scenario catalog must contain 113 scenarios; found $($scenarioCatalog.Count)."
+if ($scenarioCatalog.Count -ne 116) {
+	throw "The gameplay scenario catalog must contain 116 scenarios; found $($scenarioCatalog.Count)."
 }
 $requestedScenarioNames = @($Scenario | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
 $exactScenarioSelection = $requestedScenarioNames.Count -gt 0
@@ -116,6 +117,11 @@ foreach ($scenarioName in $requestedScenarioNames) {
 	}
 	[void]$selectedScenarios.Add($scenarioName)
 }
+# Resolve comparison dependencies before any Docker command or disposable reset.
+if ($selectedScenarios.Contains("ranged_position")) {
+	[void]$selectedScenarios.Add("ranged_position_control")
+}
+$script:rangedPositionControlDamage = $null
 if ($exactScenarioSelection -and ($Focused -or $MagicTrainingCase)) {
 	throw "-Scenario cannot be combined with -Focused or -MagicTrainingCase."
 }
@@ -161,7 +167,7 @@ if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
 	throw "Docker is required to run the playerbot gameplay suite."
 }
 
-$focusedScenarioRequested = $FullNavigation -or $TargetApproach -or $CorpseLoot -or $DeathTelemetry -or $Healing -or $ValueLoot -or
+$focusedScenarioRequested = $FullNavigation -or $TargetApproach -or $RangedPosition -or $CorpseLoot -or $DeathTelemetry -or $Healing -or $ValueLoot -or
 	$PickupProgression -or $GoalArbitration -or $OracleDeparture -or $StaminaProjection -or $HuntRegionPlanning -or
 	$AdaptiveChallenge -or
 	$CombatReadiness -or $EquipmentOffers -or $EquipmentPurchases -or $MainlandRewards -or $Depot -or $SlottedLoot -or $SellLoot -or $MainlandLoop -or $SpellTraining -or $SpellUse -or $SpellCalibration -or $MagicTraining -or $MagicTrainingCase
@@ -169,7 +175,7 @@ if ($Focused -and -not $focusedScenarioRequested) {
 	throw "-Focused requires at least one focused scenario switch."
 }
 if (-not $Focused) {
-	$FullNavigation = $TargetApproach = $CorpseLoot = $DeathTelemetry = $Healing = $ValueLoot = $true
+	$FullNavigation = $TargetApproach = $RangedPosition = $CorpseLoot = $DeathTelemetry = $Healing = $ValueLoot = $true
 	$PickupProgression = $GoalArbitration = $OracleDeparture = $StaminaProjection = $HuntRegionPlanning = $true
 	$AdaptiveChallenge = $CombatReadiness = $EquipmentOffers = $EquipmentPurchases = $MainlandRewards = $true
 	$Depot = $SlottedLoot = $SellLoot = $MainlandLoop = $SpellTraining = $SpellUse = $SpellCalibration = $MagicTraining = $true
