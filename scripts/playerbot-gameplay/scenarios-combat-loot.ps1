@@ -116,3 +116,25 @@
 			}
 		}
 	}
+
+	if ($RangedPosition) {
+		# Same deterministic spear/chaser combat; only the control positioning differs.
+		# The shallow wall is a blocked-retreat fallback, not a wall-sliding fixture.
+		foreach ($rangedCase in @(
+			@{ Name = "ranged_position_control"; Assertion = "control" },
+			@{ Name = "ranged_position"; Assertion = "open" },
+			@{ Name = "ranged_position_corner"; Assertion = "corner" }
+		)) {
+			Invoke-Scenario -Name $rangedCase.Name -DefaultTimeoutSeconds 120 -Body {
+				Invoke-Compose down --volumes --remove-orphans
+				$env:PLAYERBOT_GAMEPLAY_MODE = $rangedCase.Name
+				$env:PLAYERBOT_HUNT_DURATION_SECONDS = "900"
+				Invoke-Compose up --detach
+				Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST RANGED_POSITION_RESULT' | Out-Null
+				$rangedLogs = Wait-ForPlayerbotEvent -Predicate {
+					$_.event -eq "action_result" -and $_.action -eq "loot" -and $_.result -eq "success" -and $_.item_id -eq 2148
+				}
+				Assert-RangedPositionEvents -Logs $rangedLogs -Case $rangedCase.Assertion
+			}
+		}
+	}

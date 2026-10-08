@@ -1,4 +1,4 @@
-local function registerCorpseTestMonster(name, loot, corpseId, hostile, health, attacks, experience)
+local function registerCorpseTestMonster(name, loot, corpseId, hostile, health, attacks, experience, speed)
     local monsterType = Game.createMonsterType(name)
     local monster = {
         description = name:lower(),
@@ -8,7 +8,7 @@ local function registerCorpseTestMonster(name, loot, corpseId, hostile, health, 
         maxHealth = health or 1,
         race = "blood",
         corpse = corpseId or 5964,
-        speed = 0,
+        speed = speed or 0,
         flags = {
             summonable = false,
             attackable = true,
@@ -49,3 +49,11 @@ registerCorpseTestMonster("Playerbot Death Threat", {}, nil, true, 100000, {
     {name = "combat", type = COMBAT_PHYSICALDAMAGE, interval = 100, chance = 100,
         minDamage = -10000, maxDamage = -10000, target = true, range = 1},
 })
+-- Slower than a level-8 player (234), so a ranged bot may retreat from it (#235).
+registerCorpseTestMonster("Playerbot Melee Chaser", {
+    {id = ITEM_GOLD_COIN, chance = 100000, maxCount = 1},
+}, nil, true, 150, {
+    -- Life drain bypasses random armor reduction; range 1 still requires melee contact.
+    {name = "combat", type = COMBAT_LIFEDRAIN, interval = 2000, chance = 100,
+        minDamage = -6, maxDamage = -6, target = true, range = 1},
+}, nil, 200)

@@ -509,6 +509,8 @@ bool PlayerBotController::findPath(Player* player, const Position& target, std::
 void PlayerBotController::resetNavigation()
 {
 	navigationRuntime.reset();
+	rangedMovement.clear();
+	rangedMovement.clearBlockedPositions();
 	huntPatrolValidationDestination.reset();
 	huntPatrolValidationOrigin.reset();
 	huntPatrolOutboundPlan.reset();

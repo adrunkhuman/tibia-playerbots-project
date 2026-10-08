@@ -69,7 +69,7 @@ const playerbot::PlayerBotTestPolicy& playerbot::playerBotTestPolicyFromEnvironm
 			 std::strcmp(gameplayMode, "mutable_portal_route") == 0 ||
 			 (std::strcmp(gameplayMode, "corpse") == 0 || std::strcmp(gameplayMode, "corpse_detour") == 0 ||
 			  std::strcmp(gameplayMode, "corpse_inaccessible") == 0) ||
-			 std::strcmp(gameplayMode, "patrol_recovery") == 0 ||
+			 std::strcmp(gameplayMode, "patrol_recovery") == 0 || std::strncmp(gameplayMode, "ranged_position", 15) == 0 ||
 			 (std::strcmp(gameplayMode, "target_approach") == 0 || std::strcmp(gameplayMode, "target_approach_unreachable") == 0 ||
 			  std::strcmp(gameplayMode, "target_attacker_priority") == 0) ||
 			 std::strcmp(gameplayMode, "healing") == 0 || std::strcmp(gameplayMode, "healing_resupply") == 0 ||
@@ -174,6 +174,7 @@ const playerbot::PlayerBotTestPolicy& playerbot::playerBotTestPolicyFromEnvironm
 			gameplayMode && std::strcmp(gameplayMode, "door_passages") == 0,
 			navigationPreflightFixture,
 			gameplayMode && std::strcmp(gameplayMode, "hunt_planning") == 0,
+			gameplayMode && std::strcmp(gameplayMode, "ranged_position_control") == 0,
 		};
 	}();
 	return policy;
