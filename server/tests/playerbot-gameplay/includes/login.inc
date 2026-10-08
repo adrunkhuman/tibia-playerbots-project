@@ -62,7 +62,8 @@ function F.login.onLogin(player)
         mode == "magic_training_expired" or mode == "magic_training_post_hunt" or mode == "magic_training_post_hunt_no_overflow" or
         mode == "svargrond_local_route_recovery" or mode == "navigation_fare_rejection" or
         mode == "navigation_risk_rejection" or mode == "door_passages" or mode == "spear_restock" or
-        mode == "spear_break",
+        mode == "spear_break" or mode == "paladin_spell_training" or mode == "paladin_healing_economy" or
+        mode == "paladin_mana_healing" or mode == "paladin_healing_fallback" or mode == "paladin_supply_restock",
         "unknown PLAYERBOT_GAMEPLAY_MODE: " .. mode)
     if mode == "equipment_shadow" or mode == "equipment_shadow_unaffordable" or mode == "equipment_shadow_no_upgrade" or
         mode == "equipment_buy" or mode == "equipment_buy_resume" or mode == "equipment_buy_space" or
@@ -216,6 +217,11 @@ function F.login.onLogin(player)
             addEvent(F.moveEquipmentProvider, 100, player:getId(), start.x, start.y, start.z, 0)
         end
         print("PLAYERBOT_GAMEPLAY_TEST " .. string.upper(mode) .. "_START")
+        return true
+    end
+    if mode == "paladin_spell_training" or mode == "paladin_healing_economy" or
+        mode == "paladin_mana_healing" or mode == "paladin_healing_fallback" or mode == "paladin_supply_restock" then
+        F.setupPaladinSpellFixture(player, mode)
         return true
     end
     if mode == "spear_restock" or mode == "spear_break" then

@@ -1,5 +1,67 @@
 local F = PlayerbotGameplayFixture
 
+function F.verifyPaladinSpellFixture(playerId, mode, phase, attempts)
+    local player = Player(playerId)
+    assert(player and not player:isRemoved(), "Bot One disappeared during " .. mode)
+    local supply = mode == "paladin_supply_restock"
+    if phase == "purchase" then
+        if not player:hasLearnedSpell("Light Healing") and attempts > 0 then
+            addEvent(F.verifyPaladinSpellFixture, 100, playerId, mode, phase, attempts - 1)
+            return
+        end
+        assert(player:hasLearnedSpell("Light Healing") and player:getMoney() + player:getBankBalance() == 130,
+            "Paladin training did not pay the normal 170 gold")
+        assert(player:getItemCount(F.healthPotionItemId) == 20 and player:getItemCount(F.manaPotionItemId) == 20 and
+            player:getItemCount(F.spearItemId) == 7, "Paladin training spent the survival floors")
+        assert(player:setHealth(119), "Paladin training could not seed the wounded-cast stage")
+        F.paladinFixtureEvidence(player, mode, "wounded")
+        addEvent(F.verifyPaladinSpellFixture, 100, playerId, mode, "recovery", attempts)
+        return
+    end
+    if phase == "recovery" then
+        local complete = supply and player:getItemCount(F.healthPotionItemId) >= 20 and
+            player:getItemCount(F.manaPotionItemId) >= 20 or not supply and player:getHealth() > 120
+        if not complete and attempts > 0 then
+            addEvent(F.verifyPaladinSpellFixture, 100, playerId, mode, phase, attempts - 1)
+            return
+        end
+        assert(complete, mode .. " did not reach its normal recovery/restock target")
+        -- Let the controller verify the last engine action before another setup mutation.
+        addEvent(F.verifyPaladinSpellFixture, 1500, playerId, mode,
+            mode == "paladin_healing_economy" and "healthy" or "complete", 0)
+        return
+    end
+    if phase == "healthy" then
+        assert(player:getItemCount(F.healthPotionItemId) == 20 and player:getItemCount(F.manaPotionItemId) == 20,
+            "economical healing consumed potions")
+        assert(player:setHealth(200) and player:addMana(20 - player:getMana()),
+            "Paladin economy could not seed the exact healthy reserve boundary")
+        F.paladinFixtureEvidence(player, mode, "healthy_reserve")
+        addEvent(F.verifyPaladinSpellFixture, 5000, playerId, mode, "complete", 0)
+        return
+    end
+    assert(phase == "complete", "unknown Paladin fixture phase")
+    assert(player:getItemCount(F.healthPotionItemId) >= 20, "Paladin fixture consumed a health potion")
+    if mode == "paladin_mana_healing" then
+        assert(player:getItemCount(F.healthPotionItemId) == 20 and player:getItemCount(F.manaPotionItemId) == 19 and
+            player:getHealth() > 120, "peaceful Paladin healing did not use one mana potion then spells")
+    elseif mode == "paladin_healing_economy" then
+        assert(player:getHealth() == 200 and player:getMana() == 20 and player:getItemCount(F.manaPotionItemId) == 20,
+            "healthy Paladin topped up for the maximum learned heal instead of Light's 20-mana reserve")
+    elseif mode == "paladin_spell_training" then
+        assert(player:getMoney() + player:getBankBalance() == 130 and player:getHealth() > 120 and
+            player:getItemCount(F.manaPotionItemId) == 20, "paid Paladin healing did not preserve money/supplies")
+        assert(player:setStorageValue(F.spellTrainingStorage, 1), "Paladin paid spell marker could not persist")
+    elseif supply then
+        assert(player:getItemCount(F.manaPotionItemId) >= 20, "Paladin mana restock did not reach target")
+    else
+        assert(player:getItemCount(F.manaPotionItemId) == 20 and player:hasLearnedSpell("Intense Healing") and
+            not player:hasLearnedSpell("Light Healing"), "Intense fallback fixture gained Light or consumed mana potions")
+    end
+    F.paladinFixtureEvidence(player, mode, "pass")
+    print("PLAYERBOT_GAMEPLAY_TEST " .. string.upper(mode) .. "_PASS")
+end
+
 function F.verifyReadiness(playerId, mode, attempts)
     local player = Player(playerId)
     assert(player and not player:isRemoved(), "Bot One disappeared during readiness fixture")

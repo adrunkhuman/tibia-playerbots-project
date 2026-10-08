@@ -1,3 +1,115 @@
+function Assert-PaladinSpellFixtureEvents {
+	param(
+		[string]$Logs,
+		[ValidateSet('paladin_spell_training', 'paladin_healing_economy', 'paladin_mana_healing', 'paladin_healing_fallback', 'paladin_supply_restock')]
+		[string]$Scenario,
+		[switch]$Restart
+	)
+	$events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
+	$fixture = @($events | Where-Object { $_.event -eq 'paladin_fixture' -and $_.scenario -eq $Scenario -and $_.source -eq 'lua_setup_verifier' })
+	$failures = @($events | Where-Object {
+		$_.event -eq 'terminal' -or ($_.event -eq 'action_result' -and $_.result -eq 'failed' -and
+			$_.action -in @('cast_spell', 'learn_spell', 'restore_mana', 'heal', 'buy_potions'))
+	})
+	$purchases = @($events | Where-Object { $_.event -eq 'action_result' -and $_.action -eq 'learn_spell' -and $_.result -eq 'success' })
+	if ($Restart) {
+		$receipt = @($fixture | Where-Object { $_.phase -eq 'restart' -and $_.vocation -eq 3 -and $_.level -eq 9 -and $_.money -eq 130 -and $_.learned_light })
+		if ($receipt.Count -ne 1 -or $purchases.Count -ne 0 -or $failures.Count -ne 0) {
+			throw 'Paladin paid Light Healing did not survive a server-only restart without another purchase.'
+		}
+		return
+	}
+	$level = $Scenario -eq 'paladin_spell_training' ? 9 : $Scenario -eq 'paladin_healing_fallback' ? 11 : 20
+	$start = @($fixture | Where-Object { $_.phase -eq 'start' -and $_.vocation -eq 3 -and $_.level -eq $level -and $_.spears -eq 7 })
+	$pass = @($fixture | Where-Object { $_.phase -eq 'pass' })
+	if ($start.Count -ne 1 -or $pass.Count -ne 1 -or $failures.Count -ne 0) {
+		throw "Incomplete Paladin fixture receipt: $Scenario (start=$($start.Count), pass=$($pass.Count), failures=$($failures.Count))."
+	}
+	if ($Scenario -eq 'paladin_supply_restock') {
+		$shop = @($events | Where-Object { $_.event -eq 'service_discovered' -and $_.npc_name -eq 'Xodet' -and $_.offers -gt 0 })
+		if ($start[0].health_potions -ne 1 -or $start[0].mana_potions -ne 1 -or $shop.Count -lt 1 -or
+			$pass[0].health_potions -lt 20 -or $pass[0].mana_potions -lt 20 -or $purchases.Count -ne 0) {
+			throw 'Paladin supply fixture did not discover the real shop and restock both low stocks.'
+		}
+		foreach ($item in @(7618, 7620)) {
+			$buys = @($events | Where-Object { $_.event -eq 'action_result' -and $_.action -eq 'buy_potions' -and $_.result -eq 'success' -and $_.item_id -eq $item })
+			if ($buys.Count -ne 1 -or $buys[0].count -ne 19 -or
+				($buys[0].carried_before + $buys[0].bank_before - $buys[0].carried_after - $buys[0].bank_after) -ne (19 * ($item -eq 7618 ? 45 : 50))) {
+				throw "Paladin restock lacks a normal paid 19-potion receipt for item $item."
+			}
+		}
+		return
+	}
+	if ($start[0].health_potions -ne 20 -or $start[0].mana_potions -ne 20 -or
+		($Scenario -eq 'paladin_healing_fallback' -and
+			($start[0].learned_light -or -not $start[0].learned_intense -or $start[0].learned_ultimate -or
+			 $start[0].mana -lt 70 -or $start[0].health * 2 -ne $start[0].health_max)) -or
+		($Scenario -eq 'paladin_healing_economy' -and
+			(-not $start[0].learned_light -or -not $start[0].learned_intense -or -not $start[0].learned_ultimate)) -or
+		($Scenario -eq 'paladin_spell_training' -and $start[0].learned_light)) {
+		throw "Paladin fixture did not load the required learned spells and survival stock: $Scenario."
+	}
+	$expectedSpell = $Scenario -eq 'paladin_healing_fallback' ? 'Intense Healing' : 'Light Healing'
+	$cost = $Scenario -eq 'paladin_healing_fallback' ? 70 : 20
+	$casts = @($events | Where-Object { $_.event -eq 'action_result' -and $_.action -eq 'cast_spell' -and $_.result -eq 'success' })
+	$heals = @($casts | Where-Object {
+		$_.policy_candidate.spell -eq $expectedSpell -and $_.policy_candidate.role -eq 'healing' -and $_.need -eq 'recovery' -and
+		$_.engine_result -eq 'accepted' -and $_.mana_before -ge $cost -and $_.mana_after -eq ($_.mana_before - $cost) -and
+		$_.health_after -gt $_.health_before -and $expectedSpell -in @($_.legal_candidates)
+	})
+	$healthPotions = @($events | Where-Object { $_.event -eq 'action_result' -and $_.action -eq 'heal' -and $_.result -in @('requested', 'success') })
+	if ($heals.Count -lt 1 -or $casts.Count -ne $heals.Count -or $healthPotions.Count -ne 0 -or $pass[0].health_potions -ne 20) {
+		throw "Paladin healing did not exclusively use legal affordable $expectedSpell casts: $Scenario."
+	}
+	$mana = @($events | Where-Object { $_.event -eq 'action_result' -and $_.action -eq 'restore_mana' -and $_.result -eq 'success' })
+	if ($Scenario -eq 'paladin_mana_healing') {
+		$requested = @($events | Where-Object { $_.event -eq 'action_result' -and $_.action -eq 'restore_mana' -and $_.result -eq 'requested' -and $_.reason -eq 'healing_spell_mana' })
+		$manaIndex = -1
+		$healIndex = -1
+		for ($i = 0; $i -lt $events.Count; ++$i) {
+			if ($events[$i] -in $mana -and $manaIndex -lt 0) { $manaIndex = $i }
+			if ($events[$i] -in $heals -and $healIndex -lt 0) { $healIndex = $i }
+		}
+		$combat = @($events | Where-Object { $_.event -eq 'target_changed' -and $_.target_id -gt 0 })
+		if ($start[0].mana -ge 20 -or $start[0].health -ne 119 -or $start[0].health_max -ne 200 -or $mana.Count -ne 1 -or
+			$requested.Count -ne 1 -or $requested[0].mana_reserve -ne 20 -or $mana[0].item_id -ne 7620 -or
+			$mana[0].resource_before -ne 20 -or $mana[0].resource_after -ne 19 -or $mana[0].mana_after -lt 20 -or
+			$manaIndex -lt 0 -or $healIndex -le $manaIndex -or $combat.Count -ne 0 -or $pass[0].mana_potions -ne 19) {
+			throw 'Peaceful wounded Paladin did not drink mana before casting Light Healing.'
+		}
+	} elseif ($mana.Count -ne 0 -or $pass[0].mana_potions -ne 20) {
+		throw "Paladin unexpectedly used a mana potion: $Scenario."
+	}
+	if ($Scenario -eq 'paladin_spell_training') {
+		$selected = @($events | Where-Object { $_.event -eq 'goal_selection' -and $_.to_goal -eq 'learn_spell' -and $_.spell -eq 'Light Healing' -and $_.price -eq 170 })
+		$purchase = @($purchases | Where-Object { $_.spell -eq 'Light Healing' -and $_.price -eq 170 -and $_.money_before -eq 300 -and $_.money_after -eq 130 })
+		$wounded = @($fixture | Where-Object { $_.phase -eq 'wounded' -and $_.health -eq 119 -and $_.health_max -eq 200 -and $_.money -eq 130 })
+		$elane = @($events | Where-Object { $_.event -eq 'spell_candidate' -and $_.npc_name -eq 'Elane' -and $_.spell -eq 'Light Healing' -and $_.result -eq 'feasible' -and $_.price -eq 170 })
+		if ($selected.Count -ne 1 -or $elane.Count -lt 1 -or $purchase.Count -ne 1 -or $purchases.Count -ne 1 -or $wounded.Count -ne 1 -or $pass[0].money -ne 130) {
+			throw 'Level-9 Paladin did not pay Elane 170 gold for Light Healing before wounded use.'
+		}
+	} elseif ($purchases.Count -ne 0) {
+		throw "Prelearned Paladin fixture bought an unrelated spell: $Scenario."
+	}
+	if ($Scenario -eq 'paladin_healing_economy') {
+		$healthy = @($fixture | Where-Object { $_.phase -eq 'healthy_reserve' -and $_.health -eq $_.health_max -and $_.mana -eq 20 })
+		$firstHeal = $heals[0]
+		if ($start[0].mana -lt 160 -or $start[0].health -ne 119 -or $start[0].health_max -ne 200 -or
+			$firstHeal.health_before -ne 119 -or $healthy.Count -ne 1 -or
+			$pass[0].mana -ne 20 -or $pass[0].health -ne $pass[0].health_max) {
+			throw 'Paladin economy lacks all-heals-affordable Light selection or the healthy 20-mana boundary.'
+		}
+		$inHealthyPhase = $false
+		foreach ($event in $events) {
+			if ($event -eq $healthy[0]) { $inHealthyPhase = $true; continue }
+			if ($event -eq $pass[0]) { break }
+			if ($inHealthyPhase -and $event.event -eq 'action_result' -and $event.action -in @('restore_mana', 'cast_spell')) {
+				throw 'Healthy Paladin spent a potion or cast during the exact-reserve observation window.'
+			}
+		}
+	}
+}
+
 function Assert-LowSupplySpellTrainingEvents {
 	param([string]$Logs, [switch]$Unaffordable)
 	$events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)

@@ -93,7 +93,7 @@ local function buySpell(later, playerId, target, keyword)
     sayTo(later, playerId, target, "yes")
 end
 
-local paladinSpells = {"Light Healing", "Intense Healing", "Conjure Arrow"}
+local paladinSpells = {"Light Healing", "Intense Healing", "Conjure Arrow", "Food", "Magic Shield", "Ultimate Healing"}
 
 local login = CreatureEvent("zzPlayerbotConnectionlessRegression")
 
@@ -455,6 +455,34 @@ function login.onLogin(player)
             assert(bot:hasLearnedSpell("Conjure Arrow"), "Elane did not teach Conjure Arrow")
             assert(hasCastableSpell(bot, "Conjure Arrow"), "Conjure Arrow remained uncastable after training")
             assert(getTotalMoney(bot) == 0, "Elane did not charge exactly 450 gold for Conjure Arrow")
+            setLevel(bot, 14)
+            assert(bot:setPremiumEndsAt(0), "Paladin learning could not select a free account")
+            for _, spellName in ipairs({"Food", "Magic Shield"}) do
+                assert(bot:canLearnSpell(spellName), "level-14 Paladin cannot learn " .. spellName)
+                assert(not hasCastableSpell(bot, spellName), "unlearned " .. spellName .. " is castable at level 14")
+            end
+            assert(bot:addMoney(750), "Food and Magic Shield money could not be added")
+        end)
+        buySpell(later, playerId, elane, "food")
+        buySpell(later, playerId, elane, "magic shield")
+        later(function()
+            local bot = getBot(playerId)
+            for _, spellName in ipairs({"Food", "Magic Shield"}) do
+                assert(bot:hasLearnedSpell(spellName), "Elane did not teach " .. spellName .. " at level 14")
+                assert(hasCastableSpell(bot, spellName), spellName .. " remained uncastable after training")
+            end
+            assert(getTotalMoney(bot) == 0, "Elane did not charge exactly 300 and 450 gold")
+            setLevel(bot, 20)
+            assert(bot:canLearnSpell("Ultimate Healing"), "level-20 Paladin cannot learn Ultimate Healing")
+            assert(not hasCastableSpell(bot, "Ultimate Healing"), "unlearned Ultimate Healing is castable at level 20")
+            assert(bot:addMoney(1000), "Ultimate Healing money could not be added")
+        end)
+        buySpell(later, playerId, elane, "ultimate healing")
+        later(function()
+            local bot = getBot(playerId)
+            assert(bot:hasLearnedSpell("Ultimate Healing"), "Elane did not teach Ultimate Healing at level 20")
+            assert(hasCastableSpell(bot, "Ultimate Healing"), "Ultimate Healing remained uncastable after training")
+            assert(getTotalMoney(bot) == 0, "Elane did not charge exactly 1000 gold for Ultimate Healing")
             pass(mode)
         end)
         return true
@@ -482,7 +510,7 @@ function login.onLogin(player)
         local originalPremiumEndsAt = player:getPremiumEndsAt()
         local originalInventoryMoney = player:getMoney()
         local originalBankMoney = player:getBankBalance()
-        local testedSpells = {"Light Healing", "Intense Healing", "Conjure Bolt", "Conjure Power Bolt"}
+        local testedSpells = {"Light Healing", "Intense Healing", "Conjure Bolt", "Conjure Power Bolt", "Food", "Magic Shield", "Ultimate Healing"}
         local originallyLearned = {}
         for _, spellName in ipairs(testedSpells) do
             originallyLearned[spellName] = player:hasLearnedSpell(spellName)
@@ -524,6 +552,16 @@ function login.onLogin(player)
         prepare(3, 10, false, 350)
         buySpell(later, playerId, elane, "intense healing")
         rejected("Intense Healing", 350, "level-10 Paladin")
+
+        prepare(3, 13, false, 300)
+        buySpell(later, playerId, elane, "food")
+        rejected("Food", 300, "level-13 Paladin")
+        prepare(3, 13, false, 450)
+        buySpell(later, playerId, elane, "magic shield")
+        rejected("Magic Shield", 450, "level-13 Paladin")
+        prepare(3, 19, false, 1000)
+        buySpell(later, playerId, elane, "ultimate healing")
+        rejected("Ultimate Healing", 1000, "level-19 Paladin")
 
         prepare(3, 17, false, 750)
         buySpell(later, playerId, ursula, "conjure bolt")

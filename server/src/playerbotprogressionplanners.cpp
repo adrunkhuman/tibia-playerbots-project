@@ -48,7 +48,7 @@ PlayerBotSpellTrainingDecision PlayerBotSpellTrainingPlanner::select(const Playe
 		                        !offer.implementedUse ? "no_implemented_use" :
 		                        !offer.vocationEligible ? "vocation_ineligible" : !offer.levelEligible ? "level_ineligible" :
 		                        !offer.premiumEligible ? "premium_ineligible" : offer.known ? "already_learned" :
-		                        !offer.suppliesReady ? "supply_reserve_unmet" : !reserveAvailable ? "recovery_reserve_unavailable" :
+		                        !offer.worthLearning ? "uneconomical_healing_spell" : !offer.suppliesReady ? "supply_reserve_unmet" : !reserveAvailable ? "recovery_reserve_unavailable" :
 		                        !playerBotAffordableAfterReserve(snapshot.totalMoney, reserve, offer.price) ? "unaffordable_after_reserves" :
 		                        !offer.route.reachable ? "trainer_unreachable" :
 		                        offer.route.dangerCost > snapshot.maximumRouteDangerCost ? "route_danger_above_tolerance" :

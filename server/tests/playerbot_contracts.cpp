@@ -663,6 +663,179 @@ void routeSelectionContracts()
 	assert(!playerBotHuntTravelAffordable(UINT64_MAX, UINT64_MAX, UINT64_MAX, 1, 0));
 }
 
+void typedSupplyRouteContracts()
+{
+	const Position depot(200, 100, 7), supplier(300, 100, 7);
+	const PlayerBotSupplyRule mana = playerBotSupplyRule(PlayerBotSupplyKind::ManaPotion, 3);
+	const PlayerBotSupplyRule spears = playerBotThrowingWeaponRule(2389);
+	const PlayerBotSupplyRule ammo{PlayerBotSupplyKind::Ammunition, 2544, 6, 5, 40};
+	const uint16_t healthItemId = 7618;
+	const PlayerBotSupplyRule health{PlayerBotSupplyKind::HealthPotion, healthItemId, 2, 1, 20};
+	// Shop admission is per-kind, not vocation-specific. A potion shop need
+	// not sell weapons already at their floors, even below their targets.
+	PlayerBotSupplyStocks stocks{{health, 20}, {mana, 0}, {spears, spears.safetyFloor}, {ammo, ammo.safetyFloor}};
+	auto items = playerBotSupplyExitShopItems(stocks, healthItemId);
+	assert((items == std::vector<uint16_t>{healthItemId, mana.itemId}));
+	stocks[1].count = mana.safetyFloor;
+	assert((playerBotSupplyExitShopItems(stocks, healthItemId) == std::vector<uint16_t>{healthItemId}));
+	stocks[2].count = spears.safetyFloor - 1;
+	assert((playerBotSupplyExitShopItems(stocks, healthItemId) == std::vector<uint16_t>{healthItemId, spears.itemId}));
+	stocks[2].rule.target = 0; // inactive kinds are not shop requirements
+	assert((playerBotSupplyExitShopItems(stocks, healthItemId) == std::vector<uint16_t>{healthItemId}));
+	assert((playerBotSupplyExitShopItems({}, healthItemId) == std::vector<uint16_t>{healthItemId}));
+
+	// Three mana potions are projected, while health has no projected use
+	// and is fully stocked. At exact routine coverage no supplier is needed.
+	for (uint32_t count : {0U, 1U, 2U, 3U, 4U}) {
+		auto candidate = routeFixture(41);
+		candidate.availableHuntSeconds = 60;
+		candidate.combatFraction = 1;
+		candidate.supplyProfile.kinds = {{mana.kind, mana.itemId, count, mana.returnThreshold, {0.05, 1}}};
+		PlayerBotHuntRouteSelection selector({candidate});
+		auto outbound = routeFacts(); outbound.approaches = {depot};
+		selector.observe(selector.next(), outbound);
+		auto live = routeFacts();
+		// The adapter refreshes stock without learned demand: it must not
+		// erase the candidate's typed forecast at the depot or final check.
+		live.supplyProfile.kinds = {{mana.kind, mana.itemId, count, mana.returnThreshold, {}}};
+		selector.observe(selector.next(), live);
+		auto request = selector.next();
+		const bool needsRoute = count < 4;
+		assert(request.stage == (needsRoute ? PlayerBotHuntRouteStage::DiscoverSupply : PlayerBotHuntRouteStage::Final));
+		if (needsRoute) {
+			assert(request.requiredSupplyItems == std::vector<uint16_t>{mana.itemId});
+			auto discovery = routeFacts(); discovery.approaches = {supplier};
+			selector.observe(request, discovery);
+			request = selector.next();
+			assert(request.stage == PlayerBotHuntRouteStage::Supplier && request.from == depot && request.to == supplier);
+			selector.observe(request, routeFacts());
+		}
+		const auto result = selector.observe(selector.next(), live);
+		assert(result.terminal && result.selectedRouteRegion);
+		const auto& selected = *result.selectedRouteRegion;
+		assert(selected.supplyBudget.expectedPotions == 0 && selected.supplyKindBudgets.size() == 1);
+		assert(selected.supplyKindBudgets[0].expected == 3 && selected.supplyBudget.fits == !needsRoute);
+		assert(selected.supplyDestination == (needsRoute ? supplier : Position()));
+	}
+
+	// A mana-only deficit needs actual supplier access. A health-only shop
+	// cannot satisfy a missing active mana floor; unreachable access rejects.
+	for (bool offersMana : {false, true}) {
+		auto candidate = routeFixture(42);
+		candidate.availableHuntSeconds = 60;
+		candidate.combatFraction = 1;
+		candidate.supplyProfile.kinds = {{mana.kind, mana.itemId, 0, mana.returnThreshold, {0.05, 1}}};
+		PlayerBotHuntRouteSelection selector({candidate});
+		auto outbound = routeFacts(); outbound.approaches = {depot};
+		selector.observe(selector.next(), outbound);
+		auto live = routeFacts(); live.supplyProfile.kinds = candidate.supplyProfile.kinds;
+		selector.observe(selector.next(), live);
+		assert(selector.next().stage == PlayerBotHuntRouteStage::DiscoverSupply);
+		auto discovery = routeFacts();
+		items = playerBotSupplyExitShopItems({{health, 20}, {mana, 0}, {spears, 7}}, healthItemId);
+		for (uint16_t itemId : items) {
+			const bool sold = itemId == healthItemId || (offersMana && itemId == mana.itemId);
+			discovery.supplyApproachGroups.push_back({itemId, sold ? std::vector<Position>{supplier} : std::vector<Position>{}});
+		}
+		auto result = selector.observe(selector.next(), discovery);
+		if (offersMana) {
+			assert(selector.next().stage == PlayerBotHuntRouteStage::Supplier);
+			selector.observe(selector.next(), routeFacts(false));
+			assert(selector.next().stage == PlayerBotHuntRouteStage::RejectSupply);
+			result = selector.observe(selector.next(), live);
+		}
+		assert(result.completedCandidate && result.completedCandidate->rejectionReason == "recovery_supply_route_unavailable");
+	}
+
+	// Potions and spears use separate shops. A projected spear deficit must
+	// validate both providers, including the path and fare between them.
+	const Position weaponSupplier(400, 100, 7);
+	for (int failure : {0, 1, 2, 3}) {
+		auto candidate = routeFixture(44);
+		candidate.availableHuntSeconds = 60;
+		candidate.combatFraction = 1;
+		candidate.supplyProfile.kinds = {{spears.kind, spears.itemId, 7, spears.returnThreshold, {0.2, 1}}};
+		PlayerBotHuntRouteSelection selector({candidate});
+		auto outbound = routeFacts(); outbound.approaches = {depot};
+		selector.observe(selector.next(), outbound);
+		auto live = routeFacts(); live.supplyProfile.kinds = candidate.supplyProfile.kinds;
+		selector.observe(selector.next(), live);
+		auto request = selector.next();
+		assert(request.stage == PlayerBotHuntRouteStage::DiscoverSupply &&
+		       request.requiredSupplyItems == std::vector<uint16_t>{spears.itemId});
+		auto discovery = routeFacts();
+		discovery.supplyApproachGroups = {{healthItemId, {supplier}},
+		    {spears.itemId, failure == 1 ? std::vector<Position>{} : std::vector<Position>{weaponSupplier}}};
+		auto result = selector.observe(request, discovery);
+		if (failure != 1) {
+			request = selector.next();
+			assert(request.from == depot && request.to == supplier && request.supplyItemId == healthItemId);
+			auto first = routeFacts(); first.fare = 5; first.npcTravel = true;
+			assert(selector.observe(request, first).yield);
+			request = selector.next();
+			assert(request.stage == PlayerBotHuntRouteStage::Supplier && request.from == supplier &&
+			       request.to == weaponSupplier && request.supplyItemId == spears.itemId);
+			auto second = routeFacts(failure != 2); second.fare = 7;
+			selector.observe(request, second);
+			if (failure == 2) assert(selector.next().stage == PlayerBotHuntRouteStage::RejectSupply);
+			else assert(selector.next().stage == PlayerBotHuntRouteStage::Final);
+			if (failure == 3) live.recoverySpendingReserve = live.funds - 11;
+			result = selector.observe(selector.next(), live);
+		}
+		if (failure == 0) {
+			assert(result.terminal && result.selectedRouteRegion);
+			assert(result.selectedRouteRegion->supplyDestination == weaponSupplier &&
+			       result.selectedRouteRegion->supplyFare == 12 && result.selectedRouteRegion->supplyNpcTravel);
+		} else {
+			assert(result.completedCandidate && !result.completedCandidate->suitable);
+			assert(result.completedCandidate->rejectionReason == (failure == 3 ?
+			    "travel_fare_breaks_recovery_reserve" : "recovery_supply_route_unavailable"));
+		}
+	}
+
+	// Recovery may earn cash with zero/low mana stock only if projected mana
+	// demand is zero. Ordinary hunt admission keeps the same stock floor.
+	for (uint32_t count : {0U, 1U}) {
+		for (double demand : {0.0, 0.01}) {
+			auto candidate = routeFixture(43);
+			candidate.availableHuntSeconds = 60;
+			candidate.combatFraction = 1;
+			candidate.coinGoldPerMinute = 1;
+			candidate.currentHealth = candidate.maximumHealth = 100;
+			candidate.supplyProfile.kinds = {{mana.kind, mana.itemId, count, mana.returnThreshold, {demand, 1}}};
+			candidate.reconcileSupplies(1);
+			assert(!candidate.supplyBudget.fits); // zero demand alone cannot waive ordinary floors
+			candidate.supplyRecovery = true;
+			candidate.supplyProfile.potions = 0;
+			candidate.reconcileSupplies(1);
+			assert(candidate.supplyBudget.expectedPotions == 0);
+			assert(candidate.supplyBudget.fits == (demand == 0));
+			assert(candidate.supplyKindBudgets[0].fits == (demand == 0));
+			PlayerBotHuntRouteSelection selector({candidate});
+			auto outbound = routeFacts(); outbound.approaches = {depot};
+			selector.observe(selector.next(), outbound);
+			auto live = routeFacts(); live.potionReserve = 1; live.supplyProfile = candidate.supplyProfile;
+			selector.observe(selector.next(), live);
+			assert(selector.next().stage == PlayerBotHuntRouteStage::Final); // recovery does not demand a supplier
+			const auto result = selector.observe(selector.next(), live);
+			if (demand == 0) assert(result.terminal && result.selectedRouteRegion && result.selectedRouteRegion->recoverySustainable());
+			else assert(result.completedCandidate && result.completedCandidate->rejectionReason == "recovery_hunt_not_sustainable");
+		}
+	}
+	// A recorded zero break/use rate does not mean weapons/ammo are optional.
+	for (const auto& rule : {spears, ammo}) {
+		for (uint32_t count : {0U, rule.returnThreshold}) {
+			auto candidate = routeFixture(44);
+			candidate.supplyRecovery = true;
+			candidate.availableHuntSeconds = 60;
+			candidate.combatFraction = 1;
+			candidate.supplyProfile.kinds = {{rule.kind, rule.itemId, count, rule.returnThreshold, {0, 3}}};
+			candidate.reconcileSupplies(1);
+			assert(!candidate.supplyKindBudgets[0].fits && !candidate.supplyBudget.fits);
+		}
+	}
+}
+
 void selectedRouteRetention()
 {
 	struct Evidence {
@@ -942,7 +1115,7 @@ void selectedRouteLegProofs()
 		} else if (request.stage == Stage::Supplier) {
 			if (request.to == rejectedSupplier) {
 				observation.reached = false;
-				assert(!retained.pending()->evidence.supplier);
+				assert(retained.pending()->evidence.suppliers.empty());
 			} else completed = proof(depot, supplier, 2, Position(320, 100, 7));
 		}
 		result = selector.observe(request, observation);
@@ -954,9 +1127,9 @@ void selectedRouteLegProofs()
 	auto selected = retained.take(*result.selectedRouteRegion);
 	assert(selected && selected->evidence.valid(validate));
 	auto& legs = selected->evidence;
-	assert(!legs.outbound->paid && legs.depot->paid && legs.supplier->paid);
-	assert(legs.depot->source == hunt && legs.supplier->source == depot);
-	assert(std::get<18>(legs.depot->actor) == origin && std::get<18>(legs.supplier->actor) == origin);
+	assert(!legs.outbound->paid && legs.depot->paid && legs.suppliers.at(0)->paid);
+	assert(legs.depot->source == hunt && legs.suppliers.at(0)->source == depot);
+	assert(std::get<18>(legs.depot->actor) == origin && std::get<18>(legs.suppliers.at(0)->actor) == origin);
 
 	// Each required paid leg must check offers/providers even though outbound
 	// walking has no provider facts. No tile or NPC-generation change occurs.
@@ -991,8 +1164,8 @@ void selectedRouteLegProofs()
 	assert(!legs.valid(validate));
 	legs.accept(Stage::Outbound, true, proof(origin, hunt, 0, outboundTile));
 	assert(legs.valid(validate));
-	legs.supplier.reset();
-	assert(legs.supplierRequired && !legs.valid(validate));
+	legs.suppliers.at(0).reset();
+	assert(!legs.valid(validate));
 	PlayerBotHuntRouteEvidence missingDepot;
 	missingDepot.accept(Stage::Outbound, true, legs.outbound);
 	assert(!missingDepot.valid(validate));
@@ -1000,6 +1173,37 @@ void selectedRouteLegProofs()
 	assert(missingDepot.valid(validate)); // A supplier is optional only when never required.
 	missingDepot.accept(Stage::Supplier, true, nullptr);
 	assert(!missingDepot.valid(validate)); // A missing accepted endpoint proof cannot escape.
+
+	// Retain every selected supplier leg and the actual item it must sell.
+	const Position weapons(350, 100, 7), potionTile(330, 100, 7), spearTile(340, 100, 7);
+	PlayerBotHuntRouteEvidence grouped;
+	grouped.accept(Stage::Outbound, true, proof(origin, hunt, 0, outboundTile));
+	grouped.accept(Stage::Depot, true, proof(hunt, depot, 1, Position(220, 100, 7)));
+	auto supplierProof = [&](uint16_t itemId) {
+		auto leg = itemId == 7618 ? proof(depot, supplier, 2, potionTile) : proof(supplier, weapons, 3, spearTile);
+		leg->exit = Evidence::Exit::Supplier;
+		leg->supplyItemId = itemId;
+		return leg;
+	};
+	grouped.accept(Stage::Supplier, true, supplierProof(7618), 7618);
+	grouped.accept(Stage::Supplier, true, supplierProof(2389), 2389);
+	std::set<uint16_t> checkedItems;
+	auto validateItems = [&](Evidence& leg) {
+		if (leg.exit == Evidence::Exit::Supplier) checkedItems.insert(leg.supplyItemId);
+		return validate(leg);
+	};
+	assert(grouped.valid(validateItems) && (checkedItems == std::set<uint16_t>{2389, 7618}));
+	for (uint16_t itemId : {7618, 2389}) {
+		Changes::changed(itemId == 7618 ? potionTile : spearTile);
+		assert(!grouped.valid(validateItems));
+		const uint16_t other = itemId == 7618 ? 2389 : 7618;
+		grouped.accept(Stage::Supplier, true, supplierProof(other), other);
+		assert(!grouped.valid(validateItems)); // Another item's proof cannot repair the stale leg.
+		grouped.accept(Stage::Supplier, true, supplierProof(itemId), itemId);
+		assert(grouped.valid(validateItems));
+	}
+	grouped.accept(Stage::Supplier, true, nullptr, 2389);
+	assert(grouped.suppliers.at(7618) && !grouped.valid(validateItems));
 }
 
 void routeTurnContracts()
@@ -2839,12 +3043,66 @@ void typedSupplyStock()
 	assert(playerBotSupplyStockKey(stocks) != key);
 	assert(playerBotSupplyStockKey({{health, 7}}) == 7); // health-only key equals the potion count
 
-	// No current vocation activates mana potions or ammunition yet; spares need a wielded weapon.
-	for (uint16_t vocation : {0, 1, 2, 3, 4, 8}) {
-		for (const PlayerBotSupplyKind kind : {PlayerBotSupplyKind::ManaPotion, PlayerBotSupplyKind::Ammunition,
-		                                       PlayerBotSupplyKind::ThrowingWeapon}) {
+	// Only Paladins stock mana; Knights and every other vocation keep no mana target.
+	for (uint16_t vocation : {0, 1, 2, 3, 4, 5, 6, 7, 8, 9}) {
+		const PlayerBotSupplyRule rule = playerBotSupplyRule(PlayerBotSupplyKind::ManaPotion, vocation);
+		assert(rule.kind == PlayerBotSupplyKind::ManaPotion && rule.itemId == playerBotManaPotionItemId && rule.itemId == 7620);
+		if (vocation == 3 || vocation == 7) {
+			assert(rule.active() && rule.target == 20 && rule.safetyFloor == 2 && rule.returnThreshold == 1);
+		} else {
+			assert(!rule.active() && rule.target == 0 && rule.safetyFloor == 0 && rule.returnThreshold == 0);
+			const PlayerBotSupplyStocks inactive{{health, 20}, {rule, 0}};
+			assert(!playerBotMandatorySupplyDeficit(inactive, false).first && !playerBotExhaustedSupply(inactive));
+		}
+		for (const PlayerBotSupplyKind kind : {PlayerBotSupplyKind::Ammunition, PlayerBotSupplyKind::ThrowingWeapon}) {
 			assert(!playerBotSupplyRule(kind, vocation).active());
 		}
+	}
+
+	for (uint16_t vocation : {3, 7}) {
+		const PlayerBotSupplyRule rule = playerBotSupplyRule(PlayerBotSupplyKind::ManaPotion, vocation);
+		PlayerBotSupplyStocks supplies{{health, 20}, {rule, rule.safetyFloor}};
+		assert(!playerBotMandatorySupplyDeficit(supplies, false).first && !playerBotExhaustedSupply(supplies));
+		supplies[1].count = rule.returnThreshold;
+		deficit = playerBotMandatorySupplyDeficit(supplies, false);
+		assert(deficit.first == &supplies[1] && deficit.missing == 1);
+		assert(playerBotExhaustedSupply(supplies) == &supplies[1]);
+		assert(std::string(playerBotSupplyExhaustedReason(rule.kind)) == "mana_potion_exhausted");
+		supplies[1].count = 0;
+		assert(playerBotMandatorySupplyDeficit(supplies, false).missing == 2);
+		assert(!playerBotMandatorySupplyDeficit(supplies, true).first);
+
+		// Real health/mana rules share cash (including bank gold) and potion capacity.
+		const std::vector<PlayerBotEconomySupplyRequest> potions{
+		    {0, 45, 270, health.returnThreshold, health.target, health.safetyFloor},
+		    {0, 50, 270, rule.returnThreshold, rule.target, rule.safetyFloor}};
+		restock = policy.restockSupplies(potions, 40 * 270, 900, 1000);
+		assert(restock[0].amount == 20 && restock[1].amount == 20);
+		assert(!restock[0].insufficientFunds && !restock[1].insufficientFunds);
+		restock = policy.restockSupplies(potions, 40 * 270, 500, 500);
+		assert(restock[0].amount == 20 && restock[1].amount == 2); // exactly 1000 gold, not two budgets
+		restock = policy.restockSupplies(potions, 4 * 270, 1900, 0);
+		assert(restock[0].amount == 2 && restock[1].amount == 2); // both floors before health's target
+		for (bool survival : {false, true}) {
+			restock = policy.restockSupplies(potions, 40 * 270, 190, 0, survival);
+			assert(restock[0].amount == 2 && restock[1].amount == 2);
+			assert(!restock[0].insufficientFunds && !restock[1].insufficientFunds);
+		}
+		restock = policy.restockSupplies(potions, 40 * 270, 300, 0, true);
+		assert(restock[0].amount == 4 && restock[1].amount == 2); // mana's floor precedes health top-up
+		restock = policy.restockSupplies(potions, 40 * 270, 150, 0, true);
+		assert(restock[0].amount == 2 && restock[1].amount == 1 && !restock[1].insufficientFunds);
+		restock = policy.restockSupplies(potions, 3 * 270, 1900, 0, true);
+		assert(restock[0].amount == 2 && restock[1].amount == 1);
+
+		// Consumed mana potions and unpaid mana debt feed the same learned hunt budget.
+		const auto learned = playerBotObserveSupplyDemand({}, 2, 60, true, 1);
+		PlayerBotSupplyKindProfile profile{rule.kind, rule.itemId, rule.target, rule.returnThreshold, learned.demand};
+		const auto budget = playerBotSupplyKindBudget(profile, 380);
+		assert(learned.updated && budget.routine == 19 && budget.expected == 19 && budget.fits);
+		assert(!playerBotSupplyKindBudget(profile, 400).fits);
+		profile.count = rule.returnThreshold;
+		assert(!playerBotSupplyKindBudget(profile, 0).fits);
 	}
 
 	// Throwing-weapon counts include the wielded stack, so one carried spear means no spare.
@@ -3283,6 +3541,21 @@ void supplyBudget()
 
 void recoverySpellPriority()
 {
+	PlayerBotSpellTrainingPlanner training;
+	PlayerBotSpellTrainingPlannerSnapshot trainingSnapshot;
+	trainingSnapshot.reserveAvailable = true;
+	trainingSnapshot.totalMoney = 1000;
+	PlayerBotSpellOfferSnapshot offer;
+	offer.spellName = "A Healing Spell";
+	offer.inScope = offer.registryMatches = offer.implementedUse = offer.vocationEligible = true;
+	offer.levelEligible = offer.premiumEligible = offer.suppliesReady = offer.route.reachable = true;
+	offer.worthLearning = false;
+	trainingSnapshot.offers = {offer};
+	auto rejected = training.select(trainingSnapshot);
+	assert(!rejected.selected && rejected.rejections.size() == 1);
+	assert(rejected.rejections.front().reason == "uneconomical_healing_spell");
+	trainingSnapshot.offers.front().worthLearning = true;
+	assert(training.select(trainingSnapshot).selected);
 	using Goal = PlayerBotGoalArbiter::TopLevelGoal;
 	assert(playerBotRecoverySpendingReserve(2, 2, 45, 100) == 100);
 	assert(playerBotRecoverySpendingReserve(2, 10, 45, 100) == 460);
@@ -3809,6 +4082,7 @@ int main()
 	huntCandidateTelemetryDeltas();
 	incrementalHuntValidationPipeline();
 	routeSelectionContracts();
+	typedSupplyRouteContracts();
 	selectedRouteRetention();
 	selectedRouteEvidence();
 	selectedRouteLegProofs();

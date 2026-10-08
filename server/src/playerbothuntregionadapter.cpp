@@ -12,6 +12,7 @@
 #include "player.h"
 #include "playerbotinventorypolicy.h"
 #include "playerbotspellcalibration.h"
+#include "playerbothealingpolicy.h"
 #include "spawn.h"
 #include "spells.h"
 #include "tile.h"
@@ -804,18 +805,33 @@ PlayerBotHuntPlanningProfile PlayerBotHuntRegionAdapter::planningProfile(const P
 		profile.supply.manaGain = vocation->getManaGainAmount();
 		profile.supply.manaInterval = interval(static_cast<int64_t>(vocation->getManaGainTicks()) * 1000);
 	}
-	InstantSpell* spell = g_spells ? g_spells->getInstantSpellByName("Light Healing") : nullptr;
-	if (!spell || spell->getWords() != "exura" || !spell->isLearnable() || !spell->isEnabled() ||
-	    !spell->canCast(&player) || player.getLevel() < spell->getLevel() ||
-	    player.getMagicLevel() < spell->getMagicLevel() || (spell->isPremium() && !player.isPremium())) {
-		return profile;
+	InstantSpell* selected = nullptr;
+	PlayerBotSpellEnvelope selectedEnvelope;
+	PlayerBotHealingSpellValue selectedValue;
+	for (const auto& descriptor : playerBotSpellDescriptors()) {
+		if (descriptor.role != PlayerBotSpellRole::Healing) continue;
+		InstantSpell* spell = g_spells ? g_spells->getInstantSpellByName(descriptor.name) : nullptr;
+		if (!spell || spell->getWords() != descriptor.words || !spell->isLearnable() || !spell->isEnabled() ||
+		    !spell->canCast(&player) || player.getLevel() < spell->getLevel() ||
+		    player.getMagicLevel() < spell->getMagicLevel() || player.getSoul() < spell->getSoulCost() ||
+		    (spell->isPremium() && !player.isPremium()) ||
+		    (!spell->getVocMap().empty() && !spell->getVocMap().count(player.getVocationId()))) continue;
+		const auto envelope = playerBotSpellEnvelope(player, descriptor);
+		const PlayerBotHealingSpellValue value{descriptor.name, spell->getManaCost(&player),
+		    (static_cast<double>(envelope.minimum) + envelope.maximum) / 2};
+		if (playerBotHealingEfficiency(value) <= 0) continue;
+		if (!selected || playerBotPreferHealingSpell(value, selectedValue)) {
+			selected = spell;
+			selectedEnvelope = envelope;
+			selectedValue = value;
+		}
 	}
+	if (!selected) return profile;
+	// Legacy profile field names now describe the selected economical heal.
 	profile.lightHealingLegal = true;
-	profile.lightHealingManaCost = spell->getManaCost(&player);
-	profile.lightHealingCooldown = std::max(spell->getCooldown(), spell->getGroupCooldown());
-	if (const PlayerBotSpellDescriptor* descriptor = playerBotSpellDescriptor("Light Healing")) {
-		profile.lightHealingMinimum = playerBotSpellEnvelope(player, *descriptor).minimum;
-	}
+	profile.lightHealingManaCost = selectedValue.manaCost;
+	profile.lightHealingCooldown = std::max(selected->getCooldown(), selected->getGroupCooldown());
+	profile.lightHealingMinimum = selectedEnvelope.minimum;
 	profile.supply.spellLegal = profile.lightHealingLegal;
 	profile.supply.spellMana = profile.lightHealingManaCost;
 	profile.supply.spellHealing = std::max(0, profile.lightHealingMinimum);

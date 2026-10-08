@@ -76,16 +76,22 @@ inline constexpr uint16_t playerBotManaPotionItemId = 7620;
 // Lower bound of the datapack's mana potion roll (actions/scripts/other/potions.lua).
 inline constexpr uint32_t playerBotManaPotionMinimumMana = 75;
 
-// Base rule for kinds without a specialized controller policy. Every current
-// vocation has a zero target: Paladin mana potion values arrive with Paladin
-// healing (#234) and launcher ammunition with #255. Bots still drink carried
-// mana potions without a target. Weapon-matched kinds have no item until the
+// Base rule for kinds without a specialized controller policy. Paladins stock
+// mana potions for spell use; other vocations still drink carried mana potions
+// without a shopping target. Weapon-matched kinds have no item until the
 // loadout selects one.
-inline PlayerBotSupplyRule playerBotSupplyRule(PlayerBotSupplyKind kind, uint16_t /*vocationId*/)
+inline PlayerBotSupplyRule playerBotSupplyRule(PlayerBotSupplyKind kind, uint16_t vocationId)
 {
 	PlayerBotSupplyRule rule;
 	rule.kind = kind;
-	if (kind == PlayerBotSupplyKind::ManaPotion) rule.itemId = playerBotManaPotionItemId;
+	if (kind == PlayerBotSupplyKind::ManaPotion) {
+		rule.itemId = playerBotManaPotionItemId;
+		if (vocationId == 3 || vocationId == 7) {
+			rule.safetyFloor = 2;
+			rule.returnThreshold = 1;
+			rule.target = 20;
+		}
+	}
 	return rule;
 }
 
@@ -135,6 +141,19 @@ inline const PlayerBotSupplyStock* playerBotSupplyStock(const PlayerBotSupplySto
 {
 	const auto found = std::find_if(stocks.begin(), stocks.end(), [kind](const auto& stock) { return stock.rule.kind == kind; });
 	return found == stocks.end() ? nullptr : &*found;
+}
+
+// Base exit requirements before candidate demand is added. Keep the legacy
+// health-supplier requirement plus active kinds below their mandatory floor.
+// Each item may have its own provider; no universal shop is required.
+inline std::vector<uint16_t> playerBotSupplyExitShopItems(const PlayerBotSupplyStocks& stocks, uint16_t healthItemId)
+{
+	std::vector<uint16_t> items{healthItemId};
+	for (const PlayerBotSupplyStock& stock : stocks) {
+		if (stock.rule.kind != PlayerBotSupplyKind::HealthPotion && stock.rule.active() &&
+		    stock.count < stock.rule.safetyFloor) items.push_back(stock.rule.itemId);
+	}
+	return items;
 }
 
 // First active non-health kind at or below its return threshold. Health

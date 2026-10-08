@@ -94,7 +94,7 @@ keywordHandler:addSpellKeyword({'cure','poison','rune'}, {npcHandler = npcHandle
 keywordHandler:addSpellKeyword({'intense','healing'}, {npcHandler = npcHandler, spellName = 'Intense Healing', price = 350, level = 11, vocation ={2,3}})
 keywordHandler:addSpellKeyword({'intense','healing','rune'}, {npcHandler = npcHandler, spellName = 'Intense Healing Rune', price = 600, level = 15, vocation ={2}})
 keywordHandler:addSpellKeyword({'light','healing'}, {npcHandler = npcHandler, spellName = 'Light Healing', price = 170, level = 9, vocation ={2,3}})
-keywordHandler:addSpellKeyword({'ultimate','healing'}, {npcHandler = npcHandler, spellName = 'Ultimate Healing', price = 1000, level = 30, vocation ={2}})
+keywordHandler:addSpellKeyword({'ultimate','healing'}, {npcHandler = npcHandler, spellName = 'Ultimate Healing', price = 1000, level = 20, vocation ={2,3}})
 keywordHandler:addSpellKeyword({'ultimate','healing','rune'}, {npcHandler = npcHandler, spellName = 'Ultimate Healing Rune', price = 1500, level = 24, vocation ={2}})
 keywordHandler:addKeyword({'healing', 'spells'}, StdModule.say, {npcHandler = npcHandler, text = "In this category I have '{Cure Poison}', '{Intense Healing}', '{Light Healing}' and '{Ultimate Healing}'."})
 keywordHandler:addKeyword({'support', 'spells'}, StdModule.say, {npcHandler = npcHandler, text = "In this category I have '{Conjure Poisoned Arrow}', '{Cure Poison Rune}', '{Intense Healing Rune}' and '{Ultimate Healing Rune}'."})

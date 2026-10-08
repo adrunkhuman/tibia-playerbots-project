@@ -28,6 +28,7 @@ struct PlayerBotSurvivalSpellObservation {
 	bool targetReachable = false;
 	bool magicTrainingEligible = false;
 	bool vocationAllowed = false;
+	bool requirementsMet = false;
 	uint32_t level = 0;
 	uint32_t manaCost = 0;
 	PlayerBotSpellEnvelope envelope;
@@ -134,9 +135,12 @@ class PlayerBotSurvivalRuntime
 {
 	public:
 		bool needsHealing(const PlayerBotSurvivalSnapshot& snapshot) const;
-		// Mana that offense, support, and magic training leave for the most
-		// expensive learned healing spell. Zero without a learned healing spell.
+		// Mana left for the preferred economical learned heal, ignoring current
+		// mana and overheal. Zero without an eligible learned healing spell.
 		uint32_t healingManaReserve(const PlayerBotSurvivalSnapshot& snapshot) const;
+		const PlayerBotSurvivalSpellObservation* preferredHealingSpell(const PlayerBotSurvivalSnapshot& snapshot,
+		                                                             bool affordable = false, bool capOverheal = false) const;
+		bool healingSpellWorthLearning(const PlayerBotSurvivalSnapshot& snapshot, const char* name) const;
 		bool hasPendingDefensiveWork() const;
 		uint16_t pendingFoodItemId() const;
 		void beginPotion(const PlayerBotSurvivalSnapshot& snapshot, uint16_t itemId, const std::string& trigger);

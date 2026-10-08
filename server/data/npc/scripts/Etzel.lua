@@ -37,7 +37,7 @@ keywordHandler:addSpellKeyword({'poison','wall'}, {npcHandler = npcHandler, spel
 keywordHandler:addSpellKeyword({'stalagmite'}, {npcHandler = npcHandler, spellName = 'Stalagmite', price = 1400, level = 24, vocation ={1}})
 keywordHandler:addSpellKeyword({'sudden','death'}, {npcHandler = npcHandler, spellName = 'Sudden Death', price = 3000, level = 45, vocation ={1}})
 keywordHandler:addSpellKeyword({'summon','creature'}, {npcHandler = npcHandler, spellName = 'Summon Creature', price = 2000, level = 25, vocation ={1}})
-keywordHandler:addSpellKeyword({'ultimate','healing'}, {npcHandler = npcHandler, spellName = 'Ultimate Healing', price = 1000, level = 30, vocation ={1}})
+keywordHandler:addSpellKeyword({'ultimate','healing'}, {npcHandler = npcHandler, spellName = 'Ultimate Healing', price = 1000, level = 20, vocation ={1}})
 keywordHandler:addKeyword({'attack', 'spells'}, StdModule.say, {npcHandler = npcHandler, text = "In this category I have '{Energy Beam}', '{Energy Wave}', '{Fire Wave}' and '{Great Energy Beam}'."})
 keywordHandler:addKeyword({'healing', 'spells'}, StdModule.say, {npcHandler = npcHandler, text = "In this category I have '{Cure Poison}', '{Intense Healing}', '{Light Healing}' and '{Ultimate Healing}'."})
 keywordHandler:addKeyword({'support', 'spells'}, StdModule.say, {npcHandler = npcHandler, text = "In this category I have '{Creature Illusion}', '{Destroy Field}', '{Energy Field}', '{Energy Wall}', '{Explosion}', '{Find Person}', '{Fire Bomb}', '{Fire Field}', '{Fire Wall}', '{Great Fireball}', '{Great Light}', '{Heavy Magic Missile}', '{Invisible}', '{Light}', '{Light Magic Missile}', '{Magic Shield}', '{Poison Field}', '{Poison Wall}', '{Stalagmite}', '{Sudden Death}' and '{Summon Creature}'."})

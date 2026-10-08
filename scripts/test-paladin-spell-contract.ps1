@@ -13,6 +13,10 @@ $npcScriptRoot = Join-Path $projectRoot "server\data\npc\scripts"
 # December 2010 spell overhaul: https://web.archive.org/web/20100530041734/http://www.tibia.com/library/?subtopic=spells
 # Vocations, soul points, and teaching cities come from the latest per-spell pages captured before that update:
 # https://web.archive.org/web/2010*/http://www.tibia.com/library/?subtopic=spells&spell=<name>
+# Restored shared spells have direct pre-overhaul CipSoft captures:
+# https://web.archive.org/web/20100830224240/http://www.tibia.com/library/?subtopic=spells&spell=food&vocation=&category=&type=&premium=&sort=
+# https://web.archive.org/web/20100912040442/http://www.tibia.com/library/?subtopic=spells&spell=magicshield&vocation=&category=&type=&premium=&sort=
+# https://web.archive.org/web/20090314044828/http://tibia.com/library/?subtopic=spells&spell=ultimatehealing&vocation=&category=&type=&premium=&sort=
 $freeCities = @("Ab'Dendriel", "Ankrahmun", "Carlin", "Darashia", "Kazordoon", "Liberty Bay", "Port Hope", "Svargrond", "Thais", "Venore", "Yalahar")
 $conjureCities = @($freeCities | Where-Object { $_ -ne "Kazordoon" })
 $premiumCities = @("Ankrahmun", "Darashia", "Edron", "Liberty Bay", "Port Hope", "Svargrond", "Yalahar")
@@ -31,10 +35,13 @@ $paladinSpells = @(
     @{ Name = "Levitate"; Words = "exani hur"; Level = 12; Mana = 50; Soul = 0; Price = 500; Premium = 1; Vocations = $both; Cities = $premiumCities }
     @{ Name = "Great Light"; Words = "utevo gran lux"; Level = 13; Mana = 60; Soul = 0; Price = 500; Premium = 0; Vocations = $both; Cities = $freeCities }
     @{ Name = "Conjure Arrow"; Words = "exevo con"; Level = 13; Mana = 100; Soul = 1; Price = 450; Premium = 0; Vocations = $both; Cities = $conjureCities }
+    @{ Name = "Food"; Words = "exevo pan"; Level = 14; Mana = 120; Soul = 1; Price = 300; Premium = 0; Vocations = $both; Cities = $conjureCities }
+    @{ Name = "Magic Shield"; Words = "utamo vita"; Level = 14; Mana = 50; Soul = 0; Price = 450; Premium = 0; Vocations = $both; Cities = $freeCities }
     @{ Name = "Haste"; Words = "utani hur"; Level = 14; Mana = 60; Soul = 0; Price = 600; Premium = 1; Vocations = $both; Cities = $premiumCities }
     @{ Name = "Conjure Poisoned Arrow"; Words = "exevo con pox"; Level = 16; Mana = 130; Soul = 2; Price = 700; Premium = 0; Vocations = $both; Cities = $conjureCities }
     @{ Name = "Conjure Bolt"; Words = "exevo con mort"; Level = 17; Mana = 140; Soul = 2; Price = 750; Premium = 1; Vocations = $both; Cities = $premiumCities }
     @{ Name = "Destroy Field Rune"; Words = "adito grav"; Level = 17; Mana = 120; Soul = 2; Price = 700; Premium = 0; Vocations = $both; Cities = $freeCities }
+    @{ Name = "Ultimate Healing"; Words = "exura vita"; Level = 20; Mana = 160; Soul = 0; Price = 1000; Premium = 0; Vocations = $both; Cities = $freeCities }
     @{ Name = "Disintegrate Rune"; Words = "adito tera"; Level = 21; Mana = 200; Soul = 3; Price = 900; Premium = 1; Vocations = $both; Cities = $premiumCities }
     @{ Name = "Ethereal Spear"; Words = "exori con"; Level = 23; Mana = 25; Soul = 0; Price = 1100; Premium = 1; Vocations = $both; Cities = $premiumCities }
     @{ Name = "Conjure Sniper Arrow"; Words = "exevo con hur"; Level = 24; Mana = 160; Soul = 3; Price = 800; Premium = 1; Vocations = $both; Cities = $premiumCities }
@@ -52,14 +59,11 @@ $paladinSpells = @(
     @{ Name = "Sharpshooter"; Words = "utito tempo san"; Level = 60; Mana = 450; Soul = 0; Price = 8000; Premium = 1; Vocations = $both; Cities = @("Edron") }
 )
 
-# Blank Rune (adori blank) is absent from the 8.60 list but shared by every caster vocation; #94 owns its removal.
-$classifiedExtras = @("Blank Rune")
-
 $contractNames = @($paladinSpells | ForEach-Object { $_.Name })
 $registeredPaladinSpells = @($registry.spells.instant | Where-Object {
         @($_.vocation | Where-Object { $_.name -in $both }).Count -gt 0
     } | ForEach-Object { [string]$_.name })
-$unexpected = @($registeredPaladinSpells | Where-Object { $_ -notin $contractNames -and $_ -notin $classifiedExtras })
+$unexpected = @($registeredPaladinSpells | Where-Object { $_ -notin $contractNames })
 if ($unexpected.Count -gt 0) {
     throw "Paladin vocations can use spells outside the 8.60 contract: $($unexpected -join ', ')."
 }

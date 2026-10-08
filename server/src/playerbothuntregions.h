@@ -294,6 +294,11 @@ struct PlayerBotHuntRegion {
 		supplyKindBudgets.clear();
 		for (const PlayerBotSupplyKindProfile& kind : supplyProfile.kinds) {
 			supplyKindBudgets.push_back(playerBotSupplyKindBudget(kind, exposure));
+			// Recovery may earn cash without mana potions only when this outing
+			// projects no mana-potion use. Weapons/ammo remain essential even
+			// with zero learned consumption; ordinary hunts keep their floors.
+			if (supplyRecovery && kind.kind == PlayerBotSupplyKind::ManaPotion &&
+			    supplyKindBudgets.back().expected == 0) supplyKindBudgets.back().fits = true;
 			supplyBudget.fits = supplyBudget.fits && supplyKindBudgets.back().fits;
 		}
 	}

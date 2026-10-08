@@ -154,6 +154,7 @@ struct PlayerBotSpellOfferSnapshot {
 	PlayerBotRouteEstimate route;
 	std::optional<uint64_t> reserve;
 	uint32_t potionReserve = 1;
+	bool worthLearning = true;
 };
 
 struct PlayerBotSpellTrainingPlannerSnapshot {
