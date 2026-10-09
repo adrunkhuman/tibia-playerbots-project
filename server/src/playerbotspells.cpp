@@ -326,8 +326,9 @@ uint32_t PlayerBotController::carriedSupplyReserve(const Player& player, uint16_
 bool PlayerBotController::huntSuppliesReady(const Player& player) const
 {
 	const PlayerBotSupplyStocks stocks = supplyStocks(player);
-	return std::all_of(stocks.begin(), stocks.end(), [](const PlayerBotSupplyStock& stock) {
-		return !stock.rule.active() || stock.count > stock.rule.returnThreshold;
+	return std::all_of(stocks.begin(), stocks.end(), [this](const PlayerBotSupplyStock& stock) {
+		return !stock.rule.active() || stock.count >
+		    playerBotSupplyHuntReserve(stock.rule.kind, stock.rule.returnThreshold, supplyRecovery.active());
 	});
 }
 

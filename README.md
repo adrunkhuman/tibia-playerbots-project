@@ -6,7 +6,7 @@ A Tibia 8.60 real-map server built toward a population made mostly of autonomous
 
 ## Current state
 
-The development stack controls two seeded level 8 Knights: `Bot One` in Carlin and `Bot Two` in Thais. Each can choose map-derived hunting regions, navigate, fight, heal, eat, loot owned corpses, use depots, sell loot, buy supplies and equipment, bank money, learn and cast supported spells, claim supported container rewards, recover after death, and continue from persisted player state.
+The development stack controls four level 8 bots: Knights `Bot One` in Carlin and `Bot Two` in Thais, plus Paladins `Bot Three` and `Bot Four` in those respective towns. The Paladins start with distance 40 to skip initial skill training, using spears and shields. The shared controller can choose map-derived hunting regions, navigate, fight, heal, eat, loot owned corpses, use depots, sell loot, buy supplies and equipment, bank money, learn and cast supported spells, claim supported container rewards, recover after death, and continue from persisted player state.
 
 This is a prototype, not a simulated population. Navigation combines whole-map routing with local pathfinding and NPC travel. Unsupported transitions, search limits, and changing obstacles can still prevent a journey. Quest support is narrow, and focused gameplay tests do not establish reliable unattended progression. The bots act independently; personalities, relationships, parties, guilds, and generated population behavior remain planned. See [Playerbots](docs/playerbots.md) for the capability and evidence boundaries.
 
@@ -34,8 +34,10 @@ Launch `client/launch-angelion-redemption.cmd` on Windows. On Linux, run `(cd cl
 | `admin` | `admin` | `GOD Admin`, `Rook Tester` |
 | `bot-one` | `bot-one` | `Bot One` |
 | `bot-two` | `bot-two` | `Bot Two` |
+| `bot-three` | `bot-three` | `Bot Three` |
+| `bot-four` | `bot-four` | `Bot Four` |
 
-A human client cannot control either registered bot while the server owns its identity, including during recovery or after its controller stops. Local database and world state are disposable. This command deletes them:
+A human client cannot control any registered bot while the server owns its identity, including during recovery or after its controller stops. Local database and world state are disposable. This command deletes them:
 
 ```powershell
 docker compose -f server/compose.yaml down --volumes

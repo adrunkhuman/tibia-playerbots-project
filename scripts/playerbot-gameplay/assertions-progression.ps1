@@ -417,13 +417,25 @@ function Assert-HuntRegionPlanningEvents {
 		$routeValidations.Count -le $selectedScan.route_candidate_count -and
 		$validatedVariantCount -le $selectedScan.route_candidate_count -and $selectedScan.transport_offer_count -ge 0 -and
 		$selectedScan.transport_arrival_count -ge 1
+	$productiveCandidates = @($reachableCandidates | Where-Object { $_.available_hunt_seconds -gt 0 })
+	if ($productiveCandidates.Count -gt 0) { $reachableCandidates = $productiveCandidates }
+	$supplyPressure = {
+		param($Candidate)
+		$pressure = $Candidate.supply_expected_potions / [Math]::Max(1, $Candidate.supply_routine_potions)
+		foreach ($kind in $Candidate.supply_kinds) {
+			$typed = $kind.expected / [Math]::Max(1, $kind.routine)
+			if (-not $kind.fits -and $kind.routine -eq 0) { $typed = [Math]::Max(1, $typed) }
+			$pressure = [Math]::Max($pressure, $typed)
+		}
+		return $pressure
+	}
 	$budgetCandidates = @($reachableCandidates | Where-Object { $_.supply_budget_fits })
-	$minimumPotions = if ($reachableCandidates.Count -gt 0) { ($reachableCandidates | Measure-Object -Property supply_expected_potions -Minimum).Minimum } else { $null }
+	$minimumPressure = ($reachableCandidates | ForEach-Object { & $supplyPressure $_ } | Measure-Object -Minimum).Minimum
 	$preferredCandidates = if ($budgetCandidates.Count -gt 0) { $budgetCandidates } else {
-		@($reachableCandidates | Where-Object { $_.supply_expected_potions -eq $minimumPotions })
+		@($reachableCandidates | Where-Object { (& $supplyPressure $_) -eq $minimumPressure })
 	}
     $bestScore = if ($preferredCandidates.Count -gt 0) { ($preferredCandidates | Measure-Object -Property score -Maximum).Maximum } else { $null }
-	$selectionRule = if ($budgetCandidates.Count -gt 0) { 'supply_budget_then_xp' } else { 'lowest_potion_consumption_then_xp' }
+	$selectionRule = if ($budgetCandidates.Count -gt 0) { 'supply_budget_then_xp' } else { 'lowest_supply_pressure_then_xp' }
 	$completedTopology = @($completed | Where-Object {
 		$_.topology_time_us -ge 0
 	})
@@ -455,7 +467,7 @@ function Assert-HuntRegionPlanningEvents {
 		-not $finiteRouteQueue -or $selection.selection_rule -ne $selectionRule -or
 		-not $selectedCandidate[0].route_validated -or
 		($budgetCandidates.Count -gt 0 -and -not $selectedCandidate[0].supply_budget_fits) -or
-		($budgetCandidates.Count -eq 0 -and $selectedCandidate[0].supply_expected_potions -ne $minimumPotions) -or
+		($budgetCandidates.Count -eq 0 -and (& $supplyPressure $selectedCandidate[0]) -ne $minimumPressure) -or
 		-not $selectedAccessValid -or
 		-not $selectedCandidate[0].reachable -or $selectedCandidate[0].route_danger_cost -lt 0 -or
 		$outsideLocalFixture.Count -lt 1 -or $completedTopology.Count -lt 1 -or
@@ -539,7 +551,7 @@ function Assert-SupplyBudgetEvents {
 		$_.easy_expected_potions -eq 2 -and $_.costly_expected_potions -eq 12 -and
 		$_.easy_budget_fits -eq $false -and $_.costly_budget_fits -eq $false -and
 		$_.selected_variant -eq 1 -and $_.budget_fits -eq $false -and $_.expected_potions -eq 2 -and
-		$_.selection_rule -eq 'lowest_potion_consumption_then_xp'
+		$_.selection_rule -eq 'lowest_supply_pressure_then_xp'
 	})
 	if ($fixtures.Count -ne 3 -or $scarce.Count -ne 1 -or $plentiful.Count -ne 1 -or $overBudget.Count -ne 1) {
 		throw 'Duration-budget runtime selection failed the scarce/plentiful/all-over-budget supply contrast.'

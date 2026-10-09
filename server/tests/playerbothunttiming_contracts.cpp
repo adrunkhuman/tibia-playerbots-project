@@ -1,4 +1,5 @@
 #include "playerbothunttiming.h"
+#include "playerbothunttriptiming.h"
 
 #include <cassert>
 #include <chrono>
@@ -7,6 +8,20 @@
 
 int main()
 {
+	// Terrain comes from the route, not the fast town tile at planning time.
+	assert(playerBotHuntStepMilliseconds(70, 220) == 350);
+	assert(playerBotHuntStepMilliseconds(150, 220) == 700);
+	assert(playerBotHuntStepMilliseconds(200, 220) == 950);
+	assert(playerBotHuntStepMilliseconds(150, 220, true) == 1400);
+	assert(playerBotHuntStepMilliseconds(150, 220, true, true) == 1400);
+	assert(playerBotHuntStepMilliseconds(0, 220) == 700);
+	assert(playerBotHuntCoarseTravelSeconds(100, 220) == 70);
+	assert(playerBotHuntActionMilliseconds(700, 200) == 1000);
+	assert(playerBotHuntActionMilliseconds(700, 1500) == 1500);
+	assert(playerBotHuntActionMilliseconds(1900, 1500) == 1900);
+	assert(playerBotHuntTransitSeconds(200) == 460);
+	assert(playerBotHuntTransitSeconds(0) == 60);
+	assert(playerBotHuntTransitSeconds(1e12) == 3600);
 	using namespace std::chrono;
 	using Timing = PlayerBotHuntSliceTiming;
 	const Timing::Time start{};

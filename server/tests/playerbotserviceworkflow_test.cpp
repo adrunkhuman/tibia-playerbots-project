@@ -151,5 +151,79 @@ int main()
 		       unavailable.outcome == PlayerBotServiceOutcome::Unavailable);
 	}
 
+	// Missing spears are supplies, not an optional equipment upgrade: 39 gp
+	// may buy the whole floor even though it is below the 100-gp cash reserve.
+	for (bool survival : {false, true}) {
+		PlayerBotServiceWorkflow supplies;
+		supplies.setSurvivalRestock(survival);
+		auto observation = supplyShop({{7618, 20}, {7620, 20}, {2389, 0}}, 39,
+		    {{7618, 45, 0, 0}, {7620, 50, 0, 0}, {2389, 10, 0, 0}});
+		observation.supplyCapacityReserve = 3000;
+		observation.supplies = {
+		    {PlayerBotSupplyKind::HealthPotion, 7618, 270, 1, 20, 2},
+		    {PlayerBotSupplyKind::ManaPotion, 7620, 270, 1, 20, 2},
+		    {PlayerBotSupplyKind::ThrowingWeapon, 2389, 2000, 1, 3, 3}};
+		const auto purchase = supplies.advance(observation, catalog, disposition);
+		assert(purchase.type == PlayerBotServiceCommandType::Buy && purchase.itemId == 2389 && purchase.amount == 3);
+		assert(purchase.transaction && purchase.transaction->unitPrice == 10);
+		observation.money = 9;
+		observation.inventoryCounts[2389] = 3;
+		bool complete = false;
+		for (int step = 0; step < 5; ++step) {
+			const auto next = supplies.advance(observation, catalog, disposition);
+			assert(next.type != PlayerBotServiceCommandType::Fail && next.type != PlayerBotServiceCommandType::Buy);
+			if (next.type == PlayerBotServiceCommandType::Complete) { complete = true; break; }
+		}
+		assert(complete);
+	}
+
+	// A level-8 Paladin's gear and three spears leave 110 oz. Shopping keeps
+	// the 30 oz hunting buffer rather than sending protected stock to a depot.
+	for (bool survival : {false, true}) {
+		for (uint64_t funds : {1000ULL, 10000ULL}) {
+			PlayerBotServiceWorkflow supplies;
+			supplies.setSurvivalRestock(survival);
+			auto observation = supplyShop({{7618, 0}, {7620, 0}, {2389, 3}}, funds,
+			    {{7618, 45, 0, 0}, {7620, 50, 0, 0}, {2389, 10, 0, 0}});
+			observation.freeCapacity = 11000;
+			observation.supplyCapacityReserve = 3000;
+			observation.supplies = {
+			    {PlayerBotSupplyKind::HealthPotion, 7618, 270, 1, 20, 2},
+			    {PlayerBotSupplyKind::ManaPotion, 7620, 270, 1, 20, 2},
+			    {PlayerBotSupplyKind::ThrowingWeapon, 2389, 2000, 1, 3, 3}};
+			bool complete = false;
+			for (int turn = 0; turn < 20; ++turn) {
+				const auto command = supplies.advance(observation, catalog, disposition);
+				assert(command.type != PlayerBotServiceCommandType::Fail);
+				if (command.type == PlayerBotServiceCommandType::Complete) {
+					complete = true;
+					break;
+				}
+				if (command.type != PlayerBotServiceCommandType::Buy) continue;
+				assert(command.itemId == 7618 || command.itemId == 7620);
+				observation.inventoryCounts[command.itemId] += command.amount;
+				observation.freeCapacity -= command.amount * 270;
+				assert(command.transaction);
+				observation.money -= command.amount * command.transaction->unitPrice;
+				assert(observation.freeCapacity >= observation.supplyCapacityReserve);
+			}
+			assert(complete && observation.inventoryCounts.at(7618) == 20);
+			assert(observation.inventoryCounts.at(7620) == (funds == 1000 ? 2 : 9));
+			assert(observation.inventoryCounts.at(2389) == 3);
+			assert(observation.freeCapacity == (funds == 1000 ? 5060 : 3170));
+			// Optional targets still below their ceiling do not restart shopping.
+			assert(supplies.advance(observation, catalog, disposition).type == PlayerBotServiceCommandType::Complete);
+		}
+	}
+	for (uint32_t capacity : {0U, 2999U, 3000U}) {
+		PlayerBotServiceWorkflow supplies;
+		auto observation = supplyShop({{7618, 2}, {7620, 2}}, 10000,
+		    {{7618, 50, 0, 0}, {7620, 50, 0, 0}});
+		observation.freeCapacity = capacity;
+		observation.supplyCapacityReserve = 3000;
+		for (auto& supply : observation.supplies) supply.weight = 270;
+		assert(supplies.advance(observation, catalog, disposition).type == PlayerBotServiceCommandType::Complete);
+	}
+
 	std::cout << "service workflow regression tests passed\n";
 }

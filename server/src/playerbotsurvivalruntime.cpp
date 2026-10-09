@@ -39,7 +39,9 @@ namespace {
 
 bool PlayerBotSurvivalRuntime::needsHealing(const PlayerBotSurvivalSnapshot& snapshot) const
 {
-	return static_cast<int64_t>(snapshot.health) * 100 <= static_cast<int64_t>(snapshot.healthMaximum) * healingHealthPercent;
+	return static_cast<int64_t>(snapshot.health) * 100 <= static_cast<int64_t>(snapshot.healthMaximum) * healingHealthPercent ||
+	       (!snapshot.combatActive && snapshot.health < static_cast<int64_t>(std::min<uint32_t>(
+	           std::max(0, snapshot.healthMaximum), snapshot.departureHealthTarget)));
 }
 
 bool PlayerBotSurvivalRuntime::hasPendingDefensiveWork() const

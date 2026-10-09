@@ -547,7 +547,11 @@ PlayerBotServiceCommand PlayerBotServiceWorkflow::advanceImpl(const PlayerBotSer
 			requests.back().unitPrice = offer->buyPrice;
 			offers.back() = {selected, &*offer};
 		}
-		const auto restock = disposition.restockSupplies(requests, observation.freeCapacity, observation.money,
+		// Buying supplies must not immediately force a depot return with only
+		// protected items to carry. All kinds share the remaining capacity.
+		const uint32_t purchaseCapacity = observation.freeCapacity > observation.supplyCapacityReserve ?
+		    observation.freeCapacity - observation.supplyCapacityReserve : 0;
+		const auto restock = disposition.restockSupplies(requests, purchaseCapacity, observation.money,
 		                                                 observation.bankBalance, survivalRestock);
 		for (size_t index = 0; index < restock.size(); ++index) {
 			if (restock[index].insufficientFunds) {

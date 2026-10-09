@@ -162,7 +162,8 @@ bool PlayerBotEquipmentPolicy::isThrowingWeapon(const PlayerBotEquipmentPlayerSn
 }
 
 uint16_t PlayerBotEquipmentPolicy::throwingWeaponSupplyItem(const PlayerBotEquipmentPlayerSnapshot& player,
-	const PlayerBotEquipmentLoadout& loadout, const std::vector<PlayerBotEquipmentItemSnapshot>& carried) const
+	const PlayerBotEquipmentLoadout& loadout, const std::vector<PlayerBotEquipmentItemSnapshot>& carried,
+	const PlayerBotEquipmentItemSnapshot& fallback) const
 {
 	for (slots_t hand : {left, right}) {
 		const auto& item = loadout.items[static_cast<uint8_t>(hand)];
@@ -178,6 +179,9 @@ uint16_t PlayerBotEquipmentPolicy::throwingWeaponSupplyItem(const PlayerBotEquip
 			selected = item.itemId;
 			selectedBenefit = upgrade->benefit;
 		}
+	}
+	if (selected == 0 && isThrowingWeapon(player, fallback) && fillsReadinessGap(player, loadout, fallback)) {
+		selected = fallback.itemId;
 	}
 	return selected;
 }
@@ -236,6 +240,18 @@ std::optional<PlayerBotEquipmentUpgrade> PlayerBotEquipmentPolicy::evaluateUpgra
 	const PlayerBotEquipmentLoadout& loadout, const PlayerBotEquipmentItemSnapshot& candidate) const
 {
 	if (!isLegalEquipmentItem(player, candidate)) return std::nullopt;
+	// Restoring a missing weapon is not a damage/breakage comparison with
+	// whatever occupies the left slot. Honor either shield/weapon orientation.
+	if (managesEquipment(player) && !weaponReady(player, loadout) && isStyleWeapon(player, candidate)) {
+		auto restored = loadout;
+		slots_t target;
+		uint16_t replaced, displacedLeft, displacedRight;
+		std::string rejection;
+		if (applyOffer(player, restored, candidate, target, replaced, displacedLeft, displacedRight, rejection) &&
+		    weaponReady(player, restored)) {
+			return PlayerBotEquipmentUpgrade{target, std::max(1, candidate.attack), "attack", 0, candidate.attack};
+		}
+	}
 	slots_t target = slot(0);
 	const char* metric = nullptr;
 	int32_t candidateValue = 0;
@@ -391,9 +407,9 @@ PlayerBotEquipmentReadiness PlayerBotEquipmentPolicy::combatReadiness(const Play
 	const bool armorIsReady = armorReady(player, loadout);
 	if (carriedUpgrade) { result.recovery = "equip_carried"; return result; }
 	if (weaponIsReady && armorIsReady && readiness.backpackReady && readiness.suppliesReady && readiness.effectiveFreeCapacity >= readiness.minimumFreeCapacity) { result.ready = true; return result; }
-	// A missing weapon or armor is bought as readiness repair; the controller
-	// stops with the matching missing_* reason only when no offer can fill it.
-	if (!weaponIsReady) result.recovery = "acquire_weapon";
+	// Consumable weapons use supply funding, not the reserve-protected budget
+	// for equipment upgrades. Other missing gear still uses readiness repair.
+	if (!weaponIsReady) result.recovery = readiness.restockableWeaponMissing ? "service" : "acquire_weapon";
 	else if (!armorIsReady) result.recovery = "acquire_armor";
 	else if (!readiness.backpackReady) result.recovery = "acquire_backpack";
 	else result.recovery = "service";

@@ -16,7 +16,7 @@ function Test-Evidence([array]$Events, [scriptblock]$Assertion, [bool]$Reject = 
 $supply = @(
     @{ event = 'supply_budget_fixture'; source = 'synthetic_runtime_candidates'; potions = 2; duration_seconds = 900; selected_variant = 1; budget_fits = $true; expected_potions = 1; scored_candidates = 2; selection_rule = 'supply_budget_then_xp' }
     @{ event = 'supply_budget_fixture'; source = 'synthetic_runtime_candidates'; potions = 10; duration_seconds = 900; selected_variant = 2; budget_fits = $true; expected_potions = 8; scored_candidates = 2; selection_rule = 'supply_budget_then_xp' }
-    @{ event = 'supply_budget_fixture'; source = 'synthetic_runtime_candidates'; potions = 2; duration_seconds = 1500; selected_variant = 1; budget_fits = $false; expected_potions = 2; scored_candidates = 2; easy_expected_potions = 2; costly_expected_potions = 12; easy_budget_fits = $false; costly_budget_fits = $false; selection_rule = 'lowest_potion_consumption_then_xp' }
+    @{ event = 'supply_budget_fixture'; source = 'synthetic_runtime_candidates'; potions = 2; duration_seconds = 1500; selected_variant = 1; budget_fits = $false; expected_potions = 2; scored_candidates = 2; easy_expected_potions = 2; costly_expected_potions = 12; easy_budget_fits = $false; costly_budget_fits = $false; selection_rule = 'lowest_supply_pressure_then_xp' }
 )
 $checkSupply = { param($logs) Assert-SupplyBudgetEvents -Logs $logs }
 Test-Evidence $supply $checkSupply

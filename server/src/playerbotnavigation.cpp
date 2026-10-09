@@ -554,6 +554,9 @@ std::optional<PlayerBotNavigationResult> PlayerBotNavigator::advance(
 {
 	const auto& start = search.start;
 	const auto& goal = search.goal;
+	if (costPolicy && search.rejectUnsafeEndpoints([&](const Position& target) { return costPolicy->dangerAt(target); })) {
+		return search.result;
+	}
 	if (!search.sourceTree && goal.reached(start)) return search.result = PlayerBotNavigationResult::Reached;
 	if (!search.sourceTree && playerBotNavigationExactGoalBlocked(goal, blockedPositions)) {
 		return search.result = PlayerBotNavigationResult::Unreachable;

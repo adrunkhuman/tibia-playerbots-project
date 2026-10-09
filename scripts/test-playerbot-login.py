@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Local Tibia 8.60 login/takeover smoke test. No gameplay packets except logout.
 
-Run without arguments for the three seeded accounts, or select one with
+Run without arguments for the admin and four normal-roster bot accounts, or select one with
 --character, --account, --password, and --expect login|reject.
 --self-test checks the packet codec and extracts the local PEM public key; no sockets.
 """
@@ -310,6 +310,8 @@ def main():
         ("GOD Admin", "admin", "admin", "login"),
         ("Bot One", "bot-one", "bot-one", "reject"),
         ("Bot Two", "bot-two", "bot-two", "reject"),
+        ("Bot Three", "bot-three", "bot-three", "reject"),
+        ("Bot Four", "bot-four", "bot-four", "reject"),
     ]
     rsa = public_key()
     for character, account, password, expected in cases:

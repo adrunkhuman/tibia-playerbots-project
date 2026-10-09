@@ -80,6 +80,7 @@ PlayerBotNavigationRuntimeOutcome PlayerBotNavigationRuntime::observePlan(Player
 	if (observation.plan.metrics.result != PlayerBotNavigationResult::Reached ||
 	    (!observation.startsNavigation && observation.plan.steps.empty())) {
 		outcome.routeUnavailable = true;
+		outcome.routeUnsafe = observation.plan.metrics.result == PlayerBotNavigationResult::RiskRejected;
 		session.activeBlockedPositions(observation.now);
 		fixedTargetFailures.observePlan(false);
 		outcome.fixedTargetRouteFailures = fixedTargetFailures.count();

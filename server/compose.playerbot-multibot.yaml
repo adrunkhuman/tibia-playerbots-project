@@ -1,5 +1,9 @@
 # Disposable two-character integration fixture. Never combine with the single-bot gameplay override.
 services:
+  playerbot-setup:
+    environment:
+      PLAYERBOT_SEED_PALADINS: "false"
+
   server:
     environment:
       PLAYERBOT_GAMEPLAY_MODE: ""

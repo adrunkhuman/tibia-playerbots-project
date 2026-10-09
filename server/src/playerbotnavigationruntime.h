@@ -126,7 +126,8 @@ inline const char* playerBotNavigationActionName(PlayerBotNavigationAction actio
 inline const char* playerBotNavigationResultName(PlayerBotNavigationResult result)
 {
 	return result == PlayerBotNavigationResult::Reached ? "reached" :
-	       result == PlayerBotNavigationResult::NodeLimit ? "node_limit" : "unreachable";
+	       result == PlayerBotNavigationResult::NodeLimit ? "node_limit" :
+	       result == PlayerBotNavigationResult::RiskRejected ? "risk_rejected" : "unreachable";
 }
 
 struct PlayerBotNavigationRuntimeTiming {

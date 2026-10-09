@@ -133,15 +133,14 @@ end
 
 for _, selectedMode in ipairs({'equipment_buy', 'equipment_buy_resume', 'equipment_buy_rejected',
     'equipment_buy_space', 'equipment_buy_provider_unreachable', 'equipment_buy_provider_moved',
-    'equipment_shadow', 'equipment_shadow_unaffordable', 'equipment_shadow_no_upgrade', 'equipment_buy_spear'}) do
+    'equipment_shadow', 'equipment_shadow_unaffordable', 'equipment_shadow_no_upgrade'}) do
     local p = newPlayer()
     login(selectedMode, p)
     local moved = selectedMode == 'equipment_buy_provider_moved'
     local shadow = selectedMode == 'equipment_shadow' or selectedMode == 'equipment_shadow_no_upgrade'
     local resume = selectedMode == 'equipment_buy_resume'
     local space = selectedMode == 'equipment_buy_space'
-    local spear = selectedMode == 'equipment_buy_spear'
-    local carried = moved and 80 or shadow and 2017 or spear and 10 or
+    local carried = moved and 80 or shadow and 2017 or
         (resume or selectedMode == 'equipment_shadow_unaffordable') and 0 or 5
     assert(p:getItemCount(F.healthPotionItemId) == potionTarget,
         selectedMode .. ': potions must meet the production stock target of ' .. potionTarget)
@@ -156,14 +155,8 @@ for _, selectedMode in ipairs({'equipment_buy', 'equipment_buy_resume', 'equipme
         assert(p.capacity == (space and 100000 or 47000), selectedMode .. ': changed unrelated capacity')
     end
     assert(p:getItemCount(F.equipmentPurchaseItemId) == (resume and 1 or 0), 'incorrect persisted purchase seed')
-    if spear then
-        assert(p.vocation == 3 and not p:getSlotItem(CONST_SLOT_LEFT) and p:getItemCount(F.spearItemId) == 0,
-            'spear fixture must start as an unarmed Paladin')
-        assert(p:getSlotItem(CONST_SLOT_RIGHT):getId() == 2525, 'spear fixture must keep the shield')
-    else
-        assert(p.vocation == 4 and p:getSlotItem(CONST_SLOT_LEFT):getId() == (moved and 2376 or
-            selectedMode == 'equipment_shadow_no_upgrade' and F.broadswordItemId or F.starterWeaponId))
-    end
+    assert(p.vocation == 4 and p:getSlotItem(CONST_SLOT_LEFT):getId() == (moved and 2376 or
+        selectedMode == 'equipment_shadow_no_upgrade' and F.broadswordItemId or F.starterWeaponId))
     assert(p:getSlotItem(CONST_SLOT_ARMOR):getId() == (space and F.starterArmorId or 2463))
     assert(p.storage[F.fixtureReadyStorage] == 1 and marker == 'PLAYERBOT_GAMEPLAY_TEST ' .. selectedMode:upper() .. '_START')
     scheduled(F.suppressNearbyMonsters, 100, 3)
@@ -176,8 +169,6 @@ for _, selectedMode in ipairs({'equipment_buy', 'equipment_buy_resume', 'equipme
         local backpack = p:getSlotItem(CONST_SLOT_BACKPACK)
         assert(backpack:getSize() == backpack:getCapacity() - 1, 'space fixture must leave exactly one slot')
         scheduled(F.verifyEquipmentPurchaseSpace, 500, 3)
-    elseif spear then
-        scheduled(F.verifySpearPurchase, 500, 3, 360)
     elseif selectedMode == 'equipment_buy_provider_unreachable' then
         assert(#events == 1, 'unreachable provider must not schedule a successful-purchase verifier')
     elseif selectedMode:find('equipment_shadow', 1, true) then
@@ -202,4 +193,5 @@ for _, purchaseSlot in ipairs({CONST_SLOT_LEFT, CONST_SLOT_RIGHT}) do
     assert(marker == 'PLAYERBOT_GAMEPLAY_TEST EQUIPMENT_BUY_RESTART_PASS')
 end
 print = originalPrint
-print('PASS equipment fixture: ten modes, full potions, exact economy, placement/capacity, verifier scheduling and both purchase-restart slots')
+-- The unarmed Paladin uses supply recovery; see test-playerbot-spear-fixture.lua.
+print('PASS equipment fixture: nine modes, full potions, exact economy, placement/capacity, verifier scheduling and both purchase-restart slots')

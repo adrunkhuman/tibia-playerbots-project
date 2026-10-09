@@ -103,6 +103,7 @@ struct PlayerBotServiceObservation {
 	bool backpackAvailable = false;
 	bool backpackOpen = false;
 	uint32_t freeCapacity = 0;
+	uint32_t supplyCapacityReserve = 0;
 	uint64_t money = 0;
 	uint64_t bankBalance = 0;
 	uint32_t goldCoinWeight = 0;

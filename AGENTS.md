@@ -149,9 +149,11 @@ pwsh -File scripts/bootstrap-client.ps1
   at the cost of a simpler reset, rebuild, or restart. Use a clean volume when
   useful unless the task explicitly requires persistence testing.
 - Preserve the seeded development characters after database resets:
-  `GOD Admin`, `Rook Tester`, and the server-controlled `Bot One` and `Bot Two`.
-  Normal seeds are level 8 Knights in Carlin and Thais respectively; existing
-  single-bot fixture overlays deliberately seed only Bot One.
+  `GOD Admin`, `Rook Tester`, and server-controlled `Bot One` through `Bot Four`.
+  All four bots start at level 8: Bot One and Bot Two are Knights in Carlin and
+  Thais; Bot Three and Bot Four are Paladins in the same respective towns, with
+  distance 40 to skip initial skill training. Single-bot fixture overlays seed
+  only Bot One; the two-bot lifecycle overlay seeds only the Knights.
 - Keep `playerbot-setup` ahead of the server in the Compose dependency chain.
   It owns idempotent bot provisioning and the `player_bots` registry, and must
   fail rather than take over an unrelated same-named or deleted character.
@@ -164,7 +166,7 @@ pwsh -File scripts/bootstrap-client.ps1
 
 ## Playerbots
 
-- `Bot One` and `Bot Two` are database-backed, server-controlled `Player`s. They
+- `Bot One` through `Bot Four` are database-backed, server-controlled `Player`s. They
   have no client connection or external bot API. The manager reads `player_bots`
   at startup and reserves identities through activation, recovery, startup failure,
   and terminal stop; a human client must not take control of a reserved identity.
@@ -231,9 +233,10 @@ docker compose -f server/compose.yaml logs playerbot-setup server
 Confirm that MariaDB is healthy, the map loads, the server reports online, and
 ports `7171` and `7172` accept local connections. Confirm that
 `playerbot-setup` exits successfully, one valid registration exists for each of
-`Bot One` and `Bot Two`, and the server emits distinct valid JSONL `playerbot`
-`lifecycle` events with status `online` for both in the same server run.
-Single-bot fixture overlays instead require exactly the Bot One registration.
+`Bot One`, `Bot Two`, `Bot Three`, and `Bot Four`, and the server emits distinct
+valid JSONL `playerbot` `lifecycle` events with status `online` for all four in
+one server run. Single-bot fixture overlays require exactly Bot One; the
+multibot lifecycle overlay requires exactly Bot One and Bot Two.
 
 For playerbot navigation or looting changes, also run the focused checks:
 

@@ -4,7 +4,12 @@
 #include <utility>
 
 PlayerBotHuntRouteSelection::PlayerBotHuntRouteSelection(std::vector<PlayerBotHuntRegion> candidates) :
-	candidates(std::move(candidates)) {}
+	candidates(std::move(candidates))
+{
+	// Engine candidates are already frozen. Synthetic callers get the same
+	// snapshot contract before any live route observation can change facts.
+	for (auto& candidate : this->candidates) candidate.freezeEconomicKey();
+}
 
 PlayerBotHuntRouteRequest PlayerBotHuntRouteSelection::next()
 {
@@ -129,7 +134,11 @@ PlayerBotHuntRouteResult PlayerBotHuntRouteSelection::observe(const PlayerBotHun
 			    [&kind](const PlayerBotSupplyKindProfile& previous) {
 				    return previous.kind == kind.kind && previous.itemId == kind.itemId;
 			    });
-			if (prior != routed.supplyProfile.kinds.end()) kind.demand = prior->demand;
+			if (prior != routed.supplyProfile.kinds.end()) {
+				kind.demand = prior->demand;
+				kind.staticUnitsPerCombatSecond = prior->staticUnitsPerCombatSecond;
+				kind.unitPrice = prior->unitPrice;
+			}
 		}
 		routed.supplyProfile = std::move(profile);
 	};
@@ -144,10 +153,11 @@ PlayerBotHuntRouteResult PlayerBotHuntRouteSelection::observe(const PlayerBotHun
 		routed.outboundNpcTravel = observation.npcTravel;
 		routed.routeDangerCost = observation.dangerCost;
 		routed.maximumRouteDanger = observation.peakDanger;
-		if (observation.travelSeconds > 0)
+		if (observation.huntDurationSeconds > 0)
 			routed.reconcileTravel(observation.huntDurationSeconds, observation.travelSeconds,
 		        observation.staminaMultiplier);
-		if (!observation.reached) routed.rejectionReason = searchIncomplete ? "route_search_incomplete" : "route_unreachable";
+		if (!observation.reached) routed.rejectionReason = observation.endpointRiskRejected ?
+		    "route_endpoint_peak_danger" : searchIncomplete ? "route_search_incomplete" : "route_unreachable";
 		else if (!safe) routed.rejectionReason = observation.dangerCost >
 		    static_cast<uint32_t>(risk.maximumRouteHealthLoss * risk.healthLossCost) ?
 		    "route_danger_above_tolerance" : "route_peak_danger_above_tolerance";
@@ -173,6 +183,7 @@ PlayerBotHuntRouteResult PlayerBotHuntRouteSelection::observe(const PlayerBotHun
 		routed.exitDepotDestination = request.to;
 		routed.exitFare = observation.fare;
 		routed.exitNpcTravel = observation.npcTravel;
+		routed.estimatedReturnSeconds = observation.travelSeconds;
 		refreshSupply(observation.supplyProfile);
 		routed.reconcileRecovery(observation.potionReserve, observation.funds);
 		current = std::move(routed);
@@ -206,6 +217,7 @@ PlayerBotHuntRouteResult PlayerBotHuntRouteSelection::observe(const PlayerBotHun
 			return continuation(true);
 		}
 		routed.supplyDestination = request.to;
+		routed.estimatedSupplySeconds += observation.travelSeconds;
 		routed.supplyFare = routed.supplyFare > UINT64_MAX - observation.fare ? UINT64_MAX :
 		    routed.supplyFare + observation.fare;
 		routed.supplyNpcTravel = routed.supplyNpcTravel || observation.npcTravel;
@@ -226,8 +238,11 @@ PlayerBotHuntRouteResult PlayerBotHuntRouteSelection::observe(const PlayerBotHun
 		refreshSupply(observation.supplyProfile);
 		routed.recoveryPotionReserve = observation.potionReserve;
 		routed.recoveryRouteHealthLoss = observation.recoveryRouteHealthLoss;
+		routed.healthPotionUnitPrice = observation.healthPotionUnitPrice;
 		routed.reconcileRecovery(observation.potionReserve, observation.funds);
+		routed.fitSupplyWindow(observation.potionReserve);
 		if (!routed.recoverySustainable()) routed.rejectionReason = "recovery_hunt_not_sustainable";
+		else if (!routed.productiveWindow() || !routed.supplyBudget.fits) routed.rejectionReason = "hunt_supply_window_unavailable";
 		else if (!playerBotHuntTravelAffordable(observation.funds, observation.recoverySpendingReserve,
 		    routed.outboundFare, routed.exitFare, routed.supplyFare))
 			routed.rejectionReason = "travel_fare_breaks_recovery_reserve";

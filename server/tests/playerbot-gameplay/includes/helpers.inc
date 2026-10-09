@@ -1,5 +1,20 @@
 local F = PlayerbotGameplayFixture
 
+function F.spearFixtureEvidence(player, mode, phase)
+    local left, right = player:getSlotItem(CONST_SLOT_LEFT), player:getSlotItem(CONST_SLOT_RIGHT)
+    local hand = left and left:getId() == F.spearItemId and left or right and right:getId() == F.spearItemId and right
+    print(string.format('{"component":"playerbot","event":"spear_fixture","source":"lua_setup_verifier",' ..
+        '"scenario":"%s","phase":"%s","vocation":%d,"level":%d,"spears":%d,"equipped_spears":%d,' ..
+        '"left_item_id":%d,"right_item_id":%d,"carried_gold":%d,"bank_gold":%d,' ..
+        '"health":%d,"health_max":%d,"mana":%d,"mana_max":%d,"free_capacity":%d,' ..
+        '"health_potions":%d,"mana_potions":%d}',
+        mode, phase, player:getVocation():getId(), player:getLevel(), player:getItemCount(F.spearItemId),
+        hand and hand:getCount() or 0, left and left:getId() or 0, right and right:getId() or 0,
+        player:getMoney(), player:getBankBalance(), player:getHealth(), player:getMaxHealth(),
+        player:getMana(), player:getMaxMana(), player:getFreeCapacity(),
+        player:getItemCount(F.healthPotionItemId), player:getItemCount(F.manaPotionItemId)))
+end
+
 function F.paladinFixtureEvidence(player, mode, phase)
     print(string.format('{"component":"playerbot","event":"paladin_fixture","source":"lua_setup_verifier",' ..
         '"scenario":"%s","phase":"%s","vocation":%d,"level":%d,"health":%d,"health_max":%d,' ..
@@ -213,15 +228,20 @@ F.supplyRecoveryRegisteredMonsters = {}
 
 function F.armSupplyRecoveryIncome(player)
     local position = player:getPosition()
+    local incomeRecovery = os.getenv("PLAYERBOT_GAMEPLAY_MODE") == "spear_recovery_income"
     local center = F.supplyRecoveryHuntCenter
-    if position.z ~= center.z or math.abs(position.x - center.x) > 30 or math.abs(position.y - center.y) > 30 then
+    if not incomeRecovery and (position.z ~= center.z or math.abs(position.x - center.x) > 30 or
+        math.abs(position.y - center.y) > 30) then
         return
     end
-    for _, creature in ipairs(Game.getSpectators(position, true, false, 30, 30, 30, 30)) do
-        if creature:isMonster() and creature:getName():lower() == "spider" and
+    -- The Paladin case follows whichever region normal selection chooses. Only
+    -- corpse income is controlled; movement, target choice and damage stay normal.
+    local radius = incomeRecovery and 8 or 30
+    for _, creature in ipairs(Game.getSpectators(position, not incomeRecovery, false, radius, radius, radius, radius)) do
+        if creature:isMonster() and (incomeRecovery or creature:getName():lower() == "spider") and
             not F.supplyRecoveryRegisteredMonsters[creature:getId()] then
             assert(creature:registerEvent("PlayerbotSupplyRecoveryCorpseDeath"),
-                "supply recovery fixture could not arm spider income")
+                "supply recovery fixture could not arm combat income")
             F.supplyRecoveryRegisteredMonsters[creature:getId()] = true
         end
     end

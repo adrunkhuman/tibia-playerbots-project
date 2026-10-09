@@ -1,4 +1,6 @@
 #include "playerbotpathsearch.h"
+#include "playerbothuntapproach.h"
+#include "playerbotnavigationruntime.h"
 #include "playerbothuntcoarsepolicy.h"
 #include "playerbothunttravelpolicy.h"
 #include "playerbothuntregions.h"
@@ -258,6 +260,107 @@ void ordinaryWalkingContracts()
 
 	std::cout << "ordinary walking expansions: exact " << guided.expanded << '/' << dijkstra.expanded
 	          << ", any-of " << anyGuided.expanded << '/' << anyDijkstra.expanded << " (guided/Dijkstra)\n";
+}
+
+void endpointDangerContracts()
+{
+	const Position start(250, 250, 9), unsafe(252, 252, 9), alternative(252, 253, 9);
+	const double ceiling = PlayerBotNavigationRiskProfile{}.maximumHealthLossPerSecond;
+	const auto sample = [&](Position p) { return p == unsafe ? 0.0857 : ceiling; };
+	PlayerBotNavigationGoal exact;
+	exact.position = unsafe;
+	PlayerBotPathSearch rejected(start, exact, 100000);
+	rejected.maximumPeakDanger = ceiling;
+	assert(rejected.rejectUnsafeEndpoints(sample));
+	assert(rejected.result == Result::RiskRejected && rejected.expanded == 0);
+	assert(rejected.summary.maximumHealthLossPerSecond == 0.0857);
+	assert(std::string(playerBotNavigationResultName(*rejected.result)) == "risk_rejected");
+	assert(!playerBotNavigationRiskAccepts({}, 0, rejected.summary.maximumHealthLossPerSecond));
+
+	// A connected 501x501 graph with a nearby unsafe goal used to spend the
+	// full 100k-node allowance. The guard runs before even one expansion.
+	uint64_t expanded = 0;
+	auto expand = [&](Position from) {
+		++expanded;
+		std::vector<PlayerBotPathSearch::Arc> arcs;
+		for (const auto& delta : {std::pair{0, 1}, {1, 0}, {0, -1}, {-1, 0}}) {
+			const int x = from.x + delta.first, y = from.y + delta.second;
+			if (x < 0 || y < 0 || x > 500 || y > 500) continue;
+			PlayerBotNavigationStep step;
+			step.target = step.expectedPosition = Position(x, y, from.z);
+			arcs.push_back({step, 10, 0, sample(step.target)});
+		}
+		return arcs;
+	};
+	assert(rejected.advance(512, expand, [&](Position p) { return p == unsafe; }, [](Position) { return 0; }) == Result::RiskRejected);
+	assert(expanded == 0);
+
+	PlayerBotNavigationGoal any;
+	any.type = PlayerBotNavigationGoalType::AnyOf;
+	any.positions = {unsafe, alternative};
+	PlayerBotPathSearch safe(start, any, 100000);
+	safe.maximumPeakDanger = ceiling;
+	assert(!safe.rejectUnsafeEndpoints(sample));
+	while (!safe.advance(512, expand, [&](Position p) { return p == unsafe || p == alternative; }, [](Position) { return 0; })) {}
+	assert(safe.result == Result::Reached && safe.steps.back().expectedPosition == alternative);
+	assert(safe.expanded < 100 && safe.summary.maximumHealthLossPerSecond == ceiling);
+	any.positions = {unsafe, Position(254, 254, 9)};
+	assert(playerBotNavigationRejectedEndpointPeak(start, any, ceiling, [](Position) { return 0.2; }) == 0.2);
+	any.positions.push_back(start); // Zero-length route is not a new unsafe exposure.
+	assert(!playerBotNavigationRejectedEndpointPeak(start, any, ceiling, sample));
+	any.positions.clear(); // An untargeted source flood must still run.
+	assert(!playerBotNavigationRejectedEndpointPeak(start, any, ceiling, sample));
+
+	PlayerBotNavigationGoal distant;
+	distant.position = Position(499, 499, 9);
+	PlayerBotPathSearch limited(start, distant, 10);
+	limited.maximumPeakDanger = ceiling;
+	assert(!limited.rejectUnsafeEndpoints(sample));
+	assert(limited.advance(512, expand, [&](Position p) { return p == distant.position; }, [](Position) { return 0; }) == Result::NodeLimit);
+	assert(limited.expanded == 10); // Incomplete remains unknown, not risk-rejected.
+	PlayerBotPathSearch disconnected(start, distant, 10);
+	disconnected.maximumPeakDanger = ceiling;
+	assert(!disconnected.rejectUnsafeEndpoints(sample));
+	assert(disconnected.advance(10, [](Position) { return std::vector<PlayerBotPathSearch::Arc>{}; },
+	    [](Position) { return false; }, [](Position) { return 0; }) == Result::Unreachable);
+	Transport transport(2, {{0, 1, 0}}, 0);
+	while (!transport.advance([](size_t, size_t, bool) -> std::optional<Segment> {
+		return Segment{Result::RiskRejected, 0, 0, 0, 0.2};
+	})) {}
+	assert(!transport.incomplete && transport.counters.unknown == 0 && !transport.bestPaid);
+
+	// The same guard supports retargetable source trees without poisoning
+	// settled labels or carrying rejected-target peak evidence into a new goal.
+	PlayerBotPathSearch tree(start, any, 100000, false, true);
+	tree.maximumPeakDanger = ceiling;
+	any.positions = {unsafe};
+	tree.retarget(any, [](Position) { return 0; });
+	assert(tree.rejectUnsafeEndpoints(sample));
+	any.positions = {alternative};
+	tree.retarget(any, [](Position) { return 0; });
+	assert(!tree.rejectUnsafeEndpoints(sample));
+	while (!tree.advance(512, expand, [](Position) { return false; }, [](Position) { return 0; })) {}
+	assert(tree.result == Result::Reached);
+	std::deque<PlayerBotNavigationStep> steps;
+	PlayerBotNavigationCostSummary summary;
+	assert(tree.extract(any.positions, steps, summary));
+	assert(summary.maximumHealthLossPerSecond == ceiling);
+
+	// Hunt scoring uses precisely this bounded chooser. A nearer but unsafe
+	// tile cannot hide a safe approach; no usable point means no circuit member.
+	const Position spawn(253, 252, 9);
+	auto score = [&](Position p) -> std::optional<uint32_t> {
+		if (p == unsafe) return 1;
+		if (p == alternative) return 2;
+		return std::nullopt;
+	};
+	assert(playerBotHuntApproach(spawn, ceiling, score, sample) == alternative);
+	assert(!playerBotHuntApproach(spawn, ceiling, score, [](Position) { return 0.2; }));
+	auto fallback = [&](Position p) -> std::optional<uint32_t> {
+		return p == spawn ? std::optional<uint32_t>(1) : std::nullopt;
+	};
+	assert(playerBotHuntApproach(spawn, ceiling, fallback, sample) == spawn);
+	assert(!playerBotHuntApproach(spawn, ceiling, fallback, [](Position) { return 0.2; }));
 }
 
 void peakDangerPathContracts()
@@ -993,6 +1096,7 @@ int main()
 	huntCoarseVerdictContracts();
 	ordinaryWalkingContracts();
 	peakDangerPathContracts();
+	endpointDangerContracts();
 	reusableSourceTreeContracts();
 	remoteAlternativesAndFareLabels();
 	goalDirectedTransportScheduling();

@@ -1084,10 +1084,15 @@ void PlayerBotController::enterSupplyRecovery(const Position& position, uint64_t
 
 void PlayerBotController::finishHuntAndReturn(Player* player, const Position& position, const char* reason)
 {
+	const bool failedArrival = huntCoordinator.huntActive() && !huntCoordinator.huntArrived();
+	if (failedArrival && std::strcmp(reason, "hunt_deadline") == 0) reason = "hunt_arrival_timeout";
+	if (std::strcmp(reason, "hunt_arrival_timeout") == 0)
+		huntCoordinator.observeHuntArrivalTimeout(std::chrono::steady_clock::now());
 	finishHuntRegion(*player, position, reason);
 	emit("goal_result", position,
 	     "\"decision_id\":" + std::to_string(progressionRuntime.decisionId()) +
-	         ",\"goal\":\"hunt\",\"result\":\"success\",\"reason\":" + jsonString(reason));
+	         ",\"goal\":\"hunt\",\"result\":" + jsonString(failedArrival ? "failed" : "success") +
+	         ",\"reason\":" + jsonString(reason));
 	beginReturn(player, position, reason);
 	pendingHuntCompletionReason = reason;
 }
@@ -1154,6 +1159,7 @@ void PlayerBotController::processService(Player* player, const Position& current
 	PlayerBotServiceObservation observation;
 	observation.currentPosition = currentPosition;
 	observation.freeCapacity = player->getFreeCapacity();
+	observation.supplyCapacityReserve = returnCapacityThreshold;
 	observation.money = player->getMoney();
 	observation.bankBalance = player->getBankBalance();
 	observation.goldCoinWeight = Item::items[ITEM_GOLD_COIN].weight;
