@@ -181,6 +181,15 @@ function Assert-DoorPassageEvents {
 			throw "Stable approach fixture failed $field."
 		}
 	}
+	$decayEvents = @(ConvertFrom-PlayerbotLogs -Logs $Logs | Where-Object { $_.event -eq "corpse_decay_route_contract" })
+	if ($decayEvents.Count -ne 1) {
+		throw "Corpse decay route fixture emitted $($decayEvents.Count) contract events."
+	}
+	foreach ($field in @("troll", "spider", "rat", "poison_spider", "blocker_invalidated")) {
+		if ($decayEvents[0].$field -ne $true) {
+			throw "Corpse decay route fixture failed $field."
+		}
+	}
 }
 
 function Assert-SvargrondLocalRouteRecoveryEvents {
