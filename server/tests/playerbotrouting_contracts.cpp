@@ -856,6 +856,19 @@ void itemUpdateDependencies()
 	// Different visual IDs with identical non-passage semantics do not affect a route.
 	const auto cosmetic = harmless;
 	assert(!playerBotRouteItemUpdateAffectsNavigation(harmless, cosmetic));
+	// Fresh troll/spider/rat corpses become movable and pickupable after ten
+	// seconds. Neither stage blocks walking or changes a supported passage.
+	const PlayerBotRouteItemSignature freshCorpse;
+	assert(!playerBotRouteItemUpdateAffectsNavigation(freshCorpse, harmless));
+	assert(!playerBotRouteItemUpdateAffectsNavigation(harmless, freshCorpse));
+	for (const bool pickupable : {false, true}) {
+		for (const bool moveable : {false, true}) {
+			auto decayed = freshCorpse;
+			decayed.pickupable = pickupable;
+			decayed.moveable = moveable;
+			assert(!playerBotRouteItemUpdateAffectsNavigation(freshCorpse, decayed));
+		}
+	}
 	// Corpses, splashes, loot, and parcels appear and vanish without changing routes.
 	assert(!playerBotRouteItemPresenceAffectsNavigation(harmless));
 	assert(!playerBotRouteItemPresenceAffectsNavigation(PlayerBotRouteItemSignature{}));
@@ -876,7 +889,7 @@ void itemUpdateDependencies()
 	const Position location(100, 200, 7);
 	PlayerBotRouteChanges::Watch watch;
 	{ PlayerBotRouteChanges::Scope scope(watch); PlayerBotRouteChanges::read(location); }
-	if (playerBotRouteItemUpdateAffectsNavigation(harmless, cosmetic))
+	if (playerBotRouteItemUpdateAffectsNavigation(freshCorpse, harmless))
 		PlayerBotRouteChanges::changed(location, PlayerBotRouteChanges::Cause::ItemUpdate);
 	assert(watch.check() == PlayerBotRouteChanges::Reason::None);
 	{
@@ -906,6 +919,26 @@ void itemUpdateDependencies()
 	relevant = harmless; relevant.hasHeight = true; check(harmless, relevant);
 	relevant = harmless; relevant.actionId = 101; check(harmless, relevant);
 	relevant = harmless; relevant.floorChange = 1; check(harmless, relevant);
+	relevant = harmless; relevant.blockPath = true; check(harmless, relevant);
+	// Mobility still matters for blockers, fixed-height climbs, and passages.
+	for (auto mobilityRelevant : {&PlayerBotRouteItemSignature::blockSolid,
+	                             &PlayerBotRouteItemSignature::blockPath,
+	                             &PlayerBotRouteItemSignature::hasHeight}) {
+		auto fixed = freshCorpse;
+		fixed.*mobilityRelevant = true;
+		auto movable = fixed;
+		movable.moveable = true;
+		check(fixed, movable);
+		movable = fixed;
+		movable.pickupable = true;
+		check(fixed, movable);
+	}
+	auto fixedPassage = freshCorpse;
+	fixedPassage.passageId = 1386;
+	auto movablePassage = fixedPassage;
+	movablePassage.moveable = true;
+	movablePassage.pickupable = true;
+	check(fixedPassage, movablePassage);
 	PlayerBotRouteChanges::Watch changedFlags;
 	{ PlayerBotRouteChanges::Scope scope(changedFlags); PlayerBotRouteChanges::read(location); }
 	{ PlayerBotRouteChanges::Suppress update; PlayerBotRouteChanges::changed(location); }
