@@ -183,6 +183,8 @@ struct PlayerBotEquipmentReadinessInput {
 	bool suppliesReady = false;
 	uint32_t effectiveFreeCapacity = 0;
 	uint32_t minimumFreeCapacity = 0;
+	// A consumable weapon can be restored by supply service, including from zero.
+	bool restockableWeaponMissing = false;
 };
 
 class PlayerBotEquipmentPolicy
@@ -199,10 +201,12 @@ class PlayerBotEquipmentPolicy
 		bool isThrowingWeapon(const PlayerBotEquipmentPlayerSnapshot& player,
 		                      const PlayerBotEquipmentItemSnapshot& item) const;
 		// The throwing weapon whose spares are stocked: the wielded one or, with no
-		// style weapon in hand, the carried one readiness would equip. Zero if none.
+		// style weapon in hand, the carried one readiness would equip. A legal
+		// fallback keeps zero stock restockable, including after a restart.
 		uint16_t throwingWeaponSupplyItem(const PlayerBotEquipmentPlayerSnapshot& player,
 		                                  const PlayerBotEquipmentLoadout& loadout,
-		                                  const std::vector<PlayerBotEquipmentItemSnapshot>& carried) const;
+		                                  const std::vector<PlayerBotEquipmentItemSnapshot>& carried,
+		                                  const PlayerBotEquipmentItemSnapshot& fallback = {}) const;
 		bool weaponReady(const PlayerBotEquipmentPlayerSnapshot& player, const PlayerBotEquipmentLoadout& loadout) const;
 		bool armorReady(const PlayerBotEquipmentPlayerSnapshot& player, const PlayerBotEquipmentLoadout& loadout) const;
 		// True when the candidate fills a missing weapon or armor requirement.

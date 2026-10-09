@@ -99,17 +99,19 @@ inline PlayerBotSupplyRule playerBotSupplyRule(PlayerBotSupplyKind kind, uint16_
 // purchases join that stack. Counts therefore include the wielded stack and
 // match carried item counts in service, deposit, and demand accounting. Spares
 // in containers (looted, or left over when the hand stack is full) are counted
-// too and equipped once the hand empties. A spear weighs 20 oz: the target
-// carries six spares, the floor two, and a hunt ends once one spear is left so
-// the last break cannot leave the bot unarmed in the hunt area.
+// too and equipped once the hand empties. A spear weighs 20 oz: start with
+// three at level 8, then add one per two levels up to seven. This uses only
+// half the Paladin's added capacity, leaving room for potions and loot.
+// A hunt ends with one spear left so the last break need not leave it unarmed.
 inline constexpr uint32_t playerBotThrowingWeaponReturnThreshold = 1;
 inline constexpr uint32_t playerBotThrowingWeaponSafetyFloor = 3;
-inline constexpr uint32_t playerBotThrowingWeaponTarget = 7;
 
-inline PlayerBotSupplyRule playerBotThrowingWeaponRule(uint16_t weaponItemId)
+inline PlayerBotSupplyRule playerBotThrowingWeaponRule(uint16_t weaponItemId, uint32_t level)
 {
+	const uint32_t growth = level > 8 ? std::min<uint32_t>((level - 8) / 2, 4) : 0;
 	return {PlayerBotSupplyKind::ThrowingWeapon, weaponItemId, playerBotThrowingWeaponSafetyFloor,
-	        playerBotThrowingWeaponReturnThreshold, weaponItemId == 0 ? 0 : playerBotThrowingWeaponTarget};
+	        playerBotThrowingWeaponReturnThreshold,
+	        weaponItemId == 0 ? 0 : playerBotThrowingWeaponSafetyFloor + growth};
 }
 
 struct PlayerBotSupplyStock {
@@ -179,13 +181,17 @@ inline uint64_t playerBotSupplyStockKey(const PlayerBotSupplyStocks& stocks)
 	return key;
 }
 
-// Same correction shape as health potion calibration: higher demand corrects
-// immediately; cheaper evidence blends in only after a full, uninterrupted outing.
+// Non-throwing supplies retain the health calibration correction shape:
+// higher demand corrects immediately; cheaper evidence needs a full outing.
 inline constexpr double playerBotSupplyDemandDownwardBlend = 0.20;
 
 struct PlayerBotSupplyDemand {
 	double unitsPerCombatSecond = 0;
 	uint32_t samples = 0;
+	// Throwing-weapon breaks are stochastic. Pool valid outings, including
+	// interrupted ones, rather than retaining the largest short-sample rate.
+	double accumulatedCombatSeconds = 0;
+	double accumulatedConsumed = 0;
 };
 
 struct PlayerBotSupplyDemandUpdate {
@@ -225,6 +231,25 @@ inline PlayerBotSupplyDemandUpdate playerBotObserveSupplyDemand(const PlayerBotS
 	++update.demand.samples;
 	update.updated = true;
 	update.reason = "safe_combat_evidence";
+	return update;
+}
+
+inline PlayerBotSupplyDemandUpdate playerBotObserveThrowingWeaponDemand(const PlayerBotSupplyDemand& prior,
+    uint32_t consumed, double activeCombatSeconds, double minimumActiveCombatSeconds)
+{
+	PlayerBotSupplyDemandUpdate update;
+	update.kind = PlayerBotSupplyKind::ThrowingWeapon;
+	update.consumed = consumed;
+	update.demand = prior;
+	if (activeCombatSeconds <= 0) return update;
+	update.observedUnitsPerCombatSecond = consumed / activeCombatSeconds;
+	update.demand.accumulatedCombatSeconds += activeCombatSeconds;
+	update.demand.accumulatedConsumed += consumed;
+	if (update.demand.accumulatedCombatSeconds < minimumActiveCombatSeconds) return update;
+	update.demand.unitsPerCombatSecond = update.demand.accumulatedConsumed / update.demand.accumulatedCombatSeconds;
+	++update.demand.samples;
+	update.updated = true;
+	update.reason = "pooled_combat_evidence";
 	return update;
 }
 

@@ -139,26 +139,6 @@ function F.verifyEquipmentPurchase(playerId, rejected, resumed, attempts)
     print("PLAYERBOT_GAMEPLAY_TEST EQUIPMENT_BUY" .. (rejected and "_REJECTED" or resumed and "_RESUME" or "") .. "_PASS")
 end
 
-function F.verifySpearPurchase(playerId, attempts)
-    local player = Player(playerId)
-    assert(player and not player:isRemoved(), "Bot One disappeared during spear purchase fixture")
-    local left = player:getSlotItem(CONST_SLOT_LEFT)
-    local right = player:getSlotItem(CONST_SLOT_RIGHT)
-    local spearInHand = left and left:getId() == F.spearItemId or right and right:getId() == F.spearItemId
-    local shieldKept = left and left:getId() == 2525 or right and right:getId() == 2525
-    local totalMoney = player:getMoney() + player:getBankBalance()
-    local complete = spearInHand and shieldKept and player:getItemCount(F.spearItemId) == 1 and
-        (totalMoney == 100 or totalMoney == 101)
-    if not complete and attempts > 0 then
-        addEvent(F.verifySpearPurchase, 500, playerId, attempts - 1)
-        return
-    end
-    assert(complete, "spear purchase fixture did not equip one bought spear beside the shield")
-    print("PLAYERBOT_GAMEPLAY_TEST EQUIPMENT_BUY_SPEAR_PASS")
-    -- The completed fixture pauses the controller, so no later telemetry flushes this marker.
-    io.flush()
-end
-
 function F.verifyToolReplenishment(playerId, attempts, nested)
     local player = Player(playerId)
     assert(player and not player:isRemoved(), "Bot One disappeared during tool replenishment")
@@ -623,18 +603,60 @@ function F.breakHandSpear(playerId, x, y, z, attempts)
     addEvent(F.verifySpearRestock, 500, playerId, "spear_break", 480)
 end
 
+-- Begin with the full three-spear floor so service cannot run before the hunt.
+-- Simulate depletion down to the last single spear, then its final break.
+function F.breakLastSpear(playerId, x, y, z, attempts)
+    local player = Player(playerId)
+    assert(player and not player:isRemoved(), "Bot One disappeared before the last spear break")
+    if player:getPosition():getDistance(Position(x, y, z)) < 3 then
+        assert(attempts > 0, "last-spear fixture never left the depot to hunt")
+        addEvent(F.breakLastSpear, 250, playerId, x, y, z, attempts - 1)
+        return
+    end
+    local spear = player:getSlotItem(CONST_SLOT_LEFT)
+    assert(spear and spear:getId() == F.spearItemId and spear:getCount() == 3 and
+        player:getItemCount(F.spearItemId) == 3 and player:getMoney() == 39 and player:getBankBalance() == 0,
+        "last-spear fixture changed its stock or funds before the hunt")
+    assert(spear:remove(2) and spear:getCount() == 1 and player:getItemCount(F.spearItemId) == 1,
+        "last-spear fixture did not deplete to one equipped spear without a spare")
+    F.spearFixtureEvidence(player, "spear_last_break", "last_spear")
+    assert(spear:remove() and player:getItemCount(F.spearItemId) == 0,
+        "last-spear fixture could not remove the final spear")
+    F.spearFixtureEvidence(player, "spear_last_break", "broken")
+    addEvent(F.verifySpearRestock, 500, playerId, "spear_last_break", 480)
+end
+
 function F.verifySpearRestock(playerId, mode, attempts)
     local player = Player(playerId)
     assert(player and not player:isRemoved(), "Bot One disappeared during spear fixture")
     local left = player:getSlotItem(CONST_SLOT_LEFT)
     local right = player:getSlotItem(CONST_SLOT_RIGHT)
     local hand = left and left:getId() == F.spearItemId and left or right and right:getId() == F.spearItemId and right
+    if mode == "spear_unfunded" then
+        assert(player:getLevel() == 8 and not hand and not left and right and right:getId() == 2525 and
+            player:getItemCount(F.spearItemId) == 0 and player:getMoney() == 0 and player:getBankBalance() == 0,
+            "unfunded Paladin changed its zero stock/funds or shield")
+        F.spearFixtureEvidence(player, mode, "pass")
+        print("PLAYERBOT_GAMEPLAY_TEST SPEAR_UNFUNDED_PASS")
+        return
+    end
     -- Bought spears auto-stack onto the wielded spear, so the whole target is in hand.
-    local complete = hand and hand:getCount() == 7 and player:getItemCount(F.spearItemId) == 7
+    local level = mode == "spear_restock_scaled" and 16 or 8
+    local target = level == 16 and 7 or 3
+    local complete = player:getLevel() == level and hand and hand:getCount() == target and
+        player:getItemCount(F.spearItemId) == target
+    if mode == "equipment_buy_spear" or mode == "spear_last_break" or mode == "spear_mirrored" then
+        local shield = mode == "spear_mirrored" and left or right
+        local weapon = mode == "spear_mirrored" and right or left
+        local shieldKept = shield and shield:getId() == 2525 and weapon == hand
+        local money = player:getMoney()
+        complete = complete and shieldKept and player:getBankBalance() == 0 and (money == 9 or money == 12)
+    end
     if not complete and attempts > 0 then
         addEvent(F.verifySpearRestock, 500, playerId, mode, attempts - 1)
         return
     end
-    assert(complete, mode .. ": Paladin did not restock to a 7-spear stack in hand")
+    assert(complete, mode .. ": Paladin did not restock to a " .. target .. "-spear stack in hand")
+    F.spearFixtureEvidence(player, mode, "pass")
     print("PLAYERBOT_GAMEPLAY_TEST " .. string.upper(mode) .. "_PASS")
 end

@@ -1,5 +1,20 @@
 local F = PlayerbotGameplayFixture
 
+function F.spearFixtureEvidence(player, mode, phase)
+    local left, right = player:getSlotItem(CONST_SLOT_LEFT), player:getSlotItem(CONST_SLOT_RIGHT)
+    local hand = left and left:getId() == F.spearItemId and left or right and right:getId() == F.spearItemId and right
+    print(string.format('{"component":"playerbot","event":"spear_fixture","source":"lua_setup_verifier",' ..
+        '"scenario":"%s","phase":"%s","vocation":%d,"level":%d,"spears":%d,"equipped_spears":%d,' ..
+        '"left_item_id":%d,"right_item_id":%d,"carried_gold":%d,"bank_gold":%d,' ..
+        '"health":%d,"health_max":%d,"mana":%d,"mana_max":%d,"free_capacity":%d,' ..
+        '"health_potions":%d,"mana_potions":%d}',
+        mode, phase, player:getVocation():getId(), player:getLevel(), player:getItemCount(F.spearItemId),
+        hand and hand:getCount() or 0, left and left:getId() or 0, right and right:getId() or 0,
+        player:getMoney(), player:getBankBalance(), player:getHealth(), player:getMaxHealth(),
+        player:getMana(), player:getMaxMana(), player:getFreeCapacity(),
+        player:getItemCount(F.healthPotionItemId), player:getItemCount(F.manaPotionItemId)))
+end
+
 function F.paladinFixtureEvidence(player, mode, phase)
     print(string.format('{"component":"playerbot","event":"paladin_fixture","source":"lua_setup_verifier",' ..
         '"scenario":"%s","phase":"%s","vocation":%d,"level":%d,"health":%d,"health_max":%d,' ..

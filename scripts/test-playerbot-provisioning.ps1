@@ -11,6 +11,7 @@ $project = 'angelion-provision-' + [guid]::NewGuid().ToString('N').Substring(0, 
 $compose = @('compose', '--project-name', $project, '-f', (Join-Path $root 'server/compose.yaml'))
 $temp = Join-Path ([IO.Path]::GetTempPath()) "playerbot-provision-$([guid]::NewGuid().ToString('N'))"
 $started = $false
+$normalRoster = @('Bot One', 'Bot Two', 'Bot Three', 'Bot Four')
 
 function Invoke-Docker {
     param([string[]]$Arguments, [switch]$ExpectFailure, [string]$ErrorPattern)
@@ -65,8 +66,12 @@ function Reset-Database {
 }
 
 function Assert-Roster {
-    param([int]$Count)
-    Assert-Sql 'SELECT COUNT(*) FROM player_bots;' "$Count"
+    param([string[]]$Names)
+    Assert-Sql 'SELECT COUNT(*) FROM player_bots;' "$($Names.Count)"
+    Assert-Sql @'
+SELECT GROUP_CONCAT(players.name ORDER BY players.name SEPARATOR '|')
+FROM player_bots JOIN players ON players.id = player_bots.player_id;
+'@ (($Names | Sort-Object) -join '|')
 }
 
 try {
@@ -81,108 +86,161 @@ try {
     Set-Content -Path $badSql -Value 'SELECT * FROM playerbot_provisioning_missing_table;' -Encoding utf8
     $badOverlay = Join-Path $temp 'bad-import.yaml'
     $source = ($badSql.Replace('\', '/') | ConvertTo-Json -Compress)
-    Set-Content -Path $badOverlay -Encoding utf8 -Value @"
+    $singleOverlay = Join-Path $root 'server/compose.playerbot-gameplay.yaml'
+
+    $started = $true
+    Start-Database
+    # Each later import must fail closed, leaving only the preceding seeds registered.
+    $imports = @('insertBotTwo.sql', 'insertBotThree.sql', 'insertBotFour.sql')
+    for ($index = 0; $index -lt $imports.Count; $index++) {
+        if ($index -gt 0) { Reset-Database }
+        $target = '/schema/' + $imports[$index]
+        Set-Content -Path $badOverlay -Encoding utf8 -Value @"
 services:
   playerbot-setup:
     volumes:
       - type: bind
         source: $source
-        target: /schema/insertBotTwo.sql
+        target: $target
         read_only: true
 "@
-    $fixtureOverlay = Join-Path $temp 'single-bot.yaml'
-    Set-Content -Path $fixtureOverlay -Encoding utf8 -Value @'
-services:
-  playerbot-setup:
-    environment:
-      PLAYERBOT_SEED_BOT_TWO: "false"
-'@
-    Invoke-Compose -Arguments @('config', '--quiet') -Overlay $badOverlay | Out-Null
-    $mount = Invoke-Compose -Arguments @('config', '--format', 'json') -Overlay $badOverlay | ConvertFrom-Json
-    if (-not @($mount.services.'playerbot-setup'.volumes | Where-Object target -eq '/schema/insertBotTwo.sql' |
-        Where-Object source -eq $badSql).Count) {
-        throw 'Invalid SQL override did not replace the Bot Two mount.'
+        Invoke-Compose -Arguments @('config', '--quiet') -Overlay $badOverlay | Out-Null
+        $mount = Invoke-Compose -Arguments @('config', '--format', 'json') -Overlay $badOverlay | ConvertFrom-Json
+        if (-not @($mount.services.'playerbot-setup'.volumes | Where-Object target -eq $target |
+            Where-Object source -eq $badSql).Count) {
+            throw "Invalid SQL override did not replace the $target mount."
+        }
+        Invoke-Compose -Overlay $badOverlay -Arguments @('run', '--rm', '--no-deps', 'playerbot-setup') `
+            -ExpectFailure -ErrorPattern 'playerbot_provisioning_missing_table' | Out-Null
+        Assert-Roster $normalRoster[0..$index]
     }
 
-    $started = $true
-    Start-Database
-    Invoke-Compose -Overlay $badOverlay -Arguments @('run', '--rm', '--no-deps', 'playerbot-setup') `
-        -ExpectFailure -ErrorPattern 'playerbot_provisioning_missing_table' | Out-Null
-    Assert-Roster 1
-    Invoke-Compose -Overlay $fixtureOverlay -Arguments @('run', '--rm', '--no-deps', 'playerbot-setup') | Out-Null
-    Assert-Roster 1
-
+    Reset-Database
     Invoke-Compose -Arguments @('run', '--rm', '--no-deps', 'playerbot-setup') | Out-Null
-    Assert-Roster 2
+    Assert-Roster $normalRoster
+    Assert-Sql 'SELECT COUNT(DISTINCT player_id) FROM player_bots;' '4'
     $rosterQuery = @'
 SELECT CONCAT_WS('|', players.name, accounts.name, players.id, players.deletion,
     players.level, players.vocation, players.town_id, players.posx, players.posy, players.posz,
+    players.health, players.healthmax, players.experience, players.mana, players.manamax,
+    players.cap, players.balance, players.skill_sword, players.skill_dist, players.skill_shielding,
     players.lookbody, players.lookfeet, players.lookhead, players.looklegs, players.looktype,
-    players.balance, players.skill_sword, players.skill_shielding)
+    players.lookaddons, players.direction, players.maglevel, players.manaspent, players.soul,
+    players.sex, players.stamina, players.skill_dist_tries, players.skill_shielding_tries)
 FROM player_bots JOIN players ON players.id = player_bots.player_id
 JOIN accounts ON accounts.id = players.account_id ORDER BY players.name;
 '@
-    $inventoryQuery = @'
-SELECT CONCAT_WS('|', players.name, player_items.pid, player_items.sid, player_items.itemtype, player_items.count)
-FROM player_items JOIN players ON players.id = player_items.player_id
-WHERE players.name IN ('Bot One', 'Bot Two') ORDER BY players.name, player_items.sid;
-'@
     $roster = Invoke-Sql $rosterQuery
-    $lines = @($roster -split "`n")
-    if ($lines.Count -ne 2) { throw "Expected two registered bots: $roster" }
-    $one = $lines[0] -split '\|'
-    $two = $lines[1] -split '\|'
-    if ($one[0] -ne 'Bot One' -or $two[0] -ne 'Bot Two' -or
-        $one[1] -ne 'bot-one' -or $two[1] -ne 'bot-two' -or $one[2] -eq $two[2] -or
-        $one[3] -ne '0' -or $two[3] -ne '0' -or
-        ($one[4..5] -join ',') -ne '8,4' -or ($two[4..5] -join ',') -ne '8,4' -or
-        ($one[6..9] -join ',') -ne '4,32360,31782,7' -or
-        ($two[6..9] -join ',') -ne '2,32369,32241,7' -or
-        ($one[10..17] -join ',') -ne ($two[10..17] -join ',') -or
-        ($one[15..17] -join ',') -ne '1000,20,20') {
-        throw "New bot identities or starting attributes differ: $roster"
+    $expectedSeeds = @{
+        'Bot One' = 'bot-one|0|8|4|4|32360|31782|7|185|185|4200|35|35|470|1000|20|10|20'
+        'Bot Two' = 'bot-two|0|8|4|2|32369|32241|7|185|185|4200|35|35|470|1000|20|10|20'
+        'Bot Three' = 'bot-three|0|8|3|4|32360|31782|7|185|185|4200|35|35|470|1000|10|40|20'
+        'Bot Four' = 'bot-four|0|8|3|2|32369|32241|7|185|185|4200|35|35|470|1000|10|40|20'
     }
+    foreach ($line in ($roster -split "`n")) {
+        $fields = $line -split '\|'
+        $name = $fields[0]
+        $state = (@($fields[1]) + $fields[3..33]) -join '|'
+        $expected = $expectedSeeds[$name] + '|68|76|78|39|128|0|2|0|0|100|1|2520|0|0'
+        if ($fields.Count -ne 34 -or [int]$fields[2] -le 0 -or $state -ne $expected) {
+            throw "Starting attributes differ for $name`: $line"
+        }
+    }
+    $inventoryQuery = @'
+SELECT CONCAT_WS('|', players.name, player_items.pid, player_items.sid,
+    player_items.itemtype, player_items.count, HEX(player_items.attributes))
+FROM player_items JOIN players ON players.id = player_items.player_id
+WHERE players.name IN ('Bot One', 'Bot Two', 'Bot Three', 'Bot Four')
+ORDER BY players.name, player_items.sid;
+'@
     $gearQuery = @'
 SELECT CONCAT_WS('|', players.name,
-    GROUP_CONCAT(CONCAT(IF(player_items.pid BETWEEN 1 AND 10, player_items.pid, 99), ':',
+    GROUP_CONCAT(CONCAT(IF(player_items.pid = backpack.sid, 'bag', player_items.pid), ':',
         player_items.itemtype, ':', player_items.count)
         ORDER BY IF(player_items.pid BETWEEN 1 AND 10, player_items.pid, 99), player_items.itemtype SEPARATOR ','))
 FROM player_items JOIN players ON players.id = player_items.player_id
-WHERE players.name IN ('Bot One', 'Bot Two') GROUP BY players.id ORDER BY players.name;
+LEFT JOIN player_items AS backpack ON backpack.player_id = players.id AND backpack.pid = 3
+WHERE players.name IN ('Bot One', 'Bot Two', 'Bot Three', 'Bot Four')
+GROUP BY players.id ORDER BY players.name;
 '@
     $gear = @((Invoke-Sql $gearQuery) -split "`n")
-    if ($gear.Count -ne 2 -or ($gear[0] -split '\|', 2)[1] -ne ($gear[1] -split '\|', 2)[1]) {
-        throw "Starting gear differs: $gear"
+    if ($gear.Count -ne 4) { throw "Expected four loadouts: $gear" }
+    foreach ($line in $gear) {
+        $name, $items = $line -split '\|', 2
+        $weapon = if ($name -in @('Bot Three', 'Bot Four')) { '2389:3' } else { '2395:1' }
+        $expected = "1:2480:1,3:1988:1,4:2464:1,5:2530:1,6:$weapon,7:2468:1,8:2643:1,bag:2120:1,bag:2554:1"
+        if ($items -ne $expected) { throw "Starting loadout differs for $name`: $items" }
     }
     $inventory = Invoke-Sql $inventoryQuery
     Invoke-Compose -Arguments @('run', '--rm', '--no-deps', 'playerbot-setup') | Out-Null
+    Assert-Roster $normalRoster
     if ((Invoke-Sql $rosterQuery) -ne $roster -or (Invoke-Sql $inventoryQuery) -ne $inventory) {
         throw 'Provisioning was not idempotent.'
     }
-    Invoke-Compose -Overlay $fixtureOverlay -Arguments @('run', '--rm', '--no-deps', 'playerbot-setup') `
+
+    # Simulate saved progress, a replacement weapon, consumed spears and a bag item.
+    # Keep slots occupied: provisioning intentionally fills missing equipment slots.
+    Invoke-Sql @'
+UPDATE players SET level = 12, experience = 17200, health = 201, healthmax = 225,
+    mana = 41, manamax = 95, cap = 550, balance = 4321, skill_sword = 12,
+    skill_dist = 47, skill_dist_tries = 123, skill_shielding = 25, skill_shielding_tries = 456,
+    town_id = 2, posx = 32369, posy = 32241, posz = 7
+WHERE name IN ('Bot Three', 'Bot Four');
+UPDATE player_items JOIN players ON players.id = player_items.player_id
+SET player_items.itemtype = IF(players.name = 'Bot Three', 2389, 2456),
+    player_items.count = IF(players.name = 'Bot Three', 2, 1), player_items.attributes = X'010203'
+WHERE players.name IN ('Bot Three', 'Bot Four') AND player_items.pid = 6;
+INSERT INTO player_items (player_id, pid, sid, itemtype, count, attributes)
+SELECT players.id, backpack.sid, 200, 2148, 37, '' FROM players
+JOIN player_items AS backpack ON backpack.player_id = players.id AND backpack.pid = 3
+WHERE players.name IN ('Bot Three', 'Bot Four');
+'@ | Out-Null
+    $progress = Invoke-Sql $rosterQuery
+    $savedInventory = Invoke-Sql $inventoryQuery
+    Invoke-Compose -Arguments @('run', '--rm', '--no-deps', 'playerbot-setup') | Out-Null
+    Assert-Roster $normalRoster
+    if ((Invoke-Sql $rosterQuery) -ne $progress -or (Invoke-Sql $inventoryQuery) -ne $savedInventory) {
+        throw 'Provisioning reset progressed Paladin stats or saved inventory.'
+    }
+    Invoke-Compose -Overlay $singleOverlay -Arguments @('run', '--rm', '--no-deps', 'playerbot-setup') `
         -ExpectFailure -ErrorPattern 'Single-bot fixture requires only Bot One registered' | Out-Null
-    Assert-Roster 2
+    Assert-Roster $normalRoster
 
-    Reset-Database
-    Invoke-Sql @'
-INSERT INTO accounts (name, password) VALUES ('unrelated', SHA1('unrelated'));
-INSERT INTO players (name, account_id) SELECT 'Bot Two', id FROM accounts WHERE name = 'unrelated';
-'@ | Out-Null
-    Invoke-Compose -Arguments @('run', '--rm', '--no-deps', 'playerbot-setup') `
-        -ExpectFailure -ErrorPattern 'Bot Two identity collision or deletion' | Out-Null
-    Assert-Roster 1
-    Assert-Sql "SELECT accounts.name FROM players JOIN accounts ON accounts.id = players.account_id WHERE players.name = 'Bot Two';" 'unrelated'
+    # Exercise the real overlays rather than a synthetic single-bot override.
+    foreach ($fixture in @('gameplay', 'regression', 'multibot')) {
+        Reset-Database
+        $overlay = Join-Path $root "server/compose.playerbot-$fixture.yaml"
+        Invoke-Compose -Overlay $overlay -Arguments @('run', '--rm', '--no-deps', 'playerbot-setup') | Out-Null
+        $names = if ($fixture -eq 'multibot') { @('Bot One', 'Bot Two') } else { @('Bot One') }
+        Assert-Roster $names
+        Assert-Sql "SELECT COUNT(*) FROM players WHERE name IN ('Bot One', 'Bot Two', 'Bot Three', 'Bot Four');" "$($names.Count)"
+        Assert-Sql "SELECT COUNT(*) FROM accounts WHERE name IN ('bot-one', 'bot-two', 'bot-three', 'bot-four');" "$($names.Count)"
+    }
 
-    Reset-Database
-    Invoke-Sql @'
-INSERT INTO accounts (name, password) VALUES ('bot-two', SHA1('bot-two'));
-INSERT INTO players (name, account_id, deletion) SELECT 'Bot Two', id, 1 FROM accounts WHERE name = 'bot-two';
-'@ | Out-Null
-    Invoke-Compose -Arguments @('run', '--rm', '--no-deps', 'playerbot-setup') `
-        -ExpectFailure -ErrorPattern 'Bot Two identity collision or deletion' | Out-Null
-    Assert-Roster 1
-    Assert-Sql "SELECT deletion FROM players WHERE name = 'Bot Two';" '1'
-    Write-Host 'Playerbot provisioning: import failure, fixture guard, two identities, idempotence, wrong account and deleted character passed.'
+    foreach ($identity in @(
+        @{ Name = 'Bot Two'; Account = 'bot-two'; Preceding = @('Bot One') },
+        @{ Name = 'Bot Three'; Account = 'bot-three'; Preceding = @('Bot One', 'Bot Two') },
+        @{ Name = 'Bot Four'; Account = 'bot-four'; Preceding = @('Bot One', 'Bot Two', 'Bot Three') }
+    )) {
+        foreach ($deleted in @($false, $true)) {
+            Reset-Database
+            $name = $identity.Name
+            $account = if ($deleted) { $identity.Account } else { 'unrelated' }
+            $deletion = [int]$deleted
+            Invoke-Sql @"
+INSERT INTO accounts (name, password) VALUES ('$account', SHA1('$account'));
+INSERT INTO players (name, account_id, deletion)
+SELECT '$name', id, $deletion FROM accounts WHERE name = '$account';
+"@ | Out-Null
+            $before = Invoke-Sql "SELECT CONCAT_WS('|', id, account_id, deletion) FROM players WHERE name = '$name';"
+            Invoke-Compose -Arguments @('run', '--rm', '--no-deps', 'playerbot-setup') `
+                -ExpectFailure -ErrorPattern "$name identity collision or deletion" | Out-Null
+            Assert-Roster $identity.Preceding
+            Assert-Sql "SELECT CONCAT_WS('|', id, account_id, deletion) FROM players WHERE name = '$name';" $before
+            Assert-Sql "SELECT COUNT(*) FROM player_items JOIN players ON players.id = player_items.player_id WHERE players.name = '$name';" '0'
+        }
+    }
+    Write-Host 'Playerbot provisioning: four seeds/loadouts, saved Paladin progress, fixture isolation, import failures and identity refusals passed.'
 } finally {
     if ($started) {
         Invoke-Compose -Arguments @('down', '--volumes', '--remove-orphans') | Out-Null

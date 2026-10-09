@@ -426,6 +426,7 @@ PlayerBotHuntRegion routeFixture(uint64_t id, double score = 100)
 	region.destination = Position(static_cast<uint16_t>(100 + id), 100, 7);
 	region.suitable = region.reachable = region.supplyBudget.fits = true;
 	region.score = score;
+	region.availableHuntSeconds = 60;
 	region.optimisticProjectedExperience = score;
 	region.experiencePerMinute = score;
 	region.observedCorrection = region.staminaExperienceMultiplier = 1;
@@ -667,7 +668,7 @@ void typedSupplyRouteContracts()
 {
 	const Position depot(200, 100, 7), supplier(300, 100, 7);
 	const PlayerBotSupplyRule mana = playerBotSupplyRule(PlayerBotSupplyKind::ManaPotion, 3);
-	const PlayerBotSupplyRule spears = playerBotThrowingWeaponRule(2389);
+	const PlayerBotSupplyRule spears = playerBotThrowingWeaponRule(2389, 16);
 	const PlayerBotSupplyRule ammo{PlayerBotSupplyKind::Ammunition, 2544, 6, 5, 40};
 	const uint16_t healthItemId = 7618;
 	const PlayerBotSupplyRule health{PlayerBotSupplyKind::HealthPotion, healthItemId, 2, 1, 20};
@@ -1447,6 +1448,7 @@ void incrementalHuntValidationPipeline()
 		region.supplyBudget.fits = true;
 		region.score = 100 - index;
 		region.optimisticProjectedExperience = 100 - index;
+		region.availableHuntSeconds = 60;
 		region.topologyReachable = index % 2 == 0;
 	}
 	const RuntimeHuntPlan planned = planRuntimeHunts(candidates);
@@ -1485,6 +1487,7 @@ void incrementalHuntValidationPipeline()
 		sparseCompetition[index].suitable = sparseCompetition[index].reachable = true;
 		sparseCompetition[index].supplyBudget.fits = true;
 		sparseCompetition[index].optimisticProjectedExperience = 499;
+		sparseCompetition[index].availableHuntSeconds = 60;
 	}
 	PlayerBotHuntRegion earlyWinner = sparseCompetition.front();
 	earlyWinner.score = 548;
@@ -1513,6 +1516,7 @@ void incrementalHuntValidationPipeline()
 	supplyLimited.optimisticFittingExperience = playerBotHuntOptimisticFittingExperience(supplyLimited, 2400, 1);
 	assert(supplyLimited.optimisticFittingExperience == 600);
 	PlayerBotHuntRegion fittingIncumbent;
+	fittingIncumbent.availableHuntSeconds = 60;
 	fittingIncumbent.supplyBudget.fits = true;
 	fittingIncumbent.score = 601;
 	assert(!playerBotHuntCandidateCanBeatValidated(supplyLimited, fittingIncumbent));
@@ -2414,7 +2418,7 @@ void supplyCalibration()
 	// The last unit of a weapon-matched kind leaves the stock list; it still counts as consumed.
 	PlayerBotHuntRuntime spearRuntime({});
 	PlayerBotHuntRuntimePlayerObservation spearPlayer = player;
-	spearPlayer.supplies = {{playerBotThrowingWeaponRule(2389), 3}};
+	spearPlayer.supplies = {{playerBotThrowingWeaponRule(2389, 8), 3}};
 	spearRuntime.selectPlanningRegion(region, spearPlayer, start);
 	spearRuntime.enterHuntArea(spearPlayer, region.supplyProfile, start);
 	spearRuntime.sampleCombat({true, start + std::chrono::seconds(1), 100, 100, 100, 100, 1});
@@ -3106,9 +3110,18 @@ void typedSupplyStock()
 	}
 
 	// Throwing-weapon counts include the wielded stack, so one carried spear means no spare.
-	assert(!playerBotThrowingWeaponRule(0).active());
-	const PlayerBotSupplyRule spears = playerBotThrowingWeaponRule(2389);
-	assert(spears.active() && spears.safetyFloor == 3 && spears.returnThreshold == 1 && spears.target == 7);
+	for (const auto& [level, target] : std::vector<std::pair<uint32_t, uint32_t>>{
+	         {0, 3}, {7, 3}, {8, 3}, {9, 3}, {10, 4}, {11, 4}, {12, 5}, {13, 5},
+	         {14, 6}, {15, 6}, {16, 7}, {20, 7}, {UINT32_MAX, 7}}) {
+		assert(!playerBotThrowingWeaponRule(0, level).active());
+		for (uint16_t itemId : {2389, 3965, 7378}) {
+			const auto rule = playerBotThrowingWeaponRule(itemId, level);
+			assert(rule.active() && rule.itemId == itemId && rule.target == target);
+			assert(rule.safetyFloor == 3 && rule.returnThreshold == 1);
+		}
+	}
+	const PlayerBotSupplyRule spears = playerBotThrowingWeaponRule(2389, 16);
+	assert(spears.active() && spears.target == 7);
 	PlayerBotSupplyStocks paladinStocks{{health, 0}, {spears, 2}};
 	assert(!playerBotExhaustedSupply(paladinStocks)); // health returns through the healing interruption
 	deficit = playerBotMandatorySupplyDeficit(paladinStocks, false);
@@ -3412,6 +3425,153 @@ void remoteHuntTravelGuards()
 	assert(!playerBotPreferForcedPaidRoute(walking, paid));
 }
 
+void throwingWeaponDemand()
+{
+	PlayerBotHuntPolicy policy;
+	auto outing = [&](uint32_t consumed, double seconds, bool interrupted) {
+		policy.resetCombatEvidence();
+		policy.observeCombat({true, seconds, 100, 100, 100, 100, 1});
+		return policy.observeSupplyDemand(PlayerBotSupplyKind::ThrowingWeapon, consumed,
+		    static_cast<uint64_t>(seconds), interrupted);
+	};
+	// One early break is not a 3.65/min planning rate.
+	auto update = outing(1, 16.42, true);
+	assert(!update.updated && update.demand.unitsPerCombatSecond == 0 && update.demand.samples == 0);
+	assert(update.demand.accumulatedConsumed == 1 && update.demand.accumulatedCombatSeconds == 16.42);
+	assert(update.observedUnitsPerCombatSecond == 1.0 / 16.42);
+	update = outing(0, 20, true);
+	assert(!update.updated && update.demand.accumulatedConsumed == 1);
+	update = outing(0, 23.58, true);
+	assert(update.updated && std::abs(update.demand.unitsPerCombatSecond - 1.0 / 60) < 1e-12);
+	assert(update.demand.samples == 1 && std::string(update.reason) == "pooled_combat_evidence");
+	update = outing(0, 60, true);
+	assert(update.updated && std::abs(update.demand.unitsPerCombatSecond - 1.0 / 120) < 1e-12);
+	update = outing(1, 60, true);
+	assert(update.updated && std::abs(update.demand.unitsPerCombatSecond - 2.0 / 180) < 1e-12);
+	// Sustained higher use raises the pooled estimate, not a latest-sample maximum.
+	update = outing(6, 60, false);
+	assert(update.updated && std::abs(update.demand.unitsPerCombatSecond - 8.0 / 240) < 1e-12);
+	update = outing(4, 120, false);
+	assert(std::abs(update.demand.unitsPerCombatSecond - 12.0 / 360) < 1e-12);
+	const auto prior = update.demand;
+	update = outing(1, 0, true);
+	assert(!update.updated && update.demand.accumulatedConsumed == prior.accumulatedConsumed);
+	policy.resetCombatEvidence();
+	policy.observeCombat({true, 60, 100, 100, 100, 100, 1});
+	policy.observeDeath();
+	update = policy.observeSupplyDemand(PlayerBotSupplyKind::ThrowingWeapon, 3, 60, true);
+	assert(!update.updated && std::string(update.reason) == "death_observed");
+	assert(update.demand.accumulatedCombatSeconds == prior.accumulatedCombatSeconds);
+	assert(update.demand.unitsPerCombatSecond == prior.unitsPerCombatSecond);
+
+	// Other kinds retain their immediate-upward/guarded-downward semantics.
+	for (const auto kind : {PlayerBotSupplyKind::HealthPotion, PlayerBotSupplyKind::ManaPotion,
+	                       PlayerBotSupplyKind::Ammunition}) {
+		PlayerBotHuntPolicy unchanged;
+		unchanged.observeCombat({true, 16.42, 100, 100, 100, 100, 1});
+		const auto spike = unchanged.observeSupplyDemand(kind, 1, 20, true);
+		assert(spike.updated && spike.demand.unitsPerCombatSecond == 1.0 / 16.42);
+		unchanged.resetCombatEvidence();
+		unchanged.observeCombat({true, 60, 100, 100, 100, 100, 1});
+		const auto partial = unchanged.observeSupplyDemand(kind, 0, 60, true);
+		assert(!partial.updated && partial.demand.unitsPerCombatSecond == spike.demand.unitsPerCombatSecond);
+		assert(partial.demand.accumulatedCombatSeconds == 0);
+	}
+
+	// Runtime completion stores sub-guard evidence across interrupted outings.
+	PlayerBotHuntRuntime runtime({});
+	PlayerBotHuntRegion region = routeFixture(91);
+	region.supplyProfile.kinds = {{PlayerBotSupplyKind::ThrowingWeapon, 2389, 3, 1, {}}};
+	auto runtimeOuting = [&](uint32_t remaining, uint16_t endingItem, int64_t milliseconds) {
+		PlayerBotHuntRuntimePlayerObservation player;
+		player.health = player.maximumHealth = 100;
+		player.supplyInterrupted = true;
+		player.supplies = {{playerBotThrowingWeaponRule(2389, 8), 3}};
+		const auto start = std::chrono::steady_clock::time_point{} + std::chrono::seconds(1);
+		runtime.selectPlanningRegion(region, player, start);
+		runtime.enterHuntArea(player, region.supplyProfile, start);
+		runtime.sampleCombat({true, start, 100, 100, 100, 100, 1});
+		runtime.sampleCombat({true, start + std::chrono::milliseconds(milliseconds), 100, 100, 100, 100, 1});
+		player.supplies = {{playerBotThrowingWeaponRule(endingItem, 8), remaining}};
+		return runtime.complete(player, start + std::chrono::milliseconds(milliseconds), 2400);
+	};
+	const auto first = runtimeOuting(2, 2389, 16420);
+	assert(first && first->supplyDemand.size() == 1 && !first->supplyDemand[0].updated);
+	const auto zero = runtimeOuting(3, 2389, 43580);
+	assert(zero && zero->supplyDemand.size() == 1 && zero->supplyDemand[0].updated);
+	assert(std::abs(zero->supplyDemand[0].demand.unitsPerCombatSecond - 1.0 / 60) < 1e-12);
+	const auto gained = runtimeOuting(4, 2389, 60000);
+	assert(gained && gained->supplyDemand.empty());
+	const auto changed = runtimeOuting(2, 7378, 60000);
+	assert(changed && changed->supplyDemand.empty());
+	PlayerBotHuntPlanningProfile profile;
+	profile.supply = region.supplyProfile;
+	const auto learned = runtime.planningProfile(profile).supply.kinds[0].demand;
+	assert(learned.accumulatedCombatSeconds == 60 && learned.accumulatedConsumed == 1);
+	assert(playerBotSupplyKindBudget({PlayerBotSupplyKind::ThrowingWeapon, 2389, 3, 1, learned}, 120).fits);
+}
+
+void typedSupplyFallback()
+{
+	PlayerBotHuntRegion lowHealth = routeFixture(92), lowSpears = routeFixture(93);
+	lowHealth.supplyBudget = {}; lowSpears.supplyBudget = {};
+	lowHealth.supplyBudget.fits = lowSpears.supplyBudget.fits = false;
+	lowHealth.supplyBudget.routinePotions = lowSpears.supplyBudget.routinePotions = 19;
+	lowHealth.supplyBudget.expectedPotions = 0;
+	lowSpears.supplyBudget.expectedPotions = 3; // Both health budgets fit.
+	lowHealth.supplyKindBudgets = {{PlayerBotSupplyKind::ThrowingWeapon, 3, 2, 8, false}};
+	lowSpears.supplyKindBudgets = {{PlayerBotSupplyKind::ThrowingWeapon, 3, 2, 3, false}};
+	assert(playerBotHuntSupplyPressure(lowHealth) == 4);
+	assert(playerBotHuntSupplyPressure(lowSpears) == 1.5);
+	assert(playerBotPreferHuntRegion(lowSpears, lowHealth));
+	assert(!playerBotPreferHuntRegion(lowHealth, lowSpears));
+	// Units are not interchangeable: the worst normalized kind governs.
+	auto manaBound = lowSpears;
+	manaBound.supplyKindBudgets.push_back({PlayerBotSupplyKind::ManaPotion, 3, 2, 6, false});
+	assert(playerBotHuntSupplyPressure(manaBound) == 3 && playerBotPreferHuntRegion(lowSpears, manaBound));
+	auto betterCoverage = lowHealth;
+	betterCoverage.supplyKindBudgets[0].routine = 6;
+	assert(playerBotPreferHuntRegion(betterCoverage, lowSpears)); // More units, smaller relative shortage.
+	auto empty = lowSpears;
+	empty.supplyKindBudgets[0] = {PlayerBotSupplyKind::ThrowingWeapon, 1, 0, 0, false};
+	assert(playerBotHuntSupplyPressure(empty) == 1); // No zero-cost empty weapon budget.
+	empty.supplyKindBudgets[0].expected = 3;
+	assert(playerBotHuntSupplyPressure(empty) == 3 && std::isfinite(playerBotHuntSupplyPressure(empty)));
+	// Eligibility, productive time, and fit precede pressure, income, and XP.
+	lowSpears.suitable = false;
+	assert(playerBotPreferHuntRegion(lowHealth, lowSpears));
+	lowSpears.suitable = true; lowSpears.reachable = false;
+	assert(playerBotPreferHuntRegion(lowHealth, lowSpears));
+	lowSpears.reachable = true;
+	auto fitting = lowHealth;
+	fitting.supplyBudget.fits = true;
+	assert(playerBotPreferHuntRegion(fitting, lowSpears));
+	auto zeroDuration = fitting;
+	zeroDuration.availableHuntSeconds = 0;
+	assert(playerBotPreferHuntRegion(lowSpears, zeroDuration));
+	assert(playerBotHuntCandidateCanBeatValidated(lowSpears, zeroDuration));
+	assert(playerBotHuntCandidateCanBeatValidated(lowHealth, lowSpears)); // No XP-only pruning of fallback.
+	// At equal pressure, preserve cash-pressure and recovery-safety ordering.
+	auto income = lowSpears;
+	income.cashPressure = lowSpears.cashPressure = true;
+	income.coinGoldPerMinute = 10;
+	income.score = 1; lowSpears.score = 1000;
+	assert(playerBotPreferHuntRegion(income, lowSpears));
+	assert(std::string(playerBotHuntSelectionRule(income)) == "lowest_supply_pressure_then_coin_income_then_xp");
+	income.supplyRecovery = lowSpears.supplyRecovery = true;
+	income.coinGoldPerMinute = lowSpears.coinGoldPerMinute = 10;
+	income.threatRatio = 0.1; lowSpears.threatRatio = 0.4;
+	assert(playerBotPreferHuntRegion(income, lowSpears));
+	assert(std::string(playerBotHuntSelectionRule(income)) == "supply_recovery_pressure_then_coin_safety_then_xp");
+	// The comparator remains a strict ordering for sorting mixed tiers.
+	std::vector<PlayerBotHuntRegion> candidates{lowHealth, lowSpears, manaBound, fitting, zeroDuration, empty};
+	for (const auto& left : candidates) for (const auto& right : candidates) {
+		assert(!(playerBotPreferHuntRegion(left, right) && playerBotPreferHuntRegion(right, left)));
+		for (const auto& last : candidates) if (playerBotPreferHuntRegion(left, right) && playerBotPreferHuntRegion(right, last))
+			assert(playerBotPreferHuntRegion(left, last));
+	}
+}
+
 void overBudgetHunts()
 {
 	PlayerBotHuntRegion easy, costly;
@@ -3430,7 +3590,7 @@ void overBudgetHunts()
 	assert(playerBotPreferHuntRegion(easy, costly));
 	assert(!playerBotPreferHuntRegion(costly, easy));
 	assert(easy.suitable && costly.suitable); // Budget failure is not an eligibility gate.
-	assert(std::string(playerBotHuntSelectionRule(easy)) == "lowest_potion_consumption_then_xp");
+	assert(std::string(playerBotHuntSelectionRule(easy)) == "lowest_supply_pressure_then_xp");
 	easy.suitable = false;
 	assert(playerBotPreferHuntRegion(costly, easy));
 	easy.suitable = true;
@@ -4002,6 +4162,32 @@ static void paladinLoadouts()
 	assert(policy.throwingWeaponSupplyItem(paladin, broken, {shield, spear}) == spear.itemId);
 	assert(policy.throwingWeaponSupplyItem(paladin, broken, {royalSpear}) == 0); // level 24 cannot wield it
 	assert(policy.throwingWeaponSupplyItem(paladin, broken, {}) == 0);
+	assert(policy.throwingWeaponSupplyItem(paladin, broken, {}, spear) == spear.itemId);
+	assert(policy.throwingWeaponSupplyItem(paladin, broken, {royalSpear}, spear) == spear.itemId);
+	assert(policy.throwingWeaponSupplyItem(paladin, broken, {}, royalSpear) == 0);
+	auto exhaustedReadiness = readiness;
+	exhaustedReadiness.suppliesReady = false;
+	exhaustedReadiness.restockableWeaponMissing = true;
+	assert(policy.combatReadiness(paladin, broken, false, exhaustedReadiness).recovery == "service");
+	assert(policy.combatReadiness(paladin, broken, true, exhaustedReadiness).recovery == "equip_carried");
+	exhaustedReadiness.restockableWeaponMissing = false;
+	assert(policy.combatReadiness(paladin, broken, false, exhaustedReadiness).recovery == "acquire_weapon");
+	auto mirrored = broken;
+	mirrored.items[6] = shield;
+	mirrored.itemIds[6] = shield.itemId;
+	mirrored.items[5] = {};
+	mirrored.itemIds[5] = 0;
+	assert(policy.throwingWeaponSupplyItem(paladin, mirrored, {}, spear) == spear.itemId);
+	assert(policy.throwingWeaponSupplyItem(paladin, mirrored, {spear}) == spear.itemId);
+	const auto mirroredRefill = policy.findCarriedUpgrade(paladin, mirrored, {spare});
+	assert(mirroredRefill && static_cast<uint8_t>(mirroredRefill->upgrade.slot) == 5);
+	// Banking can put coins in the newly empty hand before restocking.
+	auto occupied = broken;
+	occupied.items[6].itemId = occupied.itemIds[6] = 2148;
+	occupied.items[6].pickupable = true;
+	assert(policy.throwingWeaponSupplyItem(paladin, occupied, {}, spear) == spear.itemId);
+	const auto occupiedRefill = policy.findCarriedUpgrade(paladin, occupied, {spare});
+	assert(occupiedRefill && static_cast<uint8_t>(occupiedRefill->upgrade.slot) == 6);
 	paladin.level = 25;
 	assert(policy.throwingWeaponSupplyItem(paladin, broken, {spear, royalSpear}) == royalSpear.itemId);
 	paladin.level = 24;
@@ -4011,6 +4197,7 @@ static void paladinLoadouts()
 	PlayerBotEquipmentPlayerSnapshot spearKnight = paladin;
 	spearKnight.vocationId = 4;
 	assert(policy.throwingWeaponSupplyItem(spearKnight, loadout, {}) == 0);
+	assert(policy.throwingWeaponSupplyItem(spearKnight, broken, {}, spear) == 0);
 
 	// Launchers are modeled but not acquired until #255.
 	auto bow = distanceItem(2456, 0, -1, 0);
@@ -4043,6 +4230,7 @@ static void paladinLoadouts()
 	assert(policy.weaponReady(paladin, launcherLoadout));
 	// A fed launcher stocks ammunition, not spare spears.
 	assert(!policy.isThrowingWeapon(paladin, bow) && policy.throwingWeaponSupplyItem(paladin, launcherLoadout, {spear}) == 0);
+	assert(policy.throwingWeaponSupplyItem(paladin, launcherLoadout, {}, spear) == 0);
 	const auto bowProfile = policy.combatProfile(paladin, launcherLoadout);
 	assert(bowProfile.attack == 25 && bowProfile.hitChance == 91 && bowProfile.attackRange == 6 && !bowProfile.blockedByShield);
 	// A launcher's own hit bonus adds to its ammunition's chance.
@@ -4107,6 +4295,8 @@ int main()
 	topologyComponentCompression();
 	fixtureHuntHorizons();
 	remoteHuntTravelGuards();
+	throwingWeaponDemand();
+	typedSupplyFallback();
 	overBudgetHunts();
 	supplyBudget();
 	recoverySpellPriority();

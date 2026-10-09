@@ -29,6 +29,7 @@ services:
     environment:
       MYSQL_PWD: angelion
       PLAYERBOT_SEED_BOT_TWO: "true"
+      PLAYERBOT_SEED_PALADINS: "true"
     command:
       - sh
       - -c
@@ -50,17 +51,36 @@ services:
           true|false) ;;
           *) echo "Invalid PLAYERBOT_SEED_BOT_TWO value." >&2; exit 1 ;;
         esac
+        case "$$PLAYERBOT_SEED_PALADINS" in
+          true|false) ;;
+          *) echo "Invalid PLAYERBOT_SEED_PALADINS value." >&2; exit 1 ;;
+        esac
+        if [ "$$PLAYERBOT_SEED_BOT_TWO" = false ] && [ "$$PLAYERBOT_SEED_PALADINS" = true ]; then
+          echo "Single-bot fixtures must disable PLAYERBOT_SEED_PALADINS as well." >&2
+          exit 1
+        fi
         mariadb --host=database --user=angelion angelion < /schema/insertPlayerbots.sql
         verify_bot 'Bot One' 'bot-one'
         if [ "$$PLAYERBOT_SEED_BOT_TWO" = true ]; then
           mariadb --host=database --user=angelion angelion < /schema/insertBotTwo.sql
           verify_bot 'Bot Two' 'bot-two'
+        fi
+        if [ "$$PLAYERBOT_SEED_PALADINS" = true ]; then
+          mariadb --host=database --user=angelion angelion < /schema/insertBotThree.sql
+          verify_bot 'Bot Three' 'bot-three'
+          mariadb --host=database --user=angelion angelion < /schema/insertBotFour.sql
+          verify_bot 'Bot Four' 'bot-four'
         else
           roster_count="$$(mariadb --host=database --user=angelion --batch --skip-column-names angelion -e '
             SELECT COUNT(*) FROM player_bots;
           ')"
-          if [ "$$roster_count" != "1" ]; then
-            echo "Single-bot fixture requires only Bot One registered; use a fresh disposable database volume." >&2
+          if [ "$$PLAYERBOT_SEED_BOT_TWO" = false ]; then
+            if [ "$$roster_count" != "1" ]; then
+              echo "Single-bot fixture requires only Bot One registered; use a fresh disposable database volume." >&2
+              exit 1
+            fi
+          elif [ "$$roster_count" != "2" ]; then
+            echo "Two-bot fixture requires only Bot One and Bot Two registered; use a fresh disposable database volume." >&2
             exit 1
           fi
         fi
@@ -68,6 +88,8 @@ services:
     volumes:
       - ./schema/insertPlayerbots.sql:/schema/insertPlayerbots.sql:ro
       - ./schema/insertBotTwo.sql:/schema/insertBotTwo.sql:ro
+      - ./schema/insertBotThree.sql:/schema/insertBotThree.sql:ro
+      - ./schema/insertBotFour.sql:/schema/insertBotFour.sql:ro
 
   server:
     build: .

@@ -46,6 +46,46 @@ jobs:
             sleep "$((attempt * 10))"
           done
 
+      - name: Start database and provision normal roster
+        run: |
+          docker compose up --detach database playerbot-setup
+          test "$(docker wait angelion-playerbot-setup-1)" = "0"
+
+      - name: Verify database and playerbot provisioning
+        run: |
+          test "$(docker inspect --format '{{.State.Health.Status}}' angelion-database-1)" = "healthy"
+          test "$(docker inspect --format '{{.State.ExitCode}}' angelion-playerbot-setup-1)" = "0"
+          roster="$(
+            docker compose exec -T database \
+              mariadb --user=angelion --password=angelion --batch --skip-column-names angelion \
+              --execute="
+                SELECT players.name, accounts.name, players.id, players.deletion,
+                       players.vocation, players.skill_dist
+                FROM player_bots
+                JOIN players ON players.id = player_bots.player_id
+                JOIN accounts ON accounts.id = players.account_id
+                ORDER BY players.name;
+              "
+          )"
+          ROSTER="$roster" python3 - <<'PY' >> "$GITHUB_ENV"
+          import os
+
+          rows = [line.split("\t") for line in os.environ["ROSTER"].splitlines()]
+          # Check exact seed skills before starting the server: live bots can train.
+          expected = (
+              ("Bot Four", "bot-four", "BOT_FOUR_ID", "3", "40"),
+              ("Bot One", "bot-one", "BOT_ONE_ID", "4", "10"),
+              ("Bot Three", "bot-three", "BOT_THREE_ID", "3", "40"),
+              ("Bot Two", "bot-two", "BOT_TWO_ID", "4", "10"),
+          )
+          assert len(rows) == 4, rows
+          for row, (name, account, variable, vocation, distance) in zip(rows, expected, strict=True):
+              assert len(row) == 6 and row[:2] == [name, account] and row[3:] == ["0", vocation, distance], row
+              assert int(row[2]) > 0, row
+              print(f"{variable}={int(row[2])}")
+          assert len({int(row[2]) for row in rows}) == 4, rows
+          PY
+
       - name: Build and start fresh server stack
         run: docker compose up --build --detach
 
@@ -66,35 +106,6 @@ jobs:
           echo "Server did not reach online state within 120 seconds." >&2
           exit 1
 
-      - name: Verify database and playerbot provisioning
-        run: |
-          test "$(docker inspect --format '{{.State.Health.Status}}' angelion-database-1)" = "healthy"
-          test "$(docker inspect --format '{{.State.ExitCode}}' angelion-playerbot-setup-1)" = "0"
-          roster="$(
-            docker compose exec -T database \
-              mariadb --user=angelion --password=angelion --batch --skip-column-names angelion \
-              --execute="
-                SELECT players.name, accounts.name, players.id, players.deletion
-                FROM player_bots
-                JOIN players ON players.id = player_bots.player_id
-                JOIN accounts ON accounts.id = players.account_id
-                ORDER BY players.name;
-              "
-          )"
-          ROSTER="$roster" python3 - <<'PY' >> "$GITHUB_ENV"
-          import os
-
-          rows = [line.split("\t") for line in os.environ["ROSTER"].splitlines()]
-          assert len(rows) == 2, rows
-          for row, name, account, variable in zip(
-              rows, ("Bot One", "Bot Two"), ("bot-one", "bot-two"),
-              ("BOT_ONE_ID", "BOT_TWO_ID"), strict=True,
-          ):
-              assert row[:2] == [name, account] and row[3] == "0", row
-              print(f"{variable}={int(row[2])}")
-          assert rows[0][2] != rows[1][2]
-          PY
-
       - name: Verify structured playerbot log
         run: |
           server_id="$(docker compose ps --quiet server)"
@@ -106,7 +117,9 @@ jobs:
           import sys
 
           expected = {"Bot One": int(os.environ["BOT_ONE_ID"]),
-                      "Bot Two": int(os.environ["BOT_TWO_ID"])}
+                      "Bot Two": int(os.environ["BOT_TWO_ID"]),
+                      "Bot Three": int(os.environ["BOT_THREE_ID"]),
+                      "Bot Four": int(os.environ["BOT_FOUR_ID"])}
           online = {}
           for line in sys.stdin:
               try:
@@ -121,16 +134,17 @@ jobs:
                   continue
               assert event["player_id"] == expected[name], event
               assert set(event["position"]) == {"x", "y", "z"}, event
-              assert event.get("server_run_id"), event
-              online[name] = event["server_run_id"]
+              assert event.get("server_run_id") and event.get("controller_id"), event
+              online[name] = (event["server_run_id"], event["controller_id"])
           assert set(online) == set(expected), (online, expected)
-          assert len(set(online.values())) == 1, online
+          assert len({run for run, controller in online.values()}) == 1, online
+          assert len({controller for run, controller in online.values()}) == 4, online
           ' 2>/dev/null; then
               exit 0
             fi
             sleep 2
           done
-          echo "Both registered bots did not emit online lifecycle events in this server run." >&2
+          echo "All four registered bots did not emit distinct online lifecycle events in this server run." >&2
           exit 1
 
       - name: Verify local game ports

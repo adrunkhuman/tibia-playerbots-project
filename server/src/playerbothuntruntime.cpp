@@ -443,6 +443,9 @@ std::optional<PlayerBotHuntRuntimeCompletion> PlayerBotHuntRuntime::complete(con
 			// A weapon-matched kind leaves the stock list once its last unit breaks.
 			if (after && after->rule.itemId != before.rule.itemId) continue;
 			const uint32_t remaining = after ? after->count : 0;
+			// A net stock gain hides any breaks behind newly acquired units;
+			// it is not evidence of a zero-break throwing-weapon outing.
+			if (before.rule.kind == PlayerBotSupplyKind::ThrowingWeapon && remaining > before.count) continue;
 			result.supplyDemand.push_back(policy.observeSupplyDemand(before.rule.kind,
 			    before.count > remaining ? before.count - remaining : 0, supplyDurationSeconds, player.supplyInterrupted,
 			    before.rule.kind == PlayerBotSupplyKind::ManaPotion ? result.supplyObservation.manaPotionDebt : 0));

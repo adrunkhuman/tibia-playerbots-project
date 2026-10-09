@@ -48,6 +48,8 @@ const playerbot::PlayerBotTestPolicy& playerbot::playerBotTestPolicyFromEnvironm
 			 std::strcmp(gameplayMode, "equipment_buy_provider_unreachable") == 0 ||
 			 std::strcmp(gameplayMode, "equipment_buy_rejected") == 0 ||
 			 std::strcmp(gameplayMode, "equipment_buy_spear") == 0 ||
+			 std::strcmp(gameplayMode, "spear_unfunded") == 0 ||
+			 std::strcmp(gameplayMode, "spear_mirrored") == 0 ||
 			 std::strcmp(gameplayMode, "equipment_tools") == 0 ||
 			 std::strcmp(gameplayMode, "equipment_tools_nested") == 0 ||
 			 std::strcmp(gameplayMode, "slotted_loot_seller") == 0 ||
@@ -84,7 +86,11 @@ const playerbot::PlayerBotTestPolicy& playerbot::playerBotTestPolicyFromEnvironm
 			 std::strcmp(gameplayMode, "readiness_ready") == 0 || std::strcmp(gameplayMode, "readiness_upgrade") == 0 ||
 			 std::strcmp(gameplayMode, "readiness_missing_weapon") == 0 || std::strcmp(gameplayMode, "readiness_supplies") == 0 ||
 			 std::strcmp(gameplayMode, "readiness_food_capacity") == 0 ||
-			 std::strcmp(gameplayMode, "spear_restock") == 0 || std::strcmp(gameplayMode, "spear_break") == 0 ||
+			 std::strcmp(gameplayMode, "spear_restock") == 0 || std::strcmp(gameplayMode, "spear_restock_scaled") == 0 ||
+			 std::strcmp(gameplayMode, "spear_break") == 0 || std::strcmp(gameplayMode, "spear_last_break") == 0 ||
+			 std::strcmp(gameplayMode, "equipment_buy_spear") == 0 ||
+			 std::strcmp(gameplayMode, "spear_unfunded") == 0 ||
+			 std::strcmp(gameplayMode, "spear_mirrored") == 0 ||
 			 std::strcmp(gameplayMode, "readiness_retention") == 0 || std::strcmp(gameplayMode, "spell_use") == 0 ||
 			 std::strcmp(gameplayMode, "magic_training_hunt") == 0 ||
 			 std::strcmp(gameplayMode, "magic_training_post_hunt") == 0 ||
@@ -107,7 +113,12 @@ const playerbot::PlayerBotTestPolicy& playerbot::playerBotTestPolicyFromEnvironm
 		                               std::strcmp(gameplayMode, "carlin_local_service") != 0 &&
 		                               std::strcmp(gameplayMode, "readiness_supplies") != 0 &&
 		                               std::strcmp(gameplayMode, "spear_restock") != 0 &&
+		                               std::strcmp(gameplayMode, "spear_restock_scaled") != 0 &&
 		                               std::strcmp(gameplayMode, "spear_break") != 0 &&
+		                               std::strcmp(gameplayMode, "spear_last_break") != 0 &&
+		                               std::strcmp(gameplayMode, "equipment_buy_spear") != 0 &&
+		                               std::strcmp(gameplayMode, "spear_unfunded") != 0 &&
+		                               std::strcmp(gameplayMode, "spear_mirrored") != 0 &&
 		                               std::strcmp(gameplayMode, "spell_training") != 0 &&
 		                               std::strcmp(gameplayMode, "spell_training_low_supplies") != 0 &&
 		                               std::strcmp(gameplayMode, "spell_training_low_supplies_unaffordable") != 0 &&
@@ -146,7 +157,8 @@ const playerbot::PlayerBotTestPolicy& playerbot::playerBotTestPolicyFromEnvironm
 			!gameplayMode || (std::strcmp(gameplayMode, "equipment_shadow") != 0 &&
 			                  std::strcmp(gameplayMode, "equipment_shadow_unaffordable") != 0 &&
 			                  std::strcmp(gameplayMode, "equipment_shadow_no_upgrade") != 0),
-			gameplayMode && std::strncmp(gameplayMode, "equipment_buy", 13) == 0,
+			gameplayMode && std::strncmp(gameplayMode, "equipment_buy", 13) == 0 &&
+			    std::strcmp(gameplayMode, "equipment_buy_spear") != 0,
 			gameplayMode && (std::strcmp(gameplayMode, "equipment_tools") == 0 ||
 			                 std::strcmp(gameplayMode, "equipment_tools_nested") == 0),
 			gameplayMode && std::strcmp(gameplayMode, "equipment_buy_rejected") == 0,
@@ -160,6 +172,8 @@ const playerbot::PlayerBotTestPolicy& playerbot::playerBotTestPolicyFromEnvironm
 			                 std::strcmp(gameplayMode, "spell_training_low_supplies") == 0 ||
 			                 std::strcmp(gameplayMode, "spell_training_low_supplies_unaffordable") == 0 ||
 			                 std::strncmp(gameplayMode, "equipment_buy", 13) == 0 ||
+			                 std::strcmp(gameplayMode, "spear_unfunded") == 0 ||
+			                 std::strcmp(gameplayMode, "spear_mirrored") == 0 ||
 			                 std::strcmp(gameplayMode, "equipment_tools") == 0 ||
 			                 std::strcmp(gameplayMode, "equipment_tools_nested") == 0),
 			spellCalibrationFixture,

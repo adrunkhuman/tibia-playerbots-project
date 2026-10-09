@@ -1154,6 +1154,7 @@ void PlayerBotController::processService(Player* player, const Position& current
 	PlayerBotServiceObservation observation;
 	observation.currentPosition = currentPosition;
 	observation.freeCapacity = player->getFreeCapacity();
+	observation.supplyCapacityReserve = returnCapacityThreshold;
 	observation.money = player->getMoney();
 	observation.bankBalance = player->getBankBalance();
 	observation.goldCoinWeight = Item::items[ITEM_GOLD_COIN].weight;

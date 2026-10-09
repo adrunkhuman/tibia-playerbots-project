@@ -95,9 +95,12 @@ void PlayerBotController::emitCombatReadiness(const Player& player, const Positi
 PlayerBotEquipmentReadinessInput PlayerBotController::equipmentReadinessInput(const Player& player) const
 {
 	const Item* backpack = player.getInventoryItem(CONST_SLOT_BACKPACK);
+	const auto stocks = PlayerBotInventoryPolicy::additionalSupplyStocks(player);
+	const auto* throwingWeapon = playerBotSupplyStock(stocks, PlayerBotSupplyKind::ThrowingWeapon);
 	return {backpack && backpack->getContainer(),
 	        supplyRecovery.active() || huntSuppliesReady(player),
-	        inventoryPolicy.huntFreeCapacity(player), returnCapacityThreshold};
+	        inventoryPolicy.huntFreeCapacity(player), returnCapacityThreshold,
+	        throwingWeapon && throwingWeapon->rule.active() && throwingWeapon->count == 0};
 }
 
 bool PlayerBotController::beginReadinessEquipment(Player* player, const Position& position, const char* reason, bool resumeService)
@@ -222,6 +225,15 @@ bool PlayerBotController::ensureCombatReady(Player* player, const Position& posi
 		return false;
 	}
 	if (readiness.recovery == "service") {
+		// A completed survival restock may buy nothing. Without a weapon the
+		// bot cannot earn hunt income; do not repeat the same unfunded service.
+		if (readinessInput.restockableWeaponMissing &&
+		    supplyRecovery.restockBlocked(player->getMoney() + player->getBankBalance(),
+		        playerBotSupplyStockKey(supplyStocks(*player)))) {
+			emitCombatReadiness(*player, position, "failed", readiness.recovery, "throwing_weapon_restock_blocked");
+			stop("combat_readiness_throwing_weapon_restock_blocked", position);
+			return false;
+		}
 		const PlayerBotSupplyStock* exhausted = readinessInput.suppliesReady ? nullptr :
 		    playerBotExhaustedSupply(supplyStocks(*player));
 		beginService(player, position,

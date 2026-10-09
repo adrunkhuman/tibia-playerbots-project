@@ -209,13 +209,16 @@
 			$supplyLogs = Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST READINESS_SUPPLIES_PASS'
 			Assert-CombatReadinessEvents -Logs $supplyLogs -Mode "supplies"
 		}
-		Invoke-Scenario -Name "paladin_spear_restock" -DefaultTimeoutSeconds 300 -Body {
-			Invoke-Compose down --volumes --remove-orphans
-			$env:PLAYERBOT_GAMEPLAY_MODE = "spear_restock"
-			Invoke-Compose up --detach
-			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST SPEAR_RESTOCK_PASS' | Out-Null
-			$restockLogs = Wait-ForSpearRestockHunt
-			Assert-SpareSpearEvents -Logs $restockLogs -Mode "restock"
+		Invoke-Scenario -Name "paladin_spear_restock" -DefaultTimeoutSeconds 600 -Body {
+			# Two fresh runs prove the level-8 target and the level-16 ceiling through normal purchases.
+			foreach ($level in @(8, 16)) {
+				Invoke-Compose down --volumes --remove-orphans
+				$env:PLAYERBOT_GAMEPLAY_MODE = $level -eq 8 ? "spear_restock" : "spear_restock_scaled"
+				Invoke-Compose up --detach
+				Wait-ForLog -Pattern ("PLAYERBOT_GAMEPLAY_TEST " + $env:PLAYERBOT_GAMEPLAY_MODE.ToUpperInvariant() + "_PASS") | Out-Null
+				$restockLogs = Wait-ForSpearRestockHunt
+				Assert-SpareSpearEvents -Logs $restockLogs -Mode "restock" -Level $level
+			}
 		}
 		Invoke-Scenario -Name "paladin_spear_break" -DefaultTimeoutSeconds 360 -Body {
 			Invoke-Compose down --volumes --remove-orphans
@@ -224,6 +227,15 @@
 			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST SPEAR_BREAK_PASS' | Out-Null
 			$breakLogs = Wait-ForSpearRestockHunt
 			Assert-SpareSpearEvents -Logs $breakLogs -Mode "break"
+		}
+		Invoke-Scenario -Name "paladin_spear_last_break" -DefaultTimeoutSeconds 360 -Body {
+			Invoke-Compose down --volumes --remove-orphans
+			$env:PLAYERBOT_GAMEPLAY_MODE = "spear_last_break"
+			$env:PLAYERBOT_HUNT_DURATION_SECONDS = "900"
+			Invoke-Compose up --detach
+			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST SPEAR_LAST_BREAK_PASS' | Out-Null
+			$lastBreakLogs = Wait-ForSpearRestockHunt
+			Assert-ZeroSpearRecoveryEvents -Logs $lastBreakLogs -Mode "last_break"
 		}
 		Invoke-Scenario -Name "combat_readiness_no_food" -DefaultTimeoutSeconds 60 -Body {
 			Invoke-Compose down --volumes --remove-orphans
@@ -382,16 +394,32 @@
 			}
 			Assert-EquipmentPurchaseEvents -Logs $rejectedLogs -Rejected
 		}
-		Invoke-Scenario -Name "equipment_purchase_spear" -DefaultTimeoutSeconds 240 -Body {
+		# Retain the public scenario name; an absent spear is now paid supply-service readiness repair.
+		Invoke-Scenario -Name "equipment_purchase_spear" -DefaultTimeoutSeconds 900 -Body {
 			Invoke-Compose down --volumes --remove-orphans
 			$env:PLAYERBOT_GAMEPLAY_MODE = "equipment_buy_spear"
 			$env:PLAYERBOT_HUNT_DURATION_SECONDS = "900"
 			Invoke-Compose up --detach
 			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST EQUIPMENT_BUY_SPEAR_PASS' | Out-Null
-			$spearLogs = Wait-ForPlayerbotEvent {
-				$_.event -eq "goal_result" -and $_.goal -eq "buy_equipment" -and $_.result -eq "success"
-			}
+			$spearLogs = Wait-ForSpearRestockHunt
 			Assert-EquipmentPurchaseEvents -Logs $spearLogs -Spear
+			foreach ($mode in @("spear_mirrored", "spear_unfunded")) {
+				Invoke-Compose down --volumes --remove-orphans
+				$env:PLAYERBOT_GAMEPLAY_MODE = $mode
+				Invoke-Compose up --detach
+				if ($mode -eq "spear_mirrored") {
+					Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST SPEAR_MIRRORED_PASS' | Out-Null
+					$mirroredLogs = Wait-ForSpearRestockHunt
+					Assert-ZeroSpearRecoveryEvents -Logs $mirroredLogs -Mode "mirrored"
+				} else {
+					Wait-ForPlayerbotEvent {
+						$_.event -eq "terminal" -and $_.reason -eq "combat_readiness_throwing_weapon_restock_blocked"
+					} | Out-Null
+					# Observe multiple scheduler turns after terminal, not only the stop line.
+					Start-Sleep -Seconds 3
+					Assert-ZeroSpearRecoveryEvents -Logs (Get-ServerLogs) -Mode "unfunded"
+				}
+			}
 		}
 		Invoke-Scenario -Name "equipment_tool_replenishment" -DefaultTimeoutSeconds 300 -Body {
 			Invoke-Compose down --volumes --remove-orphans

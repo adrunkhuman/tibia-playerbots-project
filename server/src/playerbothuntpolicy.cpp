@@ -425,7 +425,16 @@ PlayerBotSupplyDemandUpdate PlayerBotHuntPolicy::observeSupplyDemand(PlayerBotSu
 	const bool fullOuting = !interrupted && durationSeconds >= guards.minimumDurationSeconds &&
 	                        combat.activeSeconds >= guards.minimumActiveCombatSeconds && combat.kills >= guards.minimumKills;
 	PlayerBotSupplyDemand& demand = supplyDemands[static_cast<size_t>(kind)];
-	PlayerBotSupplyDemandUpdate update = playerBotObserveSupplyDemand(demand, consumed, combat.activeSeconds, fullOuting, debt);
+	PlayerBotSupplyDemandUpdate update;
+	if (kind == PlayerBotSupplyKind::ThrowingWeapon) {
+		// Death can remove inventory without breaking a weapon. Ordinary
+		// interruptions do not invalidate the observed breaks or exposure.
+		update = playerBotObserveThrowingWeaponDemand(demand, consumed,
+		    combat.deathObserved ? 0 : combat.activeSeconds, guards.minimumActiveCombatSeconds);
+		if (combat.deathObserved) update.reason = "death_observed";
+	} else {
+		update = playerBotObserveSupplyDemand(demand, consumed, combat.activeSeconds, fullOuting, debt);
+	}
 	update.kind = kind;
 	demand = update.demand;
 	return update;

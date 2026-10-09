@@ -28,7 +28,9 @@ Useful subsystem switches include `-Healing`, `-ValueLoot` (value replacement pl
 
 `-Scenario door_passages` also checks the shared stable-approach admission used by NPC boarding, hunt depot/supply exits, sell-loot source/seller selection, service providers, and depot scans/revalidation. A lower-cost teleport is rejected while an ordinary tile is selected; adding a teleport to the selected tile invalidates it. Floor changes and solid blockers are rejected, occupied ordinary tiles remain eligible, and the movement resolver still permits intentional teleport traversal. The same scenario checks coarse portal danger-sample reuse, unchanged cost/peak results, peak rejection, and tile-dependency invalidation. This tests loaded engine tiles, not every controller workflow independently.
 
-Paladin healing has exact scenarios `paladin_spell_training` (paid learning, casting, and restart), `paladin_healing_economy` (spell choice and reserve), `paladin_mana_healing`, `paladin_healing_fallback`, and `paladin_supply_restock`. They seed Bot One as a Paladin and do not provision Bot Three or establish sustained progression. `-SpellTraining`, `-SpellUse`, and `-Healing` include the relevant Paladin cases alongside Knight checks.
+Paladin healing has exact scenarios `paladin_spell_training` (paid learning, casting, and restart), `paladin_healing_economy` (spell choice and reserve), `paladin_mana_healing`, `paladin_healing_fallback`, and `paladin_supply_restock`. They seed Bot One as a Paladin, omit the other three bots, and do not establish sustained progression. `-SpellTraining`, `-SpellUse`, and `-Healing` include the relevant Paladin cases alongside Knight checks.
+
+`-Scenario paladin_spear_restock` checks paid restocking and hunt resumption in fresh level-8 and level-16 runs; `paladin_spear_break` checks equipping a backpack spare, ending the hunt at the reserve, and restocking. `equipment_purchase_spear` checks supply recovery from zero spears at startup in both hand orientations with only 39 gold, plus a zero-funds case that must stop after one unsuccessful service rather than loop or hunt unarmed. `paladin_spear_last_break` checks losing the final spear after hunting starts. Funded cases must buy three spears, equip them, and resume hunting without a terminal event. These use normalized gear and capacity, not the normal seed's capacity budget. `lua scripts/test-playerbot-spear-fixture.lua` checks their setup and verifiers without Docker.
 
 Ranged positioning (#235) has `ranged_position_control` (the Paladin fights like a melee class), `ranged_position` (open room: observed displacement, more than half the fight at distance 2–3, and less damage than the control), and `ranged_position_corner` (a shallow wall blocks immediate retreats; must fall back with `retreat_blocked`). Select them with `-Focused -RangedPosition`; exact `-Scenario ranged_position` automatically includes its control. These disposable fixtures use an isolated synthetic arena with a 64-tile retreat runway, normalize spear hits/damage/breakage and chaser damage, count damage through health-change events rather than sampled health loss, and require the chaser's defeat and subsequent coin loot. They do not test wall sliding or natural combat rolls. Non-Docker fixture checks are `lua server/tests/playerbot_ranged_fixture_contracts.lua` and `pwsh -File server/tests/playerbot_ranged_fixture_assertions.ps1`.
 
@@ -172,20 +174,20 @@ docker compose -f server/compose.yaml up --build --detach
 docker compose -f server/compose.yaml logs --tail 200 playerbot-setup server
 ```
 
-Confirm MariaDB is healthy, the map loads, the server reports online, and `127.0.0.1:7171` and `127.0.0.1:7172` accept connections. `playerbot-setup` must exit successfully, one valid registration must exist for each of `Bot One` and `Bot Two`, and server JSONL must contain an `online` playerbot lifecycle event for each distinct GUID/controller in the same server run. Activation is staggered, so the server-online banner can precede Bot Two's online event.
+Confirm MariaDB is healthy, the map loads, the server reports online, and `127.0.0.1:7171` and `127.0.0.1:7172` accept connections. `playerbot-setup` must exit successfully, exactly one valid registration must exist for each of `Bot One` through `Bot Four`, and server JSONL must contain an `online` playerbot lifecycle event for each distinct GUID/controller in the same server run. Activation is staggered, so the server-online banner can precede the later bots' online events. Fresh Paladins are level 8, vocation 3, with distance 40; check exact seed values before starting the server, since normal gameplay changes them.
 
 The [`Server CI`](../.github/workflows/server-ci.yml) workflow's `server-smoke` job performs this fresh-stack check for `server/**` and workflow changes. It does not execute gameplay actions.
 
-## Two-bot lifecycle and provisioning
+## Roster provisioning and lifecycle
 
 ```powershell
 pwsh -File scripts/test-playerbot-provisioning.ps1
 pwsh -File scripts/test-playerbot-multibot.ps1
 ```
 
-The provisioning check uses an isolated, disposable database-only Compose project. It checks the seeds, idempotence, and rejection of SQL errors or conflicting identities.
+The provisioning check uses an isolated, disposable database-only Compose project. It checks all four seeds and loadouts, idempotence, preservation of progressed Paladin stats and inventory, rejection of SQL errors or conflicting identities, and the one-/two-bot fixture rosters.
 
-The multibot check covers independent lifecycle, interactions, login protection, and persistence. It requires Python 3 and OpenSSL, owns the disposable `angelion` stack, and refuses existing containers. Persistence restarts use `--no-deps` to avoid provisioning changes.
+The multibot check deliberately keeps only the two Knights to cover independent lifecycle, interactions, login protection, and persistence without changing its controlled scenarios. It requires Python 3 and OpenSSL, owns the disposable `angelion` stack, and refuses existing containers. Persistence restarts use `--no-deps` to avoid provisioning changes.
 
 Use `-Case shared_npc` or another listed case for a targeted check, `-SkipBuild` with a current image, and `-KeepStack` to retain the final case. Logs go to `artifacts/playerbot-multibot/` or `-ArtifactsPath`.
 
@@ -243,4 +245,4 @@ For protocol or gameplay-facing client changes, manually test:
 - combat and death;
 - logout and persistence.
 
-Watch both logs for parser errors, unknown opcodes, restart loops, and runaway memory use. A successful login alone proves nothing beyond login. Use a human-controlled character on `admin` / `admin` for manual checks; do not attempt to take control of either registered bot.
+Watch both logs for parser errors, unknown opcodes, restart loops, and runaway memory use. A successful login alone proves nothing beyond login. Use a human-controlled character on `admin` / `admin` for manual checks; do not attempt to take control of any registered bot.

@@ -404,14 +404,37 @@ PlayerBotHuntPlanningProfile playerBotHuntPlanningProfile(const Player& player, 
 PlayerBotRecoveryPrediction playerBotPredictRecovery(const PlayerBotHuntPlanningProfile& profile,
                                                       double predictedFightSeconds);
 bool playerBotPredictedLethal(int32_t currentHealth, double predictedDamage);
+// Dimensionless use of the scarcest routine supply. A one-unit denominator
+// also orders shortages when no routine stock remains, without division by zero.
+// All fitting budgets rank first; among failures this compares the actual
+// bottleneck rather than unrelated health-potion consumption.
+inline double playerBotHuntSupplyPressure(const PlayerBotHuntRegion& region)
+{
+	double pressure = region.supplyBudget.expectedPotions / std::max<uint32_t>(1, region.supplyBudget.routinePotions);
+	for (const PlayerBotSupplyKindBudget& budget : region.supplyKindBudgets) {
+		double typedPressure = budget.expected / std::max<uint32_t>(1, budget.routine);
+		// Essential stock at its return threshold cannot masquerade as free
+		// merely because there is no learned consumption yet.
+		if (!budget.fits && budget.routine == 0) typedPressure = std::max(1.0, typedPressure);
+		pressure = std::max(pressure, typedPressure);
+	}
+	return pressure;
+}
+
 inline bool playerBotPreferHuntRegion(const PlayerBotHuntRegion& left, const PlayerBotHuntRegion& right)
 {
 	const bool leftAvailable = left.suitable && left.reachable;
 	const bool rightAvailable = right.suitable && right.reachable;
 	if (leftAvailable != rightAvailable) return leftAvailable;
+	// Spending the whole outing on travel is not a free, supply-fitting hunt.
+	const bool leftProductive = left.availableHuntSeconds > 0;
+	const bool rightProductive = right.availableHuntSeconds > 0;
+	if (leftProductive != rightProductive) return leftProductive;
 	if (left.supplyBudget.fits != right.supplyBudget.fits) return left.supplyBudget.fits;
-	if (!left.supplyBudget.fits && left.supplyBudget.expectedPotions != right.supplyBudget.expectedPotions) {
-		return left.supplyBudget.expectedPotions < right.supplyBudget.expectedPotions;
+	if (!left.supplyBudget.fits) {
+		const double leftPressure = playerBotHuntSupplyPressure(left);
+		const double rightPressure = playerBotHuntSupplyPressure(right);
+		if (leftPressure != rightPressure) return leftPressure < rightPressure;
 	}
 	const bool recovery = left.supplyRecovery && right.supplyRecovery;
 	const double leftIncome = (left.cashPressure || recovery) ?
@@ -604,10 +627,10 @@ inline bool playerBotHuntCandidateCanBeatValidated(
     const PlayerBotHuntRegion& candidate, const PlayerBotHuntRegion& validated)
 {
 	if (!candidate.suitable || !candidate.reachable) return false;
-	// Travel can improve the candidate's supply tier, but it cannot improve past
-	// an incumbent that already fits. Compare that best case with the candidate's
-	// no-travel XP bound before spending another route budget.
-	if (!validated.supplyBudget.fits) return true;
+	// A zero-duration incumbent must not prune a productive fallback. Otherwise
+	// travel can improve supply fit, but not past a productive fitting incumbent;
+	// compare that best case with the candidate's no-travel XP bound.
+	if (validated.availableHuntSeconds <= 0 || !validated.supplyBudget.fits) return true;
 	// A fitting incumbent outranks every non-fitting result, so the candidate
 	// must fit after validation to win.
 	if (candidate.optimisticFittingExperience < 0) return false;
@@ -638,10 +661,10 @@ inline bool playerBotHuntRemainingCanBeatValidated(
 inline const char* playerBotHuntSelectionRule(const PlayerBotHuntRegion& region)
 {
 	if (region.supplyRecovery) return region.supplyBudget.fits ?
-	    "supply_recovery_coin_safety_then_xp" : "supply_recovery_potions_then_coin_safety_then_xp";
+	    "supply_recovery_coin_safety_then_xp" : "supply_recovery_pressure_then_coin_safety_then_xp";
 	if (region.cashPressure) return region.supplyBudget.fits ?
-	    "supply_budget_then_coin_income_then_xp" : "lowest_potion_consumption_then_coin_income_then_xp";
-	return region.supplyBudget.fits ? "supply_budget_then_xp" : "lowest_potion_consumption_then_xp";
+	    "supply_budget_then_coin_income_then_xp" : "lowest_supply_pressure_then_coin_income_then_xp";
+	return region.supplyBudget.fits ? "supply_budget_then_xp" : "lowest_supply_pressure_then_xp";
 }
 inline bool playerBotHuntScopeExhausted(const std::vector<PlayerBotHuntRegion>& regions)
 {

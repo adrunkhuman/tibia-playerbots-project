@@ -53,7 +53,8 @@ function F.login.onLogin(player)
         mode == "equipment_buy" or mode == "equipment_buy_resume" or mode == "equipment_buy_space" or
         mode == "equipment_buy_provider_moved" or
         mode == "equipment_buy_provider_unreachable" or
-        mode == "equipment_buy_rejected" or mode == "equipment_buy_spear" or mode == "equipment_tools" or
+        mode == "equipment_buy_rejected" or mode == "equipment_buy_spear" or mode == "spear_unfunded" or
+        mode == "spear_mirrored" or mode == "equipment_tools" or
         mode == "equipment_tools_nested" or mode == "mainland_reward" or mode == "magic_training_haste" or
         mode == "magic_training_great_light" or mode == "magic_training_light" or mode == "magic_training_refresh" or
         mode == "magic_training_reserve" or mode == "magic_training_failed" or mode == "magic_training_service" or
@@ -61,25 +62,21 @@ function F.login.onLogin(player)
         mode == "magic_training_exact_full" or mode == "magic_training_restart" or mode == "magic_training_absent" or
         mode == "magic_training_expired" or mode == "magic_training_post_hunt" or mode == "magic_training_post_hunt_no_overflow" or
         mode == "svargrond_local_route_recovery" or mode == "navigation_fare_rejection" or
-        mode == "navigation_risk_rejection" or mode == "door_passages" or mode == "spear_restock" or
-        mode == "spear_break" or mode == "paladin_spell_training" or mode == "paladin_healing_economy" or
+        mode == "navigation_risk_rejection" or mode == "door_passages" or mode == "spear_restock" or mode == "spear_restock_scaled" or
+        mode == "spear_break" or mode == "spear_last_break" or mode == "paladin_spell_training" or mode == "paladin_healing_economy" or
         mode == "paladin_mana_healing" or mode == "paladin_healing_fallback" or mode == "paladin_supply_restock",
         "unknown PLAYERBOT_GAMEPLAY_MODE: " .. mode)
     if mode == "equipment_shadow" or mode == "equipment_shadow_unaffordable" or mode == "equipment_shadow_no_upgrade" or
         mode == "equipment_buy" or mode == "equipment_buy_resume" or mode == "equipment_buy_space" or
         mode == "equipment_buy_provider_moved" or mode == "equipment_buy_provider_unreachable" or
-        mode == "equipment_buy_rejected" or mode == "equipment_buy_spear" or mode == "equipment_tools" or
+        mode == "equipment_buy_rejected" or mode == "equipment_tools" or
         mode == "equipment_tools_nested" then
-        local paladin = mode == "equipment_buy_spear"
-        if paladin then
-            assert(player:setVocation(3), "spear fixture could not select the Paladin vocation")
-        end
         if mode ~= "equipment_buy_provider_moved" then
             local thais = Town(F.thaisTownId)
             assert(thais and player:setTown(thais) and player:teleportTo(thais:getTemplePosition()),
                 "equipment fixture could not select Thais")
         end
-        assert(player:getLevel() == 8 and player:getVocation():getId() == (paladin and 3 or 4),
+        assert(player:getLevel() == 8 and player:getVocation():getId() == 4,
             "equipment fixture did not load the level-8 mainland vocation")
         if mode == "equipment_tools" or mode == "equipment_tools_nested" then
             local nested = mode == "equipment_tools_nested"
@@ -130,11 +127,8 @@ function F.login.onLogin(player)
                 "equipment fixture could not restore slot " .. equipment[2])
         end
         local fixtureWeaponId = mode == "equipment_buy_provider_moved" and 2376 or F.starterWeaponId
-        -- The Paladin starts unarmed: a missing weapon must be bought, not fatal.
-        if not paladin then
-            assert(player:addItem(fixtureWeaponId, 1, false, 1, CONST_SLOT_LEFT),
-                "equipment fixture could not equip the starter weapon")
-        end
+        assert(player:addItem(fixtureWeaponId, 1, false, 1, CONST_SLOT_LEFT),
+            "equipment fixture could not equip the starter weapon")
         F.removeAll(player, F.potionItemId)
         -- Equipment spending must start with the full level-8 recovery stock,
         -- so the protected reserve stays at 100 gold rather than funding a restock.
@@ -182,8 +176,7 @@ function F.login.onLogin(player)
             F.removeAll(player, F.equipmentPurchaseItemId)
             F.removeAll(player, ITEM_GOLD_COIN)
             local backpack = player:getSlotItem(CONST_SLOT_BACKPACK)
-            -- The Paladin surplus buys one spear (9-10 gold), never a pricier weapon.
-            local surplus = mode == "equipment_buy_provider_moved" and 80 or paladin and 10 or 5
+            local surplus = mode == "equipment_buy_provider_moved" and 80 or 5
             assert(player:getBankBalance() == 100 and backpack and backpack:addItem(ITEM_GOLD_COIN, surplus),
                 "equipment purchase fixture could not set the bounded surplus")
             if mode == "equipment_buy_space" then
@@ -197,10 +190,8 @@ function F.login.onLogin(player)
         local left = player:getSlotItem(CONST_SLOT_LEFT)
         local right = player:getSlotItem(CONST_SLOT_RIGHT)
         local armor = player:getSlotItem(CONST_SLOT_ARMOR)
-        assert((left or paladin) and armor, "equipment shadow fixture lost required equipment")
-        if paladin then
-            addEvent(F.verifySpearPurchase, 500, player:getId(), 360)
-        elseif mode == "equipment_buy_space" then
+        assert(left and armor, "equipment shadow fixture lost required equipment")
+        if mode == "equipment_buy_space" then
             addEvent(F.verifyEquipmentPurchaseSpace, 500, player:getId())
         elseif mode == "equipment_buy_provider_moved" then
             addEvent(F.verifyMovedProviderPurchase, 500, player:getId(), 360)
@@ -224,14 +215,25 @@ function F.login.onLogin(player)
         F.setupPaladinSpellFixture(player, mode)
         return true
     end
-    if mode == "spear_restock" or mode == "spear_break" then
-        -- A level-8 spear Paladin at the Thais depot. Restock wields its only spear,
-        -- below the spare floor. Break keeps one spare in the backpack, as looted
-        -- spears are, and loses its wielded stack once the hunt has started.
+    if mode == "spear_restock" or mode == "spear_restock_scaled" or mode == "spear_break" or
+        mode == "equipment_buy_spear" or mode == "spear_last_break" or
+        mode == "spear_unfunded" or mode == "spear_mirrored" then
+        -- Preserve the carried-spare and level-scaled controls. Reserve cases
+        -- start empty or lose the final spear in a hunt, without a backpack spare.
         local breaking = mode == "spear_break"
+        local unfunded = mode == "spear_unfunded"
+        local mirrored = mode == "spear_mirrored"
+        local startupZero = mode == "equipment_buy_spear" or unfunded or mirrored
+        local lastBreaking = mode == "spear_last_break"
+        local reserveRecovery = startupZero or lastBreaking
+        local weaponSlot = mirrored and CONST_SLOT_RIGHT or CONST_SLOT_LEFT
+        local shieldSlot = mirrored and CONST_SLOT_LEFT or CONST_SLOT_RIGHT
         local thais = Town(F.thaisTownId)
         assert(player:getLevel() == 8 and player:setVocation(3) and thais and player:setTown(thais) and
             player:teleportTo(F.thaisDepotPosition), "spear fixture could not place the Thais Paladin")
+        local level = mode == "spear_restock_scaled" and 16 or 8
+        if level > 8 then player:addExperience(Game.getExperienceForLevel(level) - player:getExperience()) end
+        assert(player:getLevel() == level, "spear fixture seeded the wrong level")
         F.selectHealthPotion(player)
         for _, slot in ipairs({CONST_SLOT_HEAD, CONST_SLOT_ARMOR, CONST_SLOT_RIGHT, CONST_SLOT_LEFT, CONST_SLOT_LEGS, CONST_SLOT_FEET}) do
             local item = player:getSlotItem(slot)
@@ -239,28 +241,68 @@ function F.login.onLogin(player)
         end
         F.removeAll(player, F.spearItemId)
         for _, equipment in ipairs({
-            {2457, CONST_SLOT_HEAD}, {2463, CONST_SLOT_ARMOR}, {2525, CONST_SLOT_RIGHT},
-            {F.spearItemId, CONST_SLOT_LEFT}, {2647, CONST_SLOT_LEGS}, {2643, CONST_SLOT_FEET}
+            {2457, CONST_SLOT_HEAD}, {2463, CONST_SLOT_ARMOR}, {2525, shieldSlot},
+            {F.spearItemId, weaponSlot}, {2647, CONST_SLOT_LEGS}, {2643, CONST_SLOT_FEET}
         }) do
-            assert(player:addItem(equipment[1], 1, false, 1, equipment[2]),
-                "spear fixture could not equip slot " .. equipment[2])
+            if not startupZero or equipment[2] ~= weaponSlot then
+                assert(player:addItem(equipment[1], lastBreaking and equipment[2] == weaponSlot and 3 or 1,
+                    false, 1, equipment[2]), "spear fixture could not equip slot " .. equipment[2])
+            end
         end
         local backpack = player:getSlotItem(CONST_SLOT_BACKPACK)
         assert(backpack, "spear fixture requires a backpack")
+        if reserveRecovery then
+            -- No alternate weapon, sale income, or currency denomination may
+            -- disguise the zero-stock/0-or-39-gold recovery boundary.
+            F.clearBackpack(backpack)
+            local ammo = player:getSlotItem(CONST_SLOT_AMMO)
+            if ammo then assert(ammo:remove(), "spear fixture could not clear the ammo slot") end
+            assert(backpack:addItem(F.ropeItemId, 1) and backpack:addItem(F.shovelItemId, 1),
+                "spear fixture could not restore navigation tools")
+            assert(player:setHealth(player:getMaxHealth()) and player:addMana(player:getMaxMana() - player:getMana()),
+                "spear fixture could not restore health/mana")
+            player:removeCondition(CONDITION_REGENERATION)
+            local food = Condition(CONDITION_REGENERATION, CONDITIONID_DEFAULT)
+            food:setParameter(CONDITION_PARAM_TICKS, 1200000)
+            assert(player:addCondition(food) and backpack:addItem(F.meatItemId, 2),
+                "spear fixture could not normalize food")
+        end
         if breaking then assert(backpack:addItem(F.spearItemId, 1), "spear fixture could not add the spare") end
+        -- Set fixture capacity before adding supplies: addItem can otherwise
+        -- succeed by dropping an overweight stack on the ground.
+        assert(player:setCapacity(100000), "spear fixture could not normalize capacity")
         F.removeAllHealthPotions(player)
-        assert(player:addItem(F.potionItemId, 20), "spear fixture could not normalize healing supplies")
+        assert(backpack:addItem(F.potionItemId, 20), "spear fixture could not normalize healing supplies")
+        F.removeAll(player, F.manaPotionItemId)
+        assert(backpack:addItem(F.manaPotionItemId, 20), "spear fixture could not normalize mana supplies")
         F.removeAll(player, ITEM_GOLD_COIN)
-        -- Capacity and funds cover the full spare target, so only spear stock limits the hunt.
-        assert(backpack:addItem(ITEM_GOLD_COIN, 100) and player:setBankBalance(100) and player:setCapacity(100000),
-            "spear fixture could not fund the spare target")
-        assert(player:getItemCount(F.spearItemId) == (breaking and 2 or 1), "spear fixture seeded the wrong spear count")
+        -- Funded reserve cases must pay ordinary shop prices from only 39 gold.
+        if not unfunded then
+            assert(backpack:addItem(ITEM_GOLD_COIN, reserveRecovery and 39 or 100),
+                "spear fixture could not fund the spare target")
+        end
+        assert(player:setBankBalance(reserveRecovery and 0 or 100), "spear fixture could not normalize bank funds")
+        assert(player:getItemCount(F.healthPotionItemId) == 20 and player:getItemCount(F.manaPotionItemId) == 20,
+            "spear fixture supplies must be carried, not dropped")
+        assert(player:getItemCount(F.spearItemId) == (startupZero and 0 or lastBreaking and 3 or breaking and 2 or 1),
+            "spear fixture seeded the wrong spear count")
+        F.spearFixtureEvidence(player, mode, "start")
         F.suppressNearbyMonsters(player:getId())
-        if breaking then
+        if lastBreaking then
+            local start = player:getPosition()
+            addEvent(F.breakLastSpear, 250, player:getId(), start.x, start.y, start.z, 240)
+        elseif breaking then
             local start = player:getPosition()
             addEvent(F.breakHandSpear, 500, player:getId(), start.x, start.y, start.z, 240)
+        elseif unfunded then
+            -- An independent delayed inventory sample; PowerShell verifies the
+            -- actual terminal event, bounded service, and absence of later turns.
+            addEvent(F.verifySpearRestock, 10000, player:getId(), mode, 0)
         else
             addEvent(F.verifySpearRestock, 500, player:getId(), mode, 480)
+        end
+        if startupZero then
+            assert(player:setStorageValue(F.fixtureReadyStorage, 1), "spear fixture could not signal readiness")
         end
         print("PLAYERBOT_GAMEPLAY_TEST " .. string.upper(mode) .. "_START")
         return true

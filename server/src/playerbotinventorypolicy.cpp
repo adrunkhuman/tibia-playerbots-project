@@ -165,7 +165,9 @@ namespace {
 				carried.push_back(PlayerBotEquipmentAdapter::item(**it));
 			}
 		}
-		return policy.throwingWeaponSupplyItem(facts, loadout, carried);
+		// With no usable weapon left, recover the basic spear loadout through
+		// supply service. This must also work after restarting with zero stock.
+		return policy.throwingWeaponSupplyItem(facts, loadout, carried, PlayerBotEquipmentAdapter::item(2389));
 	}
 }
 
@@ -175,7 +177,7 @@ PlayerBotSupplyStocks PlayerBotInventoryPolicy::additionalSupplyStocks(const Pla
 	for (const PlayerBotSupplyKind kind : playerBotSupplyKinds) {
 		if (kind == PlayerBotSupplyKind::HealthPotion) continue;
 		const PlayerBotSupplyRule rule = kind == PlayerBotSupplyKind::ThrowingWeapon ?
-		    playerBotThrowingWeaponRule(throwingWeaponSupplyItem(player)) : playerBotSupplyRule(kind, player.getVocationId());
+		    playerBotThrowingWeaponRule(throwingWeaponSupplyItem(player), player.getLevel()) : playerBotSupplyRule(kind, player.getVocationId());
 		if (rule.active()) stocks.push_back({rule, static_cast<const Cylinder&>(player).getItemTypeCount(rule.itemId)});
 	}
 	return stocks;
