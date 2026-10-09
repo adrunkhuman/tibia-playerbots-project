@@ -192,6 +192,7 @@ enum class PlayerBotNavigationResult : uint8_t {
 	Reached,
 	Unreachable,
 	NodeLimit,
+	RiskRejected,
 };
 
 inline bool playerBotNavigationMayFallbackToNpcTravel(PlayerBotNavigationResult result)
@@ -237,11 +238,40 @@ struct PlayerBotNavigationRiskProfile {
 	double maximumRouteHealthLoss = 0.50;
 };
 
+inline bool playerBotNavigationPeakAccepts(double maximum, double peak)
+{
+	return peak <= maximum;
+}
+
+// Necessary endpoint evidence only: safety does not establish reachability.
+// Range goals and empty source-tree floods are left to the bounded search.
+// Already being at a requested endpoint requires no exposure-producing arc.
+template<class Sample>
+std::optional<double> playerBotNavigationRejectedEndpointPeak(const Position& source,
+    const PlayerBotNavigationGoal& goal, double maximum, Sample sample)
+{
+	if (!std::isfinite(maximum) || goal.type == PlayerBotNavigationGoalType::WithinRange) return std::nullopt;
+	double minimum = std::numeric_limits<double>::infinity();
+	auto rejected = [&](const Position& target) {
+		if (target == source) return false;
+		const double peak = sample(target);
+		minimum = std::min(minimum, peak);
+		return !playerBotNavigationPeakAccepts(maximum, peak);
+	};
+	if (goal.type == PlayerBotNavigationGoalType::Exact) {
+		if (!rejected(goal.position)) return std::nullopt;
+	} else {
+		if (goal.positions.empty()) return std::nullopt;
+		for (const Position& target : goal.positions) if (!rejected(target)) return std::nullopt;
+	}
+	return minimum;
+}
+
 inline bool playerBotNavigationRiskAccepts(const PlayerBotNavigationRiskProfile& risk, uint32_t dangerCost,
 	                                         double maximumHealthLossPerSecond)
 {
 	return dangerCost <= static_cast<uint32_t>(risk.maximumRouteHealthLoss * risk.healthLossCost) &&
-	       maximumHealthLossPerSecond <= risk.maximumHealthLossPerSecond;
+	       playerBotNavigationPeakAccepts(risk.maximumHealthLossPerSecond, maximumHealthLossPerSecond);
 }
 
 inline PlayerBotNavigationRiskVerdict playerBotNavigationRiskVerdict(

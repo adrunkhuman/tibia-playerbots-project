@@ -63,7 +63,7 @@ function F.login.onLogin(player)
         mode == "magic_training_expired" or mode == "magic_training_post_hunt" or mode == "magic_training_post_hunt_no_overflow" or
         mode == "svargrond_local_route_recovery" or mode == "navigation_fare_rejection" or
         mode == "navigation_risk_rejection" or mode == "door_passages" or mode == "spear_restock" or mode == "spear_restock_scaled" or
-        mode == "spear_break" or mode == "spear_last_break" or mode == "paladin_spell_training" or mode == "paladin_healing_economy" or
+        mode == "spear_break" or mode == "spear_last_break" or mode == "spear_recovery_income" or mode == "paladin_spell_training" or mode == "paladin_healing_economy" or
         mode == "paladin_mana_healing" or mode == "paladin_healing_fallback" or mode == "paladin_supply_restock",
         "unknown PLAYERBOT_GAMEPLAY_MODE: " .. mode)
     if mode == "equipment_shadow" or mode == "equipment_shadow_unaffordable" or mode == "equipment_shadow_no_upgrade" or
@@ -217,7 +217,7 @@ function F.login.onLogin(player)
     end
     if mode == "spear_restock" or mode == "spear_restock_scaled" or mode == "spear_break" or
         mode == "equipment_buy_spear" or mode == "spear_last_break" or
-        mode == "spear_unfunded" or mode == "spear_mirrored" then
+        mode == "spear_unfunded" or mode == "spear_mirrored" or mode == "spear_recovery_income" then
         -- Preserve the carried-spare and level-scaled controls. Reserve cases
         -- start empty or lose the final spear in a hunt, without a backpack spare.
         local breaking = mode == "spear_break"
@@ -225,7 +225,8 @@ function F.login.onLogin(player)
         local mirrored = mode == "spear_mirrored"
         local startupZero = mode == "equipment_buy_spear" or unfunded or mirrored
         local lastBreaking = mode == "spear_last_break"
-        local reserveRecovery = startupZero or lastBreaking
+        local incomeRecovery = mode == "spear_recovery_income"
+        local reserveRecovery = startupZero or lastBreaking or incomeRecovery
         local weaponSlot = mirrored and CONST_SLOT_RIGHT or CONST_SLOT_LEFT
         local shieldSlot = mirrored and CONST_SLOT_LEFT or CONST_SLOT_RIGHT
         local thais = Town(F.thaisTownId)
@@ -234,6 +235,18 @@ function F.login.onLogin(player)
         local level = mode == "spear_restock_scaled" and 16 or 8
         if level > 8 then player:addExperience(Game.getExperienceForLevel(level) - player:getExperience()) end
         assert(player:getLevel() == level, "spear fixture seeded the wrong level")
+        if incomeRecovery then
+            for _, entry in ipairs({{SKILL_FIST, 10}, {SKILL_CLUB, 10}, {SKILL_SWORD, 10},
+                {SKILL_AXE, 10}, {SKILL_DISTANCE, 40}, {SKILL_SHIELD, 20}, {SKILL_FISHING, 10}}) do
+                assert(player:addSkillLevel(entry[1], entry[2] - player:getSkillLevel(entry[1])) and
+                    player:getSkillLevel(entry[1]) == entry[2] and player:getSkillTries(entry[1]) == 0,
+                    "spear recovery fixture could not normalize skill " .. entry[1])
+            end
+            for _, storage in ipairs({F.mainlandRewardStorage, F.economicRewardStorage,
+                F.nestedRewardStorage, F.pickupRewardStorage}) do
+                assert(player:setStorageValue(storage, 1), "spear recovery fixture could not isolate reward " .. storage)
+            end
+        end
         F.selectHealthPotion(player)
         for _, slot in ipairs({CONST_SLOT_HEAD, CONST_SLOT_ARMOR, CONST_SLOT_RIGHT, CONST_SLOT_LEFT, CONST_SLOT_LEGS, CONST_SLOT_FEET}) do
             local item = player:getSlotItem(slot)
@@ -278,7 +291,7 @@ function F.login.onLogin(player)
         F.removeAll(player, ITEM_GOLD_COIN)
         -- Funded reserve cases must pay ordinary shop prices from only 39 gold.
         if not unfunded then
-            assert(backpack:addItem(ITEM_GOLD_COIN, reserveRecovery and 39 or 100),
+            assert(backpack:addItem(ITEM_GOLD_COIN, incomeRecovery and 6 or reserveRecovery and 39 or 100),
                 "spear fixture could not fund the spare target")
         end
         assert(player:setBankBalance(reserveRecovery and 0 or 100), "spear fixture could not normalize bank funds")
@@ -286,9 +299,17 @@ function F.login.onLogin(player)
             "spear fixture supplies must be carried, not dropped")
         assert(player:getItemCount(F.spearItemId) == (startupZero and 0 or lastBreaking and 3 or breaking and 2 or 1),
             "spear fixture seeded the wrong spear count")
+        if incomeRecovery then
+            assert(player:setHealth(128), "spear recovery fixture could not seed departure health")
+        end
         F.spearFixtureEvidence(player, mode, "start")
-        F.suppressNearbyMonsters(player:getId())
-        if lastBreaking then
+        if not incomeRecovery then F.suppressNearbyMonsters(player:getId()) end
+        if incomeRecovery then
+            assert(player:getMoney() == 6 and player:getBankBalance() == 0,
+                "spear recovery fixture must not afford even one ordinary spear")
+            -- Cover planning and the bounded outbound trip before first combat income.
+            addEvent(F.verifySpearRecoveryIncome, 250, player:getId(), 4800)
+        elseif lastBreaking then
             local start = player:getPosition()
             addEvent(F.breakLastSpear, 250, player:getId(), start.x, start.y, start.z, 240)
         elseif breaking then
@@ -301,7 +322,7 @@ function F.login.onLogin(player)
         else
             addEvent(F.verifySpearRestock, 500, player:getId(), mode, 480)
         end
-        if startupZero then
+        if startupZero or incomeRecovery then
             assert(player:setStorageValue(F.fixtureReadyStorage, 1), "spear fixture could not signal readiness")
         end
         print("PLAYERBOT_GAMEPLAY_TEST " .. string.upper(mode) .. "_START")

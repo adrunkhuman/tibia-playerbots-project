@@ -341,6 +341,115 @@ function Assert-SpareSpearEvents {
 	}
 }
 
+# Controlled corpse gold proves the loaded-world path, not sustainable economics.
+function Assert-SpearRecoveryIncomeEvents {
+	param([string]$Logs)
+
+	$events = @(ConvertFrom-PlayerbotLogs -Logs $Logs | Where-Object { -not $_.bot -or $_.bot -eq "Bot One" })
+	for ($i = 0; $i -lt $events.Count; $i++) { $events[$i] | Add-Member -NotePropertyName log_index -NotePropertyValue $i -Force }
+	$fixture = @($events | Where-Object {
+		$_.event -eq "spear_fixture" -and $_.source -eq "lua_setup_verifier" -and
+		$_.scenario -eq "spear_recovery_income" -and $_.vocation -eq 3 -and $_.level -eq 8
+	})
+	$start = @($fixture | Where-Object {
+		$_.phase -eq "start" -and $_.spears -eq 1 -and $_.equipped_spears -eq 1 -and
+		$_.left_item_id -eq 2389 -and $_.right_item_id -eq 2525 -and $_.carried_gold -eq 6 -and $_.bank_gold -eq 0 -and
+		$_.health -gt 0 -and ($_.health -eq $_.health_max -or ($_.health -eq 128 -and $_.health_max -eq 185)) -and
+		$_.mana -gt 0 -and $_.mana -eq $_.mana_max -and
+		$_.health_potions -eq 20 -and $_.mana_potions -eq 20 -and $_.free_capacity -ge 3000
+	})
+	$pass = @($fixture | Where-Object { $_.phase -eq "pass" -and $_.carried_gold -eq 7 -and $_.bank_gold -eq 0 })
+	if ($start.Count -ne 1 -or $pass.Count -ne 1 -or $pass[0].log_index -le $start[0].log_index) {
+		throw "One-spear recovery lacks isolated six-gold setup and a later seven-gold inventory sample."
+	}
+	# The inventory sample and next-turn loot receipt may arrive in either order.
+	$window = @($events | Where-Object { $_.log_index -gt $start[0].log_index })
+	$recovery = @($window | Where-Object {
+		$_.event -eq "action_result" -and $_.action -eq "supply_recovery" -and $_.result -eq "started" -and $_.funds -eq 6
+	})
+	$selected = @($window | Where-Object { $_.event -eq "hunt_region_selection" -and $_.result -eq "selected" })
+	if ($recovery.Count -lt 1 -or $selected.Count -ne 1 -or $selected[0].region_id -le 0 -or
+		$selected[0].available_gold -ne 6 -or $selected[0].log_index -le $recovery[0].log_index) {
+		throw "Unaffordable spear restock did not enter supply recovery and select an ordinary hunt with six gold."
+	}
+	$selection = $selected[0]
+	if ($start[0].health -lt $start[0].health_max * 0.8) {
+		$preparation = @($window | Where-Object {
+			$_.action -eq "hunt_departure_health" -and $_.result -eq "started" -and $_.health -eq 128 -and
+			$_.required_health -eq 148 -and $_.log_index -lt $selection.log_index
+		})
+		$ready = @($window | Where-Object {
+			$_.action -eq "hunt_departure_health" -and $_.result -eq "ready" -and $_.health -ge 148 -and
+			$_.required_health -eq 148 -and $_.log_index -lt $selection.log_index
+		})
+		$healing = @($window | Where-Object {
+			$_.action -eq "heal" -and $_.result -eq "success" -and $_.trigger -eq "hunt_departure" -and
+			$_.health_before -eq 128 -and $_.health_after -ge 148 -and $_.resource_before -eq 20 -and
+			$_.resource_after -eq 19 -and $_.log_index -lt $selection.log_index
+		})
+		if ($preparation.Count -ne 1 -or $ready.Count -ne 1 -or $healing.Count -ne 1 -or
+			$ready[0].log_index -le $preparation[0].log_index -or $healing[0].log_index -le $preparation[0].log_index) {
+			throw "Recovery hunt did not restore its departure health through a verified ordinary potion use."
+		}
+	}
+	$candidate = @($window | Where-Object {
+		$_.event -eq "hunt_region_candidate" -and $_.candidate_phase -eq "route_validation" -and
+		$_.region_id -eq $selection.region_id -and $_.planning_pass -eq $selection.planning_pass -and
+		$_.scoring_revision -eq $selection.scoring_revision -and $_.supply_recovery -eq $true -and
+		$_.suitable -eq $true -and $_.reachable -eq $true -and $_.route_validated -eq $true -and
+		$_.supply_budget_fits -eq $true -and $_.available_hunt_seconds -gt 0 -and $_.available_hunt_seconds -le 2400 -and
+		$_.log_index -gt $recovery[0].log_index -and $_.log_index -lt $selection.log_index -and
+		@($_.supply_kinds | Where-Object {
+			$_.kind -eq "throwing_weapon" -and $null -ne $_.PSObject.Properties['count'] -and $_.count -eq 1 -and $_.fits -eq $true -and
+			$null -ne $_.expected -and $_.expected -ge 0 -and $_.expected -le 1
+		}).Count -eq 1
+	})
+	$hunt = @($window | Where-Object {
+		$_.event -eq "action_result" -and $_.action -eq "hunt_cycle" -and $_.result -eq "started" -and
+		$_.log_index -gt $selection.log_index
+	})
+	$area = @($window | Where-Object {
+		$_.event -eq "hunt_area_entered" -and $_.region_id -eq $selection.region_id -and
+		$hunt.Count -gt 0 -and $_.log_index -gt $hunt[0].log_index
+	})
+	if ($candidate.Count -lt 1 -or $hunt.Count -ne 1 -or $area.Count -ne 1) {
+		throw "One carried spear did not fund a viable short recovery hunt and reach its selected area."
+	}
+	$attack = @($window | Where-Object {
+		$_.event -eq "target_changed" -and $_.reason -eq "visible_monster" -and $_.target_type -eq "monster" -and
+		$_.target_id -gt 0 -and $_.log_index -gt $area[0].log_index
+	} | Select-Object -First 1)
+	$corpse = @($window | Where-Object {
+		$_.event -eq "spear_income_corpse" -and $_.source -eq "lua_setup_verifier" -and
+		$_.scenario -eq "spear_recovery_income" -and $_.gold -eq 1 -and $attack.Count -eq 1 -and
+		$_.target_id -eq $attack[0].target_id -and $_.log_index -gt $attack[0].log_index
+	})
+	$defeated = @($window | Where-Object {
+		$_.event -eq "target_changed" -and $_.reason -eq "target_defeated" -and $corpse.Count -eq 1 -and
+		$_.previous_target_id -eq $corpse[0].target_id -and $_.log_index -gt $corpse[0].log_index
+	})
+	$loot = @($window | Where-Object {
+		$_.event -eq "action_result" -and $_.action -eq "loot" -and $_.result -eq "success" -and
+		$_.item_id -eq 2148 -and $null -ne $_.PSObject.Properties['count'] -and $_.count -eq 1 -and
+		$_.coin_gold_acquired -eq 1 -and $_.inventory_count -eq 7 -and
+		$defeated.Count -eq 1 -and $_.log_index -gt $defeated[0].log_index
+	})
+	$zeroStock = @($window | Where-Object {
+		$_.event -eq "combat_readiness" -and $_.vocation_id -eq 3 -and
+		@($_.requirements | Where-Object { $_.kind -eq "throwing_weapon" -and $_.item_id -eq 2389 -and $_.count -eq 0 }).Count -eq 1
+	})
+	$forbidden = @($window | Where-Object {
+		$interruption = $_
+		$_.event -eq "terminal" -or $_.action -in @("claim_reward", "sell", "buy_equipment", "buy_throwing_weapons", "buy_ammunition", "buy_potions") -or
+		($_.reason -eq "throwing_weapon_exhausted" -and ($attack.Count -eq 0 -or $_.log_index -lt $attack[0].log_index -or
+			@($zeroStock | Where-Object { $_.log_index -gt $attack[0].log_index -and $_.log_index -lt $interruption.log_index }).Count -eq 0))
+	})
+	if ($attack.Count -ne 1 -or $corpse.Count -ne 1 -or $defeated.Count -ne 1 -or $loot.Count -ne 1 -or
+		$pass[0].log_index -le $defeated[0].log_index -or $forbidden.Count -gt 0) {
+		throw "Recovery income did not follow selected-area normal combat and corpse looting, or reserve-one readiness interrupted it."
+	}
+}
+
 function Assert-ZeroSpearRecoveryEvents {
 	param([string]$Logs, [ValidateSet("startup", "last_break", "mirrored", "unfunded")][string]$Mode)
 

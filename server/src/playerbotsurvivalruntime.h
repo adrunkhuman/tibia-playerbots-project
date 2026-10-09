@@ -74,6 +74,8 @@ struct PlayerBotSurvivalSnapshot {
 	uint32_t routeSteps = 0;
 	PlayerBotSurvivalTargetObservation target;
 	std::vector<PlayerBotSurvivalSpellObservation> spells;
+	// A peaceful action prerequisite, not a higher emergency-combat threshold.
+	uint32_t departureHealthTarget = 0;
 };
 
 enum class PlayerBotSurvivalCommandType : uint8_t {

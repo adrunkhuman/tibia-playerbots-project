@@ -1,5 +1,6 @@
 // Real survival runtime policy checks; see playerbotsurvival_contracts.sh.
 #include "playerbotsurvivalruntime.h"
+#include "playerbotsupplyrecovery.h"
 
 #include <cassert>
 #include <chrono>
@@ -56,6 +57,39 @@ void expectHealingSpell(const PlayerBotSurvivalRuntime& runtime, const PlayerBot
 	assert(command.itemId == 0);
 	assert(runtime.pendingSpell());
 	assert(runtime.pendingSpell()->name == "Light Healing");
+}
+
+void departureHealthPreparation()
+{
+	assert(playerBotSupplyRecoveryRequiredHealth(185) == 148);
+	assert(playerBotSupplyRecoveryRequiredHealth(186) == 149);
+	PlayerBotDepartureHealthPreparation preparation;
+	assert(preparation.advance(128, 185, 148, now) == PlayerBotDepartureHealthResult::Recovering);
+	assert(preparation.active() && preparation.target() == 148);
+	assert(preparation.advance(128, 185, 148, now + std::chrono::seconds(59)) == PlayerBotDepartureHealthResult::Recovering);
+	assert(preparation.advance(128, 185, 148, now + std::chrono::seconds(60)) == PlayerBotDepartureHealthResult::TimedOut);
+	assert(preparation.advance(148, 185, 148, now + std::chrono::seconds(61)) == PlayerBotDepartureHealthResult::Ready);
+	assert(!preparation.active());
+	assert(preparation.advance(128, 185, 0, now) == PlayerBotDepartureHealthResult::Ready);
+	auto state = snapshot();
+	state.health = 128; state.healthMaximum = 185;
+	state.potionCount = 20; state.spells.clear();
+	PlayerBotSurvivalRuntime runtime;
+	assert(!runtime.needsHealing(state) && runtime.decideHealing(state, now).type == Command::None);
+	state.departureHealthTarget = 148;
+	assert(runtime.needsHealing(state));
+	expectPotion(runtime.decideHealing(state, now), healthPotion);
+	state.health = 148;
+	assert(!runtime.needsHealing(state));
+	state.health = 128; state.combatActive = true;
+	assert(!runtime.needsHealing(state)); // No global change to emergency healing.
+	state.health = 111;
+	assert(runtime.needsHealing(state));
+	state.combatActive = false; state.health = 128; state.potionCount = 0;
+	assert(runtime.decideHealing(state, now).type == Command::InterruptForService);
+	state = snapshot(); state.health = 128; state.healthMaximum = 185; state.departureHealthTarget = 148;
+	PlayerBotSurvivalRuntime spellRuntime;
+	expectHealingSpell(spellRuntime, spellRuntime.decideHealing(state, now));
 }
 
 void percentageBoundaries()
@@ -469,6 +503,7 @@ int main()
 {
 	spellFirstAndCriticalOverride();
 	percentageBoundaries();
+	departureHealthPreparation();
 	manaAndHealthFallbacks();
 	manaThenReevaluate();
 	spellBlockersAndMissingSupplies();

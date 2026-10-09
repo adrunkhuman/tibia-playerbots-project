@@ -228,6 +228,19 @@
 			$breakLogs = Wait-ForSpearRestockHunt
 			Assert-SpareSpearEvents -Logs $breakLogs -Mode "break"
 		}
+		Invoke-Scenario -Name "paladin_spear_recovery_income" -DefaultTimeoutSeconds 1200 -Body {
+			Invoke-Compose down --volumes --remove-orphans
+			$env:PLAYERBOT_GAMEPLAY_MODE = "spear_recovery_income"
+			$env:PLAYERBOT_HUNT_DURATION_SECONDS = "2400"
+			Invoke-Compose up --detach
+			Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST SPEAR_RECOVERY_INCOME_PASS' | Out-Null
+			# The inventory verifier can run before the next-turn loot receipt.
+			$incomeLogs = Wait-ForPlayerbotEvent {
+				$_.event -eq "action_result" -and $_.action -eq "loot" -and $_.result -eq "success" -and
+				$_.item_id -eq 2148 -and $_.count -eq 1 -and $_.inventory_count -eq 7
+			}
+			Assert-SpearRecoveryIncomeEvents -Logs $incomeLogs
+		}
 		Invoke-Scenario -Name "paladin_spear_last_break" -DefaultTimeoutSeconds 360 -Body {
 			Invoke-Compose down --volumes --remove-orphans
 			$env:PLAYERBOT_GAMEPLAY_MODE = "spear_last_break"

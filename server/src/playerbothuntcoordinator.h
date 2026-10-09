@@ -88,7 +88,7 @@ class PlayerBotHuntCoordinator
 		{
 			return transitCombat.observe(transit, goal, phase);
 		}
-		void enterHuntArea(const PlayerBotHuntRuntimePlayerObservation& player,
+		bool enterHuntArea(const PlayerBotHuntRuntimePlayerObservation& player,
 		                   const PlayerBotSupplyProfile& supplyProfile,
 		                   std::chrono::steady_clock::time_point now);
 		bool inTransit() const { return transitCombat.active(); }
@@ -134,6 +134,9 @@ class PlayerBotHuntCoordinator
 		bool huntDeadlineReached(std::chrono::steady_clock::time_point now) const;
 		uint32_t completedHuntCycles() const;
 		bool huntActive() const;
+		bool huntArrived() const { return huntRuntime.arrived(); }
+		void observeHuntArrivalTimeout(std::chrono::steady_clock::time_point now);
+		uint32_t effectiveHuntDurationSeconds() const { return huntRuntime.effectiveDurationSeconds(); }
 		bool insideHuntArea(const Position& position, uint32_t westRange, uint32_t eastRange,
 		                    uint32_t northRange, uint32_t southRange) const;
 		PlayerBotHuntTurnObservation observeTurn(bool inHuntPhase, bool selectRegion,

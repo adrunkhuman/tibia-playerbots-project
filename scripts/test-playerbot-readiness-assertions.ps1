@@ -372,4 +372,105 @@ Test-ZeroSpearFixture $events 'mirrored' $true
 Test-ZeroSpearFixture @() 'mirrored' $true
 Test-ZeroSpearFixture @() 'unfunded' $true
 
-Write-Host 'Food-capacity, low-wealth, tool-replenishment, spare-spear, mirrored and unfunded zero-spear assertion regressions passed.'
+function New-SpearIncomeFixture {
+    @(
+        @{ event = 'spear_fixture'; source = 'lua_setup_verifier'; scenario = 'spear_recovery_income'; phase = 'start';
+            vocation = 3; level = 8; spears = 1; equipped_spears = 1; left_item_id = 2389; right_item_id = 2525;
+            carried_gold = 6; bank_gold = 0; health = 185; health_max = 185; mana = 35; mana_max = 35;
+            health_potions = 20; mana_potions = 20; free_capacity = 90000 }
+        @{ event = 'action_result'; action = 'supply_recovery'; result = 'started'; funds = 6 }
+        @{ event = 'hunt_region_candidate'; candidate_phase = 'route_validation'; region_id = 9; planning_pass = 2; scoring_revision = 3;
+            supply_recovery = $true; suitable = $true; reachable = $true; route_validated = $true; supply_budget_fits = $true;
+            available_hunt_seconds = 100; supply_kinds = @(@{ kind = 'throwing_weapon'; count = 1; expected = 0.7; fits = $true }) }
+        @{ event = 'hunt_region_selection'; result = 'selected'; region_id = 9; planning_pass = 2; scoring_revision = 3; available_gold = 6 }
+        @{ event = 'action_result'; action = 'hunt_cycle'; result = 'started' }
+        @{ event = 'hunt_area_entered'; region_id = 9 }
+        @{ event = 'target_changed'; reason = 'visible_monster'; target_type = 'monster'; target_id = 42 }
+        @{ event = 'spear_income_corpse'; source = 'lua_setup_verifier'; scenario = 'spear_recovery_income'; target_id = 42; gold = 1 }
+        @{ event = 'target_changed'; reason = 'target_defeated'; previous_target_id = 42 }
+        @{ event = 'action_result'; action = 'loot'; result = 'success'; item_id = 2148; count = 1; coin_gold_acquired = 1; inventory_count = 7 }
+        @{ event = 'spear_fixture'; source = 'lua_setup_verifier'; scenario = 'spear_recovery_income'; phase = 'pass';
+            vocation = 3; level = 8; carried_gold = 7; bank_gold = 0 }
+    )
+}
+function Test-SpearIncomeFixture([array]$Events, [bool]$Reject) {
+    $logs = ($Events | ForEach-Object {
+        $_.component = 'playerbot'
+        if (-not $_.ContainsKey('bot')) { $_.bot = 'Bot One' }
+        $_ | ConvertTo-Json -Depth 8 -Compress
+    }) -join "`n"
+    try { Assert-SpearRecoveryIncomeEvents -Logs ("noise`n{invalid json`n" + $logs) }
+    catch { if ($Reject) { return }; throw }
+    if ($Reject) { throw 'Invalid one-spear recovery income fixture unexpectedly passed.' }
+}
+Test-SpearIncomeFixture (New-SpearIncomeFixture) $false
+$healthEvents = @(New-SpearIncomeFixture); $healthEvents[0].health = 128
+Test-SpearIncomeFixture $healthEvents $true
+$preparationEvents = @(
+    @{ event = "action_result"; action = "hunt_departure_health"; result = "started"; health = 128; required_health = 148 },
+    @{ event = "action_result"; action = "hunt_departure_health"; result = "ready"; health = 185; required_health = 148 },
+    @{ event = "action_result"; action = "heal"; result = "success"; trigger = "hunt_departure";
+        health_before = 128; health_after = 185; resource_before = 20; resource_after = 19 }
+)
+Test-SpearIncomeFixture @($healthEvents[0..1] + $preparationEvents + $healthEvents[2..10]) $false
+for ($missing = 0; $missing -lt $preparationEvents.Count; $missing++) {
+    Test-SpearIncomeFixture @($healthEvents[0..1] + @($preparationEvents | Select-Object -SkipIndex $missing) + $healthEvents[2..10]) $true
+}
+$healthEvents = @(New-SpearIncomeFixture); $healthEvents[2].available_hunt_seconds = 300
+Test-SpearIncomeFixture $healthEvents $false
+# Missing evidence, every required field, mismatched attribution and reordered stages must fail.
+$baseline = @(New-SpearIncomeFixture)
+foreach ($index in 0..($baseline.Count - 1)) {
+    Test-SpearIncomeFixture @($baseline | Select-Object -SkipIndex $index) $true
+    foreach ($field in @($baseline[$index].Keys | Where-Object { $_ -notin @('component', 'bot') })) {
+        $events = @(New-SpearIncomeFixture); $events[$index].Remove($field)
+        Test-SpearIncomeFixture $events $true
+    }
+    $events = @(New-SpearIncomeFixture); $events[$index].bot = 'Bot Two'
+    Test-SpearIncomeFixture $events $true
+}
+foreach ($field in @('kind', 'count', 'expected', 'fits')) {
+    $events = @(New-SpearIncomeFixture); $events[2].supply_kinds[0].Remove($field)
+    Test-SpearIncomeFixture $events $true
+}
+foreach ($mutation in @(
+    @(0, 'spears', 0), @(0, 'spears', 2), @(0, 'carried_gold', 9), @(0, 'bank_gold', 1), @(0, 'mana', 5),
+    @(2, 'supply_recovery', $false), @(2, 'supply_budget_fits', $false), @(2, 'route_validated', $false),
+    @(2, 'available_hunt_seconds', 2401), @(2, 'planning_pass', 1), @(2, 'scoring_revision', 4),
+    @(5, 'region_id', 8), @(7, 'target_id', 43), @(8, 'previous_target_id', 43), @(9, 'item_id', 2666),
+    @(9, 'count', 2), @(9, 'coin_gold_acquired', 0), @(10, 'carried_gold', 6)
+)) {
+    $events = @(New-SpearIncomeFixture); $events[$mutation[0]][$mutation[1]] = $mutation[2]
+    Test-SpearIncomeFixture $events $true
+}
+foreach ($index in 0..8) {
+    $events = @(New-SpearIncomeFixture); $events[$index], $events[$index + 1] = $events[$index + 1], $events[$index]
+    Test-SpearIncomeFixture $events $true
+}
+# A 250 ms inventory verifier may precede the next controller turn receipt.
+$events = @(New-SpearIncomeFixture); $events[9], $events[10] = $events[10], $events[9]
+Test-SpearIncomeFixture $events $false
+$events = @(New-SpearIncomeFixture)
+Test-SpearIncomeFixture @($events[0..7] + $events[10] + $events[8..9]) $true
+$events = @(New-SpearIncomeFixture); $events[2].supply_kinds[0].expected = 1.1
+Test-SpearIncomeFixture $events $true
+foreach ($extra in @(
+    @{ event = 'terminal'; reason = 'hunt_scope_exhausted' },
+    @{ event = 'action_result'; action = 'buy_throwing_weapons'; result = 'success' },
+    @{ event = 'action_result'; action = 'claim_reward'; result = 'success' },
+    @{ event = 'goal_result'; goal = 'hunt'; reason = 'throwing_weapon_exhausted' }
+)) {
+    $events = @(New-SpearIncomeFixture)
+    Test-SpearIncomeFixture @($events[0..5] + $extra + $events[6..10]) $true
+}
+# An interruption after attack still needs observed zero stock, not reserve one.
+$events = @(New-SpearIncomeFixture)
+$interruption = @{ event = 'goal_result'; reason = 'throwing_weapon_exhausted' }
+Test-SpearIncomeFixture @($events[0..8] + $interruption + $events[9..10]) $true
+$zero = @{ event = 'combat_readiness'; vocation_id = 3; requirements = @(
+    @{ kind = 'throwing_weapon'; item_id = 2389; count = 0 }
+) }
+Test-SpearIncomeFixture @($events[0..8] + $zero + $interruption + $events[9..10]) $false
+$zero.requirements[0].count = 1
+Test-SpearIncomeFixture @($events[0..8] + $zero + $interruption + $events[9..10]) $true
+Write-Host 'Food-capacity, low-wealth, tool-replenishment, spear and bounded recovery-income assertion regressions passed.'

@@ -2,6 +2,8 @@
 #include "otpch.h"
 
 #include "playerbothuntregionadapter.h"
+#include "playerbothuntapproach.h"
+#include "playerbothunttriptiming.h"
 
 #include "playerbottopology.h"
 
@@ -41,18 +43,23 @@ namespace {
 		       Position::getDistanceY(left, right) <= heatRadius * 2;
 	}
 
-	double expectedMonsterDamagePerSecond(const MonsterType& monsterType, const PlayerBotCombatProfile& profile)
+	PlayerBotDamageRates monsterDamageRates(const MonsterType& monsterType, const PlayerBotCombatProfile& profile)
 	{
-		double damagePerSecond = 0;
+		PlayerBotDamageRates rates;
 		const double mitigation = profile.armor * 0.35 + profile.defense * 0.08;
 		for (const spellBlock_t& attack : monsterType.info.attackSpells) {
 			const double averageDamage = (std::abs(attack.minCombatValue) + std::abs(attack.maxCombatValue)) / 2.0;
-			if (averageDamage <= 0 || attack.speed == 0) continue;
-			const double mitigatedDamage = attack.isMelee ? std::max(1.0, averageDamage - mitigation) : averageDamage;
-			damagePerSecond += mitigatedDamage * (attack.chance / 100.0) * (1000.0 / attack.speed);
-			damagePerSecond += attack.conditionDamage * (attack.chance / 100.0) / 10.0;
+			const double mitigatedDamage = attack.isMelee && averageDamage > 0 ?
+			    std::max(1.0, averageDamage - mitigation) : averageDamage;
+			rates.addAttack(mitigatedDamage, attack.chance, attack.speed, attack.conditionOnly, attack.damageCondition);
 		}
-		return std::max(0.5, damagePerSecond);
+		rates.direct += std::max(0.0, 0.5 - rates.total());
+		return rates;
+	}
+
+	double expectedMonsterDamagePerSecond(const MonsterType& monsterType, const PlayerBotCombatProfile& profile)
+	{
+		return monsterDamageRates(monsterType, profile).total();
 	}
 
 	double expectedPlayerDamagePerSecond(const PlayerBotCombatProfile& profile, const MonsterType& monsterType)
@@ -64,35 +71,19 @@ namespace {
 		return averageDamage * (profile.hitChance / 100.0) / 2.0;
 	}
 
-	std::optional<Position> nearestApproach(Player& player, const Position& spawnPosition,
+	std::optional<Position> nearestApproach(Player& player, const PlayerBotCombatProfile& combat, const Position& spawnPosition,
 	                                       const PlayerBotTopologyDistances* topologyDistances = nullptr)
 	{
-		Position best;
-		uint32_t bestDistance = std::numeric_limits<uint32_t>::max();
-		for (int32_t x = -1; x <= 1; ++x) {
-			for (int32_t y = -1; y <= 1; ++y) {
-				if (x == 0 && y == 0) continue;
-				Position candidate(spawnPosition.x + x, spawnPosition.y + y, spawnPosition.z);
-				if (!playerBotStableApproachTile(g_game.map.getTile(candidate), player)) continue;
-				if (topologyDistances && !PlayerBotTopology::instance().distanceTo(*topologyDistances, candidate)) continue;
-				const uint32_t geometricDistance = Position::getDistanceX(player.getPosition(), candidate) +
-				                                   Position::getDistanceY(player.getPosition(), candidate);
-				const auto topologyDistance = topologyDistances ?
-				    PlayerBotTopology::instance().distanceTo(*topologyDistances, candidate) : std::nullopt;
-				const uint32_t distance = topologyDistance ?
-				    std::max(geometricDistance, *topologyDistance * topologySectorSize) : geometricDistance;
-				if (distance < bestDistance) {
-					best = candidate;
-					bestDistance = distance;
-				}
-			}
-		}
-		if (bestDistance != std::numeric_limits<uint32_t>::max()) return best;
-		if (playerBotStableApproachTile(g_game.map.getTile(spawnPosition), player) &&
-		    (!topologyDistances || PlayerBotTopology::instance().distanceTo(*topologyDistances, spawnPosition))) {
-			return spawnPosition;
-		}
-		return std::nullopt;
+		return playerBotHuntApproach(spawnPosition, PlayerBotNavigationRiskProfile{}.maximumHealthLossPerSecond,
+		    [&](const Position& candidate) -> std::optional<uint32_t> {
+			    if (!playerBotStableApproachTile(g_game.map.getTile(candidate), player)) return std::nullopt;
+			    const auto topologyDistance = topologyDistances ?
+			        PlayerBotTopology::instance().distanceTo(*topologyDistances, candidate) : std::nullopt;
+			    if (topologyDistances && !topologyDistance) return std::nullopt;
+			    const uint32_t geometricDistance = Position::getDistanceX(player.getPosition(), candidate) +
+			        Position::getDistanceY(player.getPosition(), candidate);
+			    return topologyDistance ? std::max(geometricDistance, *topologyDistance * topologySectorSize) : geometricDistance;
+		    }, [&](const Position& candidate) { return PlayerBotHuntRegionAdapter::travelDanger(combat, candidate); });
 	}
 
 	double projectedStaminaExperienceMultiplier(const Player& player, double availableHuntSeconds)
@@ -140,18 +131,19 @@ namespace {
 	HuntAtlas huntAtlas;
 	uint64_t huntAtlasRevision = 0;
 
-	double spawnDamagePerSecond(const CachedSpawnBlock& spawn, const PlayerBotCombatProfile& combat)
+	PlayerBotDamageRates spawnDamageRates(const CachedSpawnBlock& spawn, const PlayerBotCombatProfile& combat)
 	{
-		if (spawn.monsters.empty()) return 0;
-		if (spawn.monsters.size() == 1) return expectedMonsterDamagePerSecond(*spawn.monsters.front().first, combat);
-		double damage = 0;
+		if (spawn.monsters.empty()) return {};
+		if (spawn.monsters.size() == 1) return monsterDamageRates(*spawn.monsters.front().first, combat);
+		PlayerBotDamageRates damage;
 		double noSelectionProbability = 1;
 		for (const auto& [monster, chance] : spawn.monsters) {
 			const double selectionProbability = noSelectionProbability * std::min(chance / 100.0, 1.0);
-			damage += selectionProbability * expectedMonsterDamagePerSecond(*monster, combat);
+			damage.addAlternative(monsterDamageRates(*monster, combat), selectionProbability);
 			noSelectionProbability -= selectionProbability;
 		}
-		return damage + noSelectionProbability * expectedMonsterDamagePerSecond(*spawn.monsters.front().first, combat);
+		damage.addAlternative(monsterDamageRates(*spawn.monsters.front().first, combat), noSelectionProbability);
+		return damage;
 	}
 
 	double expectedDamagePerSecondAt(const PlayerBotCombatProfile& combat, const Position& position)
@@ -159,7 +151,7 @@ namespace {
 		if (!huntAtlas.initialized || combat.maximumHealth <= 0 ||
 		    huntAtlas.spawnGeneration != g_game.map.spawns.getGeneration() ||
 		    huntAtlas.topologyGeneration != PlayerBotTopology::instance().generation()) return 0;
-		std::array<double, maximumModeledAttackers> strongest{};
+		std::array<PlayerBotDamageRates, maximumModeledAttackers> strongest{};
 		const int32_t bucketX = position.x / spawnBucketSize;
 		const int32_t bucketY = position.y / spawnBucketSize;
 		for (int32_t x = bucketX - 1; x <= bucketX + 1; ++x) {
@@ -175,22 +167,25 @@ namespace {
 					if (distance > heatRadius) continue;
 					if (!g_game.isSightClear(spawn.position, position, true)) continue;
 					const double reach = static_cast<double>(heatRadius + 1 - distance) / (heatRadius + 1);
-					double damage = spawnDamagePerSecond(spawn, combat) * reach;
-					for (double& current : strongest) {
-						if (damage <= current) continue;
+					PlayerBotDamageRates damage;
+					damage.merge(spawnDamageRates(spawn, combat), reach);
+					for (auto& current : strongest) {
+						if (damage.total() <= current.total()) continue;
 						std::swap(current, damage);
 					}
 				}
 			}
 		}
-		return std::accumulate(strongest.begin(), strongest.end(), 0.0);
+		PlayerBotDamageRates combined;
+		for (const auto& attacker : strongest) combined.merge(attacker);
+		return combined.total();
 	}
 
-	bool topologyRegionReachable(Player& player, const CachedVariant& variant,
+	bool topologyRegionReachable(Player& player, const PlayerBotCombatProfile& combat, const CachedVariant& variant,
 	                            const PlayerBotTopologyDistances& distances)
 	{
 		for (size_t member : variant.members) {
-			if (nearestApproach(player, huntAtlas.spawns[member].position, &distances)) return true;
+			if (nearestApproach(player, combat, huntAtlas.spawns[member].position, &distances)) return true;
 		}
 		return false;
 	}
@@ -423,7 +418,7 @@ namespace {
 		// Static topology describes walking/tool portals only. A disconnected
 		// variant remains a candidate because the bounded route preflight can
 		// reach it through a verified NPC travel offer.
-		const bool locallyReachable = topologyDistances && topologyRegionReachable(player, cached, *topologyDistances);
+		const bool locallyReachable = topologyDistances && topologyRegionReachable(player, profile, cached, *topologyDistances);
 		const PlayerBotTopologyDistances* memberDistances = locallyReachable ? topologyDistances : nullptr;
 		PlayerBotHuntRegion region;
 		region.atlasSiteId = cached.siteId;
@@ -446,7 +441,7 @@ namespace {
 		double crowdDamageInflation = 1;
 		for (size_t member : cached.members) {
 			const CachedSpawnBlock& spawn = huntAtlas.spawns[member];
-			const auto approach = nearestApproach(player, spawn.position, memberDistances);
+			const auto approach = nearestApproach(player, profile, spawn.position, memberDistances);
 			if (!approach) continue;
 			reachableMembers.insert(member);
 			region.patrolPoints.push_back(*approach);
@@ -493,34 +488,37 @@ namespace {
 		double worstFightSeconds = 0;
 		for (size_t anchor : reachableMembers) {
 			struct LocalAttacker {
-				double damagePerSecond;
+				PlayerBotDamageRates damage;
 				double fightSeconds;
 			};
 			std::vector<LocalAttacker> localAttackers;
 			for (size_t neighbor : huntAtlas.spawns[anchor].neighbors) {
-				if (reachableMembers.find(neighbor) == reachableMembers.end()) continue;
 				for (const auto& [monsterType, chance] : huntAtlas.spawns[neighbor].monsters) {
 					(void)chance;
-					localAttackers.push_back({expectedMonsterDamagePerSecond(*monsterType, profile),
+					localAttackers.push_back({monsterDamageRates(*monsterType, profile),
 					                          monsterType->info.healthMax / expectedPlayerDamagePerSecond(profile, *monsterType)});
 				}
 			}
 			std::sort(localAttackers.begin(), localAttackers.end(), [](const LocalAttacker& left, const LocalAttacker& right) {
-				return left.damagePerSecond > right.damagePerSecond;
+				return left.damage.total() > right.damage.total();
 			});
 			const size_t attackers = std::min(maximumModeledAttackers, localAttackers.size());
 			region.modeledMaximumAttackerOverlap = std::max<uint8_t>(
 			    region.modeledMaximumAttackerOverlap, static_cast<uint8_t>(attackers));
-			double remainingDamagePerSecond = 0;
-			for (size_t index = 0; index < attackers; ++index) remainingDamagePerSecond += localAttackers[index].damagePerSecond;
+			// Conditions can outlive the attacker. Keep their strongest rate
+			// through the modeled fight while removing killed direct attackers.
+			PlayerBotDamageRates lingering;
+			for (size_t index = 0; index < attackers; ++index) lingering.merge(localAttackers[index].damage);
+			lingering.direct = 0;
 			double fightDamage = 0;
 			double isolatedDamage = 0;
 			double fightSeconds = 0;
 			for (size_t index = 0; index < attackers; ++index) {
-				fightDamage += remainingDamagePerSecond * localAttackers[index].fightSeconds;
-				isolatedDamage += localAttackers[index].damagePerSecond * localAttackers[index].fightSeconds;
+				PlayerBotDamageRates remaining = lingering;
+				for (size_t alive = index; alive < attackers; ++alive) remaining.merge(localAttackers[alive].damage);
+				fightDamage += remaining.total() * localAttackers[index].fightSeconds;
+				isolatedDamage += localAttackers[index].damage.total() * localAttackers[index].fightSeconds;
 				fightSeconds += localAttackers[index].fightSeconds;
-				remainingDamagePerSecond -= localAttackers[index].damagePerSecond;
 			}
 			crowdDamageInflation = std::max(crowdDamageInflation,
 			    playerBotCrowdDamageInflation(fightDamage, isolatedDamage));
@@ -539,7 +537,7 @@ namespace {
 				const Position& to = region.patrolPoints[(index + 1) % region.patrolPoints.size()];
 				const uint32_t steps = Position::getDistanceX(from, to) + Position::getDistanceY(from, to) +
 				                       Position::getDistanceZ(from, to) * 20;
-				patrolSeconds += steps * player.getStepDuration() / 1000.0;
+				patrolSeconds += playerBotHuntCoarseTravelSeconds(steps, static_cast<const Creature&>(player).getStepSpeed());
 			}
 		}
 		region.viability = playerBotHuntViability(replenishment, player.getStepDuration() / 1000.0,
@@ -569,6 +567,7 @@ namespace {
 		region.clearExperiencePerMinute = yield.clearExperiencePerMinute;
 		region.experiencePerMinute = std::min(yield.spawnExperiencePerMinute, yield.clearExperiencePerMinute);
 		region.supplyProfile = planningProfile.supply;
+		region.healthPotionUnitPrice = planningProfile.healthPotionUnitPrice;
 		region.supplyGlobalLearning = planningProfile.supplyGlobalLearning;
 		region.supplyCapability = playerBotSupplyCapability(planningProfile);
 		if (const auto found = performance.find(region.atlasVariantId);
@@ -671,8 +670,8 @@ namespace {
 		}
 		const uint32_t estimatedTravelSteps = region.topologyReachable ? region.topologyTravelSteps :
 		    region.transportPlausible ? transportTravelSteps : geometricDistance;
-		region.estimatedTravelSeconds = estimatedTravelSteps * player.getStepDuration() / 1000.0;
-		region.availableHuntSeconds = std::max(0.0, huntDurationSeconds - region.estimatedTravelSeconds);
+		region.estimatedTravelSeconds = playerBotHuntCoarseTravelSeconds(estimatedTravelSteps, static_cast<const Creature&>(player).getStepSpeed());
+		region.maximumHuntSeconds = region.availableHuntSeconds = huntDurationSeconds;
 		region.staminaExperienceMultiplier = projectedStaminaExperienceMultiplier(player, region.availableHuntSeconds);
 		region.projectedExperience = region.experiencePerMinute * region.observedCorrection *
 		                             region.staminaExperienceMultiplier * region.availableHuntSeconds / 60.0;
@@ -682,7 +681,10 @@ namespace {
 		region.optimisticProjectedExperience = region.experiencePerMinute * region.observedCorrection *
 		    projectedStaminaExperienceMultiplier(player, huntDurationSeconds) * huntDurationSeconds / 60.0;
 		region.score = region.projectedExperience;
-		region.reconcileSupplies(planningProfile.supply.reserve);
+		// Coarse distance predicts time, not combat encounters. Keep that time
+		// in economic scoring, but defer transit supply demand to live routes.
+		region.fitSupplyWindow(planningProfile.supply.reserve, true);
+		region.freezeEconomicKey();
 		if (!region.recoverySustainable()) {
 			region.suitable = false;
 			region.rejectionReason = "recovery_hunt_not_sustainable";

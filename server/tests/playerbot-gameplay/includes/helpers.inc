@@ -228,15 +228,20 @@ F.supplyRecoveryRegisteredMonsters = {}
 
 function F.armSupplyRecoveryIncome(player)
     local position = player:getPosition()
+    local incomeRecovery = os.getenv("PLAYERBOT_GAMEPLAY_MODE") == "spear_recovery_income"
     local center = F.supplyRecoveryHuntCenter
-    if position.z ~= center.z or math.abs(position.x - center.x) > 30 or math.abs(position.y - center.y) > 30 then
+    if not incomeRecovery and (position.z ~= center.z or math.abs(position.x - center.x) > 30 or
+        math.abs(position.y - center.y) > 30) then
         return
     end
-    for _, creature in ipairs(Game.getSpectators(position, true, false, 30, 30, 30, 30)) do
-        if creature:isMonster() and creature:getName():lower() == "spider" and
+    -- The Paladin case follows whichever region normal selection chooses. Only
+    -- corpse income is controlled; movement, target choice and damage stay normal.
+    local radius = incomeRecovery and 8 or 30
+    for _, creature in ipairs(Game.getSpectators(position, not incomeRecovery, false, radius, radius, radius, radius)) do
+        if creature:isMonster() and (incomeRecovery or creature:getName():lower() == "spider") and
             not F.supplyRecoveryRegisteredMonsters[creature:getId()] then
             assert(creature:registerEvent("PlayerbotSupplyRecoveryCorpseDeath"),
-                "supply recovery fixture could not arm spider income")
+                "supply recovery fixture could not arm combat income")
             F.supplyRecoveryRegisteredMonsters[creature:getId()] = true
         end
     end

@@ -27,6 +27,18 @@ public:
 		open.push({0, 0, start});
 	}
 
+	// Call with the same positional peak samples used by incoming arcs, before
+	// expanding. This is independent of graph size and preserves unknown limits.
+	template<class Sample>
+	bool rejectUnsafeEndpoints(Sample sample) {
+		if (result) return *result == PlayerBotNavigationResult::RiskRejected;
+		const auto peak = playerBotNavigationRejectedEndpointPeak(start, goal, maximumPeakDanger, sample);
+		if (!peak) return false;
+		summary.maximumHealthLossPerSecond = *peak;
+		result = PlayerBotNavigationResult::RiskRejected;
+		return true;
+	}
+
 	// Only adjacent, same-floor moves and door uses may use a geometric
 	// lower bound. In particular, a walk into a redirect is not ordinary.
 	static bool ordinaryArc(const Position& from, const PlayerBotNavigationStep& step)
@@ -85,7 +97,7 @@ public:
 				}
 			}
 			for (const auto& arc : expand(current.position)) {
-				if ((ordinaryOnly && !ordinaryArc(current.position, arc.step)) || arc.peak > maximumPeakDanger) continue;
+				if ((ordinaryOnly && !ordinaryArc(current.position, arc.step)) || !playerBotNavigationPeakAccepts(maximumPeakDanger, arc.peak)) continue;
 				const Position to = arc.step.expectedPosition;
 				const uint32_t cost = add(current.cost, add(arc.movement, arc.danger));
 				const auto found = costs.find(key(to));
@@ -117,6 +129,7 @@ public:
 		for (auto& node : nodes) node.estimate = add(node.cost, heuristic(node.position));
 		open.rebuild();
 		result.reset();
+		summary = {};
 	}
 
 	// Queries do not consume the frontier. Only settled goals have final

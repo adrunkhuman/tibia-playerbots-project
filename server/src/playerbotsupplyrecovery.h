@@ -2,9 +2,44 @@
 #define FS_PLAYERBOTSUPPLYRECOVERY_H
 
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
+#include <optional>
 #include <limits>
 #include <vector>
+
+// Shared departure prerequisite. Round up so integer health cannot fall below
+// the planner's required fraction; ordinary emergency healing is independent.
+inline uint32_t playerBotSupplyRecoveryRequiredHealth(uint32_t maximumHealth)
+{
+	return static_cast<uint32_t>((uint64_t(maximumHealth) * 4 + 4) / 5);
+}
+
+enum class PlayerBotDepartureHealthResult { Ready, Recovering, TimedOut };
+
+// Preparation requests use existing healing actions but have their own finite
+// bound. A pending request is not a new hunt mode or a combat-healing threshold.
+class PlayerBotDepartureHealthPreparation
+{
+	public:
+		bool active() const { return started.has_value(); }
+		uint32_t target() const { return requiredHealth; }
+		PlayerBotDepartureHealthResult advance(int32_t health, int32_t maximumHealth, uint32_t targetHealth,
+		                                      std::chrono::steady_clock::time_point now)
+		{
+			requiredHealth = std::min<uint32_t>(std::max(0, maximumHealth), targetHealth);
+			if (health >= static_cast<int64_t>(requiredHealth) || requiredHealth == 0) {
+				started.reset();
+				return PlayerBotDepartureHealthResult::Ready;
+			}
+			if (!started) started = now;
+			return now - *started >= std::chrono::seconds(60) ? PlayerBotDepartureHealthResult::TimedOut :
+			       PlayerBotDepartureHealthResult::Recovering;
+		}
+	private:
+		uint32_t requiredHealth = 0;
+		std::optional<std::chrono::steady_clock::time_point> started;
+};
 
 /** Degraded operation while a supply restock is unaffordable. The bot keeps
  *  hunting and selling instead of stopping; region selection clamps toward

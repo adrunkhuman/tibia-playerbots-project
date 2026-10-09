@@ -337,12 +337,16 @@ $stableContract = @{ event = "stable_approaches_contract"; selection = $true; re
     floor_change_rejected = $true; occupied_eligible = $true; blocked_rejected = $true; teleport_traversal = $true }
 $decayContract = @{ event = "corpse_decay_route_contract"; troll = $true; spider = $true;
     rat = $true; poison_spider = $true; blocker_invalidated = $true }
-Assert-DoorPassageEvents -Logs (ConvertTo-FixtureLogs @($doorContract, $stableContract, $decayContract))
+$conditionContract = @{ event = "condition_damage_contract"; loaded = $true; type = 1; id = 0; sub_id = 0;
+    total = 30; start = 0; tick_ms = 4000; condition_dps = 0.5; strongest_tick = 2; applications = 4;
+    same_key_merged = $true; engine_total = 30; delayed_no_damage = $true; cleaned = $true;
+    modeled_condition_keys = 1; modeled_direct_dps = 20; modeled_condition_dps = 0.5 }
+Assert-DoorPassageEvents -Logs (ConvertTo-FixtureLogs @($doorContract, $stableContract, $decayContract, $conditionContract))
 foreach ($field in @("coarse_danger_reuse", "coarse_danger_rejection", "coarse_danger_dependencies")) {
     $failedContract = $doorContract.Clone()
     $failedContract[$field] = $false
     Assert-Rejected "Coarse danger contract $field" {
-        Assert-DoorPassageEvents -Logs (ConvertTo-FixtureLogs @($failedContract, $stableContract, $decayContract))
+        Assert-DoorPassageEvents -Logs (ConvertTo-FixtureLogs @($failedContract, $stableContract, $decayContract, $conditionContract))
     } "Door passage fixture failed $field."
 }
 foreach ($field in @("selection", "revalidation", "floor_change_rejected", "occupied_eligible",
@@ -350,14 +354,14 @@ foreach ($field in @("selection", "revalidation", "floor_change_rejected", "occu
     $failedContract = $stableContract.Clone()
     $failedContract[$field] = $false
     Assert-Rejected "Stable approach contract $field" {
-        Assert-DoorPassageEvents -Logs (ConvertTo-FixtureLogs @($doorContract, $failedContract, $decayContract))
+        Assert-DoorPassageEvents -Logs (ConvertTo-FixtureLogs @($doorContract, $failedContract, $decayContract, $conditionContract))
     } "Stable approach fixture failed $field."
 }
 Assert-Rejected "Missing stable approach contract" {
-    Assert-DoorPassageEvents -Logs (ConvertTo-FixtureLogs @($doorContract, $decayContract))
+    Assert-DoorPassageEvents -Logs (ConvertTo-FixtureLogs @($doorContract, $decayContract, $conditionContract))
 } "Stable approach fixture emitted 0 contract events."
 Assert-Rejected "Duplicate stable approach contract" {
-    Assert-DoorPassageEvents -Logs (ConvertTo-FixtureLogs @($doorContract, $stableContract, $stableContract, $decayContract))
+    Assert-DoorPassageEvents -Logs (ConvertTo-FixtureLogs @($doorContract, $stableContract, $stableContract, $decayContract, $conditionContract))
 } "Stable approach fixture emitted 2 contract events."
 
 foreach ($field in @("troll", "spider", "rat", "poison_spider", "blocker_invalidated")) {
@@ -366,15 +370,43 @@ foreach ($field in @("troll", "spider", "rat", "poison_spider", "blocker_invalid
         if ($failure -eq "missing") { $failedContract.Remove($field) }
         else { $failedContract[$field] = $false }
         Assert-Rejected "Corpse decay route contract $field/$failure" {
-            Assert-DoorPassageEvents -Logs (ConvertTo-FixtureLogs @($doorContract, $stableContract, $failedContract))
+            Assert-DoorPassageEvents -Logs (ConvertTo-FixtureLogs @($doorContract, $stableContract, $failedContract, $conditionContract))
         } "Corpse decay route fixture failed $field."
     }
 }
 Assert-Rejected "Missing corpse decay route contract" {
-    Assert-DoorPassageEvents -Logs (ConvertTo-FixtureLogs @($doorContract, $stableContract))
+    Assert-DoorPassageEvents -Logs (ConvertTo-FixtureLogs @($doorContract, $stableContract, $conditionContract))
 } "Corpse decay route fixture emitted 0 contract events."
 Assert-Rejected "Duplicate corpse decay route contract" {
-    Assert-DoorPassageEvents -Logs (ConvertTo-FixtureLogs @($doorContract, $stableContract, $decayContract, $decayContract))
+    Assert-DoorPassageEvents -Logs (ConvertTo-FixtureLogs @($doorContract, $stableContract, $decayContract, $decayContract, $conditionContract))
 } "Corpse decay route fixture emitted 2 contract events."
+
+foreach ($field in @("loaded", "same_key_merged", "delayed_no_damage", "cleaned")) {
+    foreach ($failure in @("false", "missing")) {
+        $failedContract = $conditionContract.Clone()
+        if ($failure -eq "missing") { $failedContract.Remove($field) }
+        else { $failedContract[$field] = $false }
+        Assert-Rejected "Condition damage contract $field/$failure" {
+            Assert-DoorPassageEvents -Logs (ConvertTo-FixtureLogs @($doorContract, $stableContract, $decayContract, $failedContract))
+        } "Condition damage fixture failed $field."
+    }
+}
+foreach ($field in @("type", "id", "sub_id", "total", "start", "tick_ms", "condition_dps", "strongest_tick",
+    "applications", "engine_total", "modeled_condition_keys", "modeled_direct_dps", "modeled_condition_dps")) {
+    foreach ($failure in @("wrong", "missing")) {
+        $failedContract = $conditionContract.Clone()
+        if ($failure -eq "missing") { $failedContract.Remove($field) }
+        else { $failedContract[$field] = $conditionContract[$field] + 1 }
+        Assert-Rejected "Condition damage contract $field/$failure" {
+            Assert-DoorPassageEvents -Logs (ConvertTo-FixtureLogs @($doorContract, $stableContract, $decayContract, $failedContract))
+        } "Condition damage fixture failed $field."
+    }
+}
+Assert-Rejected "Missing condition damage contract" {
+    Assert-DoorPassageEvents -Logs (ConvertTo-FixtureLogs @($doorContract, $stableContract, $decayContract))
+} "Condition damage fixture emitted 0 contract events."
+Assert-Rejected "Duplicate condition damage contract" {
+    Assert-DoorPassageEvents -Logs (ConvertTo-FixtureLogs @($doorContract, $stableContract, $decayContract, $conditionContract, $conditionContract))
+} "Condition damage fixture emitted 2 contract events."
 
 "Playerbot navigation assertion regression PASS"

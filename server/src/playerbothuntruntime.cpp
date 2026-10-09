@@ -1,6 +1,7 @@
 #include "definitions.h"
 #include "playerbothuntruntime.h"
 #include "playerbotequipmentpolicy.h"
+#include "playerbothunttriptiming.h"
 
 #include <cstring>
 #ifndef _WIN32
@@ -298,7 +299,9 @@ PlayerBotHuntRuntimeOutcome PlayerBotHuntRuntime::exhaustScope(std::chrono::stea
 	scopeExhaustions = std::min<uint32_t>(scopeExhaustions + 1, 3);
 	outcome.command = PlayerBotHuntRuntimeCommand::ScopeExhausted;
 	outcome.scopeExhaustionAttempt = scopeExhaustions;
-	outcome.stopForScopeExhaustion = !supplyRecoveryDegraded && scopeExhaustions >= 3;
+	// Recovery also needs an admissible outing; repeating identical failed
+	// scans cannot create income or restore a missing capability.
+	outcome.stopForScopeExhaustion = scopeExhaustions >= 3;
 	outcome.retryAfter = retryAfter;
 	scopeReevaluationAfter = now + retryAfter;
 	planning.reset();
@@ -315,11 +318,14 @@ void PlayerBotHuntRuntime::activate(PlayerBotHuntRegion region, const PlayerBotH
 	auto first = std::find(region.patrolPoints.begin(), region.patrolPoints.end(), region.destination);
 	if (first != region.patrolPoints.end()) std::rotate(region.patrolPoints.begin(), first, region.patrolPoints.end());
 	activeRegion = std::move(region);
+	plannedHuntDurationSeconds = static_cast<uint32_t>(std::clamp(activeRegion->availableHuntSeconds, 0.0,
+	    static_cast<double>(UINT32_MAX)));
 	supplyBaseline.reset();
 	patrolIndex = 0;
 	patrolWaypointSkips = 0;
 	singleWaypointReached = false;
 	huntStarted = now;
+	huntDeadline = {};
 	huntStartExperience = player.experience;
 	coinGoldAcquired = 0;
 	huntStartLevel = player.level;
@@ -330,7 +336,10 @@ void PlayerBotHuntRuntime::activate(PlayerBotHuntRegion region, const PlayerBotH
 void PlayerBotHuntRuntime::beginCycle(std::chrono::steady_clock::time_point now, uint32_t durationSeconds)
 {
 	singleWaypointReached = false;
-	huntDeadline = now + std::chrono::seconds(durationSeconds);
+	plannedHuntDurationSeconds = activeRegion ? static_cast<uint32_t>(std::min<double>(durationSeconds,
+	    activeRegion->availableHuntSeconds)) : durationSeconds;
+	huntDeadline = now + std::chrono::seconds(activeRegion ?
+	    playerBotHuntTransitSeconds(activeRegion->estimatedTravelSeconds) : durationSeconds);
 	++cycles;
 }
 
@@ -341,14 +350,50 @@ bool PlayerBotHuntRuntime::matchesMonster(const std::string& name) const
 	});
 }
 
-void PlayerBotHuntRuntime::enterHuntArea(const PlayerBotHuntRuntimePlayerObservation& player,
+bool PlayerBotHuntRuntime::enterHuntArea(const PlayerBotHuntRuntimePlayerObservation& player,
 	const PlayerBotSupplyProfile& supplyProfile, std::chrono::steady_clock::time_point now)
 {
-	if (!activeRegion || supplyBaseline) return;
-	double plannedHuntSeconds = activeRegion->availableHuntSeconds;
-	if (huntDeadline.time_since_epoch().count() != 0) {
-		plannedHuntSeconds = std::max(0.0, std::chrono::duration<double>(huntDeadline - now).count());
+	if (supplyBaseline) return true;
+	if (!activeRegion || deadlineReached(now)) return false;
+	PlayerBotHuntRegion arrival = *activeRegion;
+	arrival.maximumHuntSeconds = arrival.availableHuntSeconds = std::min(arrival.availableHuntSeconds,
+	    plannedHuntDurationSeconds ? static_cast<double>(plannedHuntDurationSeconds) : arrival.availableHuntSeconds);
+	arrival.currentHealth = player.health;
+	arrival.maximumHealth = player.maximumHealth;
+	arrival.supplyCapability = player.supplyCapability;
+	arrival.supplyProfile = supplyProfile;
+	// A broken last weapon can disappear from the live typed list. Retain its
+	// requirement with zero stock, never silently authorize an unarmed arrival.
+	for (const auto& required : activeRegion->supplyProfile.kinds) {
+		auto live = std::find_if(arrival.supplyProfile.kinds.begin(), arrival.supplyProfile.kinds.end(),
+		    [&](const auto& kind) { return kind.kind == required.kind && kind.itemId == required.itemId; });
+		if (live == arrival.supplyProfile.kinds.end()) {
+			auto missing = required;
+			missing.count = 0;
+			arrival.supplyProfile.kinds.push_back(missing);
+		} else {
+			live->demand = required.demand;
+			live->staticUnitsPerCombatSecond = required.staticUnitsPerCombatSecond;
+			live->unitPrice = required.unitPrice;
+		}
 	}
+	const double totalDanger = static_cast<double>(arrival.routeDangerCost) + arrival.returnRouteDangerCost;
+	arrival.recoveryRouteHealthLoss = totalDanger > 0 ?
+	    arrival.recoveryRouteHealthLoss * arrival.returnRouteDangerCost / totalDanger : 0;
+	arrival.estimatedTravelSeconds = 0;
+	arrival.fitSupplyWindow(activeRegion->supplyProfile.reserve);
+	if (player.health <= 0 || !arrival.supplyBudget.fits || !arrival.productiveWindow() ||
+	    !arrival.recoverySustainable()) return false;
+	// Keep the original outbound forecast for trip telemetry/economics, but use
+	// the newly checked productive budget and stock as the learning baseline.
+	arrival.estimatedTravelSeconds = activeRegion->estimatedTravelSeconds;
+	activeRegion = std::move(arrival);
+	const double plannedHuntSeconds = activeRegion->availableHuntSeconds;
+	plannedHuntDurationSeconds = static_cast<uint32_t>(plannedHuntSeconds);
+	huntDeadline = now + std::chrono::seconds(plannedHuntDurationSeconds);
+	huntStarted = now;
+	huntStartExperience = player.experience;
+	coinGoldAcquired = 0;
 	const double exposure = plannedHuntSeconds * std::clamp(activeRegion->combatFraction, 0.0, 1.0);
 	const PlayerBotSupplyBudget staticBudget = playerBotSupplyBudget(
 	    supplyProfile, activeRegion->expectedDamagePerSecond, activeRegion->combatFraction,
@@ -357,6 +402,7 @@ void PlayerBotHuntRuntime::enterHuntArea(const PlayerBotHuntRuntimePlayerObserva
 	supplyBaseline = PlayerBotHuntSupplyBaseline{
 	    player, supplyProfile, now, plannedHuntSeconds, staticRate};
 	policy.resetCombatEvidence();
+	return true;
 }
 
 bool PlayerBotHuntRuntime::insideHuntArea(const Position& position, uint32_t westRange, uint32_t eastRange,
@@ -413,15 +459,16 @@ std::optional<PlayerBotHuntRuntimeCompletion> PlayerBotHuntRuntime::complete(con
 	if (!activeRegion) return std::nullopt;
 	PlayerBotHuntRuntimeCompletion result;
 	result.region = *activeRegion;
-	result.durationSeconds = static_cast<uint64_t>(std::max<int64_t>(0, std::chrono::duration_cast<std::chrono::seconds>(now - huntStarted).count()));
-	result.experienceGained = player.experience >= huntStartExperience ? player.experience - huntStartExperience : 0;
+	result.durationSeconds = supplyBaseline ? static_cast<uint64_t>(std::max<int64_t>(0,
+	    std::chrono::duration_cast<std::chrono::seconds>(now - huntStarted).count())) : 0;
+	result.experienceGained = supplyBaseline && player.experience >= huntStartExperience ? player.experience - huntStartExperience : 0;
 	result.levelBefore = huntStartLevel;
 	result.combat = policy.combatSummary();
-	result.coinGoldAcquired = coinGoldAcquired;
-	result.performance = policy.observePerformance(activeRegion->atlasVariantId, activeRegion->atlasRevision,
+	result.coinGoldAcquired = supplyBaseline ? coinGoldAcquired : 0;
+	if (supplyBaseline) result.performance = policy.observePerformance(activeRegion->atlasVariantId, activeRegion->atlasRevision,
 	    {result.durationSeconds, result.combat.activeSeconds, result.combat.kills, result.experienceGained,
 	     activeRegion->projectedExperience, activeRegion->observedCorrection,
-	     activeRegion->supplyRecovery ? std::min<uint32_t>(configuredDurationSeconds, 120) : configuredDurationSeconds,
+	     plannedHuntDurationSeconds ? plannedHuntDurationSeconds : configuredDurationSeconds,
 	     result.combat.dangerObserved, result.combat.deathObserved});
 	if (supplyBaseline) {
 		PlayerBotHuntRegion supplyRegion = *activeRegion;
@@ -464,9 +511,11 @@ std::optional<PlayerBotHuntRuntimeCompletion> PlayerBotHuntRuntime::complete(con
 		result.supplyObservation.endingMana = player.mana;
 		result.supplyObservation.endingMaximumMana = player.supplyCapability.maximumMana;
 		result.supplyObservation.reason = "hunt_arrival_not_observed";
+		result.performance.evidenceReason = "hunt_arrival_not_observed";
 	}
 	result.region.supplyCalibration = result.supplyObservation.calibration;
-	result.challenge = policy.updateChallengeFrontier({result.durationSeconds, player.maximumHealth});
+	if (supplyBaseline) result.challenge = policy.updateChallengeFrontier({result.durationSeconds, player.maximumHealth});
+	else result.challenge.frontierBefore = result.challenge.frontierAfter = policy.challengeFrontier();
 	activeRegion.reset();
 	supplyBaseline.reset();
 	policy.resetCombatEvidence();
@@ -543,7 +592,13 @@ PlayerBotHuntPatrolOutcome PlayerBotHuntRuntime::observePatrolNavigation(const P
 	outcome.expandedNodes = patrolFailureExpandedNodes;
 	outcome.elapsedMs = patrolFailureStarted == std::chrono::steady_clock::time_point{} ? 0 : static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(now - patrolFailureStarted).count());
 	const size_t circuit = activeRegion ? activeRegion->patrolPoints.size() : 0;
-	if (activeRegion && activeRegion->viability.reachableSpawns != 0 && supplyBaseline && circuit > 1 &&
+	if (activeRegion && navigation.plan.result == PlayerBotNavigationResult::RiskRejected) {
+		// A proved unsafe endpoint invalidates the assessed circuit. Do not treat
+		// it as a transient blocker or mutate its original eligibility in place.
+		outcome.command = PlayerBotHuntPatrolCommand::RegionExhausted;
+		outcome.reason = "endpoint_peak_danger";
+		outcome.cooldown = {{activeRegion->atlasVariantId, std::chrono::minutes(10)}};
+	} else if (activeRegion && activeRegion->viability.reachableSpawns != 0 && supplyBaseline && circuit > 1 &&
 	    patrolWaypointSkips < std::max<size_t>(1, circuit / 4)) {
 		// Inside the area, pass over a waypoint without removing it. The circuit
 		// keeps its eligibility, and the next lap retries a transient blocker.

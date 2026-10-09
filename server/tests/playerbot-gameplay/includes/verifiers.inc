@@ -626,6 +626,20 @@ function F.breakLastSpear(playerId, x, y, z, attempts)
     addEvent(F.verifySpearRestock, 500, playerId, "spear_last_break", 480)
 end
 
+function F.verifySpearRecoveryIncome(playerId, attempts)
+    local player = Player(playerId)
+    assert(player and not player:isRemoved(), "Bot One disappeared during spear recovery income")
+    F.armSupplyRecoveryIncome(player)
+    -- A sold healing flask is not combat income.
+    if (F.spearIncomeCorpses or 0) > 0 and player:getMoney() == 7 and player:getBankBalance() == 0 then
+        F.spearFixtureEvidence(player, "spear_recovery_income", "pass")
+        print("PLAYERBOT_GAMEPLAY_TEST SPEAR_RECOVERY_INCOME_PASS")
+        return
+    end
+    assert(attempts > 0, "one-spear supply recovery did not earn combat income")
+    addEvent(F.verifySpearRecoveryIncome, 250, playerId, attempts - 1)
+end
+
 function F.verifySpearRestock(playerId, mode, attempts)
     local player = Player(playerId)
     assert(player and not player:isRemoved(), "Bot One disappeared during spear fixture")

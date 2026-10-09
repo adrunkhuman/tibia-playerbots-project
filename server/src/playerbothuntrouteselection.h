@@ -55,7 +55,9 @@ struct PlayerBotHuntRouteObservation {
 	uint64_t funds = 0;
 	uint64_t recoverySpendingReserve = 0;
 	double recoveryRouteHealthLoss = 0;
+	uint32_t healthPotionUnitPrice = 0;
 	bool searchIncomplete = false; // Total allowance exhausted, not proven unreachable.
+	bool endpointRiskRejected = false; // Necessary peak-risk proof, not physical disconnection.
 };
 
 struct PlayerBotHuntRouteResult {

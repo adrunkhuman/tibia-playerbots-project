@@ -67,10 +67,28 @@ F.cargoCorpseDeath:register()
 F.supplyRecoveryCorpseDeath = CreatureEvent("PlayerbotSupplyRecoveryCorpseDeath")
 
 function F.supplyRecoveryCorpseDeath.onDeath(creature, corpse)
-    if os.getenv("PLAYERBOT_GAMEPLAY_MODE") ~= "supply_recovery" or creature:getName():lower() ~= "spider" then
+    local mode = os.getenv("PLAYERBOT_GAMEPLAY_MODE")
+    local incomeRecovery = mode == "spear_recovery_income"
+    if not incomeRecovery and (mode ~= "supply_recovery" or creature:getName():lower() ~= "spider") then
         return true
     end
-    assert(corpse, "supply recovery fixture lost the spider corpse")
+    assert(corpse, "supply recovery fixture lost the combat corpse")
+    if incomeRecovery then
+        -- The corpse already exists here. Disabling loot before death would
+        -- suppress the corpse too; now it only skips the later random dropLoot.
+        assert(creature:setDropLoot(false), "spear recovery fixture could not disable random loot")
+        -- One controlled coin keeps funds below a spear price, and cannot be
+        -- confused with a reward grant or a claim about sustainable economics.
+        for _, item in ipairs(corpse:getItems() or {}) do
+            assert(item:remove(), "spear recovery fixture could not normalize corpse contents")
+        end
+        assert(corpse:addItem(ITEM_GOLD_COIN, 1), "spear recovery fixture could not ensure combat income")
+        F.spearIncomeCorpses = (F.spearIncomeCorpses or 0) + 1
+        print(string.format('{"component":"playerbot","event":"spear_income_corpse",' ..
+            '"source":"lua_setup_verifier","scenario":"spear_recovery_income","target_id":%d,"gold":1}',
+            creature:getId()))
+        return true
+    end
     for _, item in ipairs(corpse:getItems() or {}) do
         if item:getId() == ITEM_GOLD_COIN then
             return true

@@ -21,6 +21,7 @@
 #define FS_MONSTERS_H
 
 #include "creature.h"
+#include "playerbotdamagemodel.h"
 
 const uint32_t MAX_LOOTCHANCE = 100000;
 
@@ -77,7 +78,8 @@ struct spellBlock_t {
 		range(other.range),
 		minCombatValue(other.minCombatValue),
 		maxCombatValue(other.maxCombatValue),
-		conditionDamage(other.conditionDamage),
+		damageCondition(other.damageCondition),
+		conditionOnly(other.conditionOnly),
 		combatSpell(other.combatSpell),
 		isMelee(other.isMelee) {
 		other.spell = nullptr;
@@ -89,7 +91,8 @@ struct spellBlock_t {
 	uint32_t range = 0;
 	int32_t minCombatValue = 0;
 	int32_t maxCombatValue = 0;
-	int32_t conditionDamage = 0;
+	PlayerBotDamageCondition damageCondition;
+	bool conditionOnly = false;
 	bool combatSpell = false;
 	bool isMelee = false;
 };
@@ -250,7 +253,8 @@ class Monsters
 
 	private:
 		ConditionDamage* getDamageCondition(ConditionType_t conditionType,
-		                                    int32_t maxDamage, int32_t minDamage, int32_t startDamage, uint32_t tickInterval);
+		                                    int32_t maxDamage, int32_t minDamage, int32_t startDamage, uint32_t tickInterval,
+		                                    PlayerBotDamageCondition& metadata);
 		bool deserializeSpell(const pugi::xml_node& node, spellBlock_t& sb, const std::string& description = "");
 
 		MonsterType* loadMonster(const std::string& file, const std::string& monsterName, bool reloading = false);

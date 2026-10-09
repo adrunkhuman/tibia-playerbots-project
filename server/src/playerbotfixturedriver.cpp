@@ -16,6 +16,7 @@
 #include "house.h"
 #include "item.h"
 #include "monster.h"
+#include "monsters.h"
 #include "player.h"
 #include "tile.h"
 #include "teleport.h"
@@ -32,6 +33,7 @@
 
 extern Actions* g_actions;
 extern Game g_game;
+extern Monsters g_monsters;
 
 namespace {
 	constexpr uint32_t maximumRepeatedNavigationStepFailures = 3;
@@ -61,7 +63,8 @@ namespace {
 		const char* mode = std::getenv("PLAYERBOT_GAMEPLAY_MODE");
 		if (!mode) return policy;
 		const bool training = std::strcmp(mode, "paladin_spell_training") == 0;
-		const bool supply = std::strcmp(mode, "paladin_supply_restock") == 0;
+		const bool supply = std::strcmp(mode, "paladin_supply_restock") == 0 ||
+		                    std::strcmp(mode, "spear_recovery_income") == 0;
 		const bool healing = std::strcmp(mode, "paladin_healing_economy") == 0 ||
 		                     std::strcmp(mode, "paladin_mana_healing") == 0 ||
 		                     std::strcmp(mode, "paladin_healing_fallback") == 0;
@@ -517,6 +520,74 @@ std::vector<playerbot::PlayerBotFixtureEvent> playerbot::PlayerBotFixtureDriver:
 {
 	if (!policy.doorPassagesFixture || !g_actions) return {};
 
+	// Combat's condition list is private. Reconstruct the loader's delayed
+	// condition from its retained metadata, then exercise the real clone/add/
+	// merge/remove APIs synchronously. Never replace pre-existing player state.
+	const auto conditionContract = [&player]() {
+		const MonsterType* type = g_monsters.getMonsterType("Poison Spider");
+		const spellBlock_t* attack = type && type->info.attackSpells.size() == 1 ? &type->info.attackSpells.front() : nullptr;
+		const PlayerBotDamageCondition metadata = attack ? attack->damageCondition : PlayerBotDamageCondition{};
+		const bool loaded = attack && attack->isMelee && !attack->conditionOnly &&
+		    metadata.type == CONDITION_POISON && metadata.id == CONDITIONID_COMBAT && metadata.subId == 0 &&
+		    metadata.maximumTotal == 30 && metadata.start == 0 && metadata.tickMs == 4000;
+		PlayerBotDamageRates crowd;
+		if (attack) {
+			PlayerBotDamageRates single;
+			single.addAttack((std::abs(attack->minCombatValue) + std::abs(attack->maxCombatValue)) / 2.0,
+			    attack->chance, attack->speed, attack->conditionOnly, metadata);
+			for (unsigned i = 0; i < 4; ++i) crowd.merge(single);
+		}
+
+		uint32_t applications = 0;
+		int32_t engineTotal = 0;
+		int32_t strongestTick = 0;
+		bool merged = false, delayedNoDamage = false, cleaned = false;
+		if (loaded && !player.getCondition(CONDITION_POISON, CONDITIONID_COMBAT, 0)) {
+			ConditionDamage semantic(CONDITIONID_COMBAT, CONDITION_POISON, false, metadata.subId, false);
+			semantic.setParam(CONDITION_PARAM_MINVALUE, metadata.maximumTotal);
+			semantic.setParam(CONDITION_PARAM_MAXVALUE, metadata.maximumTotal);
+			semantic.setParam(CONDITION_PARAM_STARTVALUE, metadata.start);
+			semantic.setParam(CONDITION_PARAM_TICKINTERVAL, metadata.tickMs);
+			semantic.setParam(CONDITION_PARAM_DELAYED, 1);
+			const int32_t healthBefore = player.getHealth();
+			Condition* first = nullptr;
+			merged = true;
+			for (unsigned i = 0; i < 4; ++i) {
+				const bool applied = player.addCondition(semantic.clone()); // addCondition owns the clone, even on failure.
+				Condition* current = player.getCondition(CONDITION_POISON, CONDITIONID_COMBAT, 0);
+				applications += applied;
+				if (!i) first = current;
+				merged = merged && applied && current && current == first;
+				if (current) {
+					auto* damage = static_cast<ConditionDamage*>(current);
+					engineTotal = damage->getTotalDamage();
+					strongestTick = damage->getParam(CONDITION_PARAM_STARTVALUE);
+					merged = merged && engineTotal == 30 && damage->getParam(CONDITION_PARAM_DELAYED) == 1 &&
+					    damage->getParam(CONDITION_PARAM_TICKINTERVAL) == 4000;
+				}
+			}
+			delayedNoDamage = applications == 4 && player.getHealth() == healthBefore;
+			// No dispatcher yield or condition tick occurs before cleanup. Remove
+			// up to all four injected copies, even if merging regresses.
+			for (unsigned i = 0; i < 4; ++i) {
+				Condition* current = player.getCondition(CONDITION_POISON, CONDITIONID_COMBAT, 0);
+				if (!current) break;
+				player.removeCondition(current, true);
+			}
+			cleaned = !player.getCondition(CONDITION_POISON, CONDITIONID_COMBAT, 0) && player.getHealth() == healthBefore;
+		}
+		std::ostringstream fields;
+		fields << std::boolalpha << "\"loaded\":" << loaded << ",\"type\":" << metadata.type
+		       << ",\"id\":" << metadata.id << ",\"sub_id\":" << metadata.subId
+		       << ",\"total\":" << metadata.maximumTotal << ",\"start\":" << metadata.start << ",\"tick_ms\":" << metadata.tickMs
+		       << ",\"condition_dps\":" << metadata.damagePerSecond() << ",\"strongest_tick\":" << strongestTick
+		       << ",\"applications\":" << applications << ",\"same_key_merged\":" << merged << ",\"engine_total\":" << engineTotal
+		       << ",\"delayed_no_damage\":" << delayedNoDamage << ",\"cleaned\":" << cleaned
+		       << ",\"modeled_condition_keys\":" << crowd.conditions.size() << ",\"modeled_direct_dps\":" << crowd.direct
+		       << ",\"modeled_condition_dps\":" << crowd.total() - crowd.direct;
+		return fields.str();
+	}();
+
 	constexpr Position origin(65000, 65000, 7);
 	constexpr uint16_t ordinaryDoorId = 1210;
 	constexpr uint16_t levelDoorId = 1227;
@@ -926,7 +997,7 @@ std::vector<playerbot::PlayerBotFixtureEvent> playerbot::PlayerBotFixtureDriver:
 	            << ",\"poison_spider\":" << boolField(poisonSpiderDecay)
 	            << ",\"blocker_invalidated\":" << boolField(blockerInvalidated);
 	return {{"door_passages_contract", fields.str()}, {"stable_approaches_contract", stableFields.str()},
-	        {"corpse_decay_route_contract", decayFields.str()}};
+	        {"corpse_decay_route_contract", decayFields.str()}, {"condition_damage_contract", conditionContract}};
 }
 
 std::vector<playerbot::PlayerBotFixtureEvent> playerbot::PlayerBotFixtureDriver::runShovelPassagesContract(Player& player)

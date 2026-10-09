@@ -126,6 +126,13 @@ void PlayerBotHuntCoordinator::rejectHuntVariant(uint64_t variantId, std::chrono
 	if (current < until) current = until;
 }
 
+void PlayerBotHuntCoordinator::observeHuntArrivalTimeout(std::chrono::steady_clock::time_point now)
+{
+	// Failed trip feedback is scoped to this atlas variant, not monsters,
+	// topology nodes or an unbounded global navigation blacklist.
+	applyCooldown(huntRuntime.arrivalTimeout(now), now);
+}
+
 void PlayerBotHuntCoordinator::beginHuntCycle(std::chrono::steady_clock::time_point now, uint32_t durationSeconds)
 {
 	huntRuntime.beginCycle(now, durationSeconds);
@@ -133,11 +140,11 @@ void PlayerBotHuntCoordinator::beginHuntCycle(std::chrono::steady_clock::time_po
 bool PlayerBotHuntCoordinator::huntDeadlineReached(std::chrono::steady_clock::time_point now) const { return huntRuntime.deadlineReached(now); }
 uint32_t PlayerBotHuntCoordinator::completedHuntCycles() const { return huntRuntime.completedCycles(); }
 bool PlayerBotHuntCoordinator::huntActive() const { return huntRuntime.active(); }
-void PlayerBotHuntCoordinator::enterHuntArea(const PlayerBotHuntRuntimePlayerObservation& player,
+bool PlayerBotHuntCoordinator::enterHuntArea(const PlayerBotHuntRuntimePlayerObservation& player,
 	const PlayerBotSupplyProfile& supplyProfile, std::chrono::steady_clock::time_point now)
 {
 	transitCombat.finish();
-	huntRuntime.enterHuntArea(player, supplyProfile, now);
+	return huntRuntime.enterHuntArea(player, supplyProfile, now);
 }
 bool PlayerBotHuntCoordinator::insideHuntArea(const Position& position, uint32_t westRange, uint32_t eastRange,
 	uint32_t northRange, uint32_t southRange) const

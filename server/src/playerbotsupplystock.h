@@ -158,13 +158,20 @@ inline std::vector<uint16_t> playerBotSupplyExitShopItems(const PlayerBotSupplyS
 	return items;
 }
 
-// First active non-health kind at or below its return threshold. Health
-// potions return through the healing interruption, not this check.
-inline const PlayerBotSupplyStock* playerBotExhaustedSupply(const PlayerBotSupplyStocks& stocks)
+// Unaffordable restocking makes non-health reserve stock available to short recovery
+// hunts. Health reserves still protect healing and the validated exit route.
+inline uint32_t playerBotSupplyHuntReserve(PlayerBotSupplyKind kind, uint32_t returnThreshold, bool recovery)
 {
-	const auto found = std::find_if(stocks.begin(), stocks.end(), [](const PlayerBotSupplyStock& stock) {
+	return recovery && kind != PlayerBotSupplyKind::HealthPotion ? 0 : returnThreshold;
+}
+
+// First exhausted non-health kind under the same reserve policy as planning.
+// Health potions return through the healing interruption, not this check.
+inline const PlayerBotSupplyStock* playerBotExhaustedSupply(const PlayerBotSupplyStocks& stocks, bool recovery = false)
+{
+	const auto found = std::find_if(stocks.begin(), stocks.end(), [recovery](const PlayerBotSupplyStock& stock) {
 		return stock.rule.kind != PlayerBotSupplyKind::HealthPotion && stock.rule.active() &&
-		       stock.count <= stock.rule.returnThreshold;
+		       stock.count <= playerBotSupplyHuntReserve(stock.rule.kind, stock.rule.returnThreshold, recovery);
 	});
 	return found == stocks.end() ? nullptr : &*found;
 }
@@ -261,7 +268,22 @@ struct PlayerBotSupplyKindProfile {
 	uint32_t count = 0;
 	uint32_t returnThreshold = 0;
 	PlayerBotSupplyDemand demand;
+	// Engine break chance / attack interval, retained until valid learning exists.
+	double staticUnitsPerCombatSecond = 0;
+	// Zero means no known purchase quote; never a profitability guarantee.
+	uint32_t unitPrice = 0;
 };
+
+inline double playerBotSupplyDemandRate(const PlayerBotSupplyKindProfile& profile)
+{
+	return std::max(0.0, profile.demand.samples != 0 ? profile.demand.unitsPerCombatSecond :
+	    std::max(profile.demand.unitsPerCombatSecond, profile.staticUnitsPerCombatSecond));
+}
+
+inline double playerBotThrowingBreakDemand(uint32_t breakChance, uint32_t attackIntervalMs)
+{
+	return attackIntervalMs == 0 ? 0 : std::min<uint32_t>(100, breakChance) * 10.0 / attackIntervalMs;
+}
 
 struct PlayerBotSupplyKindBudget {
 	PlayerBotSupplyKind kind = PlayerBotSupplyKind::ManaPotion;
@@ -271,14 +293,19 @@ struct PlayerBotSupplyKindBudget {
 	bool fits = true;
 };
 
-inline PlayerBotSupplyKindBudget playerBotSupplyKindBudget(const PlayerBotSupplyKindProfile& profile, double combatSeconds)
+inline PlayerBotSupplyKindBudget playerBotSupplyKindBudget(const PlayerBotSupplyKindProfile& profile, double combatSeconds,
+                                                          bool recovery = false)
 {
 	PlayerBotSupplyKindBudget budget;
 	budget.kind = profile.kind;
 	budget.count = profile.count;
-	budget.routine = profile.count > profile.returnThreshold ? profile.count - profile.returnThreshold : 0;
-	budget.expected = std::ceil(std::max(0.0, profile.demand.unitsPerCombatSecond) * std::max(0.0, combatSeconds));
-	budget.fits = (profile.count > profile.returnThreshold || profile.returnThreshold == 0) &&
+	const uint32_t reserve = playerBotSupplyHuntReserve(profile.kind, profile.returnThreshold, recovery);
+	budget.routine = profile.count > reserve ? profile.count - reserve : 0;
+	budget.expected = std::ceil(std::max(0.0, playerBotSupplyDemandRate(profile)) * std::max(0.0, combatSeconds));
+	// Zero predicted consumption cannot make a missing weapon/ammunition usable.
+	const bool needsStock = profile.kind == PlayerBotSupplyKind::ThrowingWeapon ||
+	                        profile.kind == PlayerBotSupplyKind::Ammunition;
+	budget.fits = (!needsStock || profile.count != 0) && (profile.count > reserve || reserve == 0) &&
 	              budget.expected <= budget.routine;
 	return budget;
 }

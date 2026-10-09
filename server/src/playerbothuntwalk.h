@@ -9,6 +9,12 @@
 #include "playerbotroutecache.h"
 #include "playerbotroutecorridor.h"
 #include "playerbothunttiming.h"
+#include "playerbothunttriptiming.h"
+#include "game.h"
+#include "configmanager.h"
+
+extern Game g_game;
+extern ConfigManager g_config;
 
 #include <iomanip>
 #include <sstream>
@@ -351,7 +357,15 @@ private:
 	            const std::deque<PlayerBotNavigationStep>& additions) {
 		for (const auto& step : additions) {
 			const bool move = step.action == PlayerBotNavigationAction::Move;
-			const uint32_t exposure = move ? player.getStepDuration(step.direction) : 1000;
+			const Tile* tile = g_game.map.getTile(step.expectedPosition);
+			const Item* ground = tile ? tile->getGround() : nullptr;
+			const uint32_t movementMs = playerBotHuntStepMilliseconds(
+			    ground ? Item::items[ground->getID()].speed : 150, static_cast<const Creature&>(player).getStepSpeed(),
+			    (step.direction & DIRECTION_DIAGONAL_MASK) != 0, current.z != step.expectedPosition.z);
+			const bool tool = step.action == PlayerBotNavigationAction::UseRope || step.action == PlayerBotNavigationAction::UseShovel;
+			const uint32_t actionMs = std::max<int32_t>(0, g_config.getNumber(tool ?
+			    ConfigManager::EX_ACTIONS_DELAY_INTERVAL : ConfigManager::ACTIONS_DELAY_INTERVAL));
+			const uint32_t exposure = move ? movementMs : playerBotHuntActionMilliseconds(movementMs, actionMs);
 			seconds += exposure / 1000.0;
 			summary.movementCost = add(summary.movementCost, move ? ((step.direction & DIRECTION_DIAGONAL_MASK) ? 30 : 10) : 20);
 			summary.dangerCost = add(summary.dangerCost, policy.dangerCost(step.expectedPosition, exposure));

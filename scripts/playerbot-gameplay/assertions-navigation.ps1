@@ -190,6 +190,24 @@ function Assert-DoorPassageEvents {
 			throw "Corpse decay route fixture failed $field."
 		}
 	}
+	$conditionEvents = @(ConvertFrom-PlayerbotLogs -Logs $Logs | Where-Object { $_.event -eq "condition_damage_contract" })
+	if ($conditionEvents.Count -ne 1) {
+		throw "Condition damage fixture emitted $($conditionEvents.Count) contract events."
+	}
+	$condition = $conditionEvents[0]
+	foreach ($field in @("loaded", "same_key_merged", "delayed_no_damage", "cleaned")) {
+		if ($condition.$field -ne $true) {
+			throw "Condition damage fixture failed $field."
+		}
+	}
+	$expected = @{ type = 1; id = 0; sub_id = 0; total = 30; start = 0; tick_ms = 4000;
+		condition_dps = 0.5; strongest_tick = 2; applications = 4; engine_total = 30;
+		modeled_condition_keys = 1; modeled_direct_dps = 20; modeled_condition_dps = 0.5 }
+	foreach ($field in $expected.Keys) {
+		if ($null -eq $condition.$field -or $condition.$field -ne $expected[$field]) {
+			throw "Condition damage fixture failed $field."
+		}
+	}
 }
 
 function Assert-SvargrondLocalRouteRecoveryEvents {

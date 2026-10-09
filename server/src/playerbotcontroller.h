@@ -237,6 +237,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		void logHealResult(uint16_t itemId, const char* result, const char* reason, const PlayerBotPotionAttempt& before,
 		                   const PlayerBotPotionAttempt& after, const Position& position);
 
+		bool prepareHuntDeparture(Player* player, const Position& position);
 		bool handleHealing(Player* player, const Position& currentPosition);
 		bool trySupportSpell(Player* player, const Position& currentPosition);
 		bool tryOffensiveSpell(Player* player, const Position& currentPosition);
@@ -748,6 +749,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		// Local retreat acknowledgements and short-lived failed-tile suppression.
 		PlayerBotNavigationSession rangedMovement;
 		bool huntRegionReached = false;
+		PlayerBotDepartureHealthPreparation huntDepartureHealth;
 		struct RangedPositionRecord {
 			uint32_t targetId = 0;
 			PlayerBotRangedAction action = PlayerBotRangedAction::Hold;

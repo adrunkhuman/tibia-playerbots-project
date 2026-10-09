@@ -85,7 +85,7 @@ $scenarioCatalog = @(
 	"stamina_bonus_projection", "stamina_boundary_projection", "stamina_normal_projection", "hunt_region_planning", "supply_recovery",
 	"combat_readiness_ready", "combat_readiness_upgrade", "combat_readiness_missing_weapon", "combat_readiness_supplies",
 	"combat_readiness_no_food", "combat_readiness_low_wealth", "combat_readiness_food_capacity",
-	"combat_readiness_retention", "paladin_spear_restock", "paladin_spear_break", "paladin_spear_last_break", "hunt_area_arrival", "remote_hunt", "equipment_offer_shadow_upgrade", "equipment_offer_shadow_unaffordable",
+	"combat_readiness_retention", "paladin_spear_restock", "paladin_spear_break", "paladin_spear_last_break", "paladin_spear_recovery_income", "hunt_area_arrival", "remote_hunt", "equipment_offer_shadow_upgrade", "equipment_offer_shadow_unaffordable",
 	"equipment_offer_shadow_no_upgrade", "equipment_purchase", "equipment_purchase_resume", "equipment_purchase_provider_moved", "equipment_purchase_provider_unreachable", "equipment_purchase_space",
 	"equipment_purchase_rejected", "equipment_purchase_spear", "equipment_tool_replenishment", "equipment_tool_nested_inventory", "adaptive_challenge", "mainland_equipment_reward", "oracle_departure",
 		"oracle_level_eight_interrupt", "oracle_level_eight_recovery",
@@ -105,8 +105,8 @@ foreach ($scenarioName in $scenarioCatalog) {
 		throw "Duplicate gameplay scenario name: $scenarioName"
 	}
 }
-if ($scenarioCatalog.Count -ne 117) {
-	throw "The gameplay scenario catalog must contain 117 scenarios; found $($scenarioCatalog.Count)."
+if ($scenarioCatalog.Count -ne 118) {
+	throw "The gameplay scenario catalog must contain 118 scenarios; found $($scenarioCatalog.Count)."
 }
 $requestedScenarioNames = @($Scenario | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
 $exactScenarioSelection = $requestedScenarioNames.Count -gt 0

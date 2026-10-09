@@ -192,8 +192,8 @@ inline PlayerBotNavigationRuntimeOutcome playerBotHuntRejectedPatrolPreflight(
 	PlayerBotNavigationRuntimeOutcome outcome;
 	outcome.plan = plan;
 	outcome.plan.attempted = true;
-	outcome.routeUnavailable = plan.result != PlayerBotNavigationResult::NodeLimit || routeUnsafe;
-	outcome.routeUnsafe = routeUnsafe;
+	outcome.routeUnsafe = routeUnsafe || plan.result == PlayerBotNavigationResult::RiskRejected;
+	outcome.routeUnavailable = plan.result != PlayerBotNavigationResult::NodeLimit || outcome.routeUnsafe;
 	return outcome;
 }
 
@@ -234,12 +234,19 @@ class PlayerBotHuntRuntime
 		void beginCycle(std::chrono::steady_clock::time_point now, uint32_t durationSeconds);
 		bool deadlineReached(std::chrono::steady_clock::time_point now) const { return huntDeadline != std::chrono::steady_clock::time_point{} && now >= huntDeadline; }
 		uint32_t completedCycles() const { return cycles; }
+		bool arrived() const { return supplyBaseline.has_value(); }
+		std::optional<PlayerBotHuntRuntimeCooldownCommand> arrivalTimeout(std::chrono::steady_clock::time_point now) const
+		{
+			if (!activeRegion || arrived() || !deadlineReached(now)) return std::nullopt;
+			return {{activeRegion->atlasVariantId, std::chrono::minutes(10)}};
+		}
+		uint32_t effectiveDurationSeconds() const { return plannedHuntDurationSeconds; }
 		bool active() const { return activeRegion.has_value(); }
 		std::optional<PlayerBotHuntRegion> region() const { return activeRegion; }
 		bool insideHuntArea(const Position& position, uint32_t westRange, uint32_t eastRange,
 		                    uint32_t northRange, uint32_t southRange) const;
 		bool matchesMonster(const std::string& name) const;
-		void enterHuntArea(const PlayerBotHuntRuntimePlayerObservation& player,
+		bool enterHuntArea(const PlayerBotHuntRuntimePlayerObservation& player,
 		                   const PlayerBotSupplyProfile& supplyProfile,
 		                   std::chrono::steady_clock::time_point now);
 

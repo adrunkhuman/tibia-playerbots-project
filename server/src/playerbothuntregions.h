@@ -14,6 +14,7 @@
 #include "playerbotcombatprofile.h"
 #include "playerbothunteconomy.h"
 #include "playerbotsupplypolicy.h"
+#include "playerbotsupplyrecovery.h"
 #include "position.h"
 
 #include <algorithm>
@@ -83,6 +84,7 @@ struct PlayerBotHuntPlanningProfile {
 	std::array<uint16_t, playerBotSupplyEquipmentSlotCount> equipmentItemIds{};
 	std::vector<PlayerBotHuntTransportArrival> transportArrivals;
 	PlayerBotSupplyProfile supply;
+	uint32_t healthPotionUnitPrice = 0; // Zero means no known purchase quote.
 	PlayerBotSupplyGlobalLearning supplyGlobalLearning;
 };
 
@@ -129,6 +131,34 @@ struct PlayerBotHuntCorridorDanger {
 	double dangerRatio = 0;
 };
 
+enum class PlayerBotHuntProfitabilityHint : uint8_t { NotApplicable, Uncertain, LikelySurplus };
+
+inline const char* playerBotHuntProfitabilityHintName(PlayerBotHuntProfitabilityHint hint)
+{
+	switch (hint) {
+		case PlayerBotHuntProfitabilityHint::LikelySurplus: return "likely_surplus";
+		case PlayerBotHuntProfitabilityHint::Uncertain: return "uncertain";
+		default: return "not_applicable";
+	}
+}
+
+struct PlayerBotHuntEconomicKey {
+	bool cashPressure = false;
+	bool supplyRecovery = false;
+	PlayerBotHuntProfitabilityHint profitabilityHint = PlayerBotHuntProfitabilityHint::NotApplicable;
+	double coinGoldPerMinute = 0;
+};
+
+inline int playerBotCompareHuntEconomicKeys(const PlayerBotHuntEconomicKey& left,
+                                          const PlayerBotHuntEconomicKey& right)
+{
+	const bool leftSurplus = left.profitabilityHint == PlayerBotHuntProfitabilityHint::LikelySurplus;
+	const bool rightSurplus = right.profitabilityHint == PlayerBotHuntProfitabilityHint::LikelySurplus;
+	if (leftSurplus != rightSurplus) return leftSurplus ? 1 : -1;
+	if (left.coinGoldPerMinute != right.coinGoldPerMinute) return left.coinGoldPerMinute > right.coinGoldPerMinute ? 1 : -1;
+	return 0;
+}
+
 struct PlayerBotHuntRegion {
 	uint32_t id = 0;
 	uint64_t atlasSiteId = 0;
@@ -146,6 +176,7 @@ struct PlayerBotHuntRegion {
 	double observedCoinGoldPerMinute = 0;
 	bool cashPressure = false;
 	bool supplyRecovery = false;
+	std::optional<PlayerBotHuntEconomicKey> frozenEconomicKey;
 	// Synthetic policy fixtures have no atlas geometry; engine candidates set this.
 	bool sustainedEligible = true;
 	PlayerBotHuntViability viability;
@@ -153,7 +184,11 @@ struct PlayerBotHuntRegion {
 	double spawnExperiencePerMinute = 0;
 	double clearExperiencePerMinute = 0;
 	double estimatedTravelSeconds = 0;
+	double estimatedReturnSeconds = 0;
+	double estimatedSupplySeconds = 0;
 	double availableHuntSeconds = 0;
+	double maximumHuntSeconds = 0;
+	uint32_t healthPotionUnitPrice = 0;
 	double observedExperiencePerMinute = 0;
 	double observedCorrection = 1;
 	uint32_t calibrationSampleCount = 0;
@@ -217,16 +252,124 @@ struct PlayerBotHuntRegion {
 	bool predictedLethal = false;
 	std::string rejectionReason;
 
+	bool productiveWindow() const
+	{
+		return availableHuntSeconds > 0 && (predictedFightSeconds <= 0 ||
+		    availableHuntSeconds * std::clamp(combatFraction, 0.0, 1.0) >= predictedFightSeconds);
+	}
+
 	bool recoverySustainable() const
 	{
-		return !supplyRecovery || (coinGoldPerMinute > 0 && supplyBudget.fits &&
-		    availableHuntSeconds > 0 && currentHealth >= maximumHealth * 0.8);
+		return !supplyRecovery || (coinGoldPerMinute > 0 && supplyBudget.fits && productiveWindow() &&
+		    currentHealth >= static_cast<int32_t>(playerBotSupplyRecoveryRequiredHealth(std::max(0, maximumHealth))));
+	}
+
+	double transitCombatSeconds() const
+	{
+		const double travel = std::max(0.0, estimatedTravelSeconds + estimatedReturnSeconds);
+		const double fraction = std::clamp(combatFraction, 0.0, 1.0);
+		// Before detailed validation use the hunt's duty share. Afterwards route
+		// damage translates to active encounter exposure at this hunt's DPS.
+		return routeValidated && expectedDamagePerSecond > 0 ?
+		    std::min(travel, std::max(0.0, recoveryRouteHealthLoss) * fraction / expectedDamagePerSecond) :
+		    travel * fraction;
+	}
+
+	PlayerBotHuntEconomicKey cheapEconomicKey() const
+	{
+		PlayerBotHuntEconomicKey key;
+		key.cashPressure = cashPressure;
+		key.supplyRecovery = supplyRecovery;
+		if (!cashPressure && !supplyRecovery) return key;
+		key.profitabilityHint = PlayerBotHuntProfitabilityHint::Uncertain;
+		const double income = observedCoinGoldPerMinute > 0 ? observedCoinGoldPerMinute : coinGoldPerMinute;
+		const double productive = availableHuntSeconds;
+		const double travel = std::max(0.0, estimatedTravelSeconds);
+		const double seconds = productive + 2 * travel;
+		if (!std::isfinite(income) || income <= 0 || !std::isfinite(productive) || productive <= 0 ||
+		    !std::isfinite(estimatedTravelSeconds) || !std::isfinite(seconds)) return key;
+		key.coinGoldPerMinute = income * (productive / seconds);
+		if (!std::isfinite(key.coinGoldPerMinute)) key.coinGoldPerMinute = 0;
+
+		// Hunt-only demand and known prices give a sign hint, not a net-margin
+		// objective. No fare, supplier itinerary, or route-danger credit/cost.
+		bool known = std::isfinite(supplyBudget.expectedPotions) && supplyBudget.expectedPotions >= 0 &&
+		    supplyBudget.expectedPotions != std::numeric_limits<double>::max();
+		double cost = supplyBudget.expectedPotions * healthPotionUnitPrice;
+		if (supplyBudget.expectedPotions > 0 && healthPotionUnitPrice == 0) known = false;
+		const double exposure = productive * std::clamp(combatFraction, 0.0, 1.0);
+		if (!std::isfinite(combatFraction)) known = false;
+		for (const auto& kind : supplyProfile.kinds) {
+			const bool demandKnown = kind.demand.samples != 0 || kind.demand.unitsPerCombatSecond > 0 ||
+			    kind.staticUnitsPerCombatSecond > 0;
+			const double demand = kind.demand.samples != 0 ? kind.demand.unitsPerCombatSecond :
+			    std::max(kind.demand.unitsPerCombatSecond, kind.staticUnitsPerCombatSecond);
+			if (!demandKnown || !std::isfinite(demand) || demand < 0) {
+				known = false;
+				continue;
+			}
+			const double expected = std::ceil(demand * exposure);
+			if (expected > 0 && kind.unitPrice == 0) known = false;
+			cost += expected * kind.unitPrice;
+		}
+		const double gross = income * productive / 60.0;
+		if (known && std::isfinite(cost) && std::isfinite(gross) && gross > cost)
+			key.profitabilityHint = PlayerBotHuntProfitabilityHint::LikelySurplus;
+		return key;
+	}
+
+	void freezeEconomicKey()
+	{
+		if (!frozenEconomicKey) frozenEconomicKey = cheapEconomicKey();
+	}
+
+	PlayerBotHuntEconomicKey economicKey() const
+	{
+		// Standalone synthetic policy fixtures default to the same cheap model,
+		// not zero income. Engine scoring and the selector freeze before routing.
+		return frozenEconomicKey ? *frozenEconomicKey : cheapEconomicKey();
+	}
+
+	double nonproductiveTripSeconds() const
+	{
+		return estimatedTravelSeconds + estimatedReturnSeconds + estimatedSupplySeconds;
+	}
+
+	// Find a verified fitting whole-second window, not a fixed short recovery
+	// timer. Bounded probes tolerate stepped regeneration/spell budgets; they
+	// may conservatively miss a narrow fit, but never authorize an untested one.
+	// Coarse admission may omit unproven transit combat; final validation and
+	// arrival always use the default modeled exposure and verify the real fit.
+	void fitSupplyWindow(uint32_t reserve, bool optimisticTransitCombat = false)
+	{
+		if (maximumHuntSeconds == 0) maximumHuntSeconds = availableHuntSeconds;
+		const double maximum = std::floor(std::max(0.0, maximumHuntSeconds));
+		double upper = maximum;
+		for (int probe = 64; probe >= 0; --probe) {
+			availableHuntSeconds = std::floor(maximum * probe / 64);
+			reconcileSupplies(reserve, optimisticTransitCombat);
+			if (supplyBudget.fits) {
+				double lower = availableHuntSeconds;
+				for (int refinement = 0; refinement < 32 && upper - lower > 1; ++refinement) {
+					availableHuntSeconds = std::floor((lower + upper) / 2);
+					reconcileSupplies(reserve, optimisticTransitCombat);
+					if (supplyBudget.fits) lower = availableHuntSeconds;
+					else upper = availableHuntSeconds;
+				}
+				availableHuntSeconds = lower;
+				break;
+			}
+			upper = availableHuntSeconds;
+		}
+		reconcileSupplies(reserve, optimisticTransitCombat);
+		projectedExperience = experiencePerMinute * observedCorrection * staminaExperienceMultiplier * availableHuntSeconds / 60.0;
+		score = projectedExperience;
 	}
 
 	void reconcileTravel(double durationSeconds, double travelSeconds, double staminaMultiplier)
 	{
-		estimatedTravelSeconds = travelSeconds;
-		availableHuntSeconds = std::max(0.0, durationSeconds - travelSeconds);
+		estimatedTravelSeconds = std::max(0.0, travelSeconds);
+		maximumHuntSeconds = availableHuntSeconds = std::max(0.0, durationSeconds);
 		staminaExperienceMultiplier = staminaMultiplier;
 		projectedExperience = experiencePerMinute * observedCorrection *
 		                      staminaExperienceMultiplier * availableHuntSeconds / 60.0;
@@ -238,23 +381,23 @@ struct PlayerBotHuntRegion {
 	void reconcileRecovery(uint32_t reserve, uint64_t funds)
 	{
 		reconcileSupplies(reserve);
-		cashPressure = playerBotHuntCashPressure(funds);
+		if (!frozenEconomicKey) cashPressure = playerBotHuntCashPressure(funds);
 	}
 
-	void reconcileSupplies(uint32_t reserve)
+	void reconcileSupplies(uint32_t reserve, bool optimisticTransitCombat = false)
 	{
 		supplyProfile.reserve = reserve;
 		supplyBudget = playerBotSupplyBudget(supplyProfile, expectedDamagePerSecond, combatFraction,
 		                                    availableHuntSeconds, estimatedTravelSeconds);
 		if (supplyRecovery && supplyProfile.potions <= reserve) {
 			// A short recovery outing may spend only health above the 80% floor.
-			const double healthBudget = std::max(0.0, currentHealth - maximumHealth * 0.8 - recoveryRouteHealthLoss);
+			const double healthBudget = std::max(0.0, currentHealth - static_cast<double>(playerBotSupplyRecoveryRequiredHealth(std::max(0, maximumHealth))) - recoveryRouteHealthLoss);
 			const double deficit = std::max(0.0, supplyBudget.expectedDamage - supplyBudget.regenerationHealing -
 			    supplyBudget.spellHealing - healthBudget);
 			supplyBudget.expectedPotions = deficit == 0 ? 0 : supplyProfile.potionHealing > 0 ?
 			    std::ceil(deficit / supplyProfile.potionHealing) : std::numeric_limits<double>::max();
 			supplyBudget.fits = supplyBudget.expectedPotions == 0 &&
-			    recoveryRouteHealthLoss <= currentHealth - maximumHealth * 0.8;
+			    recoveryRouteHealthLoss <= currentHealth - static_cast<double>(playerBotSupplyRecoveryRequiredHealth(std::max(0, maximumHealth)));
 		}
 		const double exposure = availableHuntSeconds * std::clamp(combatFraction, 0.0, 1.0);
 		supplyEstimateSource = "static";
@@ -287,18 +430,17 @@ struct PlayerBotHuntRegion {
 		if (learnedEstimate) {
 			supplyBudget.expectedPotions = std::ceil(supplyAppliedPotionsPerCombatSecond * exposure);
 			supplyBudget.fits = (supplyRecovery && supplyBudget.expectedPotions == 0 &&
-			    recoveryRouteHealthLoss <= currentHealth - maximumHealth * 0.8) ||
+			    recoveryRouteHealthLoss <= currentHealth - static_cast<double>(playerBotSupplyRecoveryRequiredHealth(std::max(0, maximumHealth)))) ||
 			    ((supplyProfile.potions > reserve || reserve == 0) &&
 			     supplyBudget.expectedPotions <= supplyBudget.routinePotions);
 		}
 		supplyKindBudgets.clear();
 		for (const PlayerBotSupplyKindProfile& kind : supplyProfile.kinds) {
-			supplyKindBudgets.push_back(playerBotSupplyKindBudget(kind, exposure));
-			// Recovery may earn cash without mana potions only when this outing
-			// projects no mana-potion use. Weapons/ammo remain essential even
-			// with zero learned consumption; ordinary hunts keep their floors.
-			if (supplyRecovery && kind.kind == PlayerBotSupplyKind::ManaPotion &&
-			    supplyKindBudgets.back().expected == 0) supplyKindBudgets.back().fits = true;
+			// Coarse distance cannot prove encounters: admit optimistically until
+			// detailed routes supply health-loss exposure. Keep travel time for
+			// economic scoring and food lifetime; never bypass final stock checks.
+			supplyKindBudgets.push_back(playerBotSupplyKindBudget(kind,
+			    exposure + (optimisticTransitCombat ? 0 : transitCombatSeconds()), supplyRecovery));
 			supplyBudget.fits = supplyBudget.fits && supplyKindBudgets.back().fits;
 		}
 	}
@@ -427,8 +569,8 @@ inline bool playerBotPreferHuntRegion(const PlayerBotHuntRegion& left, const Pla
 	const bool rightAvailable = right.suitable && right.reachable;
 	if (leftAvailable != rightAvailable) return leftAvailable;
 	// Spending the whole outing on travel is not a free, supply-fitting hunt.
-	const bool leftProductive = left.availableHuntSeconds > 0;
-	const bool rightProductive = right.availableHuntSeconds > 0;
+	const bool leftProductive = left.productiveWindow();
+	const bool rightProductive = right.productiveWindow();
 	if (leftProductive != rightProductive) return leftProductive;
 	if (left.supplyBudget.fits != right.supplyBudget.fits) return left.supplyBudget.fits;
 	if (!left.supplyBudget.fits) {
@@ -436,18 +578,16 @@ inline bool playerBotPreferHuntRegion(const PlayerBotHuntRegion& left, const Pla
 		const double rightPressure = playerBotHuntSupplyPressure(right);
 		if (leftPressure != rightPressure) return leftPressure < rightPressure;
 	}
-	const bool recovery = left.supplyRecovery && right.supplyRecovery;
-	const double leftIncome = (left.cashPressure || recovery) ?
-	    (left.observedCoinGoldPerMinute > 0 ? left.observedCoinGoldPerMinute : left.coinGoldPerMinute) : 0;
-	const double rightIncome = (right.cashPressure || recovery) ?
-	    (right.observedCoinGoldPerMinute > 0 ? right.observedCoinGoldPerMinute : right.coinGoldPerMinute) : 0;
-	if (leftIncome != rightIncome) return leftIncome > rightIncome;
+	const auto leftKey = left.economicKey(), rightKey = right.economicKey();
+	const bool recovery = leftKey.supplyRecovery && rightKey.supplyRecovery;
+	const int economicOrder = playerBotCompareHuntEconomicKeys(leftKey, rightKey);
+	if (economicOrder != 0) return economicOrder > 0;
 	if (recovery && left.threatRatio != right.threatRatio) return left.threatRatio < right.threatRatio;
 	if (left.score != right.score) return left.score > right.score;
 	// A zero-duration estimate must not let an unproven disconnected region win
 	// a tie merely because it forecasts no combat consumption.
 	if (left.topologyReachable != right.topologyReachable) return left.topologyReachable;
-	return left.estimatedTravelSeconds < right.estimatedTravelSeconds;
+	return left.nonproductiveTripSeconds() < right.nonproductiveTripSeconds();
 }
 inline bool playerBotHuntTravelAffordable(uint64_t funds, uint64_t recoveryReserve,
                                           uint64_t outboundFare, uint64_t exitFare,
@@ -601,41 +741,57 @@ inline std::vector<PlayerBotHuntRegion> playerBotHuntRouteCandidates(
 	return result;
 }
 
-// Route validation can only add travel to the zero-travel estimate, and its
-// potion reserve never drops below the planning floor, so a candidate fits
-// afterwards only at a hunt length that fits now. Potions needed grow with hunt
-// length apart from small regeneration and spell-cast steps; probing a coarse
-// grid and allowing one extra step keeps this an upper bound.
+// Health's stepped healing budget keeps the full XP bound. Typed demand is
+// linear: a fitting hunt cannot spend more than its snapshotted routine stock.
+// Ignore transit demand optimistically. Stock changes invalidate the pass; live
+// route refreshes retain the same item's learned/static demand, without buying.
 inline double playerBotHuntOptimisticFittingExperience(const PlayerBotHuntRegion& region, double durationSeconds,
                                                        double peakExperiencePerSecond)
 {
-	constexpr int steps = 24;
-	PlayerBotHuntRegion probe = region;
-	for (int step = steps; step >= 0; --step) {
-		const double huntSeconds = durationSeconds * step / steps;
-		probe.availableHuntSeconds = huntSeconds;
-		probe.estimatedTravelSeconds = durationSeconds - huntSeconds;
-		probe.reconcileSupplies(region.supplyProfile.reserve);
-		if (!probe.supplyBudget.fits) continue;
-		if (step == steps) return region.optimisticProjectedExperience;
-		return peakExperiencePerSecond * durationSeconds * (step + 1) / steps;
+	const double conservative = std::max(region.optimisticProjectedExperience, peakExperiencePerSecond * durationSeconds);
+	if (!std::isfinite(durationSeconds) || durationSeconds < 0 ||
+	    !std::isfinite(peakExperiencePerSecond) || peakExperiencePerSecond < 0 ||
+	    !std::isfinite(region.combatFraction) || region.combatFraction <= 0) return conservative;
+	const double fraction = std::min(1.0, region.combatFraction);
+	double typedSeconds = durationSeconds;
+	bool knownDemand = false;
+	for (const auto& kind : region.supplyProfile.kinds) {
+		const double rate = kind.demand.samples != 0 ? kind.demand.unitsPerCombatSecond :
+		    std::max(kind.demand.unitsPerCombatSecond, kind.staticUnitsPerCombatSecond);
+		const double perSecond = rate * fraction;
+		if (!std::isfinite(rate) || rate <= 0 || !std::isfinite(perSecond) || perSecond <= 0) continue;
+		const uint32_t reserve = playerBotSupplyHuntReserve(kind.kind, kind.returnThreshold, region.supplyRecovery);
+		const uint32_t routine = kind.count > reserve ? kind.count - reserve : 0;
+		typedSeconds = std::min(typedSeconds, routine / perSecond);
+		knownDemand = true;
 	}
-	return -1;
+	if (!knownDemand) return conservative;
+	// Keep a whole second beyond the rounded bound: final XP uses a different
+	// arithmetic order, so one nextafter alone cannot protect tied scores.
+	typedSeconds = std::min(durationSeconds, std::ceil(typedSeconds) + 1);
+	const double typedExperience = std::nextafter(peakExperiencePerSecond * typedSeconds,
+	    std::numeric_limits<double>::infinity());
+	const double fullExperience = std::isfinite(region.optimisticProjectedExperience) &&
+	    region.optimisticProjectedExperience >= 0 ? region.optimisticProjectedExperience : conservative;
+	return std::min(fullExperience, typedExperience);
 }
 
 inline bool playerBotHuntCandidateCanBeatValidated(
     const PlayerBotHuntRegion& candidate, const PlayerBotHuntRegion& validated)
 {
 	if (!candidate.suitable || !candidate.reachable) return false;
-	// A zero-duration incumbent must not prune a productive fallback. Otherwise
-	// travel can improve supply fit, but not past a productive fitting incumbent;
-	// compare that best case with the candidate's no-travel XP bound.
-	if (validated.availableHuntSeconds <= 0 || !validated.supplyBudget.fits) return true;
+	// An unproductive incumbent must not prune a useful fallback. Only compare
+	// upper bounds after both productivity and supply preference tiers are met.
+	if (!validated.productiveWindow() || !validated.supplyBudget.fits) return true;
 	// A fitting incumbent outranks every non-fitting result, so the candidate
 	// must fit after validation to win.
 	if (candidate.optimisticFittingExperience < 0) return false;
-	if (validated.cashPressure && candidate.coinGoldPerMinute > validated.coinGoldPerMinute) return true;
-	if (validated.cashPressure && candidate.coinGoldPerMinute < validated.coinGoldPerMinute) return false;
+	const auto candidateKey = candidate.economicKey(), validatedKey = validated.economicKey();
+	const int economicOrder = playerBotCompareHuntEconomicKeys(candidateKey, validatedKey);
+	if (economicOrder != 0) return economicOrder > 0;
+	// Equal recovery keys may still win on safety before XP. Otherwise keep
+	// the existing conservative XP bound, including ties and unknown bounds.
+	if (candidateKey.supplyRecovery && validatedKey.supplyRecovery) return true;
 	return std::min(candidate.optimisticProjectedExperience, candidate.optimisticFittingExperience) >= validated.score;
 }
 
@@ -660,9 +816,10 @@ inline bool playerBotHuntRemainingCanBeatValidated(
 
 inline const char* playerBotHuntSelectionRule(const PlayerBotHuntRegion& region)
 {
-	if (region.supplyRecovery) return region.supplyBudget.fits ?
+	const auto key = region.economicKey();
+	if (key.supplyRecovery) return region.supplyBudget.fits ?
 	    "supply_recovery_coin_safety_then_xp" : "supply_recovery_pressure_then_coin_safety_then_xp";
-	if (region.cashPressure) return region.supplyBudget.fits ?
+	if (key.cashPressure) return region.supplyBudget.fits ?
 	    "supply_budget_then_coin_income_then_xp" : "lowest_supply_pressure_then_coin_income_then_xp";
 	return region.supplyBudget.fits ? "supply_budget_then_xp" : "lowest_supply_pressure_then_xp";
 }

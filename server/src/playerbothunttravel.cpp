@@ -304,6 +304,38 @@ std::optional<PlayerBotNavigationRoutePlan> PlayerBotController::advanceHuntTrav
 	PlayerBotRouteChanges::read(player.getPosition()); // PZ checks also read the actor's current tile.
 	const auto& policy = w.policy;
 	w.walking.metrics.dangerAware = policy.enabled();
+	// This necessary condition applies to every route, including NPC travel.
+	// Keep explicit endpoint evidence instead of an empty failed-plan summary.
+	auto rejectedEndpoints = [&](Position from, const std::vector<Position>& targets, const char* kind) {
+		const auto peak = playerBotNavigationRejectedEndpointPeak(from, PlayerBotNavigationGoal::anyOf(targets),
+		    riskProfile.maximumHealthLossPerSecond, [&](Position p) { return policy.dangerAt(p); });
+		if (!peak) return peak;
+		++timing.riskRejects;
+		std::ostringstream fields;
+		fields << std::setprecision(17) << "\"planning_pass\":" << w.pass << ",\"scoring_revision\":" << w.revision
+		       << ",\"request_sequence\":" << w.sequence << ",\"kind\":\"" << kind << "\""
+		       << ",\"from\":{\"x\":" << from.x << ",\"y\":" << from.y << ",\"z\":" << unsigned(from.z) << "}"
+		       << ",\"result\":\"risk_rejected\",\"fallback_reason\":\"endpoint_peak_danger\",\"expanded_nodes\":0"
+		       << ",\"endpoint_minimum_peak\":" << *peak << ",\"maximum_peak\":" << riskProfile.maximumHealthLossPerSecond
+		       << ",\"requested_target_count\":" << targets.size() << ",\"requested_targets\":[";
+		for (size_t i = 0; i < std::min<size_t>(targets.size(), 8); ++i) {
+			if (i) fields << ',';
+			fields << "{\"x\":" << targets[i].x << ",\"y\":" << targets[i].y << ",\"z\":" << unsigned(targets[i].z) << '}';
+		}
+		fields << ']';
+		emit("hunt_route_connection", player.getPosition(), fields.str());
+		return peak;
+	};
+	if (!w.walkingDone && !w.local) {
+		if (const auto peak = rejectedEndpoints(source, {w.destination}, "walking")) {
+			w.walking.metrics.result = PlayerBotNavigationResult::RiskRejected;
+			w.walking.metrics.maximumHealthLossPerSecond = *peak;
+			if (walkingAlternative) *walkingAlternative = w.walking;
+			PlayerBotNavigationRoutePlan rejected = std::move(w.walking);
+			huntTravelWork.reset();
+			return rejected;
+		}
+	}
 	uint64_t localBudget = localNodesPerTurn;
 	auto connectionEvent = [&](const char* kind, PlayerBotNavigationResult result) {
 		// Transport searches probe hundreds of arrivals per request; most end in
@@ -326,7 +358,7 @@ std::optional<PlayerBotNavigationRoutePlan> PlayerBotController::advanceHuntTrav
 		       << ",\"request_sequence\":" << w.sequence << ",\"kind\":\"" << kind << "\""
 		       << ",\"from\":{\"x\":" << w.local->source.x << ",\"y\":" << w.local->source.y << ",\"z\":" << unsigned(w.local->source.z) << "}"
 		       << ",\"to\":{\"x\":" << w.local->current.x << ",\"y\":" << w.local->current.y << ",\"z\":" << unsigned(w.local->current.z) << "}"
-		       << ",\"result\":\"" << (result == PlayerBotNavigationResult::Reached ? "reached" : result == PlayerBotNavigationResult::NodeLimit ? "node_limit" : "unreachable") << "\""
+		       << ",\"result\":\"" << playerBotNavigationResultName(result) << "\""
 		       << ",\"expanded_nodes\":" << w.local->expanded << ",\"cache_hits\":" << w.local->cacheHits
 		       << ",\"incomplete_reused\":" << (w.local->incompleteReused ? "true" : "false")
 		       << ",\"unrestricted_fallback\":" << (w.local->unrestricted ? "true" : "false")
@@ -399,6 +431,14 @@ std::optional<PlayerBotNavigationRoutePlan> PlayerBotController::advanceHuntTrav
 				return !playerBotStableApproachTile(g_game.map.getTile(target), player);
 			}), targets.end());
 			if (targets.empty()) return PlayerBotTransportSegment{};
+			if (const auto peak = rejectedEndpoints(from, targets, final ? "transport_destination" : "npc_approach")) {
+				return PlayerBotTransportSegment{PlayerBotNavigationResult::RiskRejected, 0, 0, 0, *peak};
+			}
+			// An any-of request keeps its safe alternatives; do not guide coarse
+			// routing toward an endpoint the detailed graph can never enter.
+			targets.erase(std::remove_if(targets.begin(), targets.end(), [&](Position target) {
+				return target != from && !playerBotNavigationPeakAccepts(riskProfile.maximumHealthLossPerSecond, policy.dangerAt(target));
+			}), targets.end());
 			if (w.npcNodes >= playerBotNavigationMaximumExpandedNodes)
 				return PlayerBotTransportSegment{PlayerBotNavigationResult::NodeLimit};
 			w.local = std::make_unique<PlayerBotHuntWalkSearch>(from, targets,
