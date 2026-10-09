@@ -335,12 +335,14 @@ $doorContract = @{ event = "door_passages_contract"; reloaded = $true; ordinary_
     coarse_danger_rejection = $true; coarse_danger_dependencies = $true }
 $stableContract = @{ event = "stable_approaches_contract"; selection = $true; revalidation = $true;
     floor_change_rejected = $true; occupied_eligible = $true; blocked_rejected = $true; teleport_traversal = $true }
-Assert-DoorPassageEvents -Logs (ConvertTo-FixtureLogs @($doorContract, $stableContract))
+$decayContract = @{ event = "corpse_decay_route_contract"; troll = $true; spider = $true;
+    rat = $true; poison_spider = $true; blocker_invalidated = $true }
+Assert-DoorPassageEvents -Logs (ConvertTo-FixtureLogs @($doorContract, $stableContract, $decayContract))
 foreach ($field in @("coarse_danger_reuse", "coarse_danger_rejection", "coarse_danger_dependencies")) {
     $failedContract = $doorContract.Clone()
     $failedContract[$field] = $false
     Assert-Rejected "Coarse danger contract $field" {
-        Assert-DoorPassageEvents -Logs (ConvertTo-FixtureLogs @($failedContract, $stableContract))
+        Assert-DoorPassageEvents -Logs (ConvertTo-FixtureLogs @($failedContract, $stableContract, $decayContract))
     } "Door passage fixture failed $field."
 }
 foreach ($field in @("selection", "revalidation", "floor_change_rejected", "occupied_eligible",
@@ -348,14 +350,31 @@ foreach ($field in @("selection", "revalidation", "floor_change_rejected", "occu
     $failedContract = $stableContract.Clone()
     $failedContract[$field] = $false
     Assert-Rejected "Stable approach contract $field" {
-        Assert-DoorPassageEvents -Logs (ConvertTo-FixtureLogs @($doorContract, $failedContract))
+        Assert-DoorPassageEvents -Logs (ConvertTo-FixtureLogs @($doorContract, $failedContract, $decayContract))
     } "Stable approach fixture failed $field."
 }
 Assert-Rejected "Missing stable approach contract" {
-    Assert-DoorPassageEvents -Logs (ConvertTo-FixtureLogs @($doorContract))
+    Assert-DoorPassageEvents -Logs (ConvertTo-FixtureLogs @($doorContract, $decayContract))
 } "Stable approach fixture emitted 0 contract events."
 Assert-Rejected "Duplicate stable approach contract" {
-    Assert-DoorPassageEvents -Logs (ConvertTo-FixtureLogs @($doorContract, $stableContract, $stableContract))
+    Assert-DoorPassageEvents -Logs (ConvertTo-FixtureLogs @($doorContract, $stableContract, $stableContract, $decayContract))
 } "Stable approach fixture emitted 2 contract events."
+
+foreach ($field in @("troll", "spider", "rat", "poison_spider", "blocker_invalidated")) {
+    foreach ($failure in @("false", "missing")) {
+        $failedContract = $decayContract.Clone()
+        if ($failure -eq "missing") { $failedContract.Remove($field) }
+        else { $failedContract[$field] = $false }
+        Assert-Rejected "Corpse decay route contract $field/$failure" {
+            Assert-DoorPassageEvents -Logs (ConvertTo-FixtureLogs @($doorContract, $stableContract, $failedContract))
+        } "Corpse decay route fixture failed $field."
+    }
+}
+Assert-Rejected "Missing corpse decay route contract" {
+    Assert-DoorPassageEvents -Logs (ConvertTo-FixtureLogs @($doorContract, $stableContract))
+} "Corpse decay route fixture emitted 0 contract events."
+Assert-Rejected "Duplicate corpse decay route contract" {
+    Assert-DoorPassageEvents -Logs (ConvertTo-FixtureLogs @($doorContract, $stableContract, $decayContract, $decayContract))
+} "Corpse decay route fixture emitted 2 contract events."
 
 "Playerbot navigation assertion regression PASS"

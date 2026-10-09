@@ -832,6 +832,67 @@ std::vector<playerbot::PlayerBotFixtureEvent> playerbot::PlayerBotFixtureDriver:
 			    !PlayerBotNavigator().resolveMove(player, source, DIRECTION_EAST, {}, step);
 		}
 	}
+
+	// Exercise the loaded item definitions and Tile notifications, not just the
+	// signature policy. Keep every mutation on the disposable synthetic tiles.
+	Tile* decayTile = reloaded ? g_game.map.getTile(teleportExit) : nullptr;
+	auto corpseDecayPreservesRoute = [&](uint16_t freshId, uint16_t decayedId) {
+		const ItemType& freshType = Item::items[freshId];
+		const ItemType& decayedType = Item::items[decayedId];
+		auto walkableType = [](const ItemType& type) {
+			return !type.blockSolid && !type.blockPathFind && !type.hasHeight;
+		};
+		const bool typesMatch = freshType.id == freshId && decayedType.id == decayedId &&
+		    freshType.decayTo == decayedId && freshType.isContainer() && decayedType.isContainer() &&
+		    walkableType(freshType) && walkableType(decayedType) &&
+		    freshType.moveable != decayedType.moveable && freshType.pickupable != decayedType.pickupable;
+		if (!decayTile) return false;
+		Item* corpse = Item::CreateItem(freshId);
+		if (!corpse) return false;
+		decayTile->internalAddThing(corpse);
+		PlayerBotRouteChanges::Watch watch;
+		bool freshWalkable = false;
+		{
+			PlayerBotRouteChanges::Scope scope(watch);
+			Tile* observed = g_game.map.getTile(decayTile->getPosition());
+			freshWalkable = observed == decayTile && corpse->getID() == freshId &&
+			    observed->queryAdd(0, player, 1, FLAG_IGNOREBLOCKCREATURE) == RETURNVALUE_NOERROR;
+		}
+		const bool recorded = watch.tiles.size() == 1 && watch.valid();
+		corpse = g_game.transformItem(corpse, decayedId);
+		const bool preserved = typesMatch && freshWalkable && recorded && corpse &&
+		    corpse->getID() == decayedId && corpse->getParent() == decayTile &&
+		    decayTile->queryAdd(0, player, 1, FLAG_IGNOREBLOCKCREATURE) == RETURNVALUE_NOERROR && watch.valid();
+		if (corpse && corpse->getParent() == decayTile) {
+			decayTile->removeThing(corpse, corpse->getItemCount());
+			g_game.ReleaseItem(corpse);
+		}
+		return preserved;
+	};
+	const bool trollDecay = corpseDecayPreservesRoute(5960, 3067);
+	const bool spiderDecay = corpseDecayPreservesRoute(5961, 2807);
+	const bool ratDecay = corpseDecayPreservesRoute(5964, 3073);
+	const bool poisonSpiderDecay = corpseDecayPreservesRoute(5974, 2848);
+	bool blockerInvalidated = false;
+	if (decayTile) {
+		Item* blocker = Item::CreateItem(ordinaryDoorId + 1);
+		if (blocker) {
+			decayTile->internalAddThing(blocker);
+			PlayerBotRouteChanges::Watch watch;
+			{
+				PlayerBotRouteChanges::Scope scope(watch);
+				g_game.map.getTile(decayTile->getPosition());
+			}
+			const bool walkable = watch.tiles.size() == 1 && watch.valid() &&
+			    !Item::items[blocker->getID()].blockSolid &&
+			    decayTile->queryAdd(0, player, 1, FLAG_IGNOREBLOCKCREATURE) == RETURNVALUE_NOERROR;
+			blocker = g_game.transformItem(blocker, ordinaryDoorId);
+			blockerInvalidated = walkable && blocker && blocker->getID() == ordinaryDoorId &&
+			    blocker->getParent() == decayTile && Item::items[blocker->getID()].blockSolid &&
+			    decayTile->queryAdd(0, player, 1, FLAG_IGNOREBLOCKCREATURE) != RETURNVALUE_NOERROR &&
+			    watch.check() == PlayerBotRouteChanges::Reason::ChangedTile;
+		}
+	}
 	cleanup();
 
 	std::ostringstream fields;
@@ -858,7 +919,14 @@ std::vector<playerbot::PlayerBotFixtureEvent> playerbot::PlayerBotFixtureDriver:
 	             << ",\"occupied_eligible\":" << boolField(stableApproachOccupancy)
 	             << ",\"blocked_rejected\":" << boolField(stableApproachBlocked)
 	             << ",\"teleport_traversal\":" << boolField(fixedHeightTeleportAlternative);
-	return {{"door_passages_contract", fields.str()}, {"stable_approaches_contract", stableFields.str()}};
+	std::ostringstream decayFields;
+	decayFields << "\"troll\":" << boolField(trollDecay)
+	            << ",\"spider\":" << boolField(spiderDecay)
+	            << ",\"rat\":" << boolField(ratDecay)
+	            << ",\"poison_spider\":" << boolField(poisonSpiderDecay)
+	            << ",\"blocker_invalidated\":" << boolField(blockerInvalidated);
+	return {{"door_passages_contract", fields.str()}, {"stable_approaches_contract", stableFields.str()},
+	        {"corpse_decay_route_contract", decayFields.str()}};
 }
 
 std::vector<playerbot::PlayerBotFixtureEvent> playerbot::PlayerBotFixtureDriver::runShovelPassagesContract(Player& player)

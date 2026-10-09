@@ -41,8 +41,15 @@ inline bool playerBotRouteItemPresenceAffectsNavigation(const PlayerBotRouteItem
 }
 
 inline bool playerBotRouteItemUpdateAffectsNavigation(
-    const PlayerBotRouteItemSignature& oldItem, const PlayerBotRouteItemSignature& newItem)
+    PlayerBotRouteItemSignature oldItem, PlayerBotRouteItemSignature newItem)
 {
+	// Corpse decay can make a walkable item movable/pickupable. Those flags
+	// matter for blockers, fixed-height climbs and passages, not ordinary loot.
+	if (!(oldItem.blockSolid || oldItem.blockPath || oldItem.hasHeight || oldItem.passageId != 0 ||
+	      newItem.blockSolid || newItem.blockPath || newItem.hasHeight || newItem.passageId != 0)) {
+		oldItem.moveable = newItem.moveable;
+		oldItem.pickupable = newItem.pickupable;
+	}
 	// A field may change damage/condition even without changing its item ID.
 	return oldItem.magicField || newItem.magicField || oldItem.fields() != newItem.fields();
 }
