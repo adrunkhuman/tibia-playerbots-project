@@ -26,7 +26,9 @@ enum class PlayerBotControllerLifecycle : uint8_t {
 enum class PlayerBotTurnCommand : uint8_t {
 	None,
 	Progression,
+	TrainerDiscovery,
 	MagicTraining,
+	Prepare,
 	StartHunt,
 	PlanHunt,
 	SuspendedLoot,
@@ -46,6 +48,8 @@ struct PlayerBotTurnObservation {
 	bool huntPlanningActive = false;
 	bool lootNavigationSuspended = false;
 	bool huntCycleFinished = false;
+	bool preparationActive = false;
+	bool trainerDiscoveryActive = false;
 };
 
 class PlayerBotTurnRouter
@@ -70,8 +74,10 @@ class PlayerBotTurnRouter
 		constexpr PlayerBotTurnCommand route(const PlayerBotTurnObservation& observation) const
 		{
 			if (!running()) return PlayerBotTurnCommand::None;
+			if (observation.trainerDiscoveryActive) return PlayerBotTurnCommand::TrainerDiscovery;
 			if (observation.progressionActive) return PlayerBotTurnCommand::Progression;
 			if (observation.magicTrainingActive) return PlayerBotTurnCommand::MagicTraining;
+			if (observation.preparationActive) return PlayerBotTurnCommand::Prepare;
 			if (observation.huntRegionSelectionRequired) return PlayerBotTurnCommand::StartHunt;
 			if (observation.huntPlanningActive) return PlayerBotTurnCommand::PlanHunt;
 			if (stage == PlayerBotScenarioStage::LootCorpse && observation.lootNavigationSuspended) {

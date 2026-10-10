@@ -54,7 +54,7 @@
 			$trisha = @($events | Where-Object {
 				$_.event -eq "spell_candidate" -and $_.npc_name -eq "Trisha" -and $_.spell -eq "Light Healing" -and
 				$_.result -eq "rejected" -and $_.reason -eq "unaffordable_after_reserves" -and
-				$_.price -eq 170 -and $_.reserve -eq 100 -and $_.travel_steps -eq 0
+				$_.price -eq 170 -and $_.reserve -eq 0 -and $_.travel_steps -eq 0
 			})
 			$nearbyWrongVocation = @($events | Where-Object {
 				$_.event -eq "spell_candidate" -and $_.npc_name -in @("Faluae", "Eroth", "Maealil", "Elathriel")

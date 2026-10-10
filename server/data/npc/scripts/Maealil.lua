@@ -33,7 +33,7 @@ keywordHandler:addKeyword({'stake'}, StdModule.say, {npcHandler = npcHandler, te
 
 -- Healing
 local function addHealKeyword(text, condition, effect)
-	keywordHandler:addKeyword({'heal'}, StdModule.say, {npcHandler = npcHandler, text = text},
+	keywordHandler:addKeyword({'%f[%a]heal%f[%A]'}, StdModule.say, {npcHandler = npcHandler, text = text},
 		function(player) return player:getCondition(condition) ~= nil end,
 		function(player)
 			player:removeCondition(condition)
@@ -46,7 +46,7 @@ addHealKeyword('You are burning. Let me quench those flames.', CONDITION_FIRE, C
 addHealKeyword('You are poisoned. Let me soothe your pain.', CONDITION_POISON, CONST_ME_MAGIC_RED)
 addHealKeyword('You are electrified, my child. Let me help you to stop trembling.', CONDITION_ENERGY, CONST_ME_MAGIC_GREEN)
 
-keywordHandler:addKeyword({'heal'}, StdModule.say, {npcHandler = npcHandler, text = 'You are hurt, my child. I will heal your wounds.'},
+keywordHandler:addKeyword({'%f[%a]heal%f[%A]'}, StdModule.say, {npcHandler = npcHandler, text = 'You are hurt, my child. I will heal your wounds.'},
 	function(player) return player:getHealth() < 40 end,
 	function(player)
 		local health = player:getHealth()
@@ -54,7 +54,7 @@ keywordHandler:addKeyword({'heal'}, StdModule.say, {npcHandler = npcHandler, tex
 		player:getPosition():sendMagicEffect(CONST_ME_MAGIC_GREEN)
 	end
 )
-keywordHandler:addKeyword({'heal'}, StdModule.say, {npcHandler = npcHandler, text = 'You aren\'t looking that bad. Sorry, I can\'t help you. But if you are looking for additional protection you should go on the {pilgrimage} of ashes or get the protection of the {twist of fate} here.'})
+keywordHandler:addKeyword({'%f[%a]heal%f[%A]'}, StdModule.say, {npcHandler = npcHandler, text = 'You aren\'t looking that bad. Sorry, I can\'t help you. But if you are looking for additional protection you should go on the {pilgrimage} of ashes or get the protection of the {twist of fate} here.'})
 
 -- Basic
 keywordHandler:addKeyword({'pilgrimage'}, StdModule.say, {npcHandler = npcHandler, text = 'Whenever you receive a lethal wound, your vital force is damaged and there is a chance that you lose some of your equipment. With every single of the five {blessings} you have, this damage and chance of loss will be reduced.'})

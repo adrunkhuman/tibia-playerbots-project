@@ -27,6 +27,20 @@ void PlayerBotServiceWorkflow::reset(PlayerBotServiceIntent intent)
 	providerRouteCosts.clear();
 	providersRequiringNpcTravel.clear();
 	liquidationPlan.reset();
+	survivalRestock = false;
+}
+
+PlayerBotServiceCommand PlayerBotServiceWorkflow::retirePreparationPurchase(const PlayerBotServiceObservation& observation)
+{
+	if (serviceIntent != PlayerBotServiceIntent::PreparationPurchase) return {};
+	PlayerBotServiceCommand result;
+	if (serviceSession.hasShopTransaction()) {
+		auto finalObservation = observation;
+		finalObservation.maximumAttempts = 1;
+		result = verifyShop(finalObservation, true);
+	}
+	reset();
+	return result;
 }
 
 bool PlayerBotServiceWorkflow::reportNpcReply(uint32_t playerId, uint32_t replyingPlayerId, uint32_t npcId, uint8_t type)
@@ -551,8 +565,40 @@ PlayerBotServiceCommand PlayerBotServiceWorkflow::advanceImpl(const PlayerBotSer
 		// protected items to carry. All kinds share the remaining capacity.
 		const uint32_t purchaseCapacity = observation.freeCapacity > observation.supplyCapacityReserve ?
 		    observation.freeCapacity - observation.supplyCapacityReserve : 0;
-		const auto restock = disposition.restockSupplies(requests, purchaseCapacity, observation.money,
-		                                                 observation.bankBalance, survivalRestock);
+		// Reserve every kind's floor, including stock at separate suppliers,
+		// before optional preferred stock can compete with full top-ups.
+		// Reuse the ordinary cash-reserve and partial-purchase policy in both
+		// passes; a preference must never become an insufficient-funds floor.
+		auto preferredRequests = requests;
+		bool hasPreference = false;
+		for (size_t index = 0; index < requests.size(); ++index) {
+			const auto& supply = observation.supplies[index];
+			if (supply.preferredStock != 0) hasPreference = true;
+			const auto& request = requests[index];
+			const uint32_t floor = request.returnThreshold == UINT32_MAX ? 0 :
+			    std::max(request.safetyFloor, request.returnThreshold + 1);
+			preferredRequests[index].restockTarget = std::min(request.restockTarget,
+			    std::max(floor, supply.preferredStock));
+		}
+		auto restock = disposition.restockSupplies(hasPreference ? preferredRequests : requests,
+		    purchaseCapacity, observation.money, observation.bankBalance, survivalRestock);
+		if (hasPreference && std::none_of(restock.begin(), restock.end(),
+		    [](const auto& decision) { return decision.insufficientFunds; })) {
+			uint64_t remainingFunds = observation.money + observation.bankBalance;
+			uint32_t remainingCapacity = purchaseCapacity;
+			auto fullRequests = requests;
+			for (size_t index = 0; index < requests.size(); ++index) {
+				fullRequests[index].itemCount += restock[index].amount;
+				remainingFunds -= static_cast<uint64_t>(restock[index].amount) * requests[index].unitPrice;
+				remainingCapacity -= restock[index].amount * requests[index].unitWeight;
+			}
+			const auto topUps = disposition.restockSupplies(fullRequests, remainingCapacity,
+			    remainingFunds, 0, survivalRestock);
+			for (size_t index = 0; index < restock.size(); ++index) {
+				restock[index].amount += topUps[index].amount;
+				restock[index].insufficientFunds = topUps[index].insufficientFunds;
+			}
+		}
 		for (size_t index = 0; index < restock.size(); ++index) {
 			if (restock[index].insufficientFunds) {
 				serviceStage = PlayerBotServiceStage::Failed;
@@ -574,7 +620,8 @@ PlayerBotServiceCommand PlayerBotServiceWorkflow::advanceImpl(const PlayerBotSer
 			command.transaction = transaction;
 			return command;
 		}
-		serviceStage = PlayerBotServiceStage::Bank;
+		serviceStage = serviceIntent == PlayerBotServiceIntent::PreparationPurchase ?
+		    PlayerBotServiceStage::Complete : PlayerBotServiceStage::Bank;
 		return advanceImpl(observation, catalog, disposition);
 	}
 	return advanceBank(observation, disposition);

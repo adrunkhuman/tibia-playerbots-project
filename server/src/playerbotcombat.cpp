@@ -283,14 +283,17 @@ PlayerBotSurvivalSnapshot PlayerBotController::survivalSnapshot(const Player& pl
 		}
 	}
 	snapshot.canDoAction = player.canDoAction();
-	snapshot.buyingPotions = serviceWorkflow.stage() == PlayerBotServiceStage::BuySupplies;
-	snapshot.lootMovePending = huntCoordinator.hasPendingLootMove();
+	snapshot.buyingPotions = serviceWorkflow.buyingPotions();
+	snapshot.lootMovePending = huntCoordinator.hasPendingLootMove() ||
+	    preparationOption == PlayerBotPreparationOption::BuyFood; // Do not consume a receipt before trade verification.
 	snapshot.progressionActive = progressionRuntime.session().active() != PlayerBotProgressionProcedure::None;
 	snapshot.progressionDeparture = progressionRuntime.session().active(PlayerBotProgressionProcedure::OracleDeparture);
 	snapshot.hunting = turnRouter.cyclePhase() == CyclePhase::Hunt;
 	snapshot.combatActive = turnRouter.scenarioStage() != ScenarioStage::Traverse || huntCoordinator.hasActiveCombat() ||
 	                          const_cast<Player&>(player).getAttackedCreature() != nullptr;
-	snapshot.departureHealthTarget = huntDepartureHealth.active() && supplyRecovery.active() &&
+	snapshot.departureHealthTarget = preparationOption == PlayerBotPreparationOption::RestoreHealth && preparationRequirement &&
+	    std::chrono::steady_clock::now() < preparationDeadline ?
+	    preparationRequirement->health : huntDepartureHealth.active() && supplyRecovery.active() &&
 	    !huntCoordinator.huntArrived() ? huntDepartureHealth.target() : 0;
 	snapshot.navigationPending = navigationRuntime.hasPendingWork();
 	snapshot.healingExhausted = player.hasCondition(CONDITION_EXHAUST_HEAL);
@@ -384,8 +387,241 @@ void PlayerBotController::logHealResult(uint16_t itemId, const char* result, con
 	emit("action_result", position, fields.str());
 }
 
+bool PlayerBotController::safePreparationRest(Player& player, const Position& position) const
+{
+	Tile* tile = g_game.map.getTile(position);
+	return tile && !tile->hasFlag(TILESTATE_PROTECTIONZONE) && playerBotStableApproachTile(tile, player) &&
+	       navigationCostPolicy(player).dangerAt(position) == 0;
+}
+
+std::vector<PlayerBotPreparationOption> PlayerBotController::evaluatePreparation(Player& player, const Position& position)
+{
+	std::vector<PlayerBotPreparationOption> options;
+	preparationEvaluationPending = false;
+	preparationRest.reset();
+	preparationFoodItem = 0;
+	preparationFoodProvider = 0;
+	const auto& readiness = huntSupplyHandoff.readiness();
+	if (readiness.state != PlayerBotReadiness::Blocked || !readiness.requirement) return options;
+	const auto& requirement = *readiness.requirement;
+	if (requirement.kind == PlayerBotRequirementKind::Stock) {
+		const auto facts = huntSupplyFacts(player);
+		// The existing service executor validates providers/routes before trade.
+		// An unaffordable floor instead requests the existing recovery evaluator.
+		const uint64_t spending = supplyFloorSpendingReserve(player);
+		const uint64_t floorCost = spending == UINT64_MAX ? spending : spending - carriedGoldReserve;
+		options.push_back(!supplyRecovery.restockBlocked(facts.funds, facts.stockKey) &&
+		       floorCost <= facts.funds ? PlayerBotPreparationOption::ServiceStock :
+		       PlayerBotPreparationOption::RecoveryIncome);
+		return options;
+	}
+	const auto snapshot = survivalSnapshot(player);
+	options = survivalRuntime.healthPreparations(snapshot, requirement, false, false);
+	// A hunt callback may already own this controller's slot. Outside it,
+	// defer arbitration rather than treating budget denial as infeasibility.
+	auto& budget = playerBotHuntPlanningBudget();
+	std::optional<PlayerBotPlanningBudget::Charge> charge;
+	if (!budget.isActive(playerId)) {
+		const auto admission = budget.request(playerId, PlayerBotPlanningBudget::Clock::now());
+		if (!admission.admitted) {
+			preparationEvaluationPending = true;
+			schedule(static_cast<uint32_t>(std::max<int64_t>(SCHEDULER_MINTICKS,
+			    (admission.wait.count() + 999) / 1000)));
+			return options;
+		}
+		charge.emplace(budget, playerId);
+	}
+	PlayerBotPreparationRouteBudget proofs;
+	PlayerBotNavigationCostPolicy cost = navigationCostPolicy(player);
+	cost.risk.maximumRouteHealthLoss = cost.risk.maximumHealthLossPerSecond = 0;
+	const PlayerBotNavigator navigator;
+	auto prove = [&](const Position& from, const PlayerBotNavigationGoal& goal) -> std::optional<Position> {
+		const uint64_t allowance = proofs.allowance();
+		if (allowance == 0) return std::nullopt;
+		std::deque<PlayerBotNavigationStep> steps;
+		uint64_t nodes = 0;
+		PlayerBotNavigationCostSummary summary;
+		const auto result = navigator.planFrom(player, from, goal, {}, steps, nodes, allowance,
+		    nullptr, &cost, &summary, false); // Normal stairs, doors, and item-use transitions.
+		proofs.observed(nodes);
+		const Position reached = steps.empty() ? from : steps.back().expectedPosition;
+		if (!playerBotPreparationRouteAccepted(result, summary.dangerCost, summary.maximumHealthLossPerSecond,
+		    0, goal.reached(reached))) return std::nullopt;
+		return reached;
+	};
+	const auto restPositions = playerBotPreparationRestPositions(position, [&](const Position& candidate) {
+		Tile* tile = g_game.map.getTile(candidate);
+		return tile && !tile->hasFlag(TILESTATE_PROTECTIONZONE) && playerBotStableApproachTile(tile, player) &&
+		    cost.dangerAt(candidate) == 0;
+	});
+	if (restPositions.empty()) return options;
+	preparationRest = prove(position, PlayerBotNavigationGoal::anyOf(restPositions));
+	if (!preparationRest) return options;
+	if ((snapshot.regenerationActive && snapshot.foodTicks > 0) || snapshot.foodClientId != 0) {
+		return survivalRuntime.healthPreparations(snapshot, requirement, true, false);
+	}
+	// The inventory food predicate is the supported set. Lua food.lua remains
+	// authoritative for use and duration; purchase only one, then observe feed.
+	for (Npc* npc : playerBotNpcProviders(g_game.getNpcs(), PlayerBotNpcCapability::Shop, position)) {
+		if (!playerBotPreparationProviderInRange(position, npc->getPosition())) continue;
+		for (const auto& offer : npc->getShopOffers()) {
+			if (!PlayerBotInventoryPolicy::isFoodItem(offer.itemId) || offer.buyPrice == 0 ||
+			    offer.buyPrice > player.getMoney() + player.getBankBalance() ||
+			    Item::items[offer.itemId].weight > player.getFreeCapacity()) continue;
+			std::vector<Position> approaches;
+			for (int dx = -3; dx <= 3; ++dx) for (int dy = -3; dy <= 3; ++dy) {
+				Position approach(npc->getPosition().x + dx, npc->getPosition().y + dy, npc->getPosition().z);
+				if (playerBotStableApproachTile(g_game.map.getTile(approach), player)) approaches.push_back(approach);
+			}
+			if (approaches.empty()) continue;
+			if (proofs.allowance() == 0) return options;
+			const auto approach = prove(position, PlayerBotNavigationGoal::anyOf(approaches));
+			if (!approach || !prove(*approach, PlayerBotNavigationGoal::exact(*preparationRest))) continue;
+			preparationFoodItem = offer.itemId;
+			preparationFoodProvider = npc->getID();
+			return survivalRuntime.healthPreparations(snapshot, requirement, true, true);
+		}
+	}
+	return options;
+}
+
+void PlayerBotController::retirePreparationService(Player* player, const Position& position, const char* reason)
+{
+	if (serviceWorkflow.intent() != PlayerBotServiceIntent::PreparationPurchase) return;
+	PlayerBotServiceObservation receipt;
+	if (const auto* pending = serviceWorkflow.pendingPreparationPurchase(); pending && player) {
+		receipt.inventoryCounts[pending->itemId] = inventoryPolicy.inventoryItemCount(*player, pending->itemId);
+		receipt.money = player->getMoney();
+		receipt.bankBalance = player->getBankBalance();
+	}
+	const auto result = serviceWorkflow.retirePreparationPurchase(receipt);
+	if (result.verification) {
+		const auto& before = result.verification->before;
+		emit("action_result", position, "\"action\":\"buy_food\",\"result\":" +
+		    jsonString(result.verification->result == PlayerBotServiceVerificationResult::Success ? "success" : "failed") +
+		    ",\"reason\":" + jsonString(reason) + ",\"item_id\":" + std::to_string(before.itemId) +
+		    ",\"count\":" + std::to_string(before.amount) + ",\"carried_before\":" + std::to_string(before.money) +
+		    ",\"carried_after\":" + std::to_string(receipt.money) + ",\"bank_before\":" +
+		    std::to_string(before.balance) + ",\"bank_after\":" + std::to_string(receipt.bankBalance));
+	}
+	serviceRouteSearch.reset();
+	auto& budget = playerBotHuntPlanningBudget();
+	if (!budget.isActive(playerId)) budget.cancel(playerId, PlayerBotPlanningBudget::Clock::now());
+}
+
+void PlayerBotController::retirePreparation(Player* player, const Position& position, const char* reason)
+{
+	if (!preparationEvaluationPending && preparationOption == PlayerBotPreparationOption::None &&
+	    serviceWorkflow.intent() != PlayerBotServiceIntent::PreparationPurchase) return;
+	retirePreparationService(player, position, reason);
+	serviceRouteSearch.reset();
+	auto& budget = playerBotHuntPlanningBudget();
+	if (!budget.isActive(playerId)) budget.cancel(playerId, PlayerBotPlanningBudget::Clock::now());
+	preparationEvaluationPending = false;
+	preparationOption = PlayerBotPreparationOption::None;
+	preparationRequirement.reset();
+	preparationRest.reset();
+	preparationFoodItem = 0;
+	preparationFoodProvider = 0;
+	resetNavigation();
+}
+
+void PlayerBotController::finishPreparation(Player& player, const Position& position, const char* reason)
+{
+	if (!turnRouter.running() || telemetry.terminalLogged()) return;
+	const auto snapshot = survivalSnapshot(player);
+	const auto requirement = preparationRequirement;
+	uint64_t gap = requirement ? requirement->health - std::min<uint32_t>(requirement->health, std::max(0, player.getHealth())) : 0;
+	gap += requirement && requirement->observeRegeneration && (!snapshot.regenerationActive || snapshot.foodTicks <= 0) ? 1 : 0;
+	// Track actual health improvement, not a moving request target. Reaching a
+	// higher successive target must count even when both completed gaps are zero.
+	const uint64_t healthGap = std::max(0, player.getMaxHealth() - player.getHealth());
+	if (requirement && !requirement->observeRegeneration && player.getHealth() >= static_cast<int64_t>(requirement->health)) {
+		emit("action_result", position, "\"action\":\"hunt_departure_health\",\"result\":\"ready\",\"health\":" +
+		    std::to_string(player.getHealth()) + ",\"required_health\":" + std::to_string(requirement->health));
+	}
+	const bool exhausted = preparationBudget.completed(healthGap,
+	    snapshot.regenerationActive && snapshot.foodTicks > 0 && !snapshot.protectionZone &&
+	    safePreparationRest(player, position));
+	emit("goal_result", position, std::string("\"goal\":\"prepare\",\"reason\":") + jsonString(reason) +
+	    ",\"remaining_gap\":" + std::to_string(gap));
+	retirePreparation(&player, position, reason);
+	if (exhausted) { stop("preparation_no_progress", position); return; }
+	huntSupplyHandoff.replan();
+	// Only a fresh authoritative hunt evaluation can authorize departure.
+	startHunt(&player, position, "preparation_observed");
+}
+
+void PlayerBotController::processPreparation(Player* player, const Position& position)
+{
+	if (preparationEvaluationPending) {
+		if (selectTopLevelGoal(*player, position, "preparation_budget_retry") &&
+		    !trainerDiscovery && !preparationEvaluationPending) schedule(SCHEDULER_MINTICKS);
+		return;
+	}
+	if (std::chrono::steady_clock::now() >= preparationDeadline) {
+		finishPreparation(*player, position, "preparation_timeout");
+		return;
+	}
+	if (preparationOption == PlayerBotPreparationOption::BuyFood) {
+		processService(player, position);
+		return;
+	}
+	const auto snapshot = survivalSnapshot(*player);
+	if (!preparationRequirement || survivalRuntime.healthPreparationSatisfied(snapshot, *preparationRequirement,
+	    safePreparationRest(*player, position))) {
+		finishPreparation(*player, position, "requirement_observed");
+		return;
+	}
+	if (preparationOption == PlayerBotPreparationOption::RestoreHealth) {
+		// Peaceful target is supplied to the existing survival evaluator. It owns
+		// spell/potion legality, preference, action delay, and effect verification.
+		if (!handleHealing(player, position) && preparationOption != PlayerBotPreparationOption::None)
+			finishPreparation(*player, position, "recovery_unavailable");
+		else schedule(1000);
+		return;
+	}
+	if (!preparationRest || !safePreparationRest(*player, *preparationRest)) {
+		finishPreparation(*player, position, "rest_invalidated");
+		return;
+	}
+	if (position != *preparationRest) {
+		PlayerBotNavigationRuntimeOutcome result;
+		PlayerBotNavigationRiskProfile safe = riskProfile;
+		safe.maximumRouteHealthLoss = safe.maximumHealthLossPerSecond = 0;
+		auto& budget = playerBotHuntPlanningBudget();
+		const auto admission = budget.request(playerId, PlayerBotPlanningBudget::Clock::now());
+		if (!admission.admitted) {
+			schedule(static_cast<uint32_t>(std::max<int64_t>(SCHEDULER_MINTICKS,
+			    (admission.wait.count() + 999) / 1000)));
+			return;
+		}
+		PlayerBotPlanningBudget::Charge charge(budget, playerId);
+		processNavigation(player, position, *preparationRest, &result, 4096, false, &safe);
+		if (telemetry.terminalLogged()) return;
+		if (result.fixedTargetRouteFailures >= maximumProgressionAttempts)
+			finishPreparation(*player, position, "rest_unreachable");
+		return;
+	}
+	if (!snapshot.regenerationActive && snapshot.foodClientId == 0) {
+		finishPreparation(*player, position, "regeneration_unavailable");
+		return;
+	}
+	schedule(1000);
+}
+
 bool PlayerBotController::prepareHuntDeparture(Player* player, const Position& position)
 {
+	const uint32_t floor = supplyRecovery.active() ?
+	    playerBotSupplyRecoveryRequiredHealth(std::max(0, player->getMaxHealth())) : 0;
+	if (player->getHealth() < static_cast<int64_t>(floor) && preparationOption == PlayerBotPreparationOption::None) {
+		PlayerBotPreparationRequirement requirement;
+		requirement.kind = PlayerBotRequirementKind::HealthRegeneration;
+		requirement.health = floor;
+		huntSupplyHandoff.blocked({PlayerBotReadiness::Blocked, requirement}, huntSupplyFacts(*player));
+		selectTopLevelGoal(*player, position, "departure_health_requirement");
+		return false;
+	}
 	const bool wasActive = huntDepartureHealth.active();
 	const uint32_t target = supplyRecovery.active() ?
 	    playerBotSupplyRecoveryRequiredHealth(std::max(0, player->getMaxHealth())) : 0;
@@ -431,6 +667,14 @@ bool PlayerBotController::handleHealing(Player* player, const Position& currentP
 	if (command.type == PlayerBotSurvivalCommandType::CastSpell) return dispatchSpellCommand(*player, currentPosition, command);
 	if (command.type == PlayerBotSurvivalCommandType::Wait) return true;
 	if (command.type == PlayerBotSurvivalCommandType::InterruptForService) {
+		if (preparationOption != PlayerBotPreparationOption::None && !snapshot.combatActive &&
+		    static_cast<int64_t>(snapshot.health) * 100 > static_cast<int64_t>(snapshot.healthMaximum) * 30) {
+			if (preparationOption == PlayerBotPreparationOption::RestoreHealth) {
+				finishPreparation(*player, currentPosition, "recovery_unavailable");
+				return true;
+			}
+			return false;
+		}
 		if (huntDepartureHealth.active()) {
 			if (snapshot.regenerationActive) return true; // Bounded by the preparation deadline.
 			stop("hunt_departure_healing_unavailable", currentPosition);
@@ -1490,6 +1734,17 @@ void PlayerBotController::finishHuntRegion(const Player& player, const Position&
 	if (Player* speakingPlayer = g_game.getPlayerByID(playerId)) say(*speakingPlayer, "Leaving hunt: " + std::string(reason) + ". " + std::to_string(combat.kills) + " kills, " + std::to_string(completion->experienceGained) + " experience.");
 }
 
+PlayerBotHuntSupplyFacts PlayerBotController::huntSupplyFacts(Player& player) const
+{
+	auto dependencies = huntReturnCoverageContext(player, Position{});
+	// Shopping changes the return destination/fare, not these dependencies.
+	dependencies.depotDestination = Position{};
+	dependencies.fare = 0;
+	return {playerBotSupplyCapability(huntPlanningFacts(player, huntCombatProfile(player))), dependencies,
+	        PlayerBotHuntRegionPlanner::getCacheRevision(), player.getMoney() + player.getBankBalance(),
+	        playerBotSupplyStockKey(supplyStocks(player)), player.getHealth()};
+}
+
 bool PlayerBotController::selectHuntRegion(Player& player, const Position& position, const char* reason,
                                            std::chrono::steady_clock::duration* retryAfter)
 {
@@ -1949,13 +2204,58 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 	if (!safeSelection) {
 		huntRouteRetention.clear();
 		selectedHuntRoute.reset();
-		sliceResult = "failed";
-		emit("hunt_region_selection", position,
-		     "\"result\":\"failed\",\"reason\":\"no_safe_route_candidate\",\"route_rejection_counts\":" +
-		         routeFailureCounts() + "," + planningAttribution(routeResult.planningPass, routeResult.scoringRevision));
+		sliceResult = routeResult.outcome == PlayerBotHuntRouteOutcome::Incomplete ? "incomplete" : "failed";
+		if (routeResult.outcome != PlayerBotHuntRouteOutcome::NeedsSupplies &&
+		    routeResult.outcome != PlayerBotHuntRouteOutcome::NeedsPreparation)
+			emit("hunt_region_selection", position,
+			     std::string(routeResult.outcome == PlayerBotHuntRouteOutcome::Incomplete ?
+			         "\"result\":\"incomplete\",\"reason\":\"planning_incomplete\"" :
+			         "\"result\":\"failed\",\"reason\":\"no_safe_route_candidate\"") + ",\"route_rejection_counts\":" +
+			         routeFailureCounts() + "," + planningAttribution(routeResult.planningPass, routeResult.scoringRevision));
 		huntCoordinator.completePlanningSelection();
-		// Rejected variants stay on a 10-minute cooldown, so a prompt rescan
-		// repeats the same failure and its full candidate log.
+		const auto facts = huntSupplyFacts(player);
+		huntSupplyHandoff.blocked(routeResult.readiness, facts);
+		bool preparationExhausted = false;
+		if (routeResult.outcome != PlayerBotHuntRouteOutcome::Pending &&
+		    routeResult.outcome != PlayerBotHuntRouteOutcome::Incomplete &&
+		    (!routeResult.readiness.requirement || routeResult.readiness.requirement->kind == PlayerBotRequirementKind::Stock)) {
+			uint64_t gap = 0;
+			for (const auto& stock : supplyStocks(player)) {
+				const uint32_t floor = std::max(stock.rule.safetyFloor, stock.rule.returnThreshold + 1);
+				gap += floor - std::min(floor, stock.count);
+			}
+			preparationExhausted = preparationBudget.completed(gap, false, PlayerBotRequirementKind::Stock);
+		}
+		if (huntSupplyHandoff.noProgress(routeResult.outcome, facts) || preparationExhausted) {
+			stop(routeResult.outcome == PlayerBotHuntRouteOutcome::Incomplete ?
+			    "hunt_planning_incomplete" : "hunt_supply_no_progress", position);
+			return false;
+		}
+		if (routeResult.outcome == PlayerBotHuntRouteOutcome::NeedsSupplies && routeResult.supplyShortage) {
+			huntSupplyHandoff.require(std::move(routeResult.supplyShortage->requirements), facts);
+			std::ostringstream requirements;
+			requirements << '[';
+			bool first = true;
+			for (const auto& requirement : huntSupplyHandoff.requirements()) {
+				if (!first) requirements << ',';
+				first = false;
+				requirements << "{\"kind\":" << jsonString(playerBotSupplyKindName(requirement.kind))
+				             << ",\"required_stock\":" << requirement.count << '}';
+			}
+			requirements << ']';
+			emit("hunt_region_selection", position,
+			     "\"result\":\"needs_supplies\",\"reason\":\"hunt_supply_shortage\",\"atlas_variant_id\":" +
+			         std::to_string(routeResult.supplyShortage->atlasVariantId) + ",\"requirements\":" +
+			         requirements.str() + ",\"route_rejection_counts\":" + routeFailureCounts() + "," +
+			         planningAttribution(routeResult.planningPass, routeResult.scoringRevision));
+		}
+		if (routeResult.readiness.requirement) {
+			selectTopLevelGoal(player, position, "hunt_blocked_requirement");
+			if (retryAfter) *retryAfter = std::chrono::milliseconds(navigationInterval);
+			return false;
+		}
+		// No supported requirement: a completed recovery/selection pass without progress is bounded;
+		// unfinished route work above never consumes this retry allowance.
 		if (retryAfter) *retryAfter = std::chrono::seconds(30);
 		return false;
 	}
@@ -1964,6 +2264,9 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 	huntPatrolTrip.reset();
 	huntTransitProgress.reset();
 	PlayerBotHuntRegion selected = std::move(*safeSelection);
+	preparationBudget.reset();
+	huntSupplyHandoff.selected(selected.supplyRecovery &&
+	    playerBotMandatorySupplyDeficit(supplyStocks(player), false).missing != 0);
 	selectedHuntRoute = huntRouteRetention.take(selected);
 	if (selectedHuntRoute) {
 		selectedHuntRoute->revision = selected.atlasRevision;
@@ -2086,6 +2389,7 @@ void PlayerBotController::startHunt(Player* player, const Position& position, co
 		}
 		std::chrono::steady_clock::duration retryAfter{};
 		if (!selectHuntRegion(*player, position, "hunt_started", &retryAfter)) {
+			if (telemetry.terminalLogged()) return;
 			const int64_t delay = std::chrono::duration_cast<std::chrono::milliseconds>(retryAfter).count();
 			schedule(static_cast<uint32_t>(delay > 0 ? delay : SCHEDULER_MINTICKS));
 			return;
@@ -2200,17 +2504,21 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 			schedule(navigationInterval);
 			return;
 		}
+		interruptTrainerRouteWork();
 		processDefensiveCombat(player, currentPosition);
 		return;
 	}
 	if (attackDefensiveThreat(player, currentPosition)) {
+		interruptTrainerRouteWork();
 		schedule(navigationInterval);
 		return;
 	}
 	PlayerBotTurnObservation turn;
+	turn.trainerDiscoveryActive = trainerGoalSelectionPending || trainerDiscovery.has_value();
 	turn.progressionActive = progressionRuntime.session().active() != PlayerBotProgressionProcedure::None;
-	turn.magicTrainingActive = progressionRuntime.activeGoal() == TopLevelGoal::MagicTraining;
-	if (!turn.progressionActive && !turn.magicTrainingActive) {
+	turn.magicTrainingActive = !preparationEvaluationPending && progressionRuntime.activeGoal() == TopLevelGoal::MagicTraining;
+	turn.preparationActive = preparationEvaluationPending || preparationOption != PlayerBotPreparationOption::None;
+	if (!turn.trainerDiscoveryActive && !turn.progressionActive && !turn.magicTrainingActive && !turn.preparationActive) {
 		const bool inHuntPhase = turnRouter.cyclePhase() == CyclePhase::Hunt;
 		const PlayerBotHuntTurnObservation hunt = huntCoordinator.observeTurn(
 			inHuntPhase, fixtureDriver.huntObservation().selectRegion, std::chrono::steady_clock::now());
@@ -2224,8 +2532,17 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 	// same controller's budget slot.
 	if (turnCommand != PlayerBotTurnCommand::Hunt) patrolSearchGuard.cleanup();
 
+	if (turnCommand == PlayerBotTurnCommand::TrainerDiscovery) {
+		if (selectTopLevelGoal(*player, currentPosition, "trainer_scan_continuation") &&
+		    !trainerDiscovery && !preparationEvaluationPending) schedule(SCHEDULER_MINTICKS);
+		return;
+	}
 	if (turnCommand == PlayerBotTurnCommand::Progression) {
 		processProgression(player, currentPosition);
+		return;
+	}
+	if (turnCommand == PlayerBotTurnCommand::Prepare) {
+		processPreparation(player, currentPosition);
 		return;
 	}
 	if (turnCommand == PlayerBotTurnCommand::MagicTraining) {
@@ -2245,6 +2562,7 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 		if (selectHuntRegion(*player, currentPosition, "hunt_planning", &retryAfter)) {
 			beginHuntCycle(player, currentPosition, "hunt_region_selected");
 		} else {
+			if (telemetry.terminalLogged()) return;
 			const int64_t delay = std::chrono::duration_cast<std::chrono::milliseconds>(retryAfter).count();
 			schedule(static_cast<uint32_t>(delay > 0 ? delay : SCHEDULER_MINTICKS));
 		}

@@ -3,6 +3,7 @@
 
 #include "playerbothuntregions.h"
 #include "playerbotnavigation.h"
+#include "playerbotpreparation.h"
 
 #include <map>
 #include <optional>
@@ -28,6 +29,9 @@ struct PlayerBotHuntRouteRequest {
 	uint32_t returnDangerCost = 0;
 	std::vector<uint16_t> requiredSupplyItems;
 	uint16_t supplyItemId = 0;
+	// Optional destination alternatives, never ordered checkpoints.
+	std::vector<Position> destinations;
+	std::set<Position> blockedPositions;
 };
 
 struct PlayerBotHuntSupplyApproaches {
@@ -60,7 +64,18 @@ struct PlayerBotHuntRouteObservation {
 	bool endpointRiskRejected = false; // Necessary peak-risk proof, not physical disconnection.
 };
 
+// Pending is in-flight work. Incomplete is a completed scan with only unknown routes.
+enum class PlayerBotHuntRouteOutcome { Pending, Selected, NeedsSupplies, Unavailable, NeedsPreparation, Incomplete };
+
+struct PlayerBotHuntSupplyShortage {
+	uint64_t atlasVariantId = 0;
+	PlayerBotSupplyRequirements requirements;
+};
+
 struct PlayerBotHuntRouteResult {
+	PlayerBotHuntRouteOutcome outcome = PlayerBotHuntRouteOutcome::Pending;
+	std::optional<PlayerBotHuntSupplyShortage> supplyShortage;
+	PlayerBotGoalReadiness readiness;
 	uint64_t planningPass = 0;
 	uint64_t scoringRevision = 0;
 	std::optional<PlayerBotHuntRegion> completedCandidate;
@@ -97,11 +112,14 @@ class PlayerBotHuntRouteSelection
 		size_t supplyGroupIndex = 0;
 		Position supplySource;
 		std::optional<PlayerBotHuntRegion> best;
+		std::optional<PlayerBotHuntSupplyShortage> supplyShortage;
+		std::optional<PlayerBotPreparationRequirement> preparationRequirement;
 		std::map<std::string, uint32_t> failureCounts;
 		std::vector<uint64_t> rejectedVariants;
 		PlayerBotHuntRouteStage stage = PlayerBotHuntRouteStage::Outbound;
 		bool finished = false;
 		bool searchIncomplete = false;
+		bool incompletePass = false;
 		uint64_t sequence = 0;
 		std::optional<PlayerBotHuntRouteRequest> pending;
 };

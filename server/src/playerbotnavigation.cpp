@@ -554,6 +554,7 @@ std::optional<PlayerBotNavigationResult> PlayerBotNavigator::advance(
 {
 	const auto& start = search.start;
 	const auto& goal = search.goal;
+	if (costPolicy) search.constrain(costPolicy->risk);
 	if (costPolicy && search.rejectUnsafeEndpoints([&](const Position& target) { return costPolicy->dangerAt(target); })) {
 		return search.result;
 	}

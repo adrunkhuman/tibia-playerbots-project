@@ -56,7 +56,16 @@ std::vector<PlayerBotGoalArbiter::GoalCandidate> PlayerBotGoalPlanner::candidate
 {
 	using Goal = PlayerBotGoalArbiter::TopLevelGoal;
 	const auto departure = departureCandidate(snapshot);
-	const auto service = serviceCandidate(snapshot);
+	auto service = serviceCandidate(snapshot);
+	const bool blocked = snapshot.huntReadiness.state == PlayerBotReadiness::Blocked;
+	auto available = [&snapshot](PlayerBotPreparationOption option) {
+		return std::find(snapshot.preparations.begin(), snapshot.preparations.end(), option) != snapshot.preparations.end();
+	};
+	if (blocked && !snapshot.criticalHealing && !snapshot.lowCapacity) {
+		service.feasible = available(PlayerBotPreparationOption::ServiceStock);
+		service.reason = service.feasible ? "prepare_stock" : "blocked_service_unavailable";
+		if (service.feasible) service.utility = std::max(service.utility, serviceGoalBaseUtility);
+	}
 	const auto pickup = PlayerBotGoalArbiter::GoalCandidate{Goal::PickupReward, !snapshot.pickupCoolingDown && snapshot.rewardPlanAvailable,
 		snapshot.pickupCoolingDown || !snapshot.rewardPlanAvailable ? 0 : snapshot.rewardUtility,
 		snapshot.pickupCoolingDown ? "cooldown" : snapshot.rewardPlanAvailable ? "useful_reachable_reward" : "no_useful_reward"};
@@ -79,7 +88,17 @@ std::vector<PlayerBotGoalArbiter::GoalCandidate> PlayerBotGoalPlanner::candidate
 		snapshot.sellLootCoolingDown ? "cooldown" : snapshot.sellLootPlanAvailable && snapshot.sellLootUtility > huntGoalUtility ?
 			snapshot.sellLootReason : snapshot.sellLootPlanAvailable ? "utility_below_hunt" : snapshot.sellLootReason};
 	std::vector<PlayerBotGoalArbiter::GoalCandidate> result{departure, service, pickup, spell, equipment, magic, sellLoot,
-	        {Goal::Hunt, true, huntGoalUtility, "autonomous_hunting_available"}};
+	        {Goal::Hunt, !blocked || available(PlayerBotPreparationOption::RecoveryIncome), huntGoalUtility,
+	            blocked ? (available(PlayerBotPreparationOption::RecoveryIncome) ? "evaluate_recovery_income" : "blocked_requirement") :
+	            snapshot.huntReadiness.state == PlayerBotReadiness::Pending ? "pending_hunt_evaluation" : "autonomous_hunting_available"}};
+	// Providers publish independently supported options; arbitration owns the
+	// preference. No provider executes a failure-specific fallback chain.
+	result.push_back({Goal::Prepare, blocked && available(PlayerBotPreparationOption::Regenerate),
+	    650, "prepare_regeneration", PlayerBotPreparationOption::Regenerate});
+	result.push_back({Goal::Prepare, blocked && available(PlayerBotPreparationOption::RestoreHealth),
+	    660, "prepare_health", PlayerBotPreparationOption::RestoreHealth});
+	result.push_back({Goal::Prepare, blocked && available(PlayerBotPreparationOption::BuyFood),
+	    640, "prepare_food", PlayerBotPreparationOption::BuyFood});
 	if (snapshot.recoverySpellPlanAvailable && spell.feasible) {
 		for (auto& candidate : result) {
 			if (candidate.goal == Goal::LearnSpell) {

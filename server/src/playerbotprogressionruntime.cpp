@@ -151,6 +151,12 @@ void PlayerBotProgressionRuntime::restartSpellTrainingConversation()
 	spellTrainingSession.resetRetries();
 }
 
+void PlayerBotProgressionRuntime::restartSpellTrainingTravel()
+{
+	npcSession.reset(spellTrainingSession.plan().npcId);
+	spellTrainingSession.setStage(PlayerBotSpellTrainingStage::Travel);
+}
+
 void PlayerBotProgressionRuntime::restartEquipmentConversation()
 {
 	npcSession.reset(equipmentPurchaseSession.plan().npcId);

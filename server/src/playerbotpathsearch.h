@@ -27,6 +27,16 @@ public:
 		open.push({0, 0, start});
 	}
 
+	// Zero-risk preparation excludes unsafe arcs during search, not after a
+	// cheaper dangerous path has displaced a longer safe label. Other total
+	// risk tolerances retain the existing post-search acceptance policy.
+	void constrain(const PlayerBotNavigationRiskProfile& risk) {
+		if (risk.requiresZeroRisk()) {
+			maximumPeakDanger = 0;
+			zeroDangerOnly = true;
+		}
+	}
+
 	// Call with the same positional peak samples used by incoming arcs, before
 	// expanding. This is independent of graph size and preserves unknown limits.
 	template<class Sample>
@@ -97,7 +107,8 @@ public:
 				}
 			}
 			for (const auto& arc : expand(current.position)) {
-				if ((ordinaryOnly && !ordinaryArc(current.position, arc.step)) || !playerBotNavigationPeakAccepts(maximumPeakDanger, arc.peak)) continue;
+				if ((ordinaryOnly && !ordinaryArc(current.position, arc.step)) ||
+				    (zeroDangerOnly && arc.danger != 0) || !playerBotNavigationPeakAccepts(maximumPeakDanger, arc.peak)) continue;
 				const Position to = arc.step.expectedPosition;
 				const uint32_t cost = add(current.cost, add(arc.movement, arc.danger));
 				const auto found = costs.find(key(to));
@@ -193,6 +204,7 @@ public:
 	bool unbounded = false;
 	// Hunt-only necessary safety condition; generic navigation is unrestricted.
 	double maximumPeakDanger = std::numeric_limits<double>::infinity();
+	bool zeroDangerOnly = false;
 
 private:
 	struct Node {

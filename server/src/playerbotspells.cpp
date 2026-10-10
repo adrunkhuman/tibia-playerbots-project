@@ -13,8 +13,12 @@
 #include "playerbotcontroller.h"
 #include "playerbotnpccapabilities.h"
 #include "playerbotspellcalibration.h"
+#include "playerbotplanningbudget.h"
 #include "condition.h"
 #include "spells.h"
+#include "groups.h"
+#include "guild.h"
+#include <iomanip>
 
 // Runtime spell-trainer discovery and normal NPC learning dialogue.
 using namespace playerbot;
@@ -24,9 +28,31 @@ extern Spells* g_spells;
 namespace {
 	constexpr auto magicTrainingRetryDelay = std::chrono::seconds(2);
 	constexpr size_t maximumSpellTrainerRoutes = 4;
-	constexpr size_t maximumSpellTrainerApproaches = 8;
-	constexpr uint64_t maximumSpellTrainerPathNodes = 20000;
-	constexpr uint64_t maximumSpellTrainerPathNodesPerApproach = 5000;
+	bool trainerFareLimited(Player& player, uint64_t protectedFunds)
+	{
+		const uint64_t funds = player.getMoney() + player.getBankBalance();
+		const uint64_t spendable = funds >= protectedFunds ? funds - protectedFunds : 0;
+		for (Npc* npc : playerBotNpcProviders(g_game.getNpcs(), PlayerBotNpcCapability::Travel, player.getPosition())) {
+			for (const auto& offer : npc->getTravelOffers()) {
+				if (offer.price > spendable && playerBotNpcTravelOfferEligible(player.getLevel(), player.isPremium(),
+				    UINT64_MAX, offer.level, offer.premium, offer.price, offer.hasOpaqueCondition, offer.hasOpaqueAction))
+					return true;
+			}
+		}
+		return false;
+	}
+
+	std::vector<Position> trainerApproaches(Player& player, const Npc& npc)
+	{
+		std::vector<Position> tiles;
+		for (int x = -3; x <= 3; ++x) for (int y = -3; y <= 3; ++y) {
+			if (!x && !y) continue;
+			const Position p(npc.getPosition().x + x, npc.getPosition().y + y, npc.getPosition().z);
+			if (playerBotStableApproachTile(g_game.map.getTile(p), player)) tiles.push_back(p);
+		}
+		std::sort(tiles.begin(), tiles.end());
+		return tiles;
+	}
 
 	const char* healthPotionFallback(uint16_t itemId)
 	{
@@ -314,13 +340,17 @@ PlayerBotSupplyStocks PlayerBotController::supplyStocks(const Player& player) co
 	                               huntPotionReturnThreshold, potionStockTarget(player)},
 	                              inventoryPolicy.inventoryItemCount(player, potionItemId)}};
 	for (const PlayerBotSupplyStock& stock : PlayerBotInventoryPolicy::additionalSupplyStocks(player)) stocks.push_back(stock);
+	playerBotRequireSupplies(stocks, huntSupplyHandoff.requirements());
 	return stocks;
 }
 
 uint32_t PlayerBotController::carriedSupplyReserve(const Player& player, uint16_t itemId) const
 {
-	const uint32_t reserve = inventoryPolicy.protectedItemReserve(player, itemId);
-	return itemId == recoveryPotionItemId(player.getVocationId()) ? std::max(reserve, potionStockTarget(player)) : reserve;
+	uint32_t reserve = inventoryPolicy.protectedItemReserve(player, itemId);
+	for (const auto& stock : supplyStocks(player)) {
+		if (stock.rule.itemId == itemId) reserve = std::max(reserve, stock.rule.target);
+	}
+	return reserve;
 }
 
 bool PlayerBotController::huntSuppliesReady(const Player& player) const
@@ -336,16 +366,23 @@ uint64_t PlayerBotController::spellTrainingReserve(const Player& player, bool em
 {
 	const uint16_t potionItemId = recoveryPotionItemId(player.getVocationId());
 	const uint32_t potionCount = inventoryPolicy.inventoryItemCount(player, potionItemId);
-	const uint32_t reserveTarget = emergencyOnly ?
-	    (huntPotionReturnThreshold == UINT32_MAX ? UINT32_MAX : huntPotionReturnThreshold + 1) : potionStockTarget(player);
+	const auto stocks = supplyStocks(player);
+	const auto* health = playerBotSupplyStock(stocks, PlayerBotSupplyKind::HealthPotion);
+	const uint32_t reserveTarget = std::max(health ? health->rule.safetyFloor : 0, emergencyOnly ?
+	    (huntPotionReturnThreshold == UINT32_MAX ? UINT32_MAX : huntPotionReturnThreshold + 1) : potionStockTarget(player));
 	const uint64_t healthReserve = emergencyOnly && potionCount >= reserveTarget ? carriedGoldReserve :
 	                               recoverySpendingReserve(player, reserveTarget);
 	std::vector<PlayerBotSupplyFloorCost> others;
-	for (const auto& stock : PlayerBotInventoryPolicy::additionalSupplyStocks(player)) {
+	for (const auto& stock : stocks) {
+		if (stock.rule.kind == PlayerBotSupplyKind::HealthPotion) continue;
 		others.push_back({stock.count, stock.rule.safetyFloor,
 		    stock.count < stock.rule.safetyFloor ? cheapestShopPrice(player, stock.rule.itemId) : 0});
 	}
-	return playerBotSupplyFloorSpendingReserve(healthReserve, others);
+	const uint64_t supplyReserve = playerBotSupplyFloorSpendingReserve(healthReserve, others);
+	// First-heal bootstrap only: the default query ignores current mana and
+	// overheal but still requires an eligible, usable learned healing spell.
+	const bool firstUsableHeal = emergencyOnly && !survivalRuntime.preferredHealingSpell(survivalSnapshot(player));
+	return playerBotSpellTrainingSpendingReserve(supplyReserve, carriedGoldReserve, firstUsableHeal);
 }
 
 uint32_t PlayerBotController::cheapestShopPrice(const Player& player, uint16_t itemId) const
@@ -372,17 +409,18 @@ uint64_t PlayerBotController::recoverySpendingReserve(const Player& player, uint
 
 uint64_t PlayerBotController::supplyFloorSpendingReserve(const Player& player) const
 {
-	std::vector<PlayerBotSupplyFloorCost> others;
-	for (const PlayerBotSupplyStock& stock : PlayerBotInventoryPolicy::additionalSupplyStocks(player)) {
-		others.push_back({stock.count, stock.rule.safetyFloor,
-		                  stock.count < stock.rule.safetyFloor ? cheapestShopPrice(player, stock.rule.itemId) : 0});
+	const auto stocks = supplyStocks(player);
+	std::vector<PlayerBotSupplyFloorCost> costs;
+	for (const auto& stock : stocks) {
+		costs.push_back({stock.count, stock.rule.safetyFloor,
+		    stock.count < stock.rule.safetyFloor ? cheapestShopPrice(player, stock.rule.itemId) : 0});
 	}
-	return playerBotSupplyFloorSpendingReserve(recoverySpendingReserve(player, healthPotionSafetyTarget), others);
+	return playerBotSupplyFloorSpendingReserve(carriedGoldReserve, costs);
 }
 
 void PlayerBotController::emitSpellCandidate(const Npc& npc, const NpcSpellOffer& offer, const Position& position,
                                              const char* result, const char* reason, uint64_t reserve,
-                                             uint32_t travelSteps, std::optional<uint8_t> learningPriority) const
+                                             uint32_t travelSteps, std::optional<uint8_t> learningPriority, uint64_t fare) const
 {
 	std::ostringstream fields;
 	fields << "\"goal\":\"learn_spell\",\"result\":" << jsonString(result)
@@ -390,7 +428,7 @@ void PlayerBotController::emitSpellCandidate(const Npc& npc, const NpcSpellOffer
 	       << ",\"spell\":" << jsonString(offer.spellName) << ",\"keyword\":" << jsonString(offer.keyword)
 	       << ",\"price\":" << offer.price << ",\"level\":" << offer.level
 	       << ",\"premium\":" << (offer.premium ? "true" : "false") << ",\"reserve\":" << reserve
-	       << ",\"travel_steps\":" << travelSteps
+	       << ",\"fare\":" << fare << ",\"travel_steps\":" << travelSteps
 	       << ",\"implemented_use\":" << (learningPriority ? "true" : "false");
 	if (learningPriority) fields << ",\"learning_priority\":" << static_cast<uint16_t>(*learningPriority);
 	fields << ",\"provider_position\":{\"x\":" << npc.getPosition().x
@@ -401,8 +439,179 @@ void PlayerBotController::emitSpellCandidate(const Npc& npc, const NpcSpellOffer
 	emit("spell_candidate", position, fields.str());
 }
 
-bool PlayerBotController::findSpellTraining(Player& player, const Position& position, PlayerBotSpellTrainingPlan& plan,
-                                            std::deque<PlayerBotNavigationStep>& selectedSteps)
+std::string PlayerBotController::trainerDecisionFacts(Player& player, const Position& position, bool coolingDown)
+{
+	// Do not include action delays, current mana/HP or regeneration ticks:
+	// they do not change trainer eligibility/proof and must not restart a
+	// completed phase on every preparation-budget retry.
+	const auto combat = equipmentPolicy.combatProfile(PlayerBotEquipmentAdapter::player(player),
+	    PlayerBotEquipmentAdapter::loadout(player));
+	const auto snapshot = survivalSnapshot(player);
+	std::ostringstream key;
+	key << std::setprecision(17) << position << ':' << coolingDown << ':' << player.getVocationId() << ':' << player.getVocation()->getFromVocation()
+	    << ':' << player.getLevel() << ':' << player.isPremium() << ':' << player.isPzLocked()
+	    << ':' << player.getMoney() << ':' << player.getBankBalance()
+	    << ':' << spellTrainingReserve(player) << ':' << spellTrainingReserve(player, true)
+	    << ':' << playerBotSupplyStockKey(supplyStocks(player)) << ':' << huntSuppliesReady(player)
+	    << ':' << combat.maximumHealth << ':' << combat.armor << ':' << combat.defense << ':' << combat.attack
+	    << ':' << combat.attackSkill << ':' << combat.attackFactor << ':' << combat.hitChance << ':' << combat.blockedByShield
+	    << ':' << player.getStepDuration() << ':' << player.getStepDuration(DIRECTION_NORTHEAST)
+	    << ':' << (g_game.findItemOfType(&player, ropeItemId, true) != nullptr)
+	    << ':' << (g_game.findItemOfType(&player, 2554, true) != nullptr)
+	    << ':' << (player.getGroup() && player.getGroup()->access)
+	    << ':' << (player.getGroup() ? player.getGroup()->flags : 0)
+	    << ':' << (player.getGuild() ? player.getGuild()->getId() : 0)
+	    << ':' << (player.getGuildRank() ? player.getGuildRank()->id : 0)
+	    << ':' << PlayerBotTopology::instance().generation() << ':' << PlayerBotHuntRegionPlanner::getCacheRevision()
+	    << ':' << playerBotNavigationCostIdentity("", riskProfile);
+	for (Npc* npc : playerBotNpcProviders(g_game.getNpcs(), PlayerBotNpcCapability::SpellTrainer, position)) {
+		key << ";trainer:" << npc->getID() << ':' << npc->getPosition();
+		for (const auto& offer : npc->getSpellOffers()) {
+			Spell* spell = g_spells ? g_spells->getSpellByName(offer.spellName) : nullptr;
+			key << ':' << std::quoted(offer.spellName) << ':' << std::quoted(offer.keyword)
+			    << ':' << offer.price << ':' << offer.level << ':' << offer.premium
+			    << ':' << player.hasLearnedInstantSpell(offer.spellName);
+			for (auto vocation : offer.vocationIds) key << ':' << vocation;
+			key << "|registry:" << (spell && spell->isInstant() && spell->isLearnable())
+			    << ':' << (spell ? spell->getLevel() : 0) << ':' << (spell && spell->isPremium())
+			    << ':' << (spell && spell->getVocMap().count(player.getVocationId()))
+			    << ':' << survivalRuntime.healingSpellWorthLearning(snapshot, offer.spellName.c_str());
+		}
+	}
+	for (Npc* npc : playerBotNpcProviders(g_game.getNpcs(), PlayerBotNpcCapability::Travel, position)) {
+		key << ";travel:" << npc->getID() << ':' << npc->getPosition();
+		for (const auto& offer : npc->getTravelOffers()) {
+			key << ':' << offer.destination << ':' << offer.price << ':' << offer.level << ':' << offer.premium
+			    << ':' << offer.hasOpaqueCondition << ':' << offer.hasOpaqueAction;
+			for (const auto& phrase : offer.dialogue) key << ':' << std::quoted(phrase);
+		}
+	}
+	for (const auto& [offer, until] : unavailableTravelOffers) {
+		if (until > std::chrono::steady_clock::now()) key << ";unavailable:" << offer.first << ':' << offer.second;
+	}
+	return playerBotNavigationBlockedIdentity(key.str(),
+	    navigationRuntime.activeBlockedPositions(std::chrono::steady_clock::now()));
+}
+
+void PlayerBotController::interruptTrainerRouteWork()
+{
+	const bool arbitrationWork = trainerArbitration.completed();
+	if (arbitrationWork) {
+		trainerArbitration.reset();
+		trainerDecisionWatch = {};
+		selectedTrainerRoute.reset();
+	}
+	const bool discoveryWork = trainerDiscovery && (trainerDiscovery->next != 0 || trainerRouteSearch);
+	const bool journeyWork = trainerJourney && !trainerJourneyNeedsRoute;
+	if (!arbitrationWork && !discoveryWork && !journeyWork && !trainerRouteSearch) return;
+	trainerRouteSearch.reset();
+	if (discoveryWork) {
+		++trainerDiscovery->progress.restarts;
+		trainerDiscovery->next = 0;
+		for (auto& offer : trainerDiscovery->offers) {
+			playerBotTrainerDiscardRouteProof(offer);
+			offer.routeRejection.clear();
+		}
+		for (auto& route : trainerDiscovery->routes) route = {};
+	}
+	if (journeyWork) {
+		trainerJourney->evidence.reset();
+		trainerJourneyNeedsRoute = true;
+		resetNavigation();
+	}
+	auto& budget = playerBotHuntPlanningBudget();
+	if (!budget.isActive(playerId)) budget.cancel(playerId, std::chrono::steady_clock::now());
+}
+
+void PlayerBotController::clearTrainerWork()
+{
+	trainerDiscovery.reset();
+	trainerArbitration.reset();
+	trainerDecisionWatch = {};
+	selectedTrainerRoute.reset();
+	trainerJourney.reset();
+	trainerRouteSearch.reset();
+	trainerGoalSelectionPending = false;
+	trainerJourneyNeedsRoute = false;
+	trainerTravelReceiptFailed = false;
+	auto& budget = playerBotHuntPlanningBudget();
+	if (!budget.isActive(playerId)) budget.cancel(playerId, std::chrono::steady_clock::now());
+}
+
+std::optional<PlayerBotNavigationRoutePlan> PlayerBotController::advanceTrainerRoute(
+    Player& player, const std::vector<Position>& destinations, uint64_t reserve,
+    std::shared_ptr<PlayerBotHuntTravelEvidence>& evidence)
+{
+	const Position source = player.getPosition();
+	const auto blocked = navigationRuntime.activeBlockedPositions(std::chrono::steady_clock::now());
+	if (!trainerRouteSearch || trainerRouteSearch->origin != source ||
+	    trainerRouteSearch->destination != destinations.front() || trainerRouteSearch->reserve != reserve ||
+	    trainerRouteSearch->blockedPositions != blocked) {
+		trainerRouteSearch.emplace();
+		auto& search = *trainerRouteSearch;
+		search.origin = source;
+		search.destination = destinations.front();
+		search.reserve = reserve;
+		search.blockedPositions = blocked;
+		search.pass = (uint64_t(1) << 61) | (uint64_t(playerId) << 24) | ++trainerRouteSerial;
+	}
+	auto& budget = playerBotHuntPlanningBudget();
+	const auto admission = budget.request(playerId, std::chrono::steady_clock::now());
+	if (!admission.admitted) {
+		schedule(static_cast<uint32_t>(std::clamp<int64_t>(
+		    std::chrono::duration_cast<std::chrono::milliseconds>(admission.wait).count(),
+		    blockedRouteRetryInterval, 5000)));
+		return std::nullopt;
+	}
+	PlayerBotPlanningBudget::Charge charge(budget, playerId);
+	auto& search = *trainerRouteSearch;
+	PlayerBotHuntRouteRequest request;
+	request.planningPass = search.pass;
+	request.from = source;
+	request.to = destinations.front();
+	request.destinations = destinations;
+	request.blockedPositions = search.blockedPositions;
+	request.preferSafeWalking = std::any_of(destinations.begin(), destinations.end(), [&](Position p) {
+		return playerBotNavigationDistance(source, p) <= 128;
+	});
+	PlayerBotHuntRouteTiming timing;
+	std::optional<PlayerBotNavigationRoutePlan> planned;
+	{
+		PlayerBotRouteWorkSlot slot(huntTravelWork, search.work);
+		planned = advanceHuntTravelRoute(player, request, source, timing, reserve, false, nullptr, &evidence);
+	}
+	search.expandedNodes += timing.localExpandedNodes;
+	const bool exhausted = !planned && ++search.turns >= maximumRouteSearchTurns;
+	if (planned || exhausted || search.turns == 1 || timing.invalidations != 0 || timing.transportRestarts != 0) {
+		emit("trainer_route", source, "\"npc_id\":" + std::to_string(
+		    trainerDiscovery ? trainerDiscovery->offers[trainerDiscovery->next].npcId :
+		    progressionRuntime.spellTraining().plan().npcId) +
+		    ",\"spell\":" + jsonString(trainerDiscovery ? trainerDiscovery->offers[trainerDiscovery->next].spellName :
+		                                      progressionRuntime.spellTraining().plan().spellName) +
+		    ",\"phase\":" + jsonString(trainerDiscovery ? "discovery" : "journey") +
+		    ",\"result\":" + jsonString(planned ? playerBotNavigationResultName(planned->metrics.result) :
+		                                    exhausted ? "proof_exhausted" : "pending") +
+		    (exhausted ? ",\"reason\":\"route_turn_limit\"" : "") +
+		    (trainerDiscovery ? ",\"scan_continuations\":" + std::to_string(trainerDiscovery->progress.continuations) +
+		        ",\"offer_index\":" + std::to_string(trainerDiscovery->next) : "") +
+		    ",\"expanded_nodes\":" + std::to_string(search.expandedNodes) +
+		    ",\"fare\":" + std::to_string(planned ? planned->metrics.fare : 0) +
+		    ",\"protected_funds\":" + std::to_string(reserve) +
+		    ",\"slices\":" + std::to_string(search.turns + (planned ? 1 : 0)) +
+		    ",\"blocked_tiles\":" + std::to_string(search.blockedPositions.size()) +
+		    ",\"invalidations\":" + std::to_string(timing.invalidations) +
+		    ",\"transport_restarts\":" + std::to_string(timing.transportRestarts));
+	}
+	if (exhausted) {
+		planned.emplace();
+		planned->metrics.result = PlayerBotNavigationResult::NodeLimit;
+	}
+	if (planned) trainerRouteSearch.reset();
+	else if (admission.admitted) schedule(routeSearchContinuationInterval);
+	return planned;
+}
+
+bool PlayerBotController::findSpellTraining(Player& player, const Position& position, PlayerBotSpellTrainingPlan& plan)
 {
 	const uint64_t reserve = spellTrainingReserve(player);
 	const uint64_t healingReserve = spellTrainingReserve(player, true);
@@ -420,183 +629,277 @@ bool PlayerBotController::findSpellTraining(Player& player, const Position& posi
 	auto worthwhile = [&](const std::string& name) {
 		return !healingOffer(name) || survivalRuntime.healingSpellWorthLearning(spellSnapshot, name.c_str());
 	};
-	std::vector<PlayerBotSpellOfferSnapshot> offers;
-	std::vector<std::deque<PlayerBotNavigationStep>> routes;
-	uint64_t remainingPathNodes = maximumSpellTrainerPathNodes;
-	std::vector<Npc*> trainers = playerBotNpcProviders(g_game.getNpcs(), PlayerBotNpcCapability::SpellTrainer, position);
-	auto hasRelevantOffer = [&](const Npc* trainer) {
-		return std::any_of(trainer->getSpellOffers().begin(), trainer->getSpellOffers().end(), [&](const NpcSpellOffer& offer) {
-			Spell* spell = g_spells ? g_spells->getSpellByName(offer.spellName) : nullptr;
-			return playerBotSpellLearningPriority(offer.spellName.c_str()) && worthwhile(offer.spellName) &&
-			       spell && spell->isInstant() && spell->isLearnable() && spell->getLevel() == offer.level &&
-			       spell->isPremium() == offer.premium && player.getLevel() >= offer.level &&
-			       (!offer.premium || player.isPremium()) && !player.hasLearnedInstantSpell(offer.spellName) &&
-			       std::find(offer.vocationIds.begin(), offer.vocationIds.end(), baseVocationId) != offer.vocationIds.end() &&
-			       spell->getVocMap().find(vocationId) != spell->getVocMap().end();
-		});
-	};
-	const auto eligibleEnd = std::stable_partition(trainers.begin(), trainers.end(), hasRelevantOffer);
-	const size_t eligibleCount = static_cast<size_t>(std::distance(trainers.begin(), eligibleEnd));
-	if (eligibleCount > maximumSpellTrainerRoutes) {
-		const size_t rotatingCount = eligibleCount - 1;
-		const size_t offset = spellTrainerScanOffset % rotatingCount;
-		std::rotate(trainers.begin() + 1, trainers.begin() + 1 + offset, eligibleEnd);
-		spellTrainerScanOffset = (offset + maximumSpellTrainerRoutes - 1) % rotatingCount;
-	} else if (eligibleEnd != trainers.end()) {
-		const size_t remainingCount = static_cast<size_t>(std::distance(eligibleEnd, trainers.end()));
-		const size_t offset = spellTrainerScanOffset % remainingCount;
-		std::rotate(eligibleEnd, eligibleEnd + offset, trainers.end());
-		const size_t remainingSlots = maximumSpellTrainerRoutes > eligibleCount ? maximumSpellTrainerRoutes - eligibleCount : 0;
-		spellTrainerScanOffset = (offset + std::min(remainingSlots, remainingCount)) % remainingCount;
-	}
-	if (trainers.size() > maximumSpellTrainerRoutes) {
-		trainers.resize(maximumSpellTrainerRoutes);
-	}
-
-	for (Npc* npc : trainers) {
-		const bool inScope = true;
-		emit("spell_trainer_discovered", position, "\"npc_id\":" + std::to_string(npc->getID()) +
-		     ",\"npc_name\":" + jsonString(npc->getName()) + ",\"offers\":" +
-		     std::to_string(npc->getSpellOffers().size()) + ",\"in_scope\":" + (inScope ? "true" : "false"));
-		bool routeEvaluated = false;
-		bool routeReachable = false;
-		Position trainerApproach;
-		std::deque<PlayerBotNavigationStep> trainerSteps;
-		PlayerBotRouteEstimate trainerRoute;
-		auto findTrainerApproach = [&]() {
-			if (routeEvaluated) {
-				return routeReachable;
-			}
-			routeEvaluated = true;
-			std::vector<Position> approaches;
-			for (int32_t xOffset = -3; xOffset <= 3; ++xOffset) {
-				for (int32_t yOffset = -3; yOffset <= 3; ++yOffset) {
-					if (xOffset != 0 || yOffset != 0) {
-						approaches.emplace_back(npc->getPosition().x + xOffset, npc->getPosition().y + yOffset,
-						                        npc->getPosition().z);
-					}
-				}
-			}
-			std::sort(approaches.begin(), approaches.end(), [&position, npc](const Position& left, const Position& right) {
-				const int32_t leftNpcDistance = std::max(Position::getDistanceX(npc->getPosition(), left),
-				                                             Position::getDistanceY(npc->getPosition(), left));
-				const int32_t rightNpcDistance = std::max(Position::getDistanceX(npc->getPosition(), right),
-				                                              Position::getDistanceY(npc->getPosition(), right));
-				if (leftNpcDistance != rightNpcDistance) {
-					return leftNpcDistance > rightNpcDistance;
-				}
-				const int32_t leftDistance = std::max(Position::getDistanceX(position, left), Position::getDistanceY(position, left));
-				const int32_t rightDistance = std::max(Position::getDistanceX(position, right), Position::getDistanceY(position, right));
-				return leftDistance == rightDistance ? left < right : leftDistance < rightDistance;
+	auto refresh = [&](PlayerBotSpellOfferSnapshot& snapshot) {
+		Npc* npc = g_game.getNpcByID(snapshot.npcId);
+		Spell* spell = g_spells ? g_spells->getSpellByName(snapshot.spellName) : nullptr;
+		const NpcSpellOffer* loadedOffer = nullptr;
+		if (npc) {
+			const auto found = std::find_if(npc->getSpellOffers().begin(), npc->getSpellOffers().end(), [&](const auto& offer) {
+				return offer.spellName == snapshot.spellName && offer.keyword == snapshot.keyword &&
+				    offer.price == snapshot.price && offer.level == snapshot.level && offer.premium == snapshot.premium;
 			});
-			std::array<bool, 9> evaluatedDirections{};
-			size_t evaluatedApproaches = 0;
-			for (const Position& approach : approaches) {
-				if (evaluatedApproaches >= maximumSpellTrainerApproaches || remainingPathNodes == 0) {
-					break;
-				}
-				const int32_t xDirection = approach.x < npc->getPosition().x ? 0 : approach.x > npc->getPosition().x ? 2 : 1;
-				const int32_t yDirection = approach.y < npc->getPosition().y ? 0 : approach.y > npc->getPosition().y ? 2 : 1;
-				const int32_t direction = xDirection * 3 + yDirection;
-				if (evaluatedDirections[direction]) continue;
-				Tile* tile = g_game.map.getTile(approach);
-				if (!tile || tile->queryAdd(0, player, 1, 0) != RETURNVALUE_NOERROR) {
-					continue;
-				}
-				evaluatedDirections[direction] = true;
-				++evaluatedApproaches;
-				std::deque<PlayerBotNavigationStep> steps;
-				uint64_t expandedNodes = 0;
-				const auto startedAt = std::chrono::steady_clock::now();
-				const PlayerBotNavigationRoutePlan routePlan = approach == position ? PlayerBotNavigationRoutePlan{} :
-					planCompleteNavigationRoute(player, approach, {},
-					                    std::min(remainingPathNodes, maximumSpellTrainerPathNodesPerApproach));
-				const PlayerBotNavigationResult result = approach == position ? PlayerBotNavigationResult::Reached : routePlan.metrics.result;
-				if (approach != position) {
-					steps = routePlan.steps;
-					expandedNodes = routePlan.metrics.expandedNodes;
-					remainingPathNodes -= std::min(remainingPathNodes, expandedNodes);
-				}
-				telemetry.recordPathfinding(std::chrono::duration_cast<std::chrono::microseconds>(
-					std::chrono::steady_clock::now() - startedAt), result == PlayerBotNavigationResult::Reached);
-				if (result != PlayerBotNavigationResult::Reached || (approach != position && steps.empty())) {
-					continue;
-				}
-				trainerApproach = approach;
-				trainerSteps = std::move(steps);
-				trainerRoute = {true, false, approach,
-				    approach == position ? 0 : static_cast<uint32_t>(routePlan.metrics.steps), expandedNodes,
-				    approach == position ? 0 : routePlan.metrics.dangerCost,
-				    approach == position ? 0 : routePlan.metrics.maximumHealthLossPerSecond};
-				routeReachable = true;
-				return true;
-			}
+			if (found != npc->getSpellOffers().end()) loadedOffer = &*found;
+		}
+		snapshot.registryMatches = npc && playerBotNpcHasCapability(*npc, PlayerBotNpcCapability::SpellTrainer) &&
+		    loadedOffer && spell && spell->isInstant() && spell->isLearnable() &&
+		    spell->getLevel() == snapshot.level && spell->isPremium() == snapshot.premium;
+		snapshot.vocationEligible = snapshot.registryMatches && spell->getVocMap().count(vocationId) != 0 &&
+		    std::find(loadedOffer->vocationIds.begin(), loadedOffer->vocationIds.end(), baseVocationId) != loadedOffer->vocationIds.end();
+		snapshot.levelEligible = player.getLevel() >= snapshot.level;
+		snapshot.premiumEligible = !snapshot.premium || player.isPremium();
+		snapshot.known = player.hasLearnedInstantSpell(snapshot.spellName);
+		snapshot.worthLearning = worthwhile(snapshot.spellName);
+		snapshot.suppliesReady = suppliesReady && potionCount > snapshot.potionReserve;
+	};
+	const bool factsChanged = trainerDiscovery && (trainerDiscovery->origin != position ||
+	    trainerDiscovery->money != totalMoney || trainerDiscovery->reserve != reserve ||
+	    trainerDiscovery->healingReserve != healingReserve || trainerDiscovery->potionCount != potionCount);
+	auto progress = trainerDiscovery ? trainerDiscovery->progress : PlayerBotTrainerScanProgress{};
+	if (!trainerDiscovery) progress.deadline = std::chrono::steady_clock::now() + std::chrono::minutes(10);
+	if (factsChanged) {
+		++progress.restarts;
+		trainerDiscovery.reset();
+		trainerRouteSearch.reset();
+	}
+	const char* exhaustion = progress.exhaustion(std::chrono::steady_clock::now(), PlayerBotApproachLimits::providerMoves);
+	if (exhaustion) {
+		emit("trainer_route", position, "\"phase\":\"discovery\",\"result\":\"proof_exhausted\",\"reason\":" +
+		    jsonString(exhaustion) + ",\"scan_continuations\":" + std::to_string(progress.continuations) +
+		    ",\"evaluated_offers\":" + std::to_string(trainerDiscovery ? trainerDiscovery->next : 0));
+		trainerRouteSearch.reset();
+		if (!trainerDiscovery) {
+			clearTrainerWork();
+			progressionRuntime.completeSpellTraining(false, spellTrainingFailureCooldown);
 			return false;
+		}
+		// End pending proofs, not completed candidates. Selection below still
+		// refreshes eligibility, risk, supplies, and each retained route proof.
+		playerBotTrainerEndPendingProofs(trainerDiscovery->offers, trainerDiscovery->next);
+		trainerDiscovery->next = trainerDiscovery->offers.size();
+	}
+	if (!trainerDiscovery) {
+		trainerDiscovery.emplace();
+		auto& scan = *trainerDiscovery;
+		scan.origin = position; scan.money = totalMoney;
+		scan.reserve = reserve; scan.healingReserve = healingReserve; scan.potionCount = potionCount;
+		scan.progress = progress;
+		std::vector<Npc*> trainers = playerBotNpcProviders(g_game.getNpcs(), PlayerBotNpcCapability::SpellTrainer, position);
+		auto hasRelevantOffer = [&](const Npc* trainer) {
+			return std::any_of(trainer->getSpellOffers().begin(), trainer->getSpellOffers().end(), [&](const NpcSpellOffer& offer) {
+				Spell* spell = g_spells ? g_spells->getSpellByName(offer.spellName) : nullptr;
+				return playerBotSpellLearningPriority(offer.spellName.c_str()) && worthwhile(offer.spellName) &&
+				       spell && spell->isInstant() && spell->isLearnable() && spell->getLevel() == offer.level &&
+				       spell->isPremium() == offer.premium && player.getLevel() >= offer.level &&
+				       (!offer.premium || player.isPremium()) && !player.hasLearnedInstantSpell(offer.spellName) &&
+				       std::find(offer.vocationIds.begin(), offer.vocationIds.end(), baseVocationId) != offer.vocationIds.end() &&
+				       spell->getVocMap().find(vocationId) != spell->getVocMap().end();
+			});
 		};
-		for (const NpcSpellOffer& offer : npc->getSpellOffers()) {
-			Spell* spell = g_spells ? g_spells->getSpellByName(offer.spellName) : nullptr;
-			const std::optional<uint8_t> learningPriority = playerBotSpellLearningPriority(offer.spellName.c_str());
-			const bool registryMatches = spell && spell->isInstant() && spell->isLearnable() &&
-			                             spell->getLevel() == offer.level && spell->isPremium() == offer.premium;
-			const bool vocationEligible = registryMatches &&
-			    std::find(offer.vocationIds.begin(), offer.vocationIds.end(), baseVocationId) != offer.vocationIds.end() &&
-			    spell->getVocMap().find(vocationId) != spell->getVocMap().end();
-			const bool levelEligible = player.getLevel() >= offer.level;
-			const bool premiumEligible = !offer.premium || player.isPremium();
-			const bool alreadyLearned = player.hasLearnedInstantSpell(offer.spellName);
-			const bool worthLearning = worthwhile(offer.spellName);
-			const uint64_t offerReserve = healingOffer(offer.spellName) ? healingReserve : reserve;
-			const bool affordable = playerBotAffordableAfterReserve(totalMoney, offerReserve, offer.price);
-			const bool routeReachable = registryMatches && vocationEligible && levelEligible && premiumEligible &&
-			                            !alreadyLearned && worthLearning && suppliesReady && affordable && findTrainerApproach();
-			offers.push_back({npc->getID(), npc->getPosition(), npc->getName(), offer.spellName, offer.keyword,
-			                  offer.price, offer.level, offer.premium, inScope, registryMatches,
-			                  learningPriority.has_value(), learningPriority.value_or(UINT8_MAX), vocationEligible,
-			                  levelEligible, premiumEligible, alreadyLearned, suppliesReady,
-			                  trainerRoute, offerReserve});
-			offers.back().worthLearning = worthLearning;
-			if (routeReachable) {
-				const uint32_t routeReserve = recoveryPotionRouteReserve(vocationId, player.getMaxHealth(),
-				    trainerRoute.dangerCost, static_cast<uint32_t>(riskProfile.healthLossCost));
-				offers.back().potionReserve = std::max(huntPotionReturnThreshold, routeReserve);
-				offers.back().suppliesReady = suppliesReady && potionCount > offers.back().potionReserve;
+		const auto eligibleEnd = std::stable_partition(trainers.begin(), trainers.end(), hasRelevantOffer);
+		const size_t eligibleCount = static_cast<size_t>(std::distance(trainers.begin(), eligibleEnd));
+		if (eligibleCount > maximumSpellTrainerRoutes) {
+			const size_t rotatingCount = eligibleCount - 1;
+			const size_t offset = spellTrainerScanOffset % rotatingCount;
+			std::rotate(trainers.begin() + 1, trainers.begin() + 1 + offset, eligibleEnd);
+			spellTrainerScanOffset = (offset + maximumSpellTrainerRoutes - 1) % rotatingCount;
+		} else if (eligibleEnd != trainers.end()) {
+			const size_t remainingCount = static_cast<size_t>(std::distance(eligibleEnd, trainers.end()));
+			const size_t offset = spellTrainerScanOffset % remainingCount;
+			std::rotate(eligibleEnd, eligibleEnd + offset, trainers.end());
+			const size_t remainingSlots = maximumSpellTrainerRoutes > eligibleCount ? maximumSpellTrainerRoutes - eligibleCount : 0;
+			spellTrainerScanOffset = (offset + std::min(remainingSlots, remainingCount)) % remainingCount;
+		}
+		if (trainers.size() > maximumSpellTrainerRoutes) {
+			trainers.resize(maximumSpellTrainerRoutes);
+		}
+
+		for (Npc* npc : trainers) {
+			emit("spell_trainer_discovered", position, "\"npc_id\":" + std::to_string(npc->getID()) +
+			    ",\"npc_name\":" + jsonString(npc->getName()) + ",\"offers\":" +
+			    std::to_string(npc->getSpellOffers().size()) + ",\"in_scope\":true");
+			for (const NpcSpellOffer& offer : npc->getSpellOffers()) {
+				const auto priority = playerBotSpellLearningPriority(offer.spellName.c_str());
+				PlayerBotSpellOfferSnapshot snapshot;
+				snapshot.npcId = npc->getID(); snapshot.npcPosition = npc->getPosition(); snapshot.npcName = npc->getName();
+				snapshot.spellName = offer.spellName; snapshot.keyword = offer.keyword; snapshot.price = offer.price;
+				snapshot.level = offer.level; snapshot.premium = offer.premium; snapshot.inScope = true;
+				snapshot.implementedUse = priority.has_value(); snapshot.learningPriority = priority.value_or(UINT8_MAX);
+				snapshot.reserve = healingOffer(offer.spellName) ? healingReserve : reserve;
+				refresh(snapshot);
+				scan.offers.push_back(std::move(snapshot));
 			}
-			routes.push_back(trainerSteps);
+		}
+		std::stable_sort(scan.offers.begin(), scan.offers.end(), [](const auto& a, const auto& b) {
+			return playerBotTrainerPriority(a) < playerBotTrainerPriority(b);
+		});
+		scan.routes.resize(scan.offers.size());
+	}
+	auto& scan = *trainerDiscovery;
+	PlayerBotRouteChanges::Scope decisionDependencies(trainerDecisionWatch);
+	++scan.progress.continuations;
+	auto select = [&] {
+		return spellTrainingPlanner.select({reserve, totalMoney, reserve != UINT64_MAX,
+		    static_cast<uint32_t>(riskProfile.maximumRouteHealthLoss * riskProfile.healthLossCost),
+		    riskProfile.maximumHealthLossPerSecond, scan.offers});
+	};
+	// Cheap rejections do not request the shared planner. At most one route
+	// slice runs per turn; the offer cursor and all frontiers survive a yield.
+	while (scan.next < scan.offers.size()) {
+		auto& offer = scan.offers[scan.next];
+		auto& route = scan.routes[scan.next];
+		refresh(offer);
+		if (!offer.registryMatches || !offer.implementedUse || !offer.vocationEligible || !offer.levelEligible ||
+		    !offer.premiumEligible || offer.known || !offer.worthLearning || !offer.suppliesReady ||
+		    !playerBotTrainerTripAffordable(totalMoney, *offer.reserve, offer.price, 0)) {
+			++scan.next;
+			continue;
+		}
+		Npc* npc = g_game.getNpcByID(offer.npcId);
+		auto destinations = trainerApproaches(player, *npc);
+		if (!trainerRouteSearch) {
+			// Refresh at candidate boundaries, not on every admitted search slice.
+			// Learning/loaded eligibility may change without moving the actor.
+			for (auto& candidate : scan.offers) refresh(candidate);
+			const auto incumbent = select();
+			if (incumbent.selectedOfferIndex && playerBotTrainerPriority(scan.offers[*incumbent.selectedOfferIndex]) <
+			    playerBotTrainerPriority(offer)) {
+				// Keep equal-ranked providers for the original travel-step tie break.
+				// Final proof validation can reopen deferred offers if this winner moved.
+				for (size_t i = scan.next; i < scan.offers.size(); ++i)
+					scan.offers[i].routeRejection = "lower_learning_priority";
+				scan.next = scan.offers.size();
+				break;
+			}
+			if (!offer.route.reachable && incumbent.selectedOfferIndex &&
+			    !playerBotTrainerOptimisticCanBeat(offer, playerBotTrainerMinimumSteps(position, destinations),
+			        scan.offers[*incumbent.selectedOfferIndex])) {
+				offer.routeRejection = "route_rank_dominated";
+				++scan.next;
+				continue;
+			}
+		}
+		if (offer.route.reachable) { ++scan.next; continue; } // Retained proof is validated below.
+		offer.routeRejection.clear();
+		if (destinations.empty()) {
+			offer.routeRejection = "trainer_approach_unavailable";
+		} else {
+			if (route.destinations != destinations) {
+				route.destinations = destinations;
+				trainerRouteSearch.reset();
+			}
+			// Affordability above makes this addition safe.
+			auto planned = advanceTrainerRoute(player, destinations, *offer.reserve + offer.price, route.evidence);
+			if (!planned) return false; // Pending is not a rejection or a completed arbitration.
+			route.plan = std::move(*planned);
+			offer.fare = route.plan.metrics.fare;
+			const auto result = route.plan.metrics.result;
+			offer.route = {result == PlayerBotNavigationResult::Reached, result == PlayerBotNavigationResult::NodeLimit,
+			    route.plan.metrics.firstNpcTravelOffer ? destinations.front() : route.plan.metrics.waypoint,
+			    static_cast<uint32_t>(route.plan.metrics.steps), route.plan.metrics.expandedNodes,
+			    route.plan.metrics.dangerCost, route.plan.metrics.maximumHealthLossPerSecond};
+			offer.npcPosition = npc->getPosition();
+			offer.routeRejection = result == PlayerBotNavigationResult::NodeLimit ? "route_proof_exhausted" :
+			    result == PlayerBotNavigationResult::RiskRejected ? "route_risk_rejected" :
+			    result == PlayerBotNavigationResult::Unreachable ?
+			        (trainerFareLimited(player, *offer.reserve + offer.price) ? "route_fare_limited" : "trainer_unreachable") : "";
+			const uint32_t routeReserve = recoveryPotionRouteReserve(vocationId, player.getMaxHealth(),
+			    offer.route.dangerCost, static_cast<uint32_t>(riskProfile.healthLossCost));
+			offer.potionReserve = std::max(huntPotionReturnThreshold, routeReserve);
+			offer.suppliesReady = suppliesReady && potionCount > offer.potionReserve;
+		}
+		++scan.next;
+		if (scan.next < scan.offers.size()) {
+			schedule(routeSearchContinuationInterval);
+			return false;
 		}
 	}
-	const PlayerBotSpellTrainingDecision decision = spellTrainingPlanner.select({reserve, totalMoney,
-	    reserve != std::numeric_limits<uint64_t>::max(),
-	    static_cast<uint32_t>(riskProfile.maximumRouteHealthLoss * riskProfile.healthLossCost),
-	    riskProfile.maximumHealthLossPerSecond, offers});
-	for (size_t offerIndex = 0; offerIndex < offers.size(); ++offerIndex) {
-		const auto& offer = offers[offerIndex];
-		const auto rejection = std::find_if(decision.rejections.begin(), decision.rejections.end(),
-		                                    [offerIndex](const PlayerBotPlannerOfferRejection& result) {
-			                                    return result.offerIndex == offerIndex;
-		                                    });
-		Npc* npc = g_game.getNpcByID(offer.npcId);
-		if (npc) emitSpellCandidate(*npc, {offer.spellName, offer.keyword, offer.price, offer.level, offer.premium, {}}, position,
-		                           rejection == decision.rejections.end() ? "feasible" : "rejected",
-		                           rejection == decision.rejections.end() ? nullptr : rejection->reason.c_str(), offer.reserve.value_or(reserve), offer.route.steps,
-		                           offer.implementedUse ? std::optional<uint8_t>(offer.learningPriority) : std::nullopt);
+	// Earlier candidates may have become stale while later candidates yielded.
+	// Never publish stale evidence, and never restart this scan without a bound.
+	size_t firstStale = scan.offers.size();
+	for (size_t i = 0; i < scan.offers.size(); ++i) {
+		auto& offer = scan.offers[i];
+		refresh(offer);
+		offer.suppliesReady = suppliesReady && potionCount > offer.potionReserve;
+		if (offer.route.reachable) {
+			Npc* npc = g_game.getNpcByID(offer.npcId);
+			auto& route = scan.routes[i];
+			if (!npc || !playerBotTrainerDiscoveryDestinationRetained(route.plan, route.destinations,
+			        trainerApproaches(player, *npc)) || !route.evidence ||
+			    !huntTravelEvidenceValid(player, position, route.evidence->destination, *route.evidence)) {
+				firstStale = std::min(firstStale, i);
+				playerBotTrainerDiscardRouteProof(offer);
+				offer.routeRejection = exhaustion ? "route_proof_exhausted" : "";
+				route = {};
+			}
+		}
 	}
-	if (!decision.selected) return false;
-	plan = *decision.selected;
-	if (!decision.selectedOfferIndex || *decision.selectedOfferIndex >= routes.size()) return false;
-	selectedSteps = std::move(routes[*decision.selectedOfferIndex]);
-	return true;
+	if (firstStale < scan.offers.size() && !exhaustion) {
+		++scan.progress.restarts;
+		scan.next = firstStale;
+		for (auto& offer : scan.offers)
+			if (offer.routeRejection == "lower_learning_priority" || offer.routeRejection == "route_rank_dominated")
+				offer.routeRejection.clear();
+		schedule(routeSearchContinuationInterval);
+		return false;
+	}
+	const auto decision = select();
+	if (!exhaustion) {
+		const auto deferred = playerBotTrainerDeferredNeeded(scan.offers, decision.selectedOfferIndex, [&](size_t index) {
+			Npc* npc = g_game.getNpcByID(scan.offers[index].npcId);
+			return npc ? playerBotTrainerMinimumSteps(position, trainerApproaches(player, *npc)) : uint32_t(0);
+		});
+		if (deferred) {
+			scan.next = *deferred;
+			for (auto& offer : scan.offers)
+				if (offer.routeRejection == "lower_learning_priority" || offer.routeRejection == "route_rank_dominated")
+					offer.routeRejection.clear();
+			schedule(routeSearchContinuationInterval);
+			return false;
+		}
+	}
+	for (size_t i = 0; i < scan.offers.size(); ++i) {
+		const auto& offer = scan.offers[i];
+		const auto rejection = std::find_if(decision.rejections.begin(), decision.rejections.end(),
+		    [i](const auto& r) { return r.offerIndex == i; });
+		if (Npc* npc = g_game.getNpcByID(offer.npcId))
+			emitSpellCandidate(*npc, {offer.spellName, offer.keyword, offer.price, offer.level, offer.premium, {}}, position,
+			    rejection == decision.rejections.end() ? "feasible" : "rejected",
+			    rejection == decision.rejections.end() ? nullptr : rejection->reason.c_str(),
+			    *offer.reserve, offer.route.steps, offer.implementedUse ? std::optional<uint8_t>(offer.learningPriority) : std::nullopt, offer.fare);
+	}
+	if (decision.selected && decision.selectedOfferIndex) {
+		plan = *decision.selected;
+		selectedTrainerRoute = std::move(scan.routes[*decision.selectedOfferIndex]);
+	}
+	trainerRouteSearch.reset();
+	trainerDiscovery.reset();
+	if (exhaustion && !decision.selected) progressionRuntime.completeSpellTraining(false, spellTrainingFailureCooldown);
+	return decision.selected.has_value();
 }
 
-void PlayerBotController::beginSpellTraining(Player& player, const Position& position, PlayerBotSpellTrainingPlan plan,
-                                             std::deque<PlayerBotNavigationStep> steps)
+void PlayerBotController::beginSpellTraining(Player& player, const Position& position, PlayerBotSpellTrainingPlan plan)
 {
+	trainerJourney = std::move(selectedTrainerRoute);
+	trainerArbitration.reset();
+	trainerDecisionWatch = {};
+	selectedTrainerRoute.reset();
+	trainerDiscovery.reset();
+	trainerGoalSelectionPending = false;
+	trainerFareRemaining = plan.fare;
+	trainerJourneyRestarts = 0;
+	trainerJourneyNeedsRoute = !trainerJourney.has_value();
+	trainerTravelReceiptFailed = false;
+	trainerJourneyDeadline = std::chrono::steady_clock::now() + std::chrono::minutes(15);
 	progressionRuntime.beginSpellTraining(std::move(plan));
 	const auto& training = progressionRuntime.spellTraining().plan();
-	observeNavigationPlan(training.approachPosition, std::move(steps));
+	resetNavigation();
+	if (trainerJourney) navigationRuntime.observePlan({PlayerBotNavigationGoal::anyOf(trainerJourney->destinations),
+	    trainerJourney->plan, player.canDoAction(), true, std::chrono::steady_clock::now()});
 	emit("strategy_selection", position, "\"goal\":\"learn_spell\",\"npc_id\":" +
 	     std::to_string(training.npcId) + ",\"spell\":" + jsonString(training.spellName) +
 	     ",\"keyword\":" + jsonString(training.keyword) + ",\"price\":" +
-	     std::to_string(training.price) + ",\"reserve\":" + std::to_string(training.reserve) +
+	     std::to_string(training.price) + ",\"fare\":" + std::to_string(training.fare) +
+	     ",\"reserve\":" + std::to_string(training.reserve) +
 	     ",\"potion_reserve\":" + std::to_string(training.potionReserve) +
 	     ",\"travel_steps\":" + std::to_string(training.travelSteps));
 	say(player, "Going to learn " + training.spellName + ".");
@@ -604,6 +907,7 @@ void PlayerBotController::beginSpellTraining(Player& player, const Position& pos
 
 void PlayerBotController::finishSpellTraining(Player* player, const Position& position, const char* result, const char* reason)
 {
+	clearTrainerWork();
 	emit("strategy_objective_result", position, "\"goal\":\"learn_spell\",\"spell\":" +
 	     jsonString(progressionRuntime.spellTraining().plan().spellName) + ",\"result\":" + jsonString(result) + ",\"reason\":" +
 	     jsonString(reason));
@@ -629,33 +933,140 @@ void PlayerBotController::processSpellTraining(Player* player, const Position& c
 	const uint16_t vocationId = player->getVocationId();
 	const uint16_t baseVocationId = player->getVocation()->getFromVocation() == 0 ? vocationId :
 		player->getVocation()->getFromVocation();
+	Spell* spell = g_spells ? g_spells->getSpellByName(training.spellName) : nullptr;
 	const bool offerAvailable = trainer && playerBotNpcHasCapability(*trainer, PlayerBotNpcCapability::SpellTrainer) &&
-		std::any_of(trainer->getSpellOffers().begin(), trainer->getSpellOffers().end(), [&training, player, baseVocationId](const NpcSpellOffer& offer) {
-			return offer.spellName == training.spellName && offer.keyword == training.keyword && offer.price == training.price &&
-			       offer.level == training.level && offer.premium == training.premium && player->getLevel() >= offer.level &&
-			       (!offer.premium || player->isPremium()) &&
-			       std::find(offer.vocationIds.begin(), offer.vocationIds.end(), baseVocationId) != offer.vocationIds.end();
-		});
+	    spell && spell->isInstant() && spell->isLearnable() && spell->getLevel() == training.level &&
+	    spell->isPremium() == training.premium && spell->getVocMap().count(vocationId) != 0 &&
+	    std::any_of(trainer->getSpellOffers().begin(), trainer->getSpellOffers().end(), [&training, player, baseVocationId](const NpcSpellOffer& offer) {
+		return offer.spellName == training.spellName && offer.keyword == training.keyword && offer.price == training.price &&
+		       offer.level == training.level && offer.premium == training.premium && player->getLevel() >= offer.level &&
+		       (!offer.premium || player->isPremium()) &&
+		       std::find(offer.vocationIds.begin(), offer.vocationIds.end(), baseVocationId) != offer.vocationIds.end();
+	    });
 	PlayerBotSpellTrainingObservation observation;
 	observation.totalMoney = player->getMoney() + player->getBankBalance();
-	if (progressionRuntime.spellTraining().stage() != PlayerBotSpellTrainingStage::Verify &&
-	    (!playerBotAffordableAfterReserve(observation.totalMoney, training.reserve, training.price) ||
-	     inventoryPolicy.inventoryItemCount(*player, recoveryPotionItemId(vocationId)) <=
-	         std::max(huntPotionReturnThreshold, training.potionReserve))) {
+	const bool verifying = progressionRuntime.spellTraining().stage() == PlayerBotSpellTrainingStage::Verify;
+	const auto* descriptor = playerBotSpellDescriptor(training.spellName.c_str());
+	const bool healing = descriptor && descriptor->role == PlayerBotSpellRole::Healing;
+	const uint64_t reserve = std::max(training.reserve, spellTrainingReserve(*player, healing));
+	const uint32_t potionReserve = trainerJourney ? std::max(training.potionReserve,
+	    recoveryPotionRouteReserve(vocationId, player->getMaxHealth(), trainerJourney->plan.metrics.dangerCost,
+	        static_cast<uint32_t>(riskProfile.healthLossCost))) : training.potionReserve;
+	if (!verifying && (!playerBotTrainerTripAffordable(observation.totalMoney, reserve, training.price, trainerFareRemaining) ||
+	    inventoryPolicy.inventoryItemCount(*player, recoveryPotionItemId(vocationId)) <=
+	        std::max(huntPotionReturnThreshold, potionReserve))) {
 		finishSpellTraining(player, currentPosition, "failed", "recovery_reserve_changed");
 		return;
 	}
+	if (!verifying && (!offerAvailable || player->hasLearnedInstantSpell(training.spellName))) {
+		finishSpellTraining(player, currentPosition, "failed", "trainer_offer_changed");
+		return;
+	}
+	if (trainerTravelReceiptFailed || trainerJourneyRestarts > PlayerBotApproachLimits::rejectedTiles ||
+	    (!verifying && std::chrono::steady_clock::now() >= trainerJourneyDeadline)) {
+		finishSpellTraining(player, currentPosition, "failed",
+		    trainerTravelReceiptFailed ? "travel_payment_or_landing_mismatch" :
+		    trainerJourneyRestarts > PlayerBotApproachLimits::rejectedTiles ? "trainer_route_retry_limit" : "trainer_journey_deadline");
+		return;
+	}
 	if (progressionRuntime.spellTraining().stage() == PlayerBotSpellTrainingStage::Travel) {
-		bool approachUnavailable = false;
-		observation.navigationReached = processNpcApproach(player, currentPosition, trainer, training.approachPosition, approachUnavailable);
-		observation.navigationFailed = approachUnavailable ||
-		                              navigationRuntime.fixedTargetRouteFailureCount() >= maximumProgressionAttempts;
-	} else if (progressionRuntime.spellTraining().stage() != PlayerBotSpellTrainingStage::Verify &&
-	           offerAvailable && !Position::areInRange<3, 3, 0>(currentPosition, trainer->getPosition())) {
-		progressionRuntime.restartSpellTrainingConversation();
-		bool approachUnavailable = false;
-		processNpcApproach(player, currentPosition, trainer, training.approachPosition, approachUnavailable);
-		if (approachUnavailable) finishSpellTraining(player, currentPosition, "failed", "route_unavailable");
+		auto destinations = trainerApproaches(*player, *trainer);
+		if (destinations.empty()) {
+			finishSpellTraining(player, currentPosition, "failed", "trainer_approach_unavailable");
+			return;
+		}
+		// Discovery proves a choice against the whole search graph. Execution
+		// keeps only material actor/risk/world facts and this boarding leg.
+		// Ordinary position/ground timing and unused providers are not changes
+		// to that leg. A landing always requests a fresh remaining-trip proof.
+		const char* invalidation = !trainerJourney ? "missing_route" :
+		    !playerBotTrainerDestinationRetained(trainerJourney->plan, trainerJourney->destinations, destinations) ?
+		        "trainer_approach_changed" : nullptr;
+		if (trainerJourney && !trainerJourneyNeedsRoute && trainerJourney->plan.metrics.firstNpcTravelOffer) {
+			const auto& quote = *trainerJourney->plan.metrics.firstNpcTravelOffer;
+			Npc* provider = g_game.getNpcByID(quote.npcId);
+			if (!provider || !playerBotNpcHasCapability(*provider, PlayerBotNpcCapability::Travel) ||
+			    std::none_of(provider->getTravelOffers().begin(), provider->getTravelOffers().end(), [&](const auto& offer) {
+				return offer.destination == quote.destination && offer.price == quote.price &&
+				    offer.level == quote.minimumLevel && offer.premium == quote.premium &&
+				    offer.dialogue == quote.dialogue && !offer.hasOpaqueCondition && !offer.hasOpaqueAction;
+			    })) {
+				finishSpellTraining(player, currentPosition, "failed", "travel_offer_changed");
+				return;
+			}
+			const auto approach = playerBotTrainerBoardingApproach(trainerJourney->plan,
+			    trainerJourney->evidence ? trainerJourney->evidence->source : currentPosition);
+			if (!approach || !Position::areInRange<3, 3, 0>(*approach, provider->getPosition()))
+				invalidation = "boarding_approach_changed";
+		}
+		if (!invalidation && !trainerJourneyNeedsRoute) {
+			invalidation = trainerJourney->evidence ?
+			    trainerTravelExecutionChange(*player, *trainerJourney->evidence) : "missing_execution_proof";
+		}
+		if (invalidation && !trainerJourneyNeedsRoute) {
+			emit("trainer_route", currentPosition, "\"phase\":\"journey\",\"result\":\"invalidated\",\"reason\":" +
+			    jsonString(invalidation) + ",\"restarts\":" + std::to_string(trainerJourneyRestarts + 1) +
+			    ",\"remaining_fare\":" + std::to_string(trainerFareRemaining));
+			if (++trainerJourneyRestarts > PlayerBotApproachLimits::rejectedTiles) {
+				finishSpellTraining(player, currentPosition, "failed", "trainer_route_invalidation_limit");
+				return;
+			}
+			trainerJourneyNeedsRoute = true;
+			trainerRouteSearch.reset();
+			resetNavigation();
+		}
+		if (trainerJourneyNeedsRoute) {
+			if (!trainerJourney) trainerJourney.emplace();
+			trainerJourney->destinations = destinations;
+			// Preserve the quoted allowance for all remaining legs; never borrow
+			// spell/supply money, even if the actor gains cash during the journey.
+			auto planned = advanceTrainerRoute(*player, destinations, reserve + training.price, trainerJourney->evidence);
+			if (!planned) return;
+			const char* failure = planned->metrics.result == PlayerBotNavigationResult::NodeLimit ? "route_proof_exhausted" :
+			    planned->metrics.result == PlayerBotNavigationResult::RiskRejected ? "route_risk_rejected" :
+			    planned->metrics.result != PlayerBotNavigationResult::Reached ?
+			        (trainerFareLimited(*player, reserve + training.price) ? "route_fare_limited" : "trainer_unreachable") :
+			    planned->metrics.fare > trainerFareRemaining ? "fare_quote_overrun" :
+			    playerBotNavigationRiskVerdict(riskProfile, planned->metrics) != PlayerBotNavigationRiskVerdict::Accepted ? "route_risk_rejected" :
+			    inventoryPolicy.inventoryItemCount(*player, recoveryPotionItemId(vocationId)) <=
+			        std::max(huntPotionReturnThreshold, recoveryPotionRouteReserve(vocationId, player->getMaxHealth(),
+			            planned->metrics.dangerCost, static_cast<uint32_t>(riskProfile.healthLossCost))) ? "route_potion_reserve_unmet" : nullptr;
+			if (failure) {
+				finishSpellTraining(player, currentPosition, "failed", failure);
+				return;
+			}
+			trainerJourney->plan = *planned;
+			navigationRuntime.observePlan({PlayerBotNavigationGoal::anyOf(destinations), std::move(*planned),
+			    player->canDoAction(), true, std::chrono::steady_clock::now()});
+			trainerJourneyNeedsRoute = false;
+		}
+		PlayerBotNavigationRuntimeOutcome navigation;
+		observation.navigationReached = processNavigation(player, currentPosition,
+		    PlayerBotNavigationGoal::anyOf(trainerJourney->destinations),
+		    &navigation, playerBotNavigationMaximumExpandedNodes, true, false, &riskProfile, false);
+		if (navigation.routeRequest) {
+			if (++trainerJourneyRestarts > PlayerBotApproachLimits::rejectedTiles) {
+				finishSpellTraining(player, currentPosition, "failed", "trainer_route_retry_limit");
+				return;
+			}
+			trainerJourneyNeedsRoute = true;
+			schedule(blockedRouteRetryInterval);
+			return;
+		}
+		observation.navigationFailed = navigation.routeUnsafe || navigation.fixedTargetRouteExhausted;
+		if (observation.navigationReached) {
+			// Reaching a stable talking tile ends the itinerary; no future fare
+			// can be spent while the normal paid-learning conversation owns it.
+			trainerFareRemaining = 0;
+			trainerJourney.reset();
+		}
+	} else if (!verifying && !Position::areInRange<3, 3, 0>(currentPosition, trainer->getPosition())) {
+		// A trainer wandering away must obtain a new destination route, not fall
+		// back to the old walking-only NPC approach planner.
+		progressionRuntime.restartSpellTrainingTravel();
+		trainerJourneyNeedsRoute = true;
+		resetNavigation();
+		schedule(SCHEDULER_MINTICKS);
 		return;
 	} else {
 		observation.npcAvailable = offerAvailable && Position::areInRange<3, 3, 0>(currentPosition, trainer->getPosition());

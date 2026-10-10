@@ -45,24 +45,52 @@ foreach ($mutation in @(
 Test-Evidence $supply[0..1] $checkSupply $true
 Test-Evidence $supply $checkSupply
 
+# First-heal bootstrap: two potions meet the floor, so the cash buffer is released.
 $spell = @(
-    @{ event = 'spell_candidate'; spell = 'Light Healing'; price = 170; reserve = 100; result = 'feasible' }
+    @{ event = 'spell_candidate'; spell = 'Light Healing'; price = 170; reserve = 0; result = 'feasible' }
     @{ event = 'goal_candidate'; goal = 'learn_spell'; feasible = $true; reason = 'priority_recovery_spell' }
     @{ event = 'goal_selection'; to_goal = 'learn_spell' }
-    @{ event = 'action_result'; action = 'learn_spell'; result = 'success'; spell = 'Light Healing'; money_before = 270; money_after = 100 }
+    @{ event = 'action_result'; action = 'learn_spell'; result = 'success'; spell = 'Light Healing'; price = 170; money_before = 270; money_after = 100 }
 )
 $checkSpell = { param($logs) Assert-LowSupplySpellTrainingEvents -Logs $logs }
 $marker = 'PLAYERBOT_GAMEPLAY_TEST SPELL_TRAINING_LOW_SUPPLIES_PASS'
 Test-Evidence $spell $checkSpell $false $marker
 Test-Evidence $spell $checkSpell $true
-$spell[3].money_after = 99
-Test-Evidence $spell $checkSpell $true $marker
-$spell[3].money_after = 100
+foreach ($case in @(
+    @{ Index = 0; Field = 'reserve'; Value = 100 }
+    @{ Index = 0; Field = 'price'; Value = 169 }
+    @{ Index = 0; Field = 'result'; Value = 'rejected' }
+    @{ Index = 1; Field = 'feasible'; Value = $false }
+    @{ Index = 1; Field = 'reason'; Value = 'optional_spell' }
+    @{ Index = 3; Field = 'money_before'; Value = 269 }
+    @{ Index = 3; Field = 'money_after'; Value = 99 }
+    @{ Index = 3; Field = 'price'; Value = 169 }
+    @{ Index = 3; Field = 'result'; Value = 'failed' }
+)) {
+    $original = $spell[$case.Index][$case.Field]
+    $spell[$case.Index][$case.Field] = $case.Value
+    Test-Evidence $spell $checkSpell $true $marker
+    $spell[$case.Index][$case.Field] = $original
+}
 Test-Evidence (@(@{ event = 'goal_selection'; to_goal = 'buy_equipment' }) + $spell) $checkSpell $true $marker
-$rejected = @(@{ event = 'spell_candidate'; spell = 'Light Healing'; price = 170; reserve = 100; result = 'rejected'; reason = 'unaffordable_after_reserves' })
+# Native fixture seeds 169 = 170 price + 0 mandatory reserve - 1.
+$rejected = @(@{ event = 'spell_candidate'; spell = 'Light Healing'; price = 170; reserve = 0; result = 'rejected'; reason = 'unaffordable_after_reserves' })
 $checkRejected = { param($logs) Assert-LowSupplySpellTrainingEvents -Logs $logs -Unaffordable }
 Test-Evidence $rejected $checkRejected
 Test-Evidence ($rejected + $spell[3]) $checkRejected $true
+foreach ($case in @(
+    @{ Field = 'reserve'; Value = 100 }
+    @{ Field = 'price'; Value = 169 }
+    @{ Field = 'reason'; Value = 'trainer_unreachable' }
+    @{ Field = 'result'; Value = 'feasible' }
+)) {
+    $original = $rejected[0][$case.Field]
+    $rejected[0][$case.Field] = $case.Value
+    Test-Evidence $rejected $checkRejected $true
+    $rejected[0][$case.Field] = $original
+}
+Test-Evidence $spell $checkSpell $false $marker
+Test-Evidence $rejected $checkRejected
 
 # The complete scored-candidate stream can be much larger than the route queue.
 # Only candidates marked route_validated consume the selected scan's route budget.

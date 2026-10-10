@@ -177,6 +177,7 @@ class PlayerBotProgressionRuntime {
 		void clearGreetingAcknowledgement() { npcSession.resetGreetingAcknowledgement(); }
 		void restartDepartureConversation();
 		void restartSpellTrainingConversation();
+		void restartSpellTrainingTravel();
 		void restartEquipmentConversation();
 		void beginEquipmentBackpackRecovery(const char* reason, bool purchased);
 		bool equipmentBackpackRecoveryActive() const { return equipmentPurchaseSession.backpackRecoveryActive(); }

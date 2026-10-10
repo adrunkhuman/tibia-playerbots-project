@@ -155,6 +155,9 @@ struct PlayerBotSpellOfferSnapshot {
 	std::optional<uint64_t> reserve;
 	uint32_t potionReserve = 1;
 	bool worthLearning = true;
+	uint64_t fare = 0;
+	// Empty for a completed route or a candidate rejected before route work.
+	std::string routeRejection;
 };
 
 struct PlayerBotSpellTrainingPlannerSnapshot {

@@ -465,6 +465,8 @@ void PlayerBotController::stop(const char* reason, const Position& position)
 		return;
 	}
 
+	clearTrainerWork();
+	retirePreparation(g_game.getPlayerByID(playerId), position, reason);
 	emitDepotDiscovery(playerbot::PlayerBotDepotTelemetry::Result::Cancelled, position, reason);
 	cancelHuntPlanning(reason, position);
 	const bool wasRunning = turnRouter.running();
@@ -489,6 +491,15 @@ void PlayerBotController::stop(const char* reason, const Position& position)
 void PlayerBotController::pause(const Position& position)
 {
 	if (!turnRouter.running()) return;
+	const bool trainerInterrupted = trainerDiscovery.has_value() || trainerArbitration.completed() || trainerGoalSelectionPending ||
+	    progressionRuntime.session().active(PlayerBotProgressionProcedure::LearnSpell);
+	clearTrainerWork();
+	if (trainerInterrupted) {
+		progressionRuntime.finish();
+		resetNavigation();
+		trainerGoalSelectionPending = true; // Resume at arbitration, never a stale paid leg.
+	}
+	retirePreparation(g_game.getPlayerByID(playerId), position, "paused");
 	PlayerBotPlanningBudget& budget = playerBotHuntPlanningBudget();
 	if (!budget.isActive(playerId)) budget.cancel(playerId, PlayerBotPlanningBudget::Clock::now());
 	const char* previous = turnRouter.stateName();
@@ -509,6 +520,7 @@ bool PlayerBotController::findPath(Player* player, const Position& target, std::
 void PlayerBotController::resetNavigation()
 {
 	navigationRuntime.reset();
+	navigationPlanningRisk.reset();
 	rangedMovement.clear();
 	rangedMovement.clearBlockedPositions();
 	huntPatrolValidationDestination.reset();
@@ -647,11 +659,27 @@ bool PlayerBotController::executeNavigationStep(Player* player, const PlayerBotN
 			         std::to_string(huntTravelRecoveryFundsReserve(*player, huntTravelBudgetPhase)));
 			return false;
 		}
+		const bool trainerTravel = progressionRuntime.session().active(PlayerBotProgressionProcedure::LearnSpell);
+		const uint64_t moneyBefore = player->getMoney() + player->getBankBalance();
 		npc->receiveSpeech(player, TALKTYPE_PRIVATE_PN, "hi");
 		for (const std::string& phrase : step.dialogue) {
 			npc->receiveSpeech(player, TALKTYPE_PRIVATE_PN, phrase);
 		}
 		const bool travelled = player->getPosition() == step.expectedPosition;
+		const uint64_t moneyAfter = player->getMoney() + player->getBankBalance();
+		if (trainerTravel) {
+			const bool receipt = playerBotTrainerTravelReceipt(travelled, moneyBefore, moneyAfter, step.price);
+			trainerTravelReceiptFailed = !receipt;
+			if (receipt) trainerFareRemaining -= step.price; // Admission checked the complete remaining quote.
+			trainerJourneyNeedsRoute = true;
+			if (trainerJourney) trainerJourney->evidence.reset();
+			emit("trainer_travel_receipt", player->getPosition(),
+			    "\"result\":" + jsonString(receipt ? "verified" : "failed") +
+			    ",\"fare\":" + std::to_string(step.price) +
+			    ",\"remaining_fare\":" + std::to_string(trainerFareRemaining) +
+			    ",\"money_before\":" + std::to_string(moneyBefore) +
+			    ",\"money_after\":" + std::to_string(moneyAfter));
+		}
 		if (!travelled) {
 			unavailableTravelOffers[{step.npcId, step.expectedPosition}] =
 				std::chrono::steady_clock::now() + std::chrono::minutes(5);
@@ -838,15 +866,19 @@ PlayerBotNavigationRoutePlan PlayerBotController::planCompleteNavigationRoute(
 PlayerBotNavigationRoutePlan PlayerBotController::planNavigationRoute(Player& player, const PlayerBotNavigationGoal& goal,
 	                                                                    const std::set<Position>& blockedPositions,
 	                                                                    uint64_t maximumExpandedNodes,
-	                                                                    bool sameFloorOnly) const
+	                                                                    bool sameFloorOnly,
+	                                                                    const PlayerBotNavigationRiskProfile* risk) const
 {
 	PlayerBotNavigationRoutePlan routePlan;
 	routePlan.metrics.attempted = true;
 	const auto startedAt = std::chrono::steady_clock::now();
 	const PlayerBotNavigator navigator;
-	const PlayerBotNavigationCostPolicy costPolicy = navigationCostPolicy(player);
+	PlayerBotNavigationCostPolicy costPolicy = navigationCostPolicy(player);
+	if (risk) costPolicy.risk = *risk;
 	PlayerBotNavigationCostSummary costSummary;
-	if (sameFloorOnly || goal.type != PlayerBotNavigationGoalType::Exact) {
+	// A bounded zero-risk local goal uses the complete normal movement graph,
+	// with no paid/coarse prefix that could differ from the discovery proof.
+	if ((risk && risk->requiresZeroRisk()) || sameFloorOnly || goal.type != PlayerBotNavigationGoalType::Exact) {
 		routePlan.metrics.waypoint = goal.representative();
 		routePlan.metrics.result = navigator.plan(player, goal, blockedPositions, routePlan.steps,
 		                                          routePlan.metrics.expandedNodes, maximumExpandedNodes,
@@ -1357,6 +1389,13 @@ uint64_t PlayerBotController::huntTravelRecoveryFundsReserve(
 bool PlayerBotController::huntTravelFareAffordable(
 	const Player& player, uint64_t fare, HuntTravelBudgetPhase phase) const
 {
+	if (progressionRuntime.session().active(PlayerBotProgressionProcedure::LearnSpell)) {
+		const auto& training = progressionRuntime.spellTraining().plan();
+		const auto* descriptor = playerBotSpellDescriptor(training.spellName.c_str());
+		const bool healing = descriptor && descriptor->role == PlayerBotSpellRole::Healing;
+		return playerBotTrainerFareAffordable(player.getMoney() + player.getBankBalance(),
+		    std::max(training.reserve, spellTrainingReserve(player, healing)), training.price, trainerFareRemaining, fare);
+	}
 	return playerBotHuntTravelPaymentAffordable(player.getMoney() + player.getBankBalance(),
 	                                            huntTravelRecoveryFundsReserve(player, phase),
 	                                            fare, huntExitFareReserve, phase);
@@ -1566,6 +1605,12 @@ bool PlayerBotController::processNavigation(Player* player, const Position& curr
 {
 	const Position destination = goal.representative();
 	const auto now = std::chrono::steady_clock::now();
+	if (allowRoutePlanning) {
+		const auto& requestedRisk = risk ? *risk : riskProfile;
+		if ((navigationPlanningRisk && *navigationPlanningRisk != requestedRisk) ||
+		    (!navigationPlanningRisk && risk && risk->requiresZeroRisk())) resetNavigation();
+		navigationPlanningRisk = requestedRisk;
+	}
 	const PlayerBotNavigationRuntimeTiming timing = {
 		now, navigationStepTimeout, navigationBlockSuppression, navigationOscillationSuppression,
 	};
@@ -1600,7 +1645,7 @@ bool PlayerBotController::processNavigation(Player* player, const Position& curr
 			routePlan.steps.push_back({PlayerBotNavigationAction::Move, DIRECTION_NONE, currentPosition, currentPosition});
 		} else {
 			routePlan = planNavigationRoute(*player, outcome.routeRequest->goal, blockedPositions,
-			                                std::min(fixturePlan.maximumExpandedNodes, routeNodeBudget), sameFloorOnly);
+			                                std::min(fixturePlan.maximumExpandedNodes, routeNodeBudget), sameFloorOnly, risk);
 		}
 		const PlayerBotPendingMovementResult movementResult = outcome.movementResult;
 		const std::optional<Position> failedMovementTarget = outcome.failedMovementTarget;
@@ -1846,6 +1891,16 @@ bool PlayerBotController::processNavigation(Player* player, const Position& curr
 		const Npc* captain = g_game.getNpcByID(resolvedStep->npcId);
 		if (captain && captain->getPosition().z == currentPosition.z &&
 		    !Position::areInRange<3, 3, 0>(captain->getPosition(), currentPosition)) {
+			if (progressionRuntime.session().active(PlayerBotProgressionProcedure::LearnSpell)) {
+				// Trainer boarding never escapes its quoted, risk-validated sliced
+				// route through the generic synchronous captain-follow fallback.
+				++trainerJourneyRestarts;
+				trainerJourneyNeedsRoute = true;
+				trainerRouteSearch.reset();
+				resetNavigation();
+				schedule(routeSearchContinuationInterval);
+				return false;
+			}
 			if (boardingApproachNpcId != resolvedStep->npcId) {
 				boardingApproach.reset();
 				boardingApproachNpcId = resolvedStep->npcId;

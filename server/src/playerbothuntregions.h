@@ -12,9 +12,11 @@
 #define FS_PLAYERBOTHUNTREGIONS_H
 
 #include "playerbotcombatprofile.h"
+#include "const.h"
 #include "playerbothunteconomy.h"
 #include "playerbotsupplypolicy.h"
 #include "playerbotsupplyrecovery.h"
+#include "playerbotpreparation.h"
 #include "position.h"
 
 #include <algorithm>
@@ -112,6 +114,11 @@ inline PlayerBotSupplyCapabilitySnapshot playerBotSupplyCapability(const PlayerB
 	capability.foodManaGain = profile.supply.manaGain;
 	capability.foodManaIntervalMilliseconds = static_cast<uint32_t>(profile.supply.manaInterval * 1000);
 	capability.equipmentItemIds = profile.equipmentItemIds;
+	// Legacy equipment slots can hold coins. Banking or denomination changes
+	// alter liquidity, not combat capability; real ammunition still matters.
+	for (auto& itemId : capability.equipmentItemIds) {
+		if (itemId == ITEM_GOLD_COIN || itemId == ITEM_PLATINUM_COIN || itemId == ITEM_CRYSTAL_COIN) itemId = 0;
+	}
 	return capability;
 }
 
@@ -366,6 +373,77 @@ struct PlayerBotHuntRegion {
 		score = projectedExperience;
 	}
 
+	// Probe the same fitting window at higher health after route proof. Never
+	// lower the recovery floor or invent regeneration from a prospective meal.
+	std::optional<PlayerBotPreparationRequirement> healthPreparation(uint32_t reserve) const
+	{
+		if (!supplyRecovery || maximumHealth <= 0 || (productiveWindow() && supplyBudget.fits)) return std::nullopt;
+		const bool typedFit = std::all_of(supplyKindBudgets.begin(), supplyKindBudgets.end(),
+		    [](const auto& budget) { return budget.fits; });
+		const double fraction = std::clamp(combatFraction, 0.0, 1.0);
+		if (!typedFit || coinGoldPerMinute <= 0 ||
+		    recoveryRouteHealthLoss > maximumHealth - static_cast<double>(playerBotSupplyRecoveryRequiredHealth(maximumHealth)) ||
+		    (predictedFightSeconds > 0 && (fraction <= 0 || predictedFightSeconds > maximumHuntSeconds * fraction)))
+			return std::nullopt;
+		PlayerBotHuntRegion probe = *this;
+		probe.currentHealth = maximumHealth;
+		probe.fitSupplyWindow(reserve);
+		PlayerBotPreparationRequirement requirement;
+		requirement.kind = PlayerBotRequirementKind::HealthRegeneration;
+		if (!probe.productiveWindow() || !probe.supplyBudget.fits || !probe.recoverySustainable()) {
+			// Only the next live evaluator can establish a food effect.
+			if (supplyProfile.regenerationSeconds > 0) return std::nullopt;
+			requirement.health = std::max(0, currentHealth);
+			requirement.observeRegeneration = true;
+			return requirement;
+		}
+		int32_t lower = currentHealth, upper = maximumHealth;
+		for (int i = 0; i < 32 && upper - lower > 1; ++i) {
+			probe.currentHealth = lower + (upper - lower) / 2;
+			probe.fitSupplyWindow(reserve);
+			if (probe.productiveWindow() && probe.supplyBudget.fits && probe.recoverySustainable()) upper = probe.currentHealth;
+			else lower = probe.currentHealth;
+		}
+		requirement.health = upper;
+		return requirement;
+	}
+
+	// Smallest productive whole-second outing (one modeled fight), not the
+	// configured full hunt. Reuse the same learned/static demand and transit
+	// exposure as final admission, and verify the resulting stock with its fit check.
+	PlayerBotSupplyRequirements minimumProductiveSupplies(uint32_t reserve) const
+	{
+		if (supplyRecovery) return {}; // Recovery has a different health contract.
+		PlayerBotHuntRegion minimum = *this;
+		const double fraction = std::clamp(combatFraction, 0.0, 1.0);
+		if (predictedFightSeconds > 0 && fraction <= 0) return {};
+		minimum.availableHuntSeconds = std::max(1.0, std::ceil(
+		    predictedFightSeconds > 0 ? predictedFightSeconds / fraction : 1.0));
+		if (minimum.availableHuntSeconds > maximumHuntSeconds) return {};
+		minimum.reconcileSupplies(reserve);
+		auto required = [](uint32_t reserveStock, double expected, uint32_t minimumRoutine = 1) -> uint32_t {
+			if (!std::isfinite(expected) || expected < 0 || expected >= UINT32_MAX - reserveStock)
+				return UINT32_MAX;
+			return reserveStock + std::max(minimumRoutine, static_cast<uint32_t>(std::ceil(expected)));
+		};
+		PlayerBotSupplyRequirements requirements{{PlayerBotSupplyKind::HealthPotion, 0,
+		    required(reserve, minimum.supplyBudget.expectedPotions)}};
+		minimum.supplyProfile.potions = requirements.front().count;
+		for (size_t i = 0; i < minimum.supplyProfile.kinds.size(); ++i) {
+			auto& kind = minimum.supplyProfile.kinds[i];
+			const bool needsStock = kind.returnThreshold != 0 || kind.kind == PlayerBotSupplyKind::Ammunition ||
+			    kind.kind == PlayerBotSupplyKind::ThrowingWeapon;
+			const uint32_t count = required(kind.returnThreshold, minimum.supplyKindBudgets[i].expected, needsStock ? 1 : 0);
+			requirements.push_back({kind.kind, kind.itemId, count});
+			kind.count = count;
+		}
+		minimum.reconcileSupplies(reserve);
+		if (!minimum.productiveWindow() || !minimum.supplyBudget.fits ||
+		    std::any_of(requirements.begin(), requirements.end(),
+		        [](const auto& requirement) { return requirement.count == UINT32_MAX; })) return {};
+		return requirements;
+	}
+
 	void reconcileTravel(double durationSeconds, double travelSeconds, double staminaMultiplier)
 	{
 		estimatedTravelSeconds = std::max(0.0, travelSeconds);
@@ -394,8 +472,9 @@ struct PlayerBotHuntRegion {
 			const double healthBudget = std::max(0.0, currentHealth - static_cast<double>(playerBotSupplyRecoveryRequiredHealth(std::max(0, maximumHealth))) - recoveryRouteHealthLoss);
 			const double deficit = std::max(0.0, supplyBudget.expectedDamage - supplyBudget.regenerationHealing -
 			    supplyBudget.spellHealing - healthBudget);
-			supplyBudget.expectedPotions = deficit == 0 ? 0 : supplyProfile.potionHealing > 0 ?
-			    std::ceil(deficit / supplyProfile.potionHealing) : std::numeric_limits<double>::max();
+			supplyBudget.potionEquivalentDemand = deficit == 0 ? 0 : supplyProfile.potionHealing > 0 ?
+			    deficit / supplyProfile.potionHealing : std::numeric_limits<double>::max();
+			supplyBudget.expectedPotions = std::ceil(supplyBudget.potionEquivalentDemand);
 			supplyBudget.fits = supplyBudget.expectedPotions == 0 &&
 			    recoveryRouteHealthLoss <= currentHealth - static_cast<double>(playerBotSupplyRecoveryRequiredHealth(std::max(0, maximumHealth)));
 		}
@@ -403,7 +482,7 @@ struct PlayerBotHuntRegion {
 		supplyEstimateSource = "static";
 		supplyEstimateReason = "static_duration_budget";
 		supplyLocalRejectionReason = "no_local_evidence";
-		supplyStaticPotionsPerCombatSecond = exposure > 0 ? supplyBudget.expectedPotions / exposure : 0;
+		supplyStaticPotionsPerCombatSecond = exposure > 0 ? supplyBudget.potionEquivalentDemand / exposure : 0;
 		supplyAppliedPotionsPerCombatSecond = supplyStaticPotionsPerCombatSecond;
 		bool learnedEstimate = false;
 		if (playerBotSupplyCalibrationForCapability(supplyCalibration, supplyCapability)) {
@@ -412,6 +491,7 @@ struct PlayerBotHuntRegion {
 			supplyEstimateReason = "local_variant_learning";
 			supplyLocalRejectionReason = nullptr;
 			supplyAppliedPotionsPerCombatSecond = supplyCalibration.potionsPerCombatSecond;
+			supplyBudget.potionEquivalentDemand = supplyAppliedPotionsPerCombatSecond * exposure;
 		} else {
 			if (supplyCalibration.samples != 0) {
 				const auto change = playerBotCompareSupplyCapabilities(
@@ -423,12 +503,16 @@ struct PlayerBotHuntRegion {
 				learnedEstimate = true;
 				supplyEstimateSource = "global";
 				supplyEstimateReason = "global_policy_multiplier";
-				supplyAppliedPotionsPerCombatSecond = supplyStaticPotionsPerCombatSecond *
-				    std::max(playerBotSupplyGlobalMinimumMultiplier, supplyGlobalLearning.multiplier);
+				const double multiplier = std::max(playerBotSupplyGlobalMinimumMultiplier, supplyGlobalLearning.multiplier);
+				supplyAppliedPotionsPerCombatSecond = supplyStaticPotionsPerCombatSecond * multiplier;
+				// Scale raw demand directly: converting to a rate and back can add
+				// floating-point error at an exact whole-potion boundary.
+				supplyBudget.potionEquivalentDemand = exposure > 0 ?
+				    supplyBudget.potionEquivalentDemand * multiplier : 0;
 			}
 		}
 		if (learnedEstimate) {
-			supplyBudget.expectedPotions = std::ceil(supplyAppliedPotionsPerCombatSecond * exposure);
+			supplyBudget.expectedPotions = std::ceil(supplyBudget.potionEquivalentDemand);
 			supplyBudget.fits = (supplyRecovery && supplyBudget.expectedPotions == 0 &&
 			    recoveryRouteHealthLoss <= currentHealth - static_cast<double>(playerBotSupplyRecoveryRequiredHealth(std::max(0, maximumHealth)))) ||
 			    ((supplyProfile.potions > reserve || reserve == 0) &&

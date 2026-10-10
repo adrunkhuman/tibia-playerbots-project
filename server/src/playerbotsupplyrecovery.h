@@ -57,6 +57,8 @@ class PlayerBotSupplyRecoveryState
 			deferredStockKey = stockKey;
 		}
 
+		void clearRestockDeferral() { restockDeferred = false; }
+
 		bool restockBlocked(uint64_t funds, uint64_t stockKey)
 		{
 			if (funds != deferredFunds || stockKey != deferredStockKey) restockDeferred = false;

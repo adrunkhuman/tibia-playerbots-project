@@ -6,6 +6,7 @@
 #define FS_PLAYERBOTSURVIVALRUNTIME_H
 
 #include "playerbotrecoverysession.h"
+#include "playerbotpreparation.h"
 #include "playerbotspellruntime.h"
 
 #include <chrono>
@@ -137,6 +138,11 @@ class PlayerBotSurvivalRuntime
 {
 	public:
 		bool needsHealing(const PlayerBotSurvivalSnapshot& snapshot) const;
+		bool canPrepareHealth(const PlayerBotSurvivalSnapshot& snapshot) const;
+		std::vector<PlayerBotPreparationOption> healthPreparations(const PlayerBotSurvivalSnapshot& snapshot,
+		    const PlayerBotPreparationRequirement& requirement, bool validatedRest, bool validatedFoodPurchase) const;
+		bool healthPreparationSatisfied(const PlayerBotSurvivalSnapshot& snapshot,
+		    const PlayerBotPreparationRequirement& requirement, bool safeRestHere) const;
 		// Mana left for the preferred economical learned heal, ignoring current
 		// mana and overheal. Zero without an eligible learned healing spell.
 		uint32_t healingManaReserve(const PlayerBotSurvivalSnapshot& snapshot) const;
@@ -173,6 +179,8 @@ class PlayerBotSurvivalRuntime
 	private:
 		PlayerBotPotionAttempt potionObservation(const PlayerBotSurvivalSnapshot& snapshot, uint16_t itemId) const;
 		bool needsManaPotion(const PlayerBotSurvivalSnapshot& snapshot) const;
+		bool canAssistHealingMana(const PlayerBotSurvivalSnapshot& snapshot,
+		                         const PlayerBotSurvivalSpellObservation* healing) const;
 		PlayerBotSurvivalCommand manaPotion(PlayerBotSurvivalCommand command, const PlayerBotSurvivalSnapshot& snapshot,
 		                                    const char* reason) const;
 		PlayerBotSurvivalCommand decideSpell(const PlayerBotSurvivalSnapshot& snapshot, const char* spellName,

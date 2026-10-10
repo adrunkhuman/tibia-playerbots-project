@@ -18,7 +18,7 @@
 #include <vector>
 
 enum class PlayerBotServiceStage : uint8_t { Discover, SellLoot, BuySupplies, Bank, Complete, Failed };
-enum class PlayerBotServiceIntent : uint8_t { Resupply, ResupplyWithLocalSale };
+enum class PlayerBotServiceIntent : uint8_t { Resupply, ResupplyWithLocalSale, PreparationPurchase };
 enum class PlayerBotServiceCommandType : uint8_t {
 	None, ValidateProviderRoute, NavigateProvider, Speak, Sell, Buy, DepositAll, Withdraw, OpenBackpack, MoveSlottedSale, Complete, Fail, Wait,
 };
@@ -82,12 +82,15 @@ struct PlayerBotServiceCommand {
 };
 
 struct PlayerBotServiceSupply {
-	PlayerBotSupplyKind kind = PlayerBotSupplyKind::HealthPotion;
+	// Null for a neutral preparation purchase, not a hunt consumable kind.
+	std::optional<PlayerBotSupplyKind> kind = PlayerBotSupplyKind::HealthPotion;
 	uint16_t itemId = 0;
 	uint32_t weight = 0;
 	uint32_t returnThreshold = PlayerBotDispositionPolicy::potionReturnThreshold;
 	uint32_t restockTarget = PlayerBotDispositionPolicy::potionRestockTarget;
 	uint32_t safetyFloor = 0;
+	// Optional stock preference, never a departure or recovery floor.
+	uint32_t preferredStock = 0;
 };
 
 // This is deliberately a value snapshot. It contains no Item, Container, Npc,
@@ -144,11 +147,26 @@ class PlayerBotServiceWorkflow
 {
 	public:
 		void reset(PlayerBotServiceIntent intent = PlayerBotServiceIntent::Resupply);
+		// Resupply resets take the controller's current policy; neutral cleanup stays default-off.
+		void reset(PlayerBotServiceIntent intent, bool survival) {
+			reset(intent);
+			setSurvivalRestock(survival);
+		}
 		void setLiquidationPlan(PlayerBotServiceLiquidationPlan plan) { liquidationPlan = plan; }
 		void setSurvivalRestock(bool survival) { survivalRestock = survival; }
 		const std::optional<PlayerBotServiceLiquidationPlan>& liquidation() const { return liquidationPlan; }
 		PlayerBotServiceStage stage() const { return serviceStage; }
 		PlayerBotServiceIntent intent() const { return serviceIntent; }
+		bool buyingPotions() const {
+			return serviceStage == PlayerBotServiceStage::BuySupplies &&
+			       serviceIntent != PlayerBotServiceIntent::PreparationPurchase;
+		}
+		const PlayerBotServiceTransaction* pendingPreparationPurchase() const {
+			return serviceIntent == PlayerBotServiceIntent::PreparationPurchase ? serviceSession.shopTransaction() : nullptr;
+		}
+		// Normal trade callbacks are synchronous. Observe any receipt once before
+		// retirement; do not issue another purchase or retry after interruption.
+		PlayerBotServiceCommand retirePreparationPurchase(const PlayerBotServiceObservation& observation);
 		PlayerBotServiceSnapshot snapshot() const { return {serviceStage, npcSession.targetId()}; }
 		const std::set<uint32_t>& unavailableProviders() const { return unavailableProviderIds; }
 		void setProviderUtilityProfile(PlayerBotProviderUtilityProfile profile) { providerUtilityProfile = profile; }

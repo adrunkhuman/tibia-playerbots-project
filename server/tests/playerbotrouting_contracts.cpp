@@ -5,6 +5,7 @@
 #include "playerbothunttravelpolicy.h"
 #include "playerbothuntregions.h"
 #include "playerbotroutechanges.h"
+#include "playerbotroutecache.h"
 #include "playerbotrouteitemchange.h"
 #include "playerbottransportsearch.h"
 
@@ -80,6 +81,111 @@ PlayerBotPathSearch gridPath(const PlayerBotNavigationGoal& goal, bool guided, u
 	}, [&](const Position& p) { return playerBotOrdinaryRemainingCost(p, goal); }, 0,
 	    [&](const Position& p) { return guided ? playerBotOrdinaryRemainingCost(p, goal) : 0; })) {}
 	return search;
+}
+
+void preparationFloorTransitions()
+{
+	const Position basement(100, 100, 8), stairs(101, 100, 8), shop(86, 76, 7), rest(100, 90, 7);
+	assert(playerBotPreparationProviderInRange(basement, shop));
+	PlayerBotPreparationRouteBudget budget;
+	auto searchTo = [&](const Position& start, const Position& target, bool stairsAvailable = true) {
+		PlayerBotNavigationGoal goal;
+		goal.type = PlayerBotNavigationGoalType::AnyOf;
+		goal.positions = {target};
+		goal.position = target;
+		PlayerBotPathSearch search(start, goal, budget.allowance());
+		auto expand = [&](const Position& from) {
+			std::vector<PlayerBotPathSearch::Arc> arcs;
+			PlayerBotNavigationStep step;
+			if (from.z == 8) {
+				if (!stairsAvailable) return arcs;
+				step.action = from == stairs ? PlayerBotNavigationAction::Use : PlayerBotNavigationAction::Move;
+				step.target = stairs;
+				step.expectedPosition = from == stairs ? Position(stairs.x, stairs.y, 7) : stairs;
+			} else {
+				step.action = PlayerBotNavigationAction::Move;
+				step.expectedPosition = from;
+				if (from.x != target.x) step.expectedPosition.x += from.x < target.x ? 1 : -1;
+				else if (from.y != target.y) step.expectedPosition.y += from.y < target.y ? 1 : -1;
+				step.target = step.expectedPosition;
+			}
+			arcs.push_back({step, 10, 0, 0});
+			return arcs;
+		};
+		while (!search.advance(8, expand, [&](const Position& p) { return p == target; }, [](const Position&) { return 0u; })) {}
+		budget.observed(search.expanded);
+		return search;
+	};
+	const auto foodRoute = searchTo(basement, shop);
+	assert(foodRoute.result == Result::Reached && foodRoute.steps.back().expectedPosition == shop);
+	assert(std::any_of(foodRoute.steps.begin(), foodRoute.steps.end(), [](const auto& step) {
+		return step.action == PlayerBotNavigationAction::Use && step.expectedPosition.z == 7;
+	}));
+	const auto restRoute = searchTo(shop, rest);
+	const auto directRest = searchTo(basement, rest);
+	for (const auto* route : {&foodRoute, &restRoute, &directRest}) {
+		assert(playerBotPreparationRouteAccepted(*route->result, route->summary.dangerCost,
+		    route->summary.maximumHealthLossPerSecond, 0, !route->steps.empty()));
+	}
+	const auto noStairs = searchTo(basement, shop, false);
+	assert(noStairs.result == Result::Unreachable);
+	assert(!playerBotPreparationRouteAccepted(*noStairs.result, 0, 0, 0, false));
+}
+
+void preparationSafeAlternative()
+{
+	const Position start(100, 100, 8), stairs(101, 100, 8), landing(101, 100, 7), goal(102, 100, 7);
+	PlayerBotNavigationRiskProfile ordinary, safe;
+	safe.maximumRouteHealthLoss = safe.maximumHealthLossPerSecond = 0;
+	auto route = [&](const PlayerBotNavigationRiskProfile& policy, uint64_t slice, bool stairsAvailable = true) {
+		PlayerBotNavigationGoal destination;
+		destination.position = goal;
+		PlayerBotPathSearch search(start, destination, 128);
+		search.constrain(policy); // Same policy entry used by the real navigator.
+		auto expand = [&](Position from) {
+			std::vector<PlayerBotPathSearch::Arc> arcs;
+			auto add = [&](Position to, uint32_t movement, uint32_t danger, double peak) {
+				PlayerBotNavigationStep step;
+				step.action = from.z == to.z ? PlayerBotNavigationAction::Move : PlayerBotNavigationAction::Use;
+				step.target = step.expectedPosition = to;
+				arcs.push_back({step, movement, danger, peak});
+			};
+			if (from == start) {
+				add(goal, 1, 1, 0.01); // Cheaper shortcut accepted by ordinary hunt risk.
+				if (stairsAvailable) add(stairs, 10, 0, 0);
+			} else if (from == stairs) add(landing, 10, 0, 0);
+			else if (from == landing) add(goal, 10, 0, 0);
+			return arcs;
+		};
+		while (!search.advance(slice, expand, [&](Position p) { return p == goal; }, [](Position) { return 0u; })) {}
+		return search;
+	};
+	const auto shortcut = route(ordinary, 128);
+	assert(shortcut.result == Result::Reached && shortcut.steps.size() == 1 && shortcut.summary.dangerCost == 1);
+	assert(playerBotNavigationRiskAccepts(ordinary, 1, 0.01));
+	assert(!playerBotPreparationRouteAccepted(*shortcut.result, 1, 0.01, 0, true));
+	const auto discovery = route(safe, 128), foodExecution = route(safe, 1), restExecution = route(safe, 8);
+	for (const auto* path : {&discovery, &foodExecution, &restExecution}) {
+		assert(path->result == Result::Reached && path->steps.size() == 3);
+		assert(playerBotPreparationRouteAccepted(*path->result, path->summary.dangerCost,
+		    path->summary.maximumHealthLossPerSecond, 0, path->steps.back().expectedPosition == goal));
+	}
+	assert(route(safe, 1, false).result == Result::Unreachable); // No unsafe fallback after live obstruction.
+
+	const auto ordinaryKey = playerBotNavigationCostIdentity("same_actor", ordinary);
+	const auto safeKey = playerBotNavigationCostIdentity("same_actor", safe);
+	assert(ordinaryKey != safeKey);
+	auto changed = safe; changed.healthLossCost = std::nextafter(safe.healthLossCost, INFINITY);
+	assert(playerBotNavigationCostIdentity("same_actor", changed) != safeKey);
+	PlayerBotRouteCache<std::string, std::deque<PlayerBotNavigationStep>> cache;
+	PlayerBotRouteChanges::Watch watch;
+	{ PlayerBotRouteChanges::Scope scope(watch); PlayerBotRouteChanges::read(stairs); }
+	assert(cache.insert(ordinaryKey, shortcut.steps, watch, 1024));
+	assert(!cache.lookup(safeKey)); // Ordinary cached segment cannot hide the safe alternative.
+	assert(cache.insert(safeKey, discovery.steps, watch, 1024));
+	assert(cache.lookup(safeKey)->size() == 3);
+	PlayerBotRouteChanges::changed(stairs);
+	assert(!cache.lookup(safeKey)); // Existing live dependency invalidation remains authoritative.
 }
 
 void dangerSampleContracts()
@@ -1091,6 +1197,8 @@ void invalidationAndCancellation()
 
 int main()
 {
+	preparationFloorTransitions();
+	preparationSafeAlternative();
 	resumedPaths();
 	dangerSampleContracts();
 	huntCoarseVerdictContracts();

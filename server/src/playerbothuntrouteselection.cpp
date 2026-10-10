@@ -36,7 +36,7 @@ PlayerBotHuntRouteRequest PlayerBotHuntRouteSelection::next()
 		case PlayerBotHuntRouteStage::DiscoverSupply:
 			request.from = current->exitDepotDestination;
 			for (const auto& budget : current->supplyKindBudgets) {
-				if (budget.expected <= budget.routine) continue;
+				if (budget.fits) continue;
 				const auto kind = std::find_if(current->supplyProfile.kinds.begin(), current->supplyProfile.kinds.end(),
 				    [&](const auto& profile) { return profile.kind == budget.kind; });
 				if (kind != current->supplyProfile.kinds.end() && kind->itemId != 0)
@@ -75,10 +75,14 @@ PlayerBotHuntRouteResult PlayerBotHuntRouteSelection::reject(PlayerBotHuntRegion
 	++failureCounts[candidate.rejectionReason.empty() ? "unspecified" : candidate.rejectionReason];
 	// An exhausted search can be retried on the next planning pass. Do not
 	// turn missing evidence into the ordinary unreachable-region cooldown.
-	if (!searchIncomplete) rejectedVariants.push_back(candidate.atlasVariantId);
+	const bool stockOrEconomy = candidate.rejectionReason == "hunt_supply_window_unavailable" ||
+	    candidate.rejectionReason == "travel_fare_breaks_recovery_reserve" ||
+	    candidate.rejectionReason == "recovery_hunt_not_sustainable";
+	if (!searchIncomplete && !stockOrEconomy) rejectedVariants.push_back(candidate.atlasVariantId);
 	PlayerBotHuntRouteResult result;
 	result.accepted = result.yield = true;
 	result.completedCandidate = std::move(candidate);
+	incompletePass = incompletePass || searchIncomplete;
 	advanceCandidate();
 	return result;
 }
@@ -95,6 +99,8 @@ PlayerBotHuntRouteResult PlayerBotHuntRouteSelection::finish(PlayerBotHuntRegion
 		stage = PlayerBotHuntRouteStage::Done;
 		result.terminal = true;
 		result.selectedRouteRegion = best;
+		result.outcome = PlayerBotHuntRouteOutcome::Selected;
+		result.readiness.state = PlayerBotReadiness::Executable;
 		result.failureCounts = failureCounts;
 		result.rejectedVariants = rejectedVariants;
 		finished = true;
@@ -113,6 +119,19 @@ PlayerBotHuntRouteResult PlayerBotHuntRouteSelection::observe(const PlayerBotHun
 		result.accepted = true;
 		result.terminal = true;
 		result.selectedRouteRegion = best;
+		result.supplyShortage = best ? std::nullopt : supplyShortage;
+		// Proof for one candidate is actionable even if another route remains
+		// unknown. Missing evidence neither vetoes that proof nor proves danger.
+		result.outcome = best ? PlayerBotHuntRouteOutcome::Selected : preparationRequirement ?
+		    PlayerBotHuntRouteOutcome::NeedsPreparation : supplyShortage ?
+		    PlayerBotHuntRouteOutcome::NeedsSupplies : incompletePass ?
+		    PlayerBotHuntRouteOutcome::Incomplete : PlayerBotHuntRouteOutcome::Unavailable;
+		result.readiness.state = best ? PlayerBotReadiness::Executable :
+		    !preparationRequirement && !supplyShortage && incompletePass ?
+		    PlayerBotReadiness::Pending : PlayerBotReadiness::Blocked;
+		if (!best && preparationRequirement) result.readiness.requirement = preparationRequirement;
+		else if (!best && supplyShortage) result.readiness.requirement = PlayerBotPreparationRequirement{
+		    PlayerBotRequirementKind::Stock, supplyShortage->requirements, 0, false};
 		result.failureCounts = failureCounts;
 		result.rejectedVariants = rejectedVariants;
 		finished = true;
@@ -189,7 +208,7 @@ PlayerBotHuntRouteResult PlayerBotHuntRouteSelection::observe(const PlayerBotHun
 		current = std::move(routed);
 		// Retain the depot-time decision across the final live supply refresh.
 		const bool typedDeficit = std::any_of(current->supplyKindBudgets.begin(), current->supplyKindBudgets.end(),
-		    [](const PlayerBotSupplyKindBudget& budget) { return budget.expected > budget.routine; });
+		    [](const PlayerBotSupplyKindBudget& budget) { return !budget.fits; });
 		const bool needsSupplyRoute = !current->supplyRecovery && (typedDeficit || playerBotHuntNeedsSupplyRoute(
 		    current->supplyBudget.expectedPotions, current->supplyProfile.potions, observation.potionReserve));
 		stage = needsSupplyRoute ? PlayerBotHuntRouteStage::DiscoverSupply : PlayerBotHuntRouteStage::Final;
@@ -234,20 +253,31 @@ PlayerBotHuntRouteResult PlayerBotHuntRouteSelection::observe(const PlayerBotHun
 	case PlayerBotHuntRouteStage::RejectSupply:
 		routed.rejectionReason = searchIncomplete ? "supply_route_search_incomplete" : "recovery_supply_route_unavailable";
 		return reject(std::move(routed));
-	case PlayerBotHuntRouteStage::Final:
+	case PlayerBotHuntRouteStage::Final: {
 		refreshSupply(observation.supplyProfile);
 		routed.recoveryPotionReserve = observation.potionReserve;
 		routed.recoveryRouteHealthLoss = observation.recoveryRouteHealthLoss;
 		routed.healthPotionUnitPrice = observation.healthPotionUnitPrice;
 		routed.reconcileRecovery(observation.potionReserve, observation.funds);
 		routed.fitSupplyWindow(observation.potionReserve);
+		const bool affordable = playerBotHuntTravelAffordable(observation.funds, observation.recoverySpendingReserve,
+		    routed.outboundFare, routed.exitFare, routed.supplyFare);
+		if (affordable && !preparationRequirement) preparationRequirement = routed.healthPreparation(observation.potionReserve);
 		if (!routed.recoverySustainable()) routed.rejectionReason = "recovery_hunt_not_sustainable";
-		else if (!routed.productiveWindow() || !routed.supplyBudget.fits) routed.rejectionReason = "hunt_supply_window_unavailable";
-		else if (!playerBotHuntTravelAffordable(observation.funds, observation.recoverySpendingReserve,
-		    routed.outboundFare, routed.exitFare, routed.supplyFare))
+		else if (!affordable)
 			routed.rejectionReason = "travel_fare_breaks_recovery_reserve";
+		else if (!routed.productiveWindow() || !routed.supplyBudget.fits) routed.rejectionReason = "hunt_supply_window_unavailable";
+		if (routed.rejectionReason == "hunt_supply_window_unavailable" && !supplyShortage &&
+		    !supplyApproachGroups.empty() && supplyGroupIndex == supplyApproachGroups.size()) {
+			// Only final, otherwise safe outbound/depot/supplier evidence can
+			// request shopping. Never retain an executable route for this result.
+			auto requirements = routed.minimumProductiveSupplies(observation.potionReserve);
+			if (!requirements.empty())
+				supplyShortage = PlayerBotHuntSupplyShortage{routed.atlasVariantId, std::move(requirements)};
+		}
 		if (!routed.rejectionReason.empty()) return reject(std::move(routed));
 		return finish(std::move(routed));
+	}
 	default: return {};
 	}
 }

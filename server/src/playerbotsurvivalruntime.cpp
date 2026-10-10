@@ -120,6 +120,43 @@ PlayerBotSurvivalCommand PlayerBotSurvivalRuntime::manaPotion(PlayerBotSurvivalC
 	return command;
 }
 
+bool PlayerBotSurvivalRuntime::canAssistHealingMana(const PlayerBotSurvivalSnapshot& snapshot,
+    const PlayerBotSurvivalSpellObservation* healing) const
+{
+	return healing && healing->metadataMatches && healing->learned && healing->vocationAllowed &&
+	       healing->requirementsMet && healing->targetReachable && snapshot.mana < healing->manaCost &&
+	       snapshot.manaPotionItemId != 0 && snapshot.manaPotionCount != 0 &&
+	       (!snapshot.combatActive || snapshot.potionCount == 0);
+}
+
+bool PlayerBotSurvivalRuntime::canPrepareHealth(const PlayerBotSurvivalSnapshot& snapshot) const
+{
+	return snapshot.health < snapshot.healthMaximum &&
+	       (preferredHealingSpell(snapshot, true, true) != nullptr ||
+	        canAssistHealingMana(snapshot, preferredHealingSpell(snapshot, false, true)) ||
+	        (snapshot.potionItemId != 0 && snapshot.potionCount != 0));
+}
+
+std::vector<PlayerBotPreparationOption> PlayerBotSurvivalRuntime::healthPreparations(
+    const PlayerBotSurvivalSnapshot& snapshot, const PlayerBotPreparationRequirement& requirement,
+    bool validatedRest, bool validatedFoodPurchase) const
+{
+	std::vector<PlayerBotPreparationOption> options;
+	if (!requirement.observeRegeneration && canPrepareHealth(snapshot)) options.push_back(PlayerBotPreparationOption::RestoreHealth);
+	if (validatedRest && ((snapshot.regenerationActive && snapshot.foodTicks > 0) || snapshot.foodClientId != 0))
+		options.push_back(PlayerBotPreparationOption::Regenerate);
+	if (validatedRest && validatedFoodPurchase) options.push_back(PlayerBotPreparationOption::BuyFood);
+	return options;
+}
+
+bool PlayerBotSurvivalRuntime::healthPreparationSatisfied(const PlayerBotSurvivalSnapshot& snapshot,
+    const PlayerBotPreparationRequirement& requirement, bool safeRestHere) const
+{
+	return snapshot.health >= static_cast<int64_t>(requirement.health) &&
+	    (!requirement.observeRegeneration || (safeRestHere && !snapshot.protectionZone &&
+	        snapshot.regenerationActive && snapshot.foodTicks > 0));
+}
+
 PlayerBotSurvivalCommand PlayerBotSurvivalRuntime::decideHealing(const PlayerBotSurvivalSnapshot& snapshot,
 	std::chrono::steady_clock::time_point now)
 {
@@ -165,8 +202,7 @@ PlayerBotSurvivalCommand PlayerBotSurvivalRuntime::decideHealing(const PlayerBot
 	}
 	// Reevaluate each turn: peaceful mana-assisted healing is not a promise to
 	// cast next turn if combat starts or health becomes critical.
-	if (spellAttempt.reason == "insufficient_mana_reserve" && snapshot.manaPotionItemId != 0 && snapshot.manaPotionCount != 0 &&
-	    (!snapshot.combatActive || snapshot.potionCount == 0)) {
+	if (spellAttempt.reason == "insufficient_mana_reserve" && canAssistHealingMana(snapshot, healing)) {
 		return manaPotion(command, snapshot, "healing_spell_mana");
 	}
 	if (snapshot.potionCount == 0) {

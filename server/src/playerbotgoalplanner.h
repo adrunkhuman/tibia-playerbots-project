@@ -5,6 +5,7 @@
 #define FS_PLAYERBOTGOALPLANNER_H
 
 #include "playerbotgoalarbiter.h"
+#include "playerbotpreparation.h"
 
 #include <string>
 
@@ -45,6 +46,8 @@ struct PlayerBotGoalPlannerSnapshot {
 	int32_t sellLootUtility = 0;
 	std::string sellLootReason;
 	bool recoverySpellPlanAvailable = false;
+	PlayerBotGoalReadiness huntReadiness;
+	std::vector<PlayerBotPreparationOption> preparations;
 };
 
 class PlayerBotGoalPlanner {

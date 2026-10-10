@@ -25,14 +25,16 @@ extern ConfigManager g_config;
 // Restricted failures never establish unreachability.
 class PlayerBotHuntWalkSearch {
 public:
-	PlayerBotHuntWalkSearch(Position from, std::vector<Position> goals, uint64_t allowance)
-	    : source(from), current(from), goals(std::move(goals)), allowance(allowance) {}
+	PlayerBotHuntWalkSearch(Position from, std::vector<Position> goals, uint64_t allowance,
+	    std::set<Position> blockedPositions = {})
+	    : source(from), current(from), goals(std::move(goals)), blockedPositions(std::move(blockedPositions)), allowance(allowance) {}
 
 	std::optional<PlayerBotNavigationResult> advance(Player& player, const PlayerBotNavigationCostPolicy& policy,
-	    bool rope, bool shovel, const std::string& profile, uint64_t riskRevision,
+	    bool rope, bool shovel, const std::string& actorProfile, uint64_t riskRevision,
 	    PlayerBotHuntRouteTiming& timing, uint64_t& budget, uint64_t planningPass)
 	{
 		if (result) return result;
+		const std::string profile = playerBotNavigationBlockedIdentity(actorProfile, blockedPositions);
 		const auto& topology = PlayerBotTopology::instance();
 		if (!initialized) {
 			initialized = true;
@@ -69,7 +71,7 @@ public:
 			}
 			if (coarse == PlayerBotHuntCoarseVerdict::Reachable) {
 				++timing.topologyQueries;
-				itinerary = topology.routeToAny(source, goals, {}, rope, shovel, player.getLevel(), &policy,
+				itinerary = topology.routeToAny(source, goals, blockedPositions, rope, shovel, player.getLevel(), &policy,
 				                               &timing.topologyExpandedNodes);
 			}
 			// Off-graph endpoints and restricted itinerary failures retain live
@@ -86,7 +88,8 @@ public:
 			if (!local) {
 				if (expanded >= allowance) return result = PlayerBotNavigationResult::NodeLimit;
 				segmentWatch = {};
-				segmentKey = key(current, segmentGoals, profile, topology.generation(), riskRevision);
+				segmentKey = key(current, segmentGoals, playerBotNavigationCostIdentity(profile, policy.risk),
+				                 topology.generation(), riskRevision);
 				bool reused = false;
 				if (!unrestricted) {
 					if (const auto* cached = cache().lookup(segmentKey)) {
@@ -94,7 +97,7 @@ public:
 						reused = true;
 						for (const auto& step : *cached) {
 							PlayerBotNavigationStep live;
-							if (!navigator.resolveMove(player, cursor, step.direction, {}, live) ||
+							if (!navigator.resolveMove(player, cursor, step.direction, blockedPositions, live) ||
 							    live.expectedPosition != step.expectedPosition || !PlayerBotPathSearch::ordinaryArc(cursor, live)) {
 								reused = false; break;
 							}
@@ -122,7 +125,7 @@ public:
 			if (local) {
 				PlayerBotRouteChanges::Scope segmentDependencies(segmentWatch);
 				const uint64_t before = local->expanded;
-				const auto state = navigator.advance(player, *local, {}, budget, &policy);
+				const auto state = navigator.advance(player, *local, blockedPositions, budget, &policy);
 				const uint64_t used = local->expanded - before;
 				expanded += used;
 				timing.localExpandedNodes += used;
@@ -155,7 +158,7 @@ public:
 				step.target = portal.target; step.expectedPosition = portal.destination;
 				step.direction = portal.direction; step.itemId = portal.itemId; step.expectedItemId = portal.expectedItemId;
 				step.topologyPortal = true;
-				if (!navigator.validateStep(player, current, step, {})) {
+				if (!navigator.validateStep(player, current, step, blockedPositions)) {
 					fallback(timing, "crossing_changed");
 					return std::nullopt;
 				}
@@ -235,7 +238,7 @@ private:
 				const std::set<std::pair<uint32_t, uint32_t>> excluded{
 				    {itinerary->nodes[arc], itinerary->nodes[arc + 1]}};
 				++timing.topologyQueries;
-				auto alternate = topology.routeToAny(source, goals, {}, rope, shovel, player.getLevel(),
+				auto alternate = topology.routeToAny(source, goals, blockedPositions, rope, shovel, player.getLevel(),
 				    &policy, &timing.topologyExpandedNodes, &excluded);
 				if (alternate) {
 					corridor->addSeeds(alternate->nodes);
@@ -265,7 +268,7 @@ private:
 			if (corridorStage) ++timing.corridorWidenings;
 		}
 		const auto before = local->expanded;
-		const auto state = PlayerBotNavigator{}.advance(player, *local, {}, budget, &policy, false, &*heuristic, &*corridor);
+		const auto state = PlayerBotNavigator{}.advance(player, *local, blockedPositions, budget, &policy, false, &*heuristic, &*corridor);
 		const auto used = local->expanded - before;
 		expanded += used; timing.localExpandedNodes += used; budget = 0;
 		if (!state) return std::nullopt;
@@ -318,7 +321,7 @@ private:
 		}
 		PlayerBotRouteChanges::Scope treeDependencies(tree->watch);
 		const auto before = tree->search.expanded;
-		const auto state = PlayerBotNavigator{}.advance(player, tree->search, {}, budget, &policy, false, &*heuristic);
+		const auto state = PlayerBotNavigator{}.advance(player, tree->search, blockedPositions, budget, &policy, false, &*heuristic);
 		const auto used = tree->search.expanded - before;
 		expanded += used; timing.localExpandedNodes += used; budget = 0;
 		if (!state) return std::nullopt;
@@ -375,6 +378,7 @@ private:
 	}
 	static uint32_t add(uint32_t a, uint32_t b) { return static_cast<uint32_t>(std::min<uint64_t>(UINT32_MAX, uint64_t(a) + b)); }
 	std::vector<Position> goals;
+	std::set<Position> blockedPositions;
 	uint64_t allowance;
 	bool initialized = false;
 	size_t portalIndex = 0, activePortal = 0;
