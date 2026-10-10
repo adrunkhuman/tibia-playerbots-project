@@ -4,6 +4,7 @@
 #include "playerbothunttravelpolicy.h"
 #include "playerbothuntrouteselection.h"
 #include "playerbotroutechanges.h"
+#include "playerbotnavigationruntime.h"
 
 #include <map>
 #include <memory>
@@ -21,6 +22,9 @@ struct PlayerBotHuntTravelEvidence {
 	uint64_t topologyGeneration = 0, riskRevision = 0, transportReserve = 0;
 	PlayerBotNavigationRiskProfile risk;
 	PlayerBotRouteChanges::Watch watch;
+	// Execution depends on the chosen first leg, not explored alternatives.
+	PlayerBotRouteChanges::Watch executionWatch;
+	int32_t executionStepSpeed = 0;
 	std::vector<Offer> offers;
 	PlayerBotHuntProviderValidation providers;
 	bool paid = false, walkingOnly = false;
@@ -34,6 +38,32 @@ struct PlayerBotHuntTravelEvidence {
 		    riskRevision == revision && risk.healthLossCost == liveRisk.healthLossCost &&
 		    risk.maximumRouteHealthLoss == liveRisk.maximumRouteHealthLoss &&
 		    risk.maximumHealthLossPerSecond == liveRisk.maximumHealthLossPerSecond && watch.valid();
+	}
+	void retainExecutionLeg(const PlayerBotNavigationRoutePlan& route, int32_t stepSpeed) {
+		executionStepSpeed = stepSpeed;
+		executionWatch = watch;
+		executionWatch.tiles.clear();
+		executionWatch.imports.clear();
+		PlayerBotRouteChanges::Scope execution(executionWatch);
+		PlayerBotRouteChanges::read(source);
+		for (const auto& step : route.steps) {
+			PlayerBotRouteChanges::read(step.target);
+			PlayerBotRouteChanges::read(step.expectedPosition);
+		}
+	}
+	const char* executionContextChange(Actor liveActor, int32_t liveStepSpeed, uint64_t topology,
+	                                   uint64_t revision, const PlayerBotNavigationRiskProfile& liveRisk) {
+		// Position advances normally; these durations also change with the
+		// ground under the actor. Actual speed remains a material risk fact.
+		std::get<12>(liveActor) = std::get<12>(actor);
+		std::get<13>(liveActor) = std::get<13>(actor);
+		std::get<18>(liveActor) = std::get<18>(actor);
+		if (actor != liveActor) return "actor_facts_changed";
+		if (executionStepSpeed != liveStepSpeed) return "actor_speed_changed";
+		if (topologyGeneration != topology) return "topology_changed";
+		if (riskRevision != revision || risk != liveRisk) return "risk_changed";
+		if (!executionWatch.valid()) return "execution_world_changed";
+		return nullptr;
 	}
 	// Canonically sorted by provider ID and offer semantics. Provider motion
 	// within talking range is allowed, but used anchors never drift.

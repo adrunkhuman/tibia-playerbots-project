@@ -940,6 +940,16 @@ void PlayerBotController::emitGoalCandidate(const Player& player, const GoalCand
 	       << ",\"evaluated\":" << (evaluated ? "true" : "false")
 	       << ",\"feasible\":" << (candidate.feasible ? "true" : "false")
 	       << ",\"utility\":" << candidate.utility << ",\"reason\":" << jsonString(candidate.reason);
+	if (candidate.goal == TopLevelGoal::Hunt) {
+		const auto& readiness = huntSupplyHandoff.readiness();
+		fields << ",\"readiness\":" << jsonString(readiness.state == PlayerBotReadiness::Pending ? "pending" :
+		    readiness.state == PlayerBotReadiness::Executable ? "executable" : "blocked");
+		if (readiness.requirement) {
+			fields << ",\"requirement\":" << jsonString(readiness.requirement->kind == PlayerBotRequirementKind::Stock ?
+			    "stock" : "health_regeneration") << ",\"required_health\":" << readiness.requirement->health
+			    << ",\"observe_regeneration\":" << (readiness.requirement->observeRegeneration ? "true" : "false");
+		}
+	}
 	if (candidate.goal == TopLevelGoal::Service) {
 		const PlayerBotFoodInventory food = inventoryPolicy.foodInventory(player);
 		const uint16_t potionItemId = recoveryPotionItemId(player.getVocationId());
@@ -1018,6 +1028,10 @@ void PlayerBotController::beginPickupReward(Player& player, const Position& posi
 
 bool PlayerBotController::selectTopLevelGoal(Player& player, const Position& position, const char* decisionReason)
 {
+	trainerGoalSelectionPending = false;
+	if (preparationOption != PlayerBotPreparationOption::None ||
+	    serviceWorkflow.intent() == PlayerBotServiceIntent::PreparationPurchase)
+		retirePreparation(&player, position, "arbitration_reentered");
 	std::string completedHuntReason;
 	completedHuntReason.swap(pendingHuntCompletionReason);
 	// Carry the hunt outcome across depot work, but never relabel an explicit interruption.
@@ -1040,8 +1054,31 @@ bool PlayerBotController::selectTopLevelGoal(Player& player, const Position& pos
 		return true;
 	}
 	if (requiredGoal == TopLevelGoal::Departure) {
+		clearTrainerWork();
 		return forceOracleDeparture(player, position, decisionReason);
 	}
+	const auto now = std::chrono::steady_clock::now();
+	PlayerBotSpellTrainingPlan spellTraining;
+	const bool spellTrainingCoolingDown = progressionRuntime.isCoolingDown(TopLevelGoal::LearnSpell, now);
+	const std::string trainerFacts = trainerDecisionFacts(player, position, spellTrainingCoolingDown);
+	bool trainerProofValid = trainerDecisionWatch.valid();
+	if (selectedTrainerRoute) {
+		trainerProofValid = trainerProofValid && selectedTrainerRoute->evidence &&
+		    huntTravelEvidenceValid(player, position, selectedTrainerRoute->destinations.front(), *selectedTrainerRoute->evidence);
+	}
+	const auto trainerDecision = trainerArbitration.advanceTrainer(trainerFacts, trainerProofValid, [&] {
+		if (!trainerDiscovery) {
+			selectedTrainerRoute.reset();
+			trainerDecisionWatch = {};
+		}
+		PlayerBotSpellTrainingPlan plan;
+		const bool found = !spellTrainingCoolingDown && findSpellTraining(player, position, plan);
+		return PlayerBotTrainerArbitration<PlayerBotSpellTrainingPlan>::Result{
+		    trainerDiscovery.has_value(), found ? std::optional<PlayerBotSpellTrainingPlan>(std::move(plan)) : std::nullopt};
+	});
+	if (trainerDecision.pending) return true; // Only preparation may request the next admission after completion.
+	const bool spellTrainingFound = trainerDecision.selected.has_value();
+	if (spellTrainingFound) spellTraining = *trainerDecision.selected;
 	refreshItemValues();
 	PlayerBotOracleDeparturePlan departure;
 	std::deque<PlayerBotNavigationStep> departureRoute;
@@ -1050,7 +1087,6 @@ bool PlayerBotController::selectTopLevelGoal(Player& player, const Position& pos
 	const bool departureFound = departureEligible && findOracleDeparture(player, position, departure, departureRoute);
 	PlayerBotRewardPlan reward;
 	std::deque<PlayerBotNavigationStep> rewardSteps;
-	const auto now = std::chrono::steady_clock::now();
 	const bool pickupCoolingDown = progressionRuntime.isCoolingDown(TopLevelGoal::PickupReward, now);
 	const bool pickupFound = !pickupCoolingDown && findPickupReward(player, position, reward, rewardSteps);
 	const PlayerBotRewardPlannerSnapshot rewardSnapshot{
@@ -1059,10 +1095,6 @@ bool PlayerBotController::selectTopLevelGoal(Player& player, const Position& pos
 		static_cast<uint32_t>(riskProfile.maximumRouteHealthLoss * riskProfile.healthLossCost), {},
 	};
 	const int32_t pickupUtility = pickupFound ? rewardPlanner.utility(reward, rewardSnapshot) : 0;
-	PlayerBotSpellTrainingPlan spellTraining;
-	std::deque<PlayerBotNavigationStep> spellTrainingSteps;
-	const bool spellTrainingCoolingDown = progressionRuntime.isCoolingDown(TopLevelGoal::LearnSpell, now);
-	const bool spellTrainingFound = !spellTrainingCoolingDown && findSpellTraining(player, position, spellTraining, spellTrainingSteps);
 	const bool equipmentPurchaseCoolingDown = progressionRuntime.isCoolingDown(TopLevelGoal::BuyEquipment, now);
 	const std::optional<EquipmentOfferEvaluation> equipment = equipmentPurchaseCoolingDown ? std::nullopt :
 	                                                        evaluateEquipmentOffers(player, position);
@@ -1073,7 +1105,7 @@ bool PlayerBotController::selectTopLevelGoal(Player& player, const Position& pos
 	const bool sellLootCoolingDown = progressionRuntime.isCoolingDown(TopLevelGoal::SellLoot, now);
 	const uint32_t sellable = saleableItemCount(player);
 	const bool lowCapacity = inventoryPolicy.huntFreeCapacity(player) < returnCapacityThreshold;
-	const PlayerBotGoalPlannerSnapshot snapshot{
+	PlayerBotGoalPlannerSnapshot snapshot{
 		departurePlanner.required(departureSnapshot(player)), departureEligible, departureFound,
 		player.getVocation()->getId() != 0, player.getLevel() < oracleMinimumLevel,
 		player.getLevel() > oracleMaximumLevel,
@@ -1092,6 +1124,10 @@ bool PlayerBotController::selectTopLevelGoal(Player& player, const Position& pos
 		spellTrainingFound && playerBotSpellDescriptor(spellTraining.spellName.c_str()) &&
 		    playerBotSpellDescriptor(spellTraining.spellName.c_str())->role == PlayerBotSpellRole::Healing,
 	};
+	if (huntSupplyHandoff.refresh(huntSupplyFacts(player))) preparationBudget.reset();
+	snapshot.huntReadiness = huntSupplyHandoff.readiness();
+	snapshot.preparations = evaluatePreparation(player, position);
+	if (preparationEvaluationPending) return true; // Deferred work scheduled its budget retry.
 	const PlayerBotGoalArbiter::GoalDecision decision = progressionRuntime.selectGoal(snapshot);
 	emitGoalCandidate(player, decision.candidate(TopLevelGoal::Departure), decision.id, position, decisionReason, nullptr,
 	                  departureFound ? &departure : nullptr);
@@ -1103,6 +1139,9 @@ bool PlayerBotController::selectTopLevelGoal(Player& player, const Position& pos
 	emitGoalCandidate(player, decision.candidate(TopLevelGoal::MagicTraining), decision.id, position, decisionReason);
 	emitGoalCandidate(player, decision.candidate(TopLevelGoal::SellLoot), decision.id, position, decisionReason);
 	emitGoalCandidate(player, decision.candidate(TopLevelGoal::Hunt), decision.id, position, decisionReason);
+	for (const auto& candidate : decision.candidates) {
+		if (candidate.goal == TopLevelGoal::Prepare) emitGoalCandidate(player, candidate, decision.id, position, decisionReason);
+	}
 	if (fixtureDriver.equipmentStorageObservation().pause) {
 		return false;
 	}
@@ -1115,6 +1154,7 @@ bool PlayerBotController::selectTopLevelGoal(Player& player, const Position& pos
 		return false;
 	}
 	const GoalCandidate& selected = *decision.selected;
+	if (selected.goal != TopLevelGoal::LearnSpell) clearTrainerWork();
 	std::ostringstream fields;
 	fields << "\"decision_id\":" << decision.id << ",\"decision_reason\":" << jsonString(decisionReason)
 	       << ",\"from_goal\":" << jsonString(PlayerBotGoalArbiter::goalName(decision.previousGoal))
@@ -1138,14 +1178,36 @@ bool PlayerBotController::selectTopLevelGoal(Player& player, const Position& pos
 		       << ",\"manifest_batches\":" << sellLootPlan->batches.size();
 	}
 	emit("goal_selection", position, fields.str());
+	if (selected.goal != TopLevelGoal::Prepare) retirePreparation(&player, position, "goal_changed");
 	if (selected.goal == TopLevelGoal::Departure) {
 		beginOracleDeparture(player, position, std::move(departure), std::move(departureRoute));
 	} else if (selected.goal == TopLevelGoal::PickupReward) {
 		beginPickupReward(player, position, std::move(reward), std::move(rewardSteps));
 	} else if (selected.goal == TopLevelGoal::LearnSpell) {
-		beginSpellTraining(player, position, std::move(spellTraining), std::move(spellTrainingSteps));
+		beginSpellTraining(player, position, std::move(spellTraining));
 	} else if (selected.goal == TopLevelGoal::BuyEquipment) {
 		beginEquipmentPurchase(player, position, *equipment);
+	} else if (selected.goal == TopLevelGoal::Prepare) {
+		finishHuntRegion(player, position, "preparation_selected");
+		preparationOption = selected.preparation;
+		preparationRequirement = snapshot.huntReadiness.requirement;
+		if (preparationRequirement && !preparationRequirement->observeRegeneration &&
+		    player.getHealth() < static_cast<int64_t>(preparationRequirement->health)) {
+			emit("action_result", position, "\"action\":\"hunt_departure_health\",\"result\":\"started\",\"health\":" +
+			    std::to_string(player.getHealth()) + ",\"required_health\":" + std::to_string(preparationRequirement->health));
+		}
+		preparationDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+		cancelHuntPlanning("preparation_selected", position);
+		selectedHuntRoute.reset();
+		huntRouteRetention.clear();
+		resetNavigation();
+		setCyclePhase(CyclePhase::Idle, position, "preparation_selected");
+		setStage(ScenarioStage::Traverse, position);
+		if (preparationOption == PlayerBotPreparationOption::BuyFood) {
+			serviceWorkflow.reset(PlayerBotServiceIntent::PreparationPurchase);
+			serviceWorkflow.setSurvivalRestock(true);
+		}
+		schedule(SCHEDULER_MINTICKS);
 	} else if (selected.goal == TopLevelGoal::Service) {
 		beginService(&player, position, "goal_selected");
 	} else if (selected.goal == TopLevelGoal::MagicTraining) {
@@ -1154,6 +1216,7 @@ bool PlayerBotController::selectTopLevelGoal(Player& player, const Position& pos
 		setCyclePhase(CyclePhase::DepositLoot, position, "sell_loot_selected");
 	} else {
 		sellLootPlan.reset();
+		if (snapshot.huntReadiness.state == PlayerBotReadiness::Blocked) huntSupplyHandoff.replan();
 		startHunt(&player, position, "goal_selected");
 	}
 	return true;
@@ -1171,6 +1234,10 @@ const char* PlayerBotController::objectiveName() const
 void PlayerBotController::finishProgressionObjective(Player* player, const Position& position, const char* result, const char* reason,
                                  bool scheduleNext)
 {
+	if (progressionRuntime.session().active(PlayerBotProgressionProcedure::LearnSpell)) {
+		finishSpellTraining(player, position, result, reason);
+		return;
+	}
 	const auto& reward = progressionRuntime.reward().plan();
 	std::ostringstream fields;
 	fields << "\"goal\":\"pickup_reward\",\"acquisition_source\":\"map_reward\",\"candidate_id\":" << reward.uniqueId

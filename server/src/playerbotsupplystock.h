@@ -68,6 +68,9 @@ struct PlayerBotSupplyRule {
 	// Stock at or below this is hunt reserve, not routine supply.
 	uint32_t returnThreshold = 0;
 	uint32_t target = 0;
+	// Optional shopping tier after all safety floors, before full targets.
+	// Zero leaves the kind's existing purchase priority unchanged.
+	uint32_t preferredStock = 0;
 
 	bool active() const { return itemId != 0 && target != 0; }
 };
@@ -90,6 +93,7 @@ inline PlayerBotSupplyRule playerBotSupplyRule(PlayerBotSupplyKind kind, uint16_
 			rule.safetyFloor = 2;
 			rule.returnThreshold = 1;
 			rule.target = 20;
+			rule.preferredStock = 10;
 		}
 	}
 	return rule;
@@ -121,6 +125,28 @@ struct PlayerBotSupplyStock {
 
 // Ordered by playerBotSupplyKinds; inactive kinds may be omitted.
 using PlayerBotSupplyStocks = std::vector<PlayerBotSupplyStock>;
+
+struct PlayerBotSupplyRequirement {
+	PlayerBotSupplyKind kind = PlayerBotSupplyKind::HealthPotion;
+	uint16_t itemId = 0; // Health is resolved against the current vocation.
+	uint32_t count = 0;
+};
+
+using PlayerBotSupplyRequirements = std::vector<PlayerBotSupplyRequirement>;
+
+// Route stock is a mandatory floor, not an optional shopping target. Do not
+// transfer evidence to a different weapon or potion type after a loadout change.
+inline void playerBotRequireSupplies(PlayerBotSupplyStocks& stocks, const PlayerBotSupplyRequirements& requirements)
+{
+	for (auto& stock : stocks) {
+		for (const auto& requirement : requirements) {
+			if (stock.rule.kind != requirement.kind ||
+			    (requirement.itemId != 0 && stock.rule.itemId != requirement.itemId)) continue;
+			stock.rule.safetyFloor = std::max(stock.rule.safetyFloor, requirement.count);
+			stock.rule.target = std::max(stock.rule.target, stock.rule.safetyFloor);
+		}
+	}
+}
 
 struct PlayerBotSupplyDeficit {
 	const PlayerBotSupplyStock* first = nullptr;

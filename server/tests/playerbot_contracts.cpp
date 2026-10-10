@@ -24,6 +24,7 @@
 #include "playerbothuntrouteretention.h"
 #include "playerbotinventorypolicy.h"
 #include "playerbotsupplyrecovery.h"
+#include "playerbothuntsupplyhandoff.h"
 #include "playerbotsupplystock.h"
 #include "playerbottelemetry.h"
 #include "playerbottestpolicy.h"
@@ -468,6 +469,385 @@ PlayerBotHuntRouteObservation routeFacts(bool reached = true)
 	return observation;
 }
 
+void preparationContracts()
+{
+	// A bank basement and a nearby upstairs provider/rest need ordinary floor
+	// transitions, not a same-floor whitelist. Coordinates are synthetic.
+	const Position basement(100, 100, 8), upstairsShop(86, 76, 7), upstairsRest(100, 90, 7);
+	assert(playerBotPreparationProviderInRange(basement, upstairsShop));
+	const auto restCandidates = playerBotPreparationRestPositions(basement,
+	    [&](const Position& candidate) { return candidate == upstairsRest; });
+	assert(restCandidates == std::vector<Position>{upstairsRest});
+	assert(!playerBotPreparationProviderInRange(basement, Position(133, 100, 7)));
+	assert(!playerBotPreparationProviderInRange(basement, Position(100, 100, 5)));
+	const auto boundedRest = playerBotPreparationRestPositions(Position(0, 0, 0), [](const Position&) { return true; });
+	assert(boundedRest.size() == 512);
+	for (const Position& position : boundedRest) assert(position.x <= 32 && position.y <= 32 && position.z <= 2);
+	assert(playerBotPreparationRestPositions(basement, [](const Position&) { return false; }).empty()); // No safe non-PZ endpoints.
+	PlayerBotPreparationRouteBudget routes;
+	for (int i = 0; i < 4; ++i) { assert(routes.allowance() == 4096); routes.observed(4096); }
+	assert(routes.allowance() == 0);
+	PlayerBotPreparationRouteBudget cheapRoutes;
+	for (int i = 0; i < 8; ++i) { assert(cheapRoutes.allowance() == 4096); cheapRoutes.observed(0); }
+	assert(cheapRoutes.allowance() == 0);
+	assert(playerBotPreparationRouteAccepted(PlayerBotNavigationResult::Reached, 0, 0, 0, true));
+	for (auto result : {PlayerBotNavigationResult::NodeLimit, PlayerBotNavigationResult::Unreachable, PlayerBotNavigationResult::RiskRejected})
+		assert(!playerBotPreparationRouteAccepted(result, 0, 0, 0, true));
+	assert(!playerBotPreparationRouteAccepted(PlayerBotNavigationResult::Reached, 1, 0, 0, true));
+	assert(!playerBotPreparationRouteAccepted(PlayerBotNavigationResult::Reached, 0, 0.01, 0, true));
+	assert(!playerBotPreparationRouteAccepted(PlayerBotNavigationResult::Reached, 0, 0, 1, true));
+	assert(!playerBotPreparationRouteAccepted(PlayerBotNavigationResult::Reached, 0, 0, 0, false)); // A waypoint is not a complete proof.
+	PlayerBotGoalPlanner planner;
+	PlayerBotGoalPlannerSnapshot snapshot;
+	snapshot.magicTrainingReason = "no_regeneration";
+	PlayerBotPreparationRequirement health;
+	health.kind = PlayerBotRequirementKind::HealthRegeneration;
+	health.health = 186;
+	snapshot.huntReadiness = {PlayerBotReadiness::Blocked, health};
+	auto candidates = planner.candidates(snapshot);
+	auto hunt = [](const auto& candidates) -> const PlayerBotGoalArbiter::GoalCandidate& {
+		return *std::find_if(candidates.begin(), candidates.end(), [](const auto& candidate) {
+			return candidate.goal == PlayerBotGoalArbiter::TopLevelGoal::Hunt;
+		});
+	};
+	assert(!hunt(candidates).feasible);
+	assert(std::none_of(candidates.begin(), candidates.end(), [](const auto& candidate) { return candidate.feasible; }));
+	for (auto option : {PlayerBotPreparationOption::RestoreHealth, PlayerBotPreparationOption::Regenerate,
+	                    PlayerBotPreparationOption::BuyFood}) {
+		snapshot.preparations = {option};
+		candidates = planner.candidates(snapshot);
+		assert(!hunt(candidates).feasible);
+		auto chosen = std::max_element(candidates.begin(), candidates.end(), [](const auto& left, const auto& right) {
+			return (left.feasible ? left.utility : 0) < (right.feasible ? right.utility : 0);
+		});
+		assert(chosen->goal == PlayerBotGoalArbiter::TopLevelGoal::Prepare && chosen->preparation == option);
+	}
+	snapshot.preparations = {PlayerBotPreparationOption::RestoreHealth, PlayerBotPreparationOption::Regenerate};
+	candidates = planner.candidates(snapshot);
+	const auto restore = std::find_if(candidates.begin(), candidates.end(), [](const auto& candidate) {
+		return candidate.preparation == PlayerBotPreparationOption::RestoreHealth;
+	});
+	const auto regenerate = std::find_if(candidates.begin(), candidates.end(), [](const auto& candidate) {
+		return candidate.preparation == PlayerBotPreparationOption::Regenerate;
+	});
+	assert(restore->feasible && regenerate->feasible && restore->utility > regenerate->utility);
+	snapshot.huntReadiness.state = PlayerBotReadiness::Pending;
+	snapshot.preparations.clear();
+	assert(hunt(planner.candidates(snapshot)).feasible); // Request evidence, not executable travel.
+	snapshot.huntReadiness.state = PlayerBotReadiness::Blocked;
+	snapshot.huntReadiness.requirement->kind = PlayerBotRequirementKind::Stock;
+	snapshot.preparations = {PlayerBotPreparationOption::ServiceStock};
+	assert(!hunt(planner.candidates(snapshot)).feasible);
+	assert(planner.candidates(snapshot)[1].feasible);
+	snapshot.preparations = {PlayerBotPreparationOption::RecoveryIncome};
+	assert(hunt(planner.candidates(snapshot)).feasible);
+
+	PlayerBotPreparationBudget budget;
+	assert(!budget.completed(10));
+	assert(!budget.completed(10)); // Currency or unrelated stock identity is not a gap change.
+	assert(!budget.completed(9)); // Genuine requirement improvement resets attempts.
+	assert(!budget.completed(10)); // A regression does not reset the high-water mark.
+	assert(budget.completed(9));
+	assert(!budget.completed(8)); // Successive higher health targets remain genuine improvement.
+	assert(!budget.completed(8, true)); // First verified regeneration is new evidence.
+	assert(!budget.completed(8, false));
+	assert(budget.completed(8, true)); // Eating again is not another first observation.
+	budget.reset();
+	assert(!budget.completed(0, false, PlayerBotRequirementKind::Stock));
+	assert(!budget.completed(10)); // Health and stock gaps must not share a numerical scale.
+	assert(!budget.completed(9)); // Genuine health improvement still resets after stock work.
+	assert(!budget.completed(0, false, PlayerBotRequirementKind::Stock));
+	assert(budget.completed(9)); // Switching kinds without improvement cannot loop.
+	budget.reset();
+	assert(!budget.completed(0)); assert(!budget.completed(0)); assert(budget.completed(0));
+
+	auto region = routeFixture(75);
+	region.supplyRecovery = true;
+	region.coinGoldPerMinute = 1;
+	region.currentHealth = 180;
+	region.maximumHealth = 195;
+	region.recoveryRouteHealthLoss = 20;
+	region.predictedFightSeconds = 10;
+	region.combatFraction = 0.2;
+	region.expectedDamagePerSecond = 0.2;
+	region.supplyProfile.potions = 2;
+	region.fitSupplyWindow(2);
+	assert(!region.productiveWindow());
+	const auto requirement = region.healthPreparation(2);
+	assert(requirement && !requirement->observeRegeneration && requirement->health > 180 && requirement->health < 195);
+	auto evaluate = [](PlayerBotHuntRegion candidate, bool incompleteAlternative = false) {
+		std::vector<PlayerBotHuntRegion> candidates{candidate};
+		if (incompleteAlternative) candidates.insert(candidates.begin(), routeFixture(76));
+		PlayerBotHuntRouteSelection selection(std::move(candidates));
+		if (incompleteAlternative) {
+			auto unknown = routeFacts(false);
+			unknown.searchIncomplete = true;
+			selection.observe(selection.next(), unknown);
+		}
+		auto facts = routeFacts();
+		facts.supplyProfile = candidate.supplyProfile;
+		facts.potionReserve = 2;
+		facts.recoveryRouteHealthLoss = 20;
+		facts.approaches = {Position(200, 100, 7)};
+		PlayerBotHuntRouteResult result;
+		for (int turn = 0; turn < 8 && !result.terminal; ++turn)
+			result = selection.observe(selection.next(), facts);
+		assert(result.terminal);
+		return result;
+	};
+	const auto mixed = evaluate(region, true);
+	assert(mixed.outcome == PlayerBotHuntRouteOutcome::NeedsPreparation && mixed.readiness.requirement);
+	assert(mixed.readiness.state == PlayerBotReadiness::Blocked && mixed.rejectedVariants.empty());
+	assert(mixed.failureCounts.at("route_search_incomplete") == 1);
+	const auto blocked = evaluate(region);
+	assert(blocked.outcome == PlayerBotHuntRouteOutcome::NeedsPreparation && !blocked.selectedRouteRegion);
+	assert(blocked.readiness.state == PlayerBotReadiness::Blocked && blocked.readiness.requirement);
+	PlayerBotHuntSupplyHandoff handoff;
+	handoff.blocked(blocked.readiness, {});
+	assert(handoff.readiness().state == PlayerBotReadiness::Blocked);
+	handoff.replan();
+	assert(handoff.readiness().state == PlayerBotReadiness::Pending && !handoff.readiness().requirement);
+	// An actually observed regeneration profile is evaluated anew, not treated
+	// as a cached promise from purchasing or carrying food.
+	auto fed = region;
+	fed.supplyProfile.regenerationSeconds = 180;
+	fed.supplyProfile.healthGain = 5;
+	fed.supplyProfile.healthInterval = 4;
+	assert(evaluate(fed).outcome == PlayerBotHuntRouteOutcome::Selected);
+	region.currentHealth = requirement->health;
+	region.fitSupplyWindow(2);
+	assert(region.productiveWindow() && region.recoverySustainable());
+	assert(!region.healthPreparation(2)); // Successful shortened hunts need no preparation.
+	region.currentHealth = 180;
+	region.expectedDamagePerSecond = 100;
+	region.fitSupplyWindow(2);
+	const auto unknownFoodEffect = region.healthPreparation(2);
+	assert(unknownFoodEffect && unknownFoodEffect->observeRegeneration);
+	region.supplyProfile.regenerationSeconds = 180;
+	region.fitSupplyWindow(2);
+	assert(!region.healthPreparation(2)); // Observing food alone does not promise a fitting hunt.
+	region.supplyProfile.regenerationSeconds = 0;
+	region.recoveryRouteHealthLoss = 40;
+	assert(!region.healthPreparation(2)); // Food cannot overcome a route above the maximum 80%-floor margin.
+}
+
+void huntSupplyServiceReplayContracts()
+{
+	PlayerBotHuntPlanningProfile profile;
+	profile.combat.level = 9;
+	profile.combat.maximumHealth = 195;
+	profile.combat.attack = 25;
+	profile.combat.attackSkill = 40;
+	profile.supplyCapabilityDefense = 10;
+	profile.equipmentItemIds[5] = 2389; // wielded spear; count is stock, not equipment identity
+	profile.equipmentItemIds[6] = 2512;
+	profile.equipmentItemIds[10] = 2148; // currency in the legacy ammo slot
+	profile.supply.potionHealing = 125;
+	profile.supply.maximumMana = 50;
+	auto stocks = [](uint32_t spears) -> PlayerBotSupplyStocks {
+		return {{{PlayerBotSupplyKind::HealthPotion, 7618, 2, 1, 2}, 2},
+		        {{PlayerBotSupplyKind::ManaPotion, 7620, 2, 1, 20}, 2},
+		        {{PlayerBotSupplyKind::ThrowingWeapon, 2389, 3, 1, 3}, spears}};
+	};
+	auto facts = [&](uint64_t money, uint64_t bank, uint32_t spears, uint16_t slottedMoney) {
+		auto current = profile;
+		current.equipmentItemIds[10] = slottedMoney;
+		PlayerBotHuntSupplyFacts result;
+		result.capability = playerBotSupplyCapability(current);
+		result.funds = money + bank;
+		result.stockKey = playerBotSupplyStockKey(stocks(spears));
+		result.health = 180;
+		return result;
+	};
+	const auto start = facts(11, 0, 3, 2148);
+	assert(start.sameDependencies(facts(0, 11, 3, 0)));
+	assert(start.sameDependencies(facts(15, 0, 4, 2148)));
+	assert(start.sameDependencies(facts(0, 100, 3, 2152)));
+	assert(start.sameDependencies(facts(0, 10000, 3, 2160)));
+	// Real ammunition and weapon replacements still change loadout identity.
+	assert(!start.sameDependencies(facts(15, 0, 3, 2544)));
+	auto replacement = start;
+	replacement.capability.equipmentItemIds[5] = 2399;
+	assert(!start.sameDependencies(replacement));
+
+	PlayerBotHuntSupplyHandoff handoff;
+	PlayerBotSupplyRecoveryState recovery;
+	handoff.require({{PlayerBotSupplyKind::HealthPotion, 0, 3}}, start);
+	assert(!handoff.noProgress(PlayerBotHuntRouteOutcome::NeedsSupplies, start));
+	recovery.enter();
+	auto service = [&](const PlayerBotHuntSupplyFacts& current, uint32_t spears) {
+		assert(!handoff.refresh(current));
+		auto carried = stocks(spears);
+		playerBotRequireSupplies(carried, handoff.requirements());
+		assert(carried.front().rule.safetyFloor == 3 && carried.front().rule.target == 3);
+		const auto budget = playerBotSupplyFloorSpendingReserve(0, {{2, carried.front().rule.safetyFloor, 45}});
+		assert(budget == 45);
+		recovery.restockBlocked(current.funds, current.stockKey);
+		recovery.update(current.funds, budget);
+		assert(recovery.active()); // Never clear against the generic health floor of two.
+		assert(!handoff.noProgress(PlayerBotHuntRouteOutcome::Pending, current));
+	};
+	service(facts(15, 0, 3, 2148), 3); // hat sale genuinely adds four gold
+	service(facts(15, 0, 4, 2148), 4); // depot withdraw merges one spear
+	service(facts(15, 0, 3, 2148), 3); // redeposit restores the same stock
+	service(facts(0, 15, 3, 0), 3); // deposit all
+	service(facts(15, 0, 3, 2148), 3); // withdraw all
+	const auto repeated = facts(15, 0, 3, 2148);
+	assert(!handoff.noProgress(PlayerBotHuntRouteOutcome::NeedsSupplies, repeated)); // genuinely new funds
+	for (int trip = 0; trip < 2; ++trip) {
+		service(facts(15, 0, 4, 2148), 4);
+		service(facts(15, 0, 3, 2148), 3);
+		service(facts(0, 15, 3, 0), 3);
+		service(repeated, 3);
+		assert(handoff.noProgress(PlayerBotHuntRouteOutcome::NeedsSupplies, repeated) == (trip == 1));
+	}
+	// Even a completed failure at transient higher stock must not erase the
+	// previous completed failure when the next trip restores that old stock.
+	PlayerBotHuntSupplyHandoff alternating;
+	assert(!alternating.noProgress(PlayerBotHuntRouteOutcome::NeedsSupplies, repeated));
+	assert(!alternating.noProgress(PlayerBotHuntRouteOutcome::NeedsSupplies, facts(15, 0, 4, 2148)));
+	assert(!alternating.noProgress(PlayerBotHuntRouteOutcome::NeedsSupplies, repeated));
+	assert(!alternating.noProgress(PlayerBotHuntRouteOutcome::NeedsSupplies, facts(15, 0, 4, 2148)));
+	assert(alternating.noProgress(PlayerBotHuntRouteOutcome::NeedsSupplies, repeated));
+	assert(!alternating.noProgress(PlayerBotHuntRouteOutcome::NeedsSupplies, facts(45, 0, 3, 2148)));
+}
+
+void huntSupplyHandoffContracts()
+{
+	auto candidate = routeFixture(1);
+	candidate.predictedFightSeconds = 10;
+	candidate.combatFraction = 1;
+	candidate.expectedDamagePerSecond = 0;
+	candidate.supplyProfile.potionHealing = 100;
+	candidate.supplyProfile.potions = 2;
+	candidate.supplyProfile.reserve = 2;
+	candidate.maximumHuntSeconds = 2400;
+	candidate.availableHuntSeconds = 2400;
+	auto select = [&](uint32_t stock, bool supplierSafe = true, bool recovering = false, bool broke = false,
+	                  bool incompleteAlternative = false) {
+		auto region = candidate;
+		region.supplyRecovery = recovering;
+		region.coinGoldPerMinute = 1;
+		region.currentHealth = region.maximumHealth = 100;
+		std::vector<PlayerBotHuntRegion> candidates{region};
+		if (incompleteAlternative) candidates.insert(candidates.begin(), routeFixture(99));
+		PlayerBotHuntRouteSelection selector(std::move(candidates));
+		if (incompleteAlternative) {
+			auto unknown = routeFacts(false);
+			unknown.searchIncomplete = true;
+			selector.observe(selector.next(), unknown);
+		}
+		auto facts = routeFacts();
+		facts.huntDurationSeconds = 2400;
+		facts.supplyProfile = region.supplyProfile;
+		facts.supplyProfile.potions = stock;
+		facts.potionReserve = 2;
+		if (broke) {
+			facts.recoverySpendingReserve = facts.funds + 1;
+			facts.fare = 1; // Free travel remains eligible below the reserve.
+		}
+		facts.approaches = {Position(200, 100, 7)};
+		PlayerBotHuntRouteResult result;
+		for (int turn = 0; turn < 16 && !result.terminal; ++turn) {
+			auto request = selector.next();
+			auto observation = facts;
+			if (request.stage == PlayerBotHuntRouteStage::DiscoverSupply)
+				observation.approaches = {Position(300, 100, 7)};
+			if (request.stage == PlayerBotHuntRouteStage::Supplier) observation.reached = supplierSafe;
+			result = selector.observe(request, observation);
+		}
+		assert(result.terminal);
+		return result;
+	};
+	const auto mixedShortage = select(2, true, false, false, true);
+	assert(mixedShortage.outcome == PlayerBotHuntRouteOutcome::NeedsSupplies && mixedShortage.supplyShortage);
+	assert(mixedShortage.readiness.state == PlayerBotReadiness::Blocked && mixedShortage.rejectedVariants.empty());
+	const auto shortage = select(2);
+	assert(shortage.outcome == PlayerBotHuntRouteOutcome::NeedsSupplies && shortage.supplyShortage);
+	assert(!shortage.selectedRouteRegion && shortage.rejectedVariants.empty());
+	assert(shortage.failureCounts.at("hunt_supply_window_unavailable") == 1);
+	assert(shortage.supplyShortage->requirements.front().count == 3); // reserve + routine, even at zero DPS
+	assert(select(2, false).outcome == PlayerBotHuntRouteOutcome::Unavailable); // no unsafe supplier proof
+	assert(select(3).outcome == PlayerBotHuntRouteOutcome::Selected);
+	const auto economy = select(3, true, false, true);
+	assert(economy.outcome == PlayerBotHuntRouteOutcome::Unavailable && economy.rejectedVariants.empty());
+	assert(economy.failureCounts.at("travel_fare_breaks_recovery_reserve") == 1);
+	const auto unaffordableShortage = select(2, true, false, true);
+	assert(unaffordableShortage.outcome == PlayerBotHuntRouteOutcome::Unavailable);
+	assert(!unaffordableShortage.supplyShortage && unaffordableShortage.rejectedVariants.empty());
+	assert(unaffordableShortage.failureCounts.at("travel_fare_breaks_recovery_reserve") == 1);
+	assert(select(2, true, true).outcome == PlayerBotHuntRouteOutcome::Selected); // existing safe recovery
+
+	PlayerBotSupplyStocks stocks{{{PlayerBotSupplyKind::HealthPotion, 7618, 2, 1, 2}, 2}};
+	playerBotRequireSupplies(stocks, shortage.supplyShortage->requirements);
+	assert(stocks.front().rule.target == 3 && stocks.front().rule.safetyFloor == 3);
+	assert(playerBotMandatorySupplyDeficit(stocks, false).missing == 1);
+	PlayerBotSupplyRecoveryState recovery;
+	recovery.deferRestock(11, playerBotSupplyStockKey(stocks));
+	recovery.enter();
+	const auto budget = playerBotSupplyFloorSpendingReserve(0, {{2, stocks.front().rule.safetyFloor, 45}});
+	recovery.update(11, budget);
+	assert(recovery.active() && recovery.restockBlocked(11, playerBotSupplyStockKey(stocks)));
+	recovery.restockBlocked(50, playerBotSupplyStockKey(stocks));
+	recovery.update(50, budget);
+	assert(!recovery.active()); // changed funds allow service, not a generic-floor clear
+
+	PlayerBotHuntSupplyHandoff handoff;
+	PlayerBotHuntSupplyFacts facts;
+	facts.stockKey = playerBotSupplyStockKey(stocks);
+	handoff.require(shortage.supplyShortage->requirements, facts);
+	for (int i = 0; i < 100; ++i)
+		assert(!handoff.noProgress(PlayerBotHuntRouteOutcome::Pending, facts));
+	assert(!handoff.noProgress(PlayerBotHuntRouteOutcome::NeedsSupplies, facts));
+	assert(!handoff.noProgress(PlayerBotHuntRouteOutcome::Unavailable, facts));
+	assert(handoff.noProgress(PlayerBotHuntRouteOutcome::NeedsSupplies, facts));
+	++facts.funds;
+	assert(!handoff.noProgress(PlayerBotHuntRouteOutcome::NeedsSupplies, facts));
+	++facts.stockKey;
+	assert(!handoff.noProgress(PlayerBotHuntRouteOutcome::Unavailable, facts));
+	handoff.refresh(facts);
+	assert(!handoff.requirements().empty()); // shopping keeps mandatory stock
+	++facts.capability.level;
+	handoff.refresh(facts);
+	assert(handoff.requirements().empty()); // stale combat dependency discarded
+	handoff.require(shortage.supplyShortage->requirements, facts);
+	handoff.selected(true); // Accepting a recovery hunt does not erase its funding goal.
+	assert(!handoff.requirements().empty());
+	recovery.deferRestock(11, facts.stockKey);
+	recovery.enter();
+	recovery.restockBlocked(12, facts.stockKey);
+	recovery.update(12, budget);
+	assert(recovery.active()); // New income is still below the route requirement.
+	assert(!handoff.noProgress(PlayerBotHuntRouteOutcome::Selected, facts));
+	assert(handoff.requirements().empty());
+
+	// Demand for one fight, not 2400 seconds. Current low stock still selects
+	// the same verified shortened window instead of taking a service trip.
+	candidate.expectedDamagePerSecond = 5;
+	candidate.supplyProfile.potions = 3;
+	candidate.reconcileSupplies(2);
+	const auto minimum = candidate.minimumProductiveSupplies(2);
+	assert(minimum.front().count == 3);
+	candidate.fitSupplyWindow(2);
+	assert(candidate.productiveWindow() && candidate.supplyBudget.fits && candidate.availableHuntSeconds < 2400);
+	const auto shortened = select(3);
+	assert(shortened.outcome == PlayerBotHuntRouteOutcome::Selected && !shortened.supplyShortage);
+	assert(shortened.selectedRouteRegion->availableHuntSeconds < 2400);
+
+	// Typed demand includes detailed transit exposure and learned rates. A
+	// shortage at a reserve boundary still requires its item-specific supplier.
+	candidate.supplyProfile.kinds = {{PlayerBotSupplyKind::ThrowingWeapon, 2389, 1, 1, {0.2, 1}}};
+	candidate.routeValidated = true;
+	candidate.estimatedTravelSeconds = 20;
+	candidate.recoveryRouteHealthLoss = 50;
+	const auto typedMinimum = candidate.minimumProductiveSupplies(2);
+	assert(typedMinimum.size() == 2 && typedMinimum[1].itemId == 2389);
+	assert(typedMinimum[1].count == 5); // one fight plus ten seconds of transit combat
+	const auto typedShortage = select(2);
+	assert(typedShortage.outcome == PlayerBotHuntRouteOutcome::NeedsSupplies &&
+	       typedShortage.supplyShortage->requirements.size() == 2 && typedShortage.rejectedVariants.empty());
+}
+
 void routeSelectionContracts()
 {
 	const Position depot(200, 100, 7), nextDepot(201, 100, 7), supplier(300, 100, 7);
@@ -489,7 +869,18 @@ void routeSelectionContracts()
 		    (returnLeg ? "depot_route_search_incomplete" : "route_search_incomplete"));
 		result = incomplete.observe(incomplete.next(), {});
 		assert(result.terminal && result.rejectedVariants.empty());
+		assert(result.outcome == PlayerBotHuntRouteOutcome::Incomplete && result.readiness.state == PlayerBotReadiness::Pending);
 	}
+	PlayerBotHuntSupplyHandoff exhausted;
+	PlayerBotHuntSupplyFacts changing;
+	for (int attempt = 1; attempt <= 3; ++attempt) {
+		for (int yield = 0; yield < 100; ++yield) assert(!exhausted.noProgress(PlayerBotHuntRouteOutcome::Pending, changing));
+		++changing.funds; ++changing.stockKey; ++changing.health;
+		exhausted.blocked({PlayerBotReadiness::Pending, std::nullopt}, changing);
+		assert(exhausted.noProgress(PlayerBotHuntRouteOutcome::Incomplete, changing) == (attempt == 3));
+	}
+	exhausted.selected();
+	assert(!exhausted.noProgress(PlayerBotHuntRouteOutcome::Incomplete, changing));
 	// Outbound failures remain distinct; a later candidate can still win.
 	PlayerBotHuntRouteSelection selection({routeFixture(1), routeFixture(2), routeFixture(3), routeFixture(4)});
 	auto request = selection.next();
@@ -2534,8 +2925,10 @@ void supplyCalibration()
 	assert(arrivalCompleted->supplyObservation.levelManaRestored == 30);
 	assert(arrivalCompleted->supplyObservation.levelAdjustedHealthDebt == 10);
 	assert(arrivalCompleted->supplyObservation.levelAdjustedManaDebt == 10);
-	assert(std::abs(arrivalCompleted->supplyObservation.staticPotionsPerCombatSecond - 1.0 / 60.0) < 1e-12);
-	assert(arrivalCompleted->region.supplyStaticPotionsPerCombatSecond == 1.0 / 60.0);
+	assert(std::abs(arrivalCompleted->supplyObservation.staticPotionsPerCombatSecond -
+	                (120.0 / 125.0) / 60.0) < 1e-12);
+	assert(std::abs(arrivalCompleted->region.supplyStaticPotionsPerCombatSecond -
+	                (120.0 / 125.0) / 60.0) < 1e-12);
 	assert(arrivalCompleted->combat.damageTaken == 10 && arrivalCompleted->combat.kills == 3);
 	assert((arrivalCompleted->supplyObservation.changedFields & PlayerBotSupplyCapabilityLevel) != 0);
 	assert((arrivalCompleted->supplyObservation.changedFields & PlayerBotSupplyCapabilityEquipment) == 0);
@@ -2561,8 +2954,8 @@ void supplyCalibration()
 	    regenerationSupply, regenerationRegion.expectedDamagePerSecond,
 	    regenerationRegion.combatFraction, 180, 60);
 	regenerationRegion.supplyStaticPotionsPerCombatSecond =
-	    pretravelBudget.expectedPotions / 90.0;
-	assert(std::abs(regenerationRegion.supplyStaticPotionsPerCombatSecond - 2.0 / 90.0) < 1e-12);
+	    pretravelBudget.potionEquivalentDemand / 90.0;
+	assert(std::abs(regenerationRegion.supplyStaticPotionsPerCombatSecond - (150.0 / 125.0) / 90.0) < 1e-12);
 	PlayerBotHuntRuntimePlayerObservation regenerationPlayer;
 	regenerationPlayer.potions = 20;
 	regenerationPlayer.health = regenerationPlayer.maximumHealth = 100;
@@ -2582,9 +2975,10 @@ void supplyCalibration()
 	assert(regenerationCompleted && regenerationCompleted->supplyObservation.accepted);
 	assert(regenerationCompleted->supplyObservation.durationSeconds == 120);
 	assert(std::abs(regenerationCompleted->supplyObservation.staticPotionsPerCombatSecond -
-	                1.0 / 90.0) < 1e-12);
+	                (90.0 / 125.0) / 90.0) < 1e-12);
 	assert(regenerationCompleted->region.availableHuntSeconds == 180);
-	assert(regenerationCompleted->region.supplyStaticPotionsPerCombatSecond == 1.0 / 90.0);
+	assert(std::abs(regenerationCompleted->region.supplyStaticPotionsPerCombatSecond -
+	                (90.0 / 125.0) / 90.0) < 1e-12);
 
 	PlayerBotHuntRuntime noArrivalRuntime({});
 	PlayerBotHuntRegion noArrivalRegion = regionFor(24, capability());
@@ -2690,6 +3084,7 @@ void globalAndLocalSupplyLearning()
 	PlayerBotHuntPolicy policy;
 	PlayerBotHuntRegion source = region(1, "Troll", "Swamp Troll");
 	const double sourceStatic = source.supplyStaticPotionsPerCombatSecond;
+	assert(std::abs(sourceStatic - (480.0 / 125.0) / 60.0) < 1e-12);
 	const auto easy = easyOuting(policy, source);
 	assert(easy.accepted && easy.localUpdated && easy.globalUpdated);
 	assert(easy.globalSamplesBefore == 0 && easy.globalSamplesAfter == 1);
@@ -3745,6 +4140,108 @@ void overBudgetHunts()
 	assert(costly.score < easy.score && playerBotPreferHuntRegion(costly, easy));
 }
 
+void supplyCalibrationRounding()
+{
+	// Bot Four: no learned heal/food, three potions, and two reserved by the
+	// detailed route. A global correction must not turn every positive window
+	// into a two-potion budget just because the raw stock count rounded to one.
+	PlayerBotHuntRegion region;
+	region.supplyProfile.potions = 3;
+	region.supplyProfile.potionHealing = 125;
+	region.expectedDamagePerSecond = 1;
+	region.combatFraction = 0.5;
+	region.supplyGlobalLearning = {1.32, 1};
+	region.reconcileTravel(120, 0, 1);
+	region.reconcileSupplies(2);
+	assert(region.supplyBudget.expectedPotions == 2 && !region.supplyBudget.fits);
+	region.fitSupplyWindow(2);
+	assert(region.availableHuntSeconds == 94 && region.supplyBudget.fits);
+	assert(region.supplyBudget.expectedPotions == 1);
+	assert(region.supplyBudget.reservedPotions == 2 && region.supplyBudget.routinePotions == 1);
+	assert(region.supplyProfile.potions == 3); // Planning does not spend the reserve.
+	assert(std::abs(region.supplyStaticPotionsPerCombatSecond - 1.0 / 62.5) < 1e-12);
+	assert(std::abs(region.supplyAppliedPotionsPerCombatSecond - 1.32 / 62.5) < 1e-12);
+	region.availableHuntSeconds = 95;
+	region.reconcileSupplies(2);
+	assert(region.supplyBudget.expectedPotions == 2 && !region.supplyBudget.fits);
+	region.availableHuntSeconds = 1;
+	region.reconcileSupplies(2);
+	assert(region.supplyBudget.expectedPotions == 1 && region.supplyBudget.fits);
+	region.supplyProfile.potions = 2;
+	region.reconcileSupplies(2);
+	assert(!region.supplyBudget.fits && region.supplyBudget.routinePotions == 0);
+	region.supplyProfile.potions = 4;
+	region.availableHuntSeconds = 120;
+	region.reconcileSupplies(2);
+	assert(region.supplyBudget.expectedPotions == 2 && region.supplyBudget.fits);
+	assert(region.supplyBudget.reservedPotions == 2 && region.supplyBudget.routinePotions == 2);
+
+	// Local rates are final absolute estimates, not global-multiplier inputs.
+	region.supplyProfile.potions = 3;
+	region.supplyCalibration = {region.supplyCapability, 1.0 / 120.0, 1};
+	region.reconcileSupplies(2);
+	assert(std::string(region.supplyEstimateSource) == "local");
+	assert(region.supplyBudget.expectedPotions == 1 && region.supplyBudget.fits);
+	region.supplyCalibration.potionsPerCombatSecond = 1.0 / 60.0;
+	region.reconcileSupplies(2);
+	assert(region.supplyBudget.expectedPotions == 1 && region.supplyBudget.fits);
+	region.availableHuntSeconds = 121;
+	region.reconcileSupplies(2);
+	assert(region.supplyBudget.expectedPotions == 2 && !region.supplyBudget.fits);
+
+	// Calibration cannot bypass typed stock or the recovery health/route floor.
+	region.availableHuntSeconds = 120;
+	region.supplyProfile.kinds = {{PlayerBotSupplyKind::ManaPotion, playerBotManaPotionItemId, 1, 1, {0.01, 1}}};
+	region.reconcileSupplies(2);
+	assert(region.supplyBudget.expectedPotions == 1 && !region.supplyBudget.fits);
+	assert(region.supplyKindBudgets.size() == 1 && !region.supplyKindBudgets.front().fits);
+	region.supplyProfile.kinds.clear();
+	region.supplyCalibration = {};
+	region.supplyRecovery = true;
+	region.currentHealth = region.maximumHealth = 100;
+	region.supplyProfile.potions = 2;
+	region.availableHuntSeconds = 20;
+	region.reconcileSupplies(2);
+	assert(region.supplyBudget.expectedPotions == 0 && region.supplyBudget.fits);
+	region.availableHuntSeconds = 21;
+	region.reconcileSupplies(2);
+	assert(region.supplyBudget.expectedPotions == 1 && !region.supplyBudget.fits);
+	region.availableHuntSeconds = 0;
+	region.recoveryRouteHealthLoss = 21;
+	region.reconcileSupplies(2);
+	assert(!region.supplyBudget.fits);
+
+	// Learning uses the fractional static denominator, while keeping immediate
+	// upward corrections and slower, guarded global/local downward blends.
+	region.supplyRecovery = false;
+	region.recoveryRouteHealthLoss = 0;
+	region.supplyGlobalLearning = {};
+	region.supplyProfile.potions = 20;
+	region.availableHuntSeconds = 120;
+	region.reconcileSupplies(2);
+	assert(region.supplyBudget.expectedPotions == 1);
+	PlayerBotHuntPolicy upwardPolicy;
+	upwardPolicy.observeCombat({true, 60, 100, 100, 0, 0, 1});
+	upwardPolicy.observeRecovery(true);
+	const auto upward = upwardPolicy.observeSupplies(
+	    region, region.supplyCapability, 60, 100, 100, 0, 19, true);
+	assert(upward.accepted && upward.globalUpdated && upward.localUpdated);
+	assert(upward.globalEstimateDirection == PlayerBotSupplyEstimateDirection::Upward);
+	assert(upward.localEstimateDirection == PlayerBotSupplyEstimateDirection::Upward);
+	assert(std::abs(upward.globalMultiplierAfter - 1.0 / 0.96) < 1e-12);
+	assert(std::abs(upward.calibration.potionsPerCombatSecond - 1.0 / 60.0) < 1e-12);
+	PlayerBotHuntPolicy downwardPolicy;
+	downwardPolicy.observeCombat({true, 60, 100, 100, 0, 0, 1});
+	for (unsigned kill = 0; kill < 3; ++kill) downwardPolicy.observeKill();
+	const auto downward = downwardPolicy.observeSupplies(
+	    region, region.supplyCapability, 120, 100, 100, 0, 20, false);
+	assert(downward.accepted && downward.globalUpdated && downward.localUpdated);
+	assert(downward.globalEstimateDirection == PlayerBotSupplyEstimateDirection::Downward);
+	assert(downward.localEstimateDirection == PlayerBotSupplyEstimateDirection::Downward);
+	assert(std::abs(downward.globalMultiplierAfter - 0.9) < 1e-12);
+	assert(std::abs(downward.calibration.potionsPerCombatSecond - 0.8 / 62.5) < 1e-12);
+}
+
 void supplyBudget()
 {
 	PlayerBotSupplyProfile profile;
@@ -3818,6 +4315,83 @@ void supplyBudget()
 	profile.potionHealing = 0;
 	budget = playerBotSupplyBudget(profile, 1, 0, 900, 0);
 	assert(std::isfinite(budget.expectedPotions) && !budget.fits);
+}
+
+void firstHealingBootstrap()
+{
+	constexpr uint32_t cashBuffer = 100, spellPrice = 170;
+	const auto stocked = playerBotRecoverySpendingReserve(3, 3, 45, cashBuffer);
+	const auto first = playerBotSpellTrainingSpendingReserve(stocked, cashBuffer, true);
+	const auto normal = playerBotSpellTrainingSpendingReserve(stocked, cashBuffer, false);
+	assert(first == 0 && normal == cashBuffer);
+	assert(playerBotAffordableAfterReserve(170, first, spellPrice));
+	assert(!playerBotAffordableAfterReserve(169, first, spellPrice));
+	assert(playerBotAffordableAfterReserve(270, normal, spellPrice));
+	assert(!playerBotAffordableAfterReserve(269, normal, spellPrice));
+
+	// Releasing cash does not release the missing health potion's 45 gold.
+	const auto missingHealth = playerBotRecoverySpendingReserve(2, 3, 45, cashBuffer);
+	const auto healthFloor = playerBotSpellTrainingSpendingReserve(missingHealth, cashBuffer, true);
+	assert(healthFloor == 45);
+	assert(!playerBotAffordableAfterReserve(170, healthFloor, spellPrice));
+	assert(!playerBotAffordableAfterReserve(214, healthFloor, spellPrice));
+	assert(playerBotAffordableAfterReserve(215, healthFloor, spellPrice));
+	assert(playerBotAffordableAfterReserve(217, healthFloor, spellPrice));
+
+	// One spear and two mana potions must also remain funded.
+	const auto allFloors = playerBotSupplyFloorSpendingReserve(missingHealth, {{2, 3, 10}, {0, 2, 50}});
+	const auto firstFloors = playerBotSpellTrainingSpendingReserve(allFloors, cashBuffer, true);
+	assert(firstFloors == 155);
+	assert(!playerBotAffordableAfterReserve(324, firstFloors, spellPrice));
+	assert(playerBotAffordableAfterReserve(325, firstFloors, spellPrice));
+	assert(playerBotSpellTrainingSpendingReserve(allFloors, cashBuffer, false) == 255);
+
+	// Unknown health reserve or a missing typed-supply quote must stay unknown.
+	for (const auto reserve : {UINT64_MAX,
+	     playerBotSupplyFloorSpendingReserve(missingHealth, {{2, 3}}),
+	     playerBotSupplyFloorSpendingReserve(missingHealth, {{0, 2}}), uint64_t{99}}) {
+		for (bool firstHeal : {false, true}) {
+			const auto blocked = playerBotSpellTrainingSpendingReserve(reserve, cashBuffer, firstHeal);
+			assert(blocked == UINT64_MAX);
+			assert(!playerBotAffordableAfterReserve(UINT64_MAX, blocked, spellPrice));
+		}
+	}
+
+	PlayerBotSpellTrainingPlanner planner;
+	PlayerBotSpellTrainingPlannerSnapshot state;
+	state.totalMoney = spellPrice;
+	state.maximumRouteDangerCost = 100;
+	state.maximumRouteDanger = 10;
+	PlayerBotSpellOfferSnapshot offer;
+	offer.spellName = "Light Healing";
+	offer.price = spellPrice;
+	offer.reserve = first;
+	offer.inScope = offer.registryMatches = offer.implementedUse = offer.vocationEligible = true;
+	offer.levelEligible = offer.premiumEligible = offer.suppliesReady = offer.route.reachable = true;
+	offer.potionReserve = 2;
+	state.offers = {offer};
+	const auto accepted = planner.select(state);
+	assert(accepted.selected && accepted.selected->reserve == 0 && accepted.selected->potionReserve == 2);
+	auto rejected = [&](const char* reason) {
+		const auto decision = planner.select(state);
+		assert(!decision.selected && decision.rejections.size() == 1);
+		assert(decision.rejections.front().reason == reason);
+		state.offers = {offer};
+	};
+	state.offers.front().reserve = normal;
+	rejected("unaffordable_after_reserves"); // Later heals and nonhealing spells.
+	state.offers.front().reserve = UINT64_MAX;
+	rejected("recovery_reserve_unavailable");
+	state.offers.front().registryMatches = false; rejected("spell_registry_mismatch");
+	state.offers.front().implementedUse = false; rejected("no_implemented_use");
+	state.offers.front().vocationEligible = false; rejected("vocation_ineligible");
+	state.offers.front().levelEligible = false; rejected("level_ineligible");
+	state.offers.front().premiumEligible = false; rejected("premium_ineligible");
+	state.offers.front().known = true; rejected("already_learned");
+	state.offers.front().suppliesReady = false; rejected("supply_reserve_unmet");
+	state.offers.front().route.reachable = false; rejected("trainer_unreachable");
+	state.offers.front().route.dangerCost = 101; rejected("route_danger_above_tolerance");
+	state.offers.front().route.maximumDanger = 11; rejected("route_peak_danger_above_tolerance");
 }
 
 void recoverySpellPriority()
@@ -4940,6 +5514,9 @@ int main()
 	huntCandidateTelemetryCompleteness();
 	huntCandidateTelemetryDeltas();
 	incrementalHuntValidationPipeline();
+	preparationContracts();
+	huntSupplyServiceReplayContracts();
+	huntSupplyHandoffContracts();
 	routeSelectionContracts();
 	typedSupplyRouteContracts();
 	selectedRouteRetention();
@@ -4961,6 +5538,7 @@ int main()
 	supplyRecoveryMode();
 	typedSupplyStock();
 	supplyCalibration();
+	supplyCalibrationRounding();
 	globalAndLocalSupplyLearning();
 	navigationFixedObjective();
 	topologyComponentCompression();
@@ -4971,6 +5549,7 @@ int main()
 	typedSupplyFallback();
 	overBudgetHunts();
 	supplyBudget();
+	firstHealingBootstrap();
 	recoverySpellPriority();
 	projection();
 	oracleRecovery();

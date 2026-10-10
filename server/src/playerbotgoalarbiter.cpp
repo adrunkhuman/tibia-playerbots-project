@@ -24,9 +24,10 @@ namespace {
 			case PlayerBotGoalArbiter::TopLevelGoal::BuyEquipment: return 4;
 			case PlayerBotGoalArbiter::TopLevelGoal::MagicTraining: return 5;
 			case PlayerBotGoalArbiter::TopLevelGoal::SellLoot: return 6;
-			case PlayerBotGoalArbiter::TopLevelGoal::Hunt: return 7;
+			case PlayerBotGoalArbiter::TopLevelGoal::Prepare: return 7;
+			case PlayerBotGoalArbiter::TopLevelGoal::Hunt: return 8;
 		}
-		return 8;
+		return 9;
 	}
 }
 
@@ -134,6 +135,7 @@ const char* PlayerBotGoalArbiter::goalName(TopLevelGoal goal)
 		case TopLevelGoal::MagicTraining: return "magic_training";
 		case TopLevelGoal::SellLoot: return "sell_loot";
 		case TopLevelGoal::Hunt: return "hunt";
+		case TopLevelGoal::Prepare: return "prepare";
 	}
 	return "unknown";
 }

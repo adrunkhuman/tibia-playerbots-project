@@ -876,7 +876,9 @@ function F.login.onLogin(player)
     end
     if mode == "spell_training" or mode == "spell_training_low_supplies" or mode == "spell_training_low_supplies_unaffordable" then
         local lowSupplies = mode ~= "spell_training"
-        local funding = mode == "spell_training_low_supplies_unaffordable" and 269 or lowSupplies and 270 or 300
+        -- Two health potions meet the mandatory floor. First-heal bootstrap
+        -- releases only the cash buffer: 170 price + 0 reserve - 1 = 169.
+        local funding = mode == "spell_training_low_supplies_unaffordable" and 169 or lowSupplies and 270 or 300
         if player:getStorageValue(F.spellTrainingStorage) == 1 then
             assert(player:hasLearnedSpell("Light Healing") and not player:hasLearnedSpell("Find Person"),
                 "spell training priority did not persist across restart")

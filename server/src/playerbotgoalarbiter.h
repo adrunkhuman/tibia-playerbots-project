@@ -11,6 +11,8 @@
 #ifndef FS_PLAYERBOTGOALARBITER_H
 #define FS_PLAYERBOTGOALARBITER_H
 
+#include "playerbotpreparation.h"
+
 #include <chrono>
 #include <cstdint>
 #include <optional>
@@ -28,6 +30,7 @@ class PlayerBotGoalArbiter {
 			MagicTraining,
 			SellLoot,
 			Hunt,
+			Prepare,
 		};
 
 		struct GoalCandidate {
@@ -35,6 +38,7 @@ class PlayerBotGoalArbiter {
 			bool feasible;
 			int32_t utility;
 			std::string reason;
+			PlayerBotPreparationOption preparation = PlayerBotPreparationOption::None;
 		};
 
 		struct GoalDecision {

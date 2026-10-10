@@ -14,6 +14,7 @@
 // Internal controller contract shared by the responsibility-specific playerbot implementation units.
 
 #include "playerbotapproach.h"
+#include "playerbottrainerroute.h"
 #include "playerbotrangedposition.h"
 #include "playerbot.h"
 #include "playerbothuntcoordinator.h"
@@ -34,6 +35,7 @@
 #include "playerbotprogressionplanners.h"
 #include "playerbotsurvivalruntime.h"
 #include "playerbotsupplyrecovery.h"
+#include "playerbothuntsupplyhandoff.h"
 #include "playerbottestpolicy.h"
 #include "playerbotfixturedriver.h"
 #include "playerbottelemetry.h"
@@ -251,6 +253,12 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		void logEatSuccess(uint16_t itemId, uint32_t inventoryCount, int32_t foodTicks, const Position& position);
 
 		bool handleFood(Player* player, const Position& currentPosition);
+		std::vector<PlayerBotPreparationOption> evaluatePreparation(Player& player, const Position& position);
+		bool safePreparationRest(Player& player, const Position& position) const;
+		void processPreparation(Player* player, const Position& position);
+		void finishPreparation(Player& player, const Position& position, const char* reason);
+		void retirePreparationService(Player* player, const Position& position, const char* reason);
+		void retirePreparation(Player* player, const Position& position, const char* reason);
 
 		playerbot::PlayerBotTelemetrySummary telemetrySummary() const;
 
@@ -347,6 +355,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		uint64_t recoverySpendingReserve(const Player& player, uint32_t target) const;
 		// Gold that lifts every active supply kind to its safety floor; unknown when a needed price is.
 		uint64_t supplyFloorSpendingReserve(const Player& player) const;
+		PlayerBotHuntSupplyFacts huntSupplyFacts(Player& player) const;
 		uint32_t cheapestShopPrice(const Player& player, uint16_t itemId) const;
 		uint32_t potionStockTarget(const Player& player, uint32_t returnReserve) const;
 		uint32_t potionStockTarget(const Player& player) const;
@@ -357,13 +366,17 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		uint64_t spellTrainingReserve(const Player& player, bool emergencyOnly = false) const;
 		void emitSpellCandidate(const Npc& npc, const NpcSpellOffer& offer, const Position& position, const char* result,
 		                        const char* reason, uint64_t reserve = 0, uint32_t travelSteps = 0,
-		                        std::optional<uint8_t> learningPriority = std::nullopt) const;
-		bool findSpellTraining(Player& player, const Position& position, PlayerBotSpellTrainingPlan& plan,
-		                       std::deque<PlayerBotNavigationStep>& steps);
-		void beginSpellTraining(Player& player, const Position& position, PlayerBotSpellTrainingPlan plan,
-		                        std::deque<PlayerBotNavigationStep> steps);
+		                        std::optional<uint8_t> learningPriority = std::nullopt, uint64_t fare = 0) const;
+		bool findSpellTraining(Player& player, const Position& position, PlayerBotSpellTrainingPlan& plan);
+		void beginSpellTraining(Player& player, const Position& position, PlayerBotSpellTrainingPlan plan);
 		void finishSpellTraining(Player* player, const Position& position, const char* result, const char* reason);
 		void processSpellTraining(Player* player, const Position& currentPosition);
+		std::string trainerDecisionFacts(Player& player, const Position& position, bool coolingDown);
+		void clearTrainerWork();
+		void interruptTrainerRouteWork();
+		std::optional<PlayerBotNavigationRoutePlan> advanceTrainerRoute(Player& player,
+		    const std::vector<Position>& destinations, uint64_t reserve,
+		    std::shared_ptr<PlayerBotHuntTravelEvidence>& evidence);
 
 		bool processMagicTraining(Player& player, const Position& position);
 		void finishMagicTraining(Player& player, const Position& position, const char* result, const char* reason);
@@ -448,7 +461,8 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		PlayerBotNavigationRoutePlan planNavigationRoute(Player& player, const PlayerBotNavigationGoal& goal,
 		                                                const std::set<Position>& blockedPositions = {},
 		                                                uint64_t maximumExpandedNodes = playerBotNavigationMaximumExpandedNodes,
-		                                                bool sameFloorOnly = false) const;
+		                                                bool sameFloorOnly = false,
+		                                                const PlayerBotNavigationRiskProfile* risk = nullptr) const;
 		// Plans the next leg of the validated patrol trip with the ordinary planner.
 		// Returns nullptr once the leg is installed, otherwise why the trip needs
 		// full revalidation.
@@ -471,10 +485,12 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		std::optional<PlayerBotNavigationRoutePlan> advanceHuntTravelRoute(Player& player,
 		    const PlayerBotHuntRouteRequest& request, const Position& source, PlayerBotHuntRouteTiming& timing,
 		    uint64_t transportReserve, bool sellEconomy, PlayerBotNavigationRoutePlan* walkingAlternative = nullptr,
-		    std::shared_ptr<PlayerBotHuntTravelEvidence>* completedEvidence = nullptr);
+		    std::shared_ptr<PlayerBotHuntTravelEvidence>* completedEvidence = nullptr,
+		    const PlayerBotNavigationRiskProfile* risk = nullptr);
 		bool huntTravelEvidenceValid(Player& player, const Position& source, const Position& destination,
 		                             PlayerBotHuntTravelEvidence& evidence);
 		bool huntTravelExitValid(Player& player, const PlayerBotHuntTravelEvidence& evidence) const;
+		const char* trainerTravelExecutionChange(Player& player, PlayerBotHuntTravelEvidence& evidence);
 		PlayerBotNavigationRoutePlan planHuntTravelRoute(Player& player, const Position& source,
 		                                                 const Position& destination,
 		                                                 const std::set<Position>& blockedPositions = {},
@@ -600,6 +616,16 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		playerbot::PlayerBotInventoryPolicy inventoryPolicy;
 		PlayerBotSurvivalRuntime survivalRuntime;
 		PlayerBotSupplyRecoveryState supplyRecovery;
+		std::optional<PlayerBotNavigationRiskProfile> navigationPlanningRisk;
+		PlayerBotHuntSupplyHandoff huntSupplyHandoff;
+		PlayerBotPreparationBudget preparationBudget;
+		bool preparationEvaluationPending = false;
+		PlayerBotPreparationOption preparationOption = PlayerBotPreparationOption::None;
+		std::optional<PlayerBotPreparationRequirement> preparationRequirement;
+		std::optional<Position> preparationRest;
+		uint16_t preparationFoodItem = 0;
+		uint32_t preparationFoodProvider = 0;
+		std::chrono::steady_clock::time_point preparationDeadline;
 		PlayerBotDepotWorkflow depotWorkflow;
 		playerbot::PlayerBotDepotTelemetry depotDiscoveryTelemetry;
 		int32_t lastDepotDiscoveryHealth = 0;
@@ -710,6 +736,37 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		};
 		std::optional<ServiceRouteSearch> serviceRouteSearch;
 		uint64_t serviceRouteSerial = 0;
+		// Trainer discovery and execution never borrow service/hunt frontiers.
+		struct TrainerRouteSearch : ServiceRouteSearch {
+			uint64_t expandedNodes = 0;
+			std::set<Position> blockedPositions;
+		};
+		std::optional<TrainerRouteSearch> trainerRouteSearch;
+		uint64_t trainerRouteSerial = 0;
+		bool trainerGoalSelectionPending = false;
+		PlayerBotTrainerArbitration<PlayerBotSpellTrainingPlan> trainerArbitration;
+		PlayerBotRouteChanges::Watch trainerDecisionWatch;
+		struct TrainerRoute {
+			PlayerBotNavigationRoutePlan plan;
+			std::shared_ptr<PlayerBotHuntTravelEvidence> evidence;
+			std::vector<Position> destinations;
+		};
+		struct TrainerDiscovery {
+			Position origin;
+			uint64_t money = 0, reserve = 0, healingReserve = 0;
+			uint32_t potionCount = 0;
+			size_t next = 0;
+			PlayerBotTrainerScanProgress progress;
+			std::vector<PlayerBotSpellOfferSnapshot> offers;
+			std::vector<TrainerRoute> routes;
+		};
+		std::optional<TrainerDiscovery> trainerDiscovery;
+		std::optional<TrainerRoute> selectedTrainerRoute;
+		std::optional<TrainerRoute> trainerJourney;
+		uint64_t trainerFareRemaining = 0;
+		uint32_t trainerJourneyRestarts = 0;
+		bool trainerJourneyNeedsRoute = false, trainerTravelReceiptFailed = false;
+		std::chrono::steady_clock::time_point trainerJourneyDeadline;
 		struct DepotSourceRouteSearch {
 			Position origin, destination, locker;
 			uint16_t depotId = 0, lockerItemId = 0;

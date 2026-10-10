@@ -277,6 +277,8 @@ struct PlayerBotSupplyBudget {
 	double expectedDamage = 0;
 	double regenerationHealing = 0;
 	double spellHealing = 0;
+	// Calibrate fractional demand; expectedPotions remains the rounded stock count.
+	double potionEquivalentDemand = 0;
 	double expectedPotions = 0;
 	uint32_t reservedPotions = 1;
 	uint32_t routinePotions = 0;
@@ -313,8 +315,9 @@ inline PlayerBotSupplyBudget playerBotSupplyBudget(const PlayerBotSupplyProfile&
 		result.spellHealing = std::min(result.expectedDamage - result.regenerationHealing, casts * profile.spellHealing);
 	}
 	const double deficit = std::max(0.0, result.expectedDamage - result.regenerationHealing - result.spellHealing);
-	result.expectedPotions = deficit == 0 ? 0 : profile.potionHealing > 0 ?
-	    std::ceil(deficit / profile.potionHealing) : std::numeric_limits<double>::max();
+	result.potionEquivalentDemand = deficit == 0 ? 0 : profile.potionHealing > 0 ?
+	    deficit / profile.potionHealing : std::numeric_limits<double>::max();
+	result.expectedPotions = std::ceil(result.potionEquivalentDemand);
 	result.fits = (profile.potions > profile.reserve || profile.reserve == 0) &&
 	    result.expectedPotions <= result.routinePotions;
 	return result;
@@ -324,6 +327,16 @@ inline uint64_t playerBotRecoverySpendingReserve(uint32_t potions, uint32_t targ
                                                 uint32_t goldReserve)
 {
 	return goldReserve + static_cast<uint64_t>(potions < target ? target - potions : 0) * price;
+}
+
+// Temporary bootstrap until supply-shopping/net-income planning can avoid
+// starving first-heal capital. The complete supply reserve already includes
+// goldReserve once; release only that cash buffer, never replenishment money.
+inline uint64_t playerBotSpellTrainingSpendingReserve(uint64_t supplyReserve, uint32_t goldReserve,
+                                                     bool firstUsableHeal)
+{
+	if (supplyReserve == UINT64_MAX || supplyReserve < goldReserve) return UINT64_MAX;
+	return firstUsableHeal ? supplyReserve - goldReserve : supplyReserve;
 }
 
 inline bool playerBotAffordableAfterReserve(uint64_t money, uint64_t reserve, uint32_t price)

@@ -398,7 +398,7 @@ bool PlayerBotHuntRuntime::enterHuntArea(const PlayerBotHuntRuntimePlayerObserva
 	const PlayerBotSupplyBudget staticBudget = playerBotSupplyBudget(
 	    supplyProfile, activeRegion->expectedDamagePerSecond, activeRegion->combatFraction,
 	    plannedHuntSeconds, 0);
-	const double staticRate = exposure > 0 ? staticBudget.expectedPotions / exposure : 0;
+	const double staticRate = exposure > 0 ? staticBudget.potionEquivalentDemand / exposure : 0;
 	supplyBaseline = PlayerBotHuntSupplyBaseline{
 	    player, supplyProfile, now, plannedHuntSeconds, staticRate};
 	policy.resetCombatEvidence();

@@ -20,6 +20,9 @@ namespace {
 		observation.lootNavigationSuspended = true;
 		if (router.route(observation) != PlayerBotTurnCommand::MagicTraining) return false;
 		observation.magicTrainingActive = false;
+		observation.preparationActive = true;
+		if (router.route(observation) != PlayerBotTurnCommand::Prepare) return false;
+		observation.preparationActive = false;
 		if (router.route(observation) != PlayerBotTurnCommand::PlanHunt) return false;
 		observation.huntPlanningActive = false;
 		if (router.route(observation) != PlayerBotTurnCommand::SuspendedLoot) return false;

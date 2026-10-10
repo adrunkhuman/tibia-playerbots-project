@@ -138,11 +138,12 @@ Town = function() return {} end
 Game = {getExperienceForLevel = function() return 0 end}
 Condition = function() return {setParameter = function() end} end
 Npc = function() return {getPosition = function() return Position(1, 2, 7) end} end
-F.verifyLowWealth = function() end
+dofile('server/tests/playerbot-gameplay/includes/verifiers.inc')
 local function economicLogin(mode)
     selectedMode = mode
+    local spellTraining = mode == 'spell_training_low_supplies' or mode == 'spell_training_low_supplies_unaffordable'
     local inventory = {[7618] = 7, [F.meatItemId] = 3, [F.saleItemId] = 3}
-    local storage, spells = {}, {}
+    local storage, spells = {}, spellTraining and {['Light Healing'] = true, ['Find Person'] = true} or {}
     local vocation, money, bank, mana, capacity, scheduled = 0, 17, 23, 0, 10000, 0
     local backpack = {addItem = function(_, id, amount)
         inventory[id] = (inventory[id] or 0) + amount
@@ -151,7 +152,7 @@ local function economicLogin(mode)
     local player = {
         getName = function() return F.botName end,
         getId = function() return 3 end,
-        getLevel = function() return mode == 'readiness_low_wealth' and 1 or 20 end,
+        getLevel = function() return spellTraining and 9 or mode == 'readiness_low_wealth' and 1 or 20 end,
         getExperience = function() return 0 end,
         getVocation = function() return {getId = function() return vocation end} end,
         setVocation = function(_, id) vocation = id; return true end,
@@ -163,6 +164,11 @@ local function economicLogin(mode)
         removeItem = function(_, id, amount) inventory[id] = inventory[id] - amount; return true end,
         getMoney = function() return money end,
         removeMoney = function(_, amount) money = money - amount; return true end,
+        removeTotalMoney = function(_, amount)
+            local carried = math.min(money, amount)
+            money, bank = money - carried, bank - (amount - carried)
+            return true
+        end,
         addMoney = function(_, amount) money = money + amount; return true end,
         getBankBalance = function() return bank end,
         setBankBalance = function(_, amount) bank = amount; return true end,
@@ -187,14 +193,22 @@ local function economicLogin(mode)
         addCondition = function() return true end,
     }
     addEvent = function(callback)
-        assert(callback == F.verifyLowWealth)
+        assert(callback == (spellTraining and F.verifyLowSupplySpellTraining or F.verifyLowWealth))
         scheduled = scheduled + 1
     end
     assert(F.login.onLogin(player), mode .. ' login failed')
     assert(F.potionItemId == 7618)
     assert(storage[50082] == ((mode == 'readiness_low_wealth' or mode == 'magic_training_progression') and 1 or nil))
     for _, key in ipairs({50076, 50083, 64120}) do assert(storage[key] == nil) end
-    if mode == 'readiness_low_wealth' then
+    if spellTraining then
+        local underfunded = mode == 'spell_training_low_supplies_unaffordable'
+        assert(money + bank == (underfunded and 169 or 270), 'incorrect first-heal funding boundary')
+        assert(vocation == 4 and inventory[7618] == 2 and inventory[F.meatItemId] == 2,
+            'first-heal setup changed the mandatory survival stock')
+        assert(not spells['Light Healing'] and not spells['Find Person'])
+        assert(scheduled == (underfunded and 0 or 1), 'incorrect first-heal verifier scheduling')
+        assert(storage[F.fixtureReadyStorage] == 1)
+    elseif mode == 'readiness_low_wealth' then
         assert(money == 0 and bank == 56 and inventory[F.saleItemId] == 0)
         assert(inventory[F.pickupRewardId] == 1 and inventory[7618] == 10 and capacity == 9000 and scheduled == 1)
         local freeCapacity = capacity - 8000 -- Initial used capacity from the player double.
@@ -210,7 +224,8 @@ local function economicLogin(mode)
         assert(mana == (mode == 'magic_training_reserve' and 39 or 1000))
     end
 end
-for _, mode in ipairs({'readiness_low_wealth', 'magic_training_progression', 'magic_training_reserve', 'magic_training_service'}) do
+for _, mode in ipairs({'readiness_low_wealth', 'magic_training_progression', 'magic_training_reserve', 'magic_training_service',
+    'spell_training_low_supplies', 'spell_training_low_supplies_unaffordable'}) do
     economicLogin(mode)
 end
 -- Exercise the real magic reserve setup, stopping before unrelated level/spell APIs.
@@ -256,7 +271,25 @@ for mode in pairs(modes) do
 end
 -- Persisted counts must not be repaired, even if empty or below the return threshold.
 for _, potions in ipairs({0, 1, 2, 7}) do magicReserve("magic_training_restart", true, potions) end
-dofile('server/tests/playerbot-gameplay/includes/verifiers.inc')
+local function verifyLowSupply(potions, money, bank, learned, utility)
+    Player = function() return {
+        isRemoved = function() return false end,
+        hasLearnedSpell = function(_, name) return name == 'Light Healing' and learned or name == 'Find Person' and utility end,
+        getMoney = function() return money end,
+        getBankBalance = function() return bank end,
+        getItemCount = function(_, id) assert(id == F.healthPotionItemId); return potions end,
+    } end
+    return pcall(F.verifyLowSupplySpellTraining, 3, 0)
+end
+assert(verifyLowSupply(2, 100, 0, true, false))
+assert(verifyLowSupply(2, 77, 23, true, false))
+for _, case in ipairs({
+    {1, 100, 0, true, false}, {3, 100, 0, true, false},
+    {2, 99, 0, true, false}, {2, 101, 0, true, false}, {2, 100, 1, true, false},
+    {2, 270, 0, false, false}, {2, 100, 0, true, true},
+}) do
+    assert(not verifyLowSupply((table.unpack or unpack)(case)), 'invalid first-heal payment/stock/priority passed')
+end
 local function verifyWealth(money, bank, weapon, cargo)
     Player = function() return {
         isRemoved = function() return false end,
@@ -287,4 +320,4 @@ assert(verifyCarlin(20, 100, 0))
 assert(not verifyCarlin(19, 100, 0))
 assert(not verifyCarlin(20, 99, 0))
 assert(not verifyCarlin(20, 100, 1))
-print("PASS fixture isolation: " .. count .. " modes, rapier setup/restart, economic login/verification, Carlin 20-potion service receipt, magic reserves/service/restart, other-player guard, failed writes")
+print("PASS fixture isolation: " .. count .. " modes, rapier setup/restart, economic login/verification, first-heal 270/169 funding and exact payment/two-potion floor, Carlin 20-potion service receipt, magic reserves/service/restart, other-player guard, failed writes")

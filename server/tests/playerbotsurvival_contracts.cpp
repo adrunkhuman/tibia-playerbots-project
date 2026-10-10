@@ -1,6 +1,7 @@
 // Real survival runtime policy checks; see playerbotsurvival_contracts.sh.
 #include "playerbotsurvivalruntime.h"
 #include "playerbotsupplyrecovery.h"
+#include "playerbotsupplypolicy.h"
 
 #include <cassert>
 #include <chrono>
@@ -57,6 +58,94 @@ void expectHealingSpell(const PlayerBotSurvivalRuntime& runtime, const PlayerBot
 	assert(command.itemId == 0);
 	assert(runtime.pendingSpell());
 	assert(runtime.pendingSpell()->name == "Light Healing");
+}
+
+void typedHealthPreparation()
+{
+	PlayerBotSurvivalRuntime runtime;
+	auto state = snapshot();
+	state.health = 75;
+	PlayerBotPreparationRequirement requirement;
+	requirement.kind = PlayerBotRequirementKind::HealthRegeneration;
+	requirement.health = 80;
+	auto options = runtime.healthPreparations(state, requirement, false, false);
+	assert(options == std::vector<PlayerBotPreparationOption>{PlayerBotPreparationOption::RestoreHealth});
+	state.departureHealthTarget = 80;
+	expectHealingSpell(runtime, runtime.decideHealing(state, now));
+	// Admission must include the executor's mana-potion -> re-evaluated heal,
+	// even above the ordinary healing trigger and without a health potion.
+	auto assisted = snapshot();
+	assisted.health = 75; assisted.departureHealthTarget = 80;
+	assisted.mana = 0; assisted.potionCount = 0; assisted.manaPotionCount = 1;
+	PlayerBotSurvivalRuntime manaAssist;
+	assert(manaAssist.healthPreparations(assisted, requirement, false, false) ==
+	       std::vector<PlayerBotPreparationOption>{PlayerBotPreparationOption::RestoreHealth});
+	auto assistedCommand = manaAssist.decideHealing(assisted, now);
+	expectPotion(assistedCommand, manaPotion);
+	assert(assistedCommand.reason == "healing_spell_mana");
+	manaAssist.beginPotion(assisted, manaPotion, assistedCommand.reason);
+	assisted.mana = 20; assisted.manaPotionCount = 0;
+	assistedCommand = manaAssist.decideHealing(assisted, now + std::chrono::seconds(3));
+	assert(assistedCommand.potionVerification &&
+	       assistedCommand.potionVerification->result == PlayerBotPotionVerificationResult::Success);
+	expectHealingSpell(manaAssist, assistedCommand);
+	assisted.spells.front().learned = false;
+	assert(!manaAssist.canPrepareHealth(assisted));
+	assisted.spells.front().learned = true; assisted.mana = 0;
+	assert(!manaAssist.canPrepareHealth(assisted)); // No carried mana left.
+	state.spells.front().learned = false;
+	PlayerBotSurvivalRuntime potionRuntime;
+	assert(potionRuntime.canPrepareHealth(state));
+	expectPotion(potionRuntime.decideHealing(state, now), healthPotion);
+	state.potionCount = 0;
+	assert(runtime.healthPreparations(state, requirement, false, false).empty());
+	state.regenerationActive = true;
+	state.foodTicks = 180000;
+	assert(runtime.healthPreparations(state, requirement, true, false) ==
+	       std::vector<PlayerBotPreparationOption>{PlayerBotPreparationOption::Regenerate});
+	state.protectionZone = true;
+	requirement.observeRegeneration = true;
+	state.health = 80;
+	assert(!runtime.healthPreparationSatisfied(state, requirement, true)); // Engine pauses in PZ.
+	state.protectionZone = false;
+	assert(!runtime.healthPreparationSatisfied(state, requirement, false)); // Rest still needs live safety proof.
+	assert(runtime.healthPreparationSatisfied(state, requirement, true));
+	state.regenerationActive = false;
+	state.foodTicks = 0;
+	state.foodClientId = 100;
+	state.foodItemId = 2666;
+	state.foodCount = 1;
+	assert(runtime.healthPreparations(state, requirement, true, false) ==
+	       std::vector<PlayerBotPreparationOption>{PlayerBotPreparationOption::Regenerate});
+	assert(!runtime.healthPreparationSatisfied(state, requirement, true)); // Carried food is not an effect.
+	PlayerBotSurvivalRuntime eating;
+	state.lootMovePending = true; // Unobserved neutral purchase receipt: do not consume it.
+	auto command = eating.decideFood(state, now);
+	assert(command.type == Command::None);
+	state.lootMovePending = false;
+	command = eating.decideFood(state, now);
+	assert(command.type == Command::UseFood);
+	state.foodClientId = 0; state.foodCount = 0; state.pendingFoodCount = 0;
+	state.regenerationActive = true; state.foodTicks = 180000;
+	command = eating.decideFood(state, now + std::chrono::seconds(1));
+	assert(command.foodVerification && command.foodVerification->result == PlayerBotFoodVerificationResult::Success);
+	assert(runtime.healthPreparationSatisfied(state, requirement, true)); // Observed, then hunt must re-evaluate.
+	state.regenerationActive = false; state.foodTicks = 0;
+	assert(runtime.healthPreparations(state, requirement, true, true) ==
+	       std::vector<PlayerBotPreparationOption>{PlayerBotPreparationOption::BuyFood});
+	assert(runtime.healthPreparations(state, requirement, true, false).empty()); // Unaffordable/no offer.
+	assert(runtime.healthPreparations(state, requirement, false, true).empty()); // No safe reachable rest.
+
+	// Food service derives buyingPotions=false; healing preempts preparation,
+	// independently of the receipt's consumption guard.
+	auto emergency = snapshot();
+	emergency.health = 25; emergency.combatActive = true;
+	emergency.buyingPotions = false; emergency.lootMovePending = true;
+	PlayerBotSurvivalRuntime criticalPotion;
+	expectPotion(criticalPotion.decideHealing(emergency, now), healthPotion);
+	emergency.potionCount = 0;
+	PlayerBotSurvivalRuntime criticalSpell;
+	expectHealingSpell(criticalSpell, criticalSpell.decideHealing(emergency, now));
 }
 
 void departureHealthPreparation()
@@ -361,6 +450,36 @@ void healingFormulaBounds()
 	}
 }
 
+void firstHealingBootstrapEligibility()
+{
+	PlayerBotSurvivalRuntime runtime;
+	auto state = snapshot();
+	state.mana = 0;
+	state.health = state.healthMaximum;
+	auto reserve = [&](bool emergencyOnly) {
+		return playerBotSpellTrainingSpendingReserve(100, 100,
+		    emergencyOnly && !runtime.preferredHealingSpell(state));
+	};
+	// A usable learned heal restores the cash buffer even at zero mana/full HP.
+	assert(runtime.preferredHealingSpell(state));
+	assert(!runtime.preferredHealingSpell(state, true));
+	assert(reserve(true) == 100 && reserve(false) == 100);
+	for (int gate = 0; gate < 7; ++gate) {
+		state = snapshot();
+		state.mana = 0;
+		auto& heal = state.spells.front();
+		if (gate == 0) heal.learned = false;
+		if (gate == 1) heal.metadataMatches = false;
+		if (gate == 2) heal.vocationAllowed = false;
+		if (gate == 3) heal.requirementsMet = false;
+		if (gate == 4) heal.targetReachable = false;
+		if (gate == 5) heal.envelope = {};
+		if (gate == 6) heal.name = "Magic Shield";
+		assert(!runtime.preferredHealingSpell(state));
+		assert(reserve(true) == 0 && reserve(false) == 100);
+	}
+}
+
 void economicalHealing()
 {
 	auto state = snapshot();
@@ -503,6 +622,7 @@ int main()
 {
 	spellFirstAndCriticalOverride();
 	percentageBoundaries();
+	typedHealthPreparation();
 	departureHealthPreparation();
 	manaAndHealthFallbacks();
 	manaThenReevaluate();
@@ -510,6 +630,7 @@ int main()
 	actionAndRetryDelays();
 	buyingPotionsAndHealthyTopups();
 	healingFormulaBounds();
+	firstHealingBootstrapEligibility();
 	economicalHealing();
 	calibratedHealingEconomy();
 	healingCalibrationProgression();

@@ -20,6 +20,7 @@
 #include <optional>
 #include <ostream>
 #include <set>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -236,7 +237,36 @@ struct PlayerBotNavigationRiskProfile {
 	double healthLossCost = 1000.0;
 	double maximumHealthLossPerSecond = 0.08;
 	double maximumRouteHealthLoss = 0.50;
+
+	bool operator==(const PlayerBotNavigationRiskProfile& other) const {
+		return healthLossCost == other.healthLossCost && maximumHealthLossPerSecond == other.maximumHealthLossPerSecond &&
+		       maximumRouteHealthLoss == other.maximumRouteHealthLoss;
+	}
+	bool operator!=(const PlayerBotNavigationRiskProfile& other) const { return !(*this == other); }
+	bool requiresZeroRisk() const { return maximumRouteHealthLoss == 0 && maximumHealthLossPerSecond == 0; }
 };
+
+// Shared route labels must not cross cost/legality policies. Hexfloat retains
+// the exact floating-point limits, unlike rounded decimal keys.
+inline std::string playerBotNavigationCostIdentity(const std::string& actor,
+    const PlayerBotNavigationRiskProfile& risk)
+{
+	std::ostringstream key;
+	key << actor << ':' << std::hexfloat << risk.healthLossCost << ':' << risk.maximumRouteHealthLoss << ':'
+	    << risk.maximumHealthLossPerSecond;
+	return key.str();
+}
+
+// Transient exclusions are part of route/source-tree identity, not just
+// dispatch validation. Canonical set order makes the same graph reusable.
+inline std::string playerBotNavigationBlockedIdentity(const std::string& actor, const std::set<Position>& blocked)
+{
+	if (blocked.empty()) return actor;
+	std::ostringstream key;
+	key << actor << ";blocked";
+	for (const auto& position : blocked) key << ':' << position.x << ',' << position.y << ',' << unsigned(position.z);
+	return key.str();
+}
 
 inline bool playerBotNavigationPeakAccepts(double maximum, double peak)
 {

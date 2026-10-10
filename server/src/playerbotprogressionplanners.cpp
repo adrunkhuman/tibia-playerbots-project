@@ -9,6 +9,7 @@
 
 #include "playerbotprogressionplanners.h"
 #include "playerbotsupplypolicy.h"
+#include "playerbottrainerroute.h"
 
 namespace {
 	// TFS inventory-slot values; keep this pure planner independent of Creature.
@@ -50,7 +51,9 @@ PlayerBotSpellTrainingDecision PlayerBotSpellTrainingPlanner::select(const Playe
 		                        !offer.premiumEligible ? "premium_ineligible" : offer.known ? "already_learned" :
 		                        !offer.worthLearning ? "uneconomical_healing_spell" : !offer.suppliesReady ? "supply_reserve_unmet" : !reserveAvailable ? "recovery_reserve_unavailable" :
 		                        !playerBotAffordableAfterReserve(snapshot.totalMoney, reserve, offer.price) ? "unaffordable_after_reserves" :
-		                        !offer.route.reachable ? "trainer_unreachable" :
+		                        !offer.routeRejection.empty() ? offer.routeRejection.c_str() :
+	                        !offer.route.reachable ? "trainer_unreachable" :
+	                        !playerBotTrainerTripAffordable(snapshot.totalMoney, reserve, offer.price, offer.fare) ? "trip_fare_unaffordable" :
 		                        offer.route.dangerCost > snapshot.maximumRouteDangerCost ? "route_danger_above_tolerance" :
 		                        offer.route.maximumDanger > snapshot.maximumRouteDanger ? "route_peak_danger_above_tolerance" : nullptr;
 		if (rejection) {
@@ -58,13 +61,13 @@ PlayerBotSpellTrainingDecision PlayerBotSpellTrainingPlanner::select(const Playe
 			continue;
 		}
 		PlayerBotSpellTrainingPlan candidate{offer.npcId, offer.npcPosition, offer.route.approachPosition, offer.spellName,
-		                                    offer.keyword, offer.price, offer.level, offer.premium, offer.route.steps, reserve, offer.potionReserve};
+		                                    offer.keyword, offer.price, offer.level, offer.premium, offer.route.steps, reserve, offer.potionReserve, offer.fare};
 		const PlayerBotSpellOfferSnapshot* selectedOffer = decision.selectedOfferIndex ?
 		    &snapshot.offers[*decision.selectedOfferIndex] : nullptr;
 		if (!selectedOffer ||
-		    std::tie(offer.learningPriority, offer.level, offer.price, candidate.travelSteps, offer.spellName, offer.npcId) <
-		        std::tie(selectedOffer->learningPriority, selectedOffer->level, selectedOffer->price,
-		                 decision.selected->travelSteps, selectedOffer->spellName, selectedOffer->npcId)) {
+		    std::tuple_cat(playerBotTrainerPriority(offer), std::tie(candidate.travelSteps, offer.spellName, offer.npcId)) <
+		        std::tuple_cat(playerBotTrainerPriority(*selectedOffer),
+		                       std::tie(decision.selected->travelSteps, selectedOffer->spellName, selectedOffer->npcId))) {
 			decision.selected = std::move(candidate);
 			decision.selectedOfferIndex = offerIndex;
 		}

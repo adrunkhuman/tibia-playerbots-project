@@ -28,6 +28,8 @@ Useful subsystem switches include `-Healing`, `-ValueLoot` (value replacement pl
 
 `-Scenario door_passages` also checks the shared stable-approach admission used by NPC boarding, hunt depot/supply exits, sell-loot source/seller selection, service providers, and depot scans/revalidation. A lower-cost teleport is rejected while an ordinary tile is selected; adding a teleport to the selected tile invalidates it. Floor changes and solid blockers are rejected, occupied ordinary tiles remain eligible, and the movement resolver still permits intentional teleport traversal. The same scenario checks coarse portal danger-sample reuse, unchanged cost/peak results, peak rejection, and tile-dependency invalidation. The same scenario checks first-stage troll, spider, rat, and poison-spider corpse transforms against loaded item definitions: both stages remain walkable and preserve a watched route, while closing a door still invalidates it. This tests loaded engine tiles, not every controller workflow independently.
 
+The Knight scenarios `spell_training_low_supplies` and `spell_training_low_supplies_unaffordable` seed two health potions, meeting the mandatory safety floor. First-heal bootstrap releases only the 100-gold cash buffer, so their computed spell reserve is 0. The affordable case must prioritize Light Healing, pay exactly 170 gold (270→100), and retain both potions. The underfunded case starts at 169 gold (`170 price + 0 mandatory reserve - 1`) and must reject learning with `unaffordable_after_reserves` without a purchase. `pwsh -File scripts/test-playerbot-supply-assertions.ps1` checks these telemetry contracts; `lua scripts/test-playerbot-fixture-isolation.lua` checks the native setup and payment/stock verifier without Docker. These checks do not replace a loaded-world scenario run.
+
 Paladin healing has exact scenarios `paladin_spell_training` (paid learning, casting, and restart), `paladin_healing_economy` (spell choice and reserve), `paladin_mana_healing`, `paladin_healing_fallback`, and `paladin_supply_restock`. They seed Bot One as a Paladin, omit the other three bots, and do not establish sustained progression. `-SpellTraining`, `-SpellUse`, and `-Healing` include the relevant Paladin cases alongside Knight checks.
 
 `-Scenario paladin_spear_restock` checks paid restocking and hunt resumption in fresh level-8 and level-16 runs; `paladin_spear_break` checks equipping a backpack spare, ending the hunt at the reserve, and restocking. `equipment_purchase_spear` checks supply recovery from zero spears at startup in both hand orientations with only 39 gold, plus a zero-funds case that must stop after one unsuccessful service rather than loop or hunt unarmed. `paladin_spear_last_break` checks losing the final spear after hunting starts. Funded cases must buy three spears, equip them, and resume hunting without a terminal event. `paladin_spear_recovery_income` starts at 128/185 health with one spear and six gold. It requires a verified departure-healing potion use, a planner-selected stock-fitting recovery hunt, area arrival, combat, and coin looting without a reserve-one interruption. It controls corpse gold, not weapon breakage or sustainable economics. These scenarios use normalized gear and capacity, not the normal seed's capacity budget. `lua scripts/test-playerbot-spear-fixture.lua` checks their setup and verifiers without Docker.
@@ -78,6 +80,7 @@ sh server/tests/playerbotrangedposition_contracts.sh
 sh server/tests/playerbothunttiming_contracts.sh
 sh server/tests/playerbotdamage_contracts.sh
 sh server/tests/playerbotrouting_contracts.sh
+sh server/tests/playerbottrainer_contracts.sh
 sh server/tests/playerbotselllootapproach_contracts.sh
 sh server/tests/playerbotselllootbasket_contracts.sh
 sh server/tests/playerbotselllootfilter_contracts.sh
@@ -99,7 +102,12 @@ lua scripts/test-playerbot-death-fixture.lua
 lua scripts/test-playerbot-transit-fixture.lua
 lua scripts/test-playerbot-supply-fixture.lua
 lua scripts/test-playerbot-coin-estimation.lua
+luajit scripts/test-maealil-healing-keywords.lua
 ```
+
+The trainer contracts exercise paid-fare plus spell/supply reserve boundaries, sliced transport continuation, independent trainer/hunt/service work slots, world/provider/fund invalidation, turn priority, and the real paid-learning session after a verified travel receipt. They also link the production trainer-arbitration phase with the shared planning budget: after another controller denies preparation admission, both positive and negative trainer decisions are reused and the next admission advances preparation. A real navigation-runtime/path-search contract blocks the direct post-landing step, resumes a four-step sliced detour with the request's exclusions, and verifies that no second fare is authorized. On Linux, use `CPPFLAGS='-I/tmp/angelion-test-includes -I/usr/include/luajit-2.1'` when those development headers are outside the default include paths. These checks do not run NPC dialogue or the loaded world. Existing `-SpellTraining` scenarios still cover local trainer learning; they do not establish Edron-to-mainland trainer travel.
+
+The Maealil keyword check loads the actual NPC script and keyword handler. It verifies that healing spell names reach their paid offers while the word `heal` still provides free healing and condition removal. Use LuaJIT or Lua 5.4: the existing NPC modules do not load under Lua 5.5.
 
 A zero exit status and each script's explicit pass marker are the pass signal. These checks prove policy, arithmetic, parsing, and fixture contracts; they do not execute an ordinary live world.
 

@@ -189,7 +189,7 @@ function F.verifyLowSupplySpellTraining(playerId, attempts)
     assert(player:hasLearnedSpell("Light Healing") and not player:hasLearnedSpell("Find Person"),
         "low-supply training did not prioritize Light Healing")
     assert(player:getMoney() + player:getBankBalance() == 100 and player:getItemCount(F.potionItemId) == 2,
-        "low-supply training did not retain the exact emergency reserves")
+        "low-supply training did not preserve exact payment and the two-potion safety floor")
     print("PLAYERBOT_GAMEPLAY_TEST SPELL_TRAINING_LOW_SUPPLIES_PASS")
 end
 

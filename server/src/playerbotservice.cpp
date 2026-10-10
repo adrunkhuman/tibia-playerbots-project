@@ -815,7 +815,7 @@ void PlayerBotController::deferSellLoot(Player& player, const Position& position
 		",\"npc_id\":" + std::to_string(sellLootPlan->providerId) + ",\"cooldown_ms\":" +
 		std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(sellLootFailureCooldown).count()));
 	progressionRuntime.completeSellLoot(sellLootFailureCooldown);
-	serviceWorkflow.reset();
+	serviceWorkflow.reset(PlayerBotServiceIntent::Resupply, supplyRecovery.active());
 	sellLootPlan.reset();
 	beginReturn(&player, position, reason);
 }
@@ -861,7 +861,7 @@ bool PlayerBotController::processSellLootWithdrawal(Player& player, const Positi
 		for (const SellLootBatch& batch : plan.batches) {
 			batches.push_back({batch.itemId, batch.count, batch.price, batch.subType});
 		}
-		serviceWorkflow.reset(PlayerBotServiceIntent::ResupplyWithLocalSale);
+		serviceWorkflow.reset(PlayerBotServiceIntent::ResupplyWithLocalSale, supplyRecovery.active());
 		serviceWorkflow.setLiquidationPlan({plan.providerId, std::move(batches), 0, 0,
 		                                    plan.fare - plan.sourceFare, plan.sellerAllowNpcTravel});
 		if (progressionRuntime.activeGoal() != TopLevelGoal::Service) {
@@ -977,6 +977,8 @@ void PlayerBotController::setCyclePhase(CyclePhase phase, const Position& positi
 
 void PlayerBotController::beginReturn(Player* player, const Position& position, const char* reason)
 {
+	clearTrainerWork();
+	retirePreparation(player, position, reason);
 	emitDepotDiscovery(playerbot::PlayerBotDepotTelemetry::Result::Cancelled, position, reason);
 	huntTravelBudgetPhase = HuntTravelBudgetPhase::ReturnToDepot;
 	huntExitValidationAttempted = false;
@@ -1017,6 +1019,8 @@ void PlayerBotController::onNpcReply(uint32_t replyingPlayerId, uint32_t npcId, 
 
 void PlayerBotController::beginService(Player* player, const Position& position, const char* reason)
 {
+	clearTrainerWork();
+	retirePreparation(player, position, reason);
 	updateSupplyRecovery(*player, position);
 	const bool interruptedHunt = fixtureDriver.progressionGoalLoop(true).selectGoal && progressionRuntime.activeGoal() == TopLevelGoal::Hunt &&
 	                             !departurePlanner.hasCompleted(departureSnapshot(*player));
@@ -1039,13 +1043,14 @@ void PlayerBotController::beginService(Player* player, const Position& position,
 	huntCoordinator.resetLoot();
 	player->closeContainer(corpseContainerId);
 	setStage(ScenarioStage::Traverse, position);
-	serviceWorkflow.reset();
-	serviceWorkflow.setSurvivalRestock(supplyRecovery.active());
+	serviceWorkflow.reset(PlayerBotServiceIntent::Resupply, supplyRecovery.active());
 	beginReturn(player, position, reason);
 }
 
 void PlayerBotController::updateSupplyRecovery(const Player& player, const Position& position)
 {
+	if (huntSupplyHandoff.refresh(huntSupplyFacts(const_cast<Player&>(player))))
+		supplyRecovery.clearRestockDeferral();
 	const uint64_t funds = player.getMoney() + player.getBankBalance();
 	const bool wasActive = supplyRecovery.active();
 	supplyRecovery.restockBlocked(funds, playerBotSupplyStockKey(supplyStocks(player)));
@@ -1138,6 +1143,7 @@ uint32_t PlayerBotController::serviceDistance(const Position& from, const Servic
 void PlayerBotController::processService(Player* player, const Position& currentPosition)
 {
 	const PlayerBotServiceSnapshot service = serviceWorkflow.snapshot();
+	const bool preparationPurchase = serviceWorkflow.intent() == PlayerBotServiceIntent::PreparationPurchase;
 	const bool localSaleService = serviceWorkflow.intent() == PlayerBotServiceIntent::ResupplyWithLocalSale;
 	const bool sellingLocalLoot = localSaleService && serviceWorkflow.liquidation().has_value() &&
 	                              (service.stage == PlayerBotServiceStage::Discover ||
@@ -1166,7 +1172,14 @@ void PlayerBotController::processService(Player* player, const Position& current
 	const PlayerBotSupplyStocks stocks = supplyStocks(*player);
 	for (const PlayerBotSupplyStock& stock : stocks) {
 		observation.supplies.push_back({stock.rule.kind, stock.rule.itemId, Item::items[stock.rule.itemId].weight,
-		                                stock.rule.returnThreshold, stock.rule.target, stock.rule.safetyFloor});
+		                                stock.rule.returnThreshold, stock.rule.target, stock.rule.safetyFloor,
+		                                stock.rule.preferredStock});
+	}
+	if (preparationPurchase) {
+		// One required preparation item, not optional food behind potion floors.
+		observation.supplies = {{std::nullopt, preparationFoodItem,
+		    Item::items[preparationFoodItem].weight, 0, 1, 1, 0}};
+		observation.supplyCapacityReserve = 0;
 	}
 	Item* serviceBackpackItem = player->getInventoryItem(CONST_SLOT_BACKPACK);
 	Container* serviceBackpack = serviceBackpackItem ? serviceBackpackItem->getContainer() : nullptr;
@@ -1228,6 +1241,7 @@ void PlayerBotController::processService(Player* player, const Position& current
 	size_t retainedBankers = 0;
 	std::vector<Npc*> matchingNpcs;
 	for (Npc* npc : serviceNpcs) {
+		if (preparationPurchase && npc->getID() != preparationFoodProvider) continue;
 		if (sellingLocalLoot && npc->getID() != serviceWorkflow.liquidation()->providerId) continue;
 		if (unavailableProviderIds.find(npc->getID()) != unavailableProviderIds.end()) continue;
 		const bool active = npc->getID() == approachProviderId || Position::areInRange<3, 3, 0>(currentPosition, npc->getPosition());
@@ -1382,6 +1396,7 @@ void PlayerBotController::processService(Player* player, const Position& current
 		routeObservation.approachRoute.providerId = routeProviderId;
 		routeObservation.approachRoute.destination = command.destination;
 		const auto startedAt = std::chrono::steady_clock::now();
+		std::optional<PlayerBotPlanningBudget::Charge> routeCharge;
 		PlayerBotNavigationRoutePlan routePlan;
 		bool validatedNpcTravel = false;
 		// Failed steps mark their tile blocked for a while, usually a wandering
@@ -1435,7 +1450,7 @@ void PlayerBotController::processService(Player* player, const Position& current
 					    blockedRouteRetryInterval, 5000)));
 					return;
 				}
-				PlayerBotPlanningBudget::Charge charge(budget, playerId);
+				routeCharge.emplace(budget, playerId); // Includes any live-blocker detour below.
 				{
 					struct WorkSlot {
 						std::shared_ptr<PlayerBotHuntTravelWork>& hunt;
@@ -1448,12 +1463,16 @@ void PlayerBotController::processService(Player* player, const Position& current
 					// A nearby safe walk needs no search through every paid connection,
 					// including on a sale: a fare-free walk cannot exceed a quoted fare.
 					request.preferSafeWalking = playerBotNavigationDistance(currentPosition, command.destination) <= 128;
+					request.walkingOnly = preparationPurchase; // Discovery proved a fare-free walking route.
 					request.from = currentPosition;
 					request.to = command.destination;
 					PlayerBotHuntRouteTiming timing;
 					PlayerBotNavigationRoutePlan walking;
+					PlayerBotNavigationRiskProfile preparationRisk = riskProfile;
+					preparationRisk.maximumRouteHealthLoss = preparationRisk.maximumHealthLossPerSecond = 0;
 					auto planned = advanceHuntTravelRoute(*player, request, currentPosition, timing, reserve,
-					                                      sellEconomy, &walking);
+					                                      sellEconomy, &walking, nullptr,
+					                                      preparationPurchase ? &preparationRisk : nullptr);
 					if (timing.invalidations != 0 || timing.transportRestarts != 0 || timing.requestRestartLimits != 0 ||
 					    timing.transportRestartLimits != 0) {
 						emit("service_route_restarted", currentPosition,
@@ -1505,9 +1524,13 @@ void PlayerBotController::processService(Player* player, const Position& current
 		    std::any_of(routePlan.steps.begin(), firstTravel, [&blockedPositions](const auto& step) {
 			    return blockedPositions.count(step.target) || blockedPositions.count(step.expectedPosition);
 		    })) {
-			auto detour = planCompleteNavigationRoute(*player, command.destination, blockedPositions);
+			PlayerBotNavigationRiskProfile detourRisk = riskProfile;
+			if (preparationPurchase) detourRisk.maximumRouteHealthLoss = detourRisk.maximumHealthLossPerSecond = 0;
+			auto detour = preparationPurchase ? planNavigationRoute(*player,
+			    PlayerBotNavigationGoal::exact(command.destination), blockedPositions, 4096, false, &detourRisk) :
+			    planCompleteNavigationRoute(*player, command.destination, blockedPositions);
 			if (detour.metrics.result == PlayerBotNavigationResult::Reached && !detour.steps.empty() &&
-			    playerBotNavigationRiskVerdict(riskProfile, detour.metrics) == PlayerBotNavigationRiskVerdict::Accepted) {
+			    playerBotNavigationRiskVerdict(detourRisk, detour.metrics) == PlayerBotNavigationRiskVerdict::Accepted) {
 				routePlan = std::move(detour);
 				validatedNpcTravel = false;
 			} else if (serviceWorkflow.approach().blocked() == PlayerBotApproachVerdict::Wait) {
@@ -1521,10 +1544,12 @@ void PlayerBotController::processService(Player* player, const Position& current
 		}
 		if (!routeBlocked) serviceWorkflow.approach().unblocked();
 		const auto* quote = sellingLocalLoot ? &*serviceWorkflow.liquidation() : nullptr;
-		const bool quoteAllowed = !quote || (routePlan.metrics.fare <= quote->maximumFare &&
-		    (quote->maximumRouteSteps == 0 || routePlan.metrics.steps <= quote->maximumRouteSteps));
+		const bool quoteAllowed = (!preparationPurchase || routePlan.metrics.fare == 0) &&
+		    (!quote || (routePlan.metrics.fare <= quote->maximumFare &&
+		    (quote->maximumRouteSteps == 0 || routePlan.metrics.steps <= quote->maximumRouteSteps)));
 		const bool routeSafe = command.destination == currentPosition ||
-		    playerBotNavigationRiskVerdict(riskProfile, routePlan.metrics) == PlayerBotNavigationRiskVerdict::Accepted;
+		    (preparationPurchase ? routePlan.metrics.dangerCost == 0 && routePlan.metrics.maximumHealthLossPerSecond == 0 :
+		    playerBotNavigationRiskVerdict(riskProfile, routePlan.metrics) == PlayerBotNavigationRiskVerdict::Accepted);
 		const bool routeAffordable = command.destination == currentPosition ||
 		                             huntTravelFareAffordable(*player, routePlan.metrics.fare,
 		                                                      huntTravelBudgetPhase);
@@ -1620,8 +1645,9 @@ void PlayerBotController::processService(Player* player, const Position& current
 		if (transaction.itemId != 0) {
 			const auto supply = std::find_if(observation.supplies.begin(), observation.supplies.end(),
 			    [&transaction](const PlayerBotServiceSupply& value) { return value.itemId == transaction.itemId; });
-			const PlayerBotSupplyKind kind = supply == observation.supplies.end() ? PlayerBotSupplyKind::HealthPotion : supply->kind;
-			const char* action = sellingLocalLoot ? "sell" : kind == PlayerBotSupplyKind::Ammunition ? "buy_ammunition" :
+			const PlayerBotSupplyKind kind = supply == observation.supplies.end() ? PlayerBotSupplyKind::HealthPotion :
+			    supply->kind.value_or(PlayerBotSupplyKind::HealthPotion);
+			const char* action = preparationPurchase ? "buy_food" : sellingLocalLoot ? "sell" : kind == PlayerBotSupplyKind::Ammunition ? "buy_ammunition" :
 			    kind == PlayerBotSupplyKind::ThrowingWeapon ? "buy_throwing_weapons" : "buy_potions";
 			emit("action_result", currentPosition, "\"action\":" + jsonString(action) + ",\"result\":\"success\",\"item_id\":" +
 			     std::to_string(transaction.itemId) + ",\"count\":" + std::to_string(transaction.amount) +
@@ -1648,12 +1674,16 @@ void PlayerBotController::processService(Player* player, const Position& current
 		updateSupplyRecovery(*player, currentPosition);
 	}
 	if (command.type == PlayerBotServiceCommandType::Fail) {
+		if (preparationPurchase) {
+			finishPreparation(*player, currentPosition, "food_transaction_failed");
+			return;
+		}
 		if (sellingLocalLoot) {
 			deferSellLoot(*player, currentPosition, "provider_or_transaction_invalidated");
 			return;
 		}
 		if (localSaleService && command.outcome == PlayerBotServiceOutcome::InsufficientFunds) {
-			serviceWorkflow.reset();
+			serviceWorkflow.reset(PlayerBotServiceIntent::Resupply, supplyRecovery.active());
 			beginReturn(player, currentPosition, "sell_trip_insufficient_funds");
 			return;
 		}
@@ -1662,14 +1692,15 @@ void PlayerBotController::processService(Player* player, const Position& current
 			    playerBotSupplyStockKey(supplyStocks(*player)));
 			const auto supply = std::find_if(observation.supplies.begin(), observation.supplies.end(),
 			    [&command](const PlayerBotServiceSupply& value) { return value.itemId == command.itemId; });
-			const PlayerBotSupplyKind kind = supply == observation.supplies.end() ? PlayerBotSupplyKind::HealthPotion : supply->kind;
+			const PlayerBotSupplyKind kind = supply == observation.supplies.end() ? PlayerBotSupplyKind::HealthPotion :
+			    supply->kind.value_or(PlayerBotSupplyKind::HealthPotion);
 			const std::string reason = kind == PlayerBotSupplyKind::HealthPotion ? "insufficient_potion_funds" :
 			    "insufficient_" + std::string(playerBotSupplyKindName(kind)) + "_funds";
 			// Unaffordable supplies degrade operation instead of stopping: hunt
 			// and sell under supply recovery until loot funds a restock.
 			enterSupplyRecovery(currentPosition, observation.money + observation.bankBalance,
 			                    recoverySpendingReserve(*player, potionStockTarget(*player)), reason.c_str());
-			serviceWorkflow.reset();
+			serviceWorkflow.reset(PlayerBotServiceIntent::Resupply, supplyRecovery.active());
 			if (fixtureDriver.progressionGoalLoop(true).selectGoal) {
 				selectTopLevelGoal(*player, currentPosition, "supply_recovery_potions_unaffordable");
 			} else {
@@ -1726,9 +1757,12 @@ void PlayerBotController::processService(Player* player, const Position& current
 			// Execute only validated steps. An exhausted leg returns to detailed
 			// service validation, never ordinary navigation planning.
 			PlayerBotNavigationRuntimeOutcome navigation;
+			PlayerBotNavigationRiskProfile preparationRisk = riskProfile;
+			preparationRisk.maximumRouteHealthLoss = preparationRisk.maximumHealthLossPerSecond = 0;
 			const bool reached = processNavigation(player, currentPosition,
 			    PlayerBotNavigationGoal::exact(command.destination), &navigation,
-			    playerBotNavigationMaximumExpandedNodes, false, false, nullptr, false);
+			    playerBotNavigationMaximumExpandedNodes, false, false,
+			    preparationPurchase ? &preparationRisk : nullptr, false);
 			if (reached || navigation.routeRequest) schedule(SCHEDULER_MINTICKS);
 			// A failed step clears the route. The next turn revalidates around the
 			// blocked tile and rejects this approach only if no route avoids it.
@@ -1820,6 +1854,16 @@ void PlayerBotController::processService(Player* player, const Position& current
 		return;
 	}
 	if (command.type == PlayerBotServiceCommandType::Complete) {
+		if (preparationPurchase) {
+			// Workflow completion follows the normal stock/currency verification.
+			// It does not prove regeneration or authorize a hunt.
+			retirePreparationService(player, currentPosition, "food_transaction_completed");
+			preparationOption = PlayerBotPreparationOption::Regenerate;
+			resetNavigation();
+			schedule(SCHEDULER_MINTICKS);
+			return;
+		}
+		huntSupplyHandoff.replan();
 		const PlayerBotSupplyStocks completedStocks = supplyStocks(*player);
 		const uint64_t stockKey = playerBotSupplyStockKey(completedStocks);
 		if (playerBotMandatorySupplyDeficit(completedStocks, false).missing != 0 &&

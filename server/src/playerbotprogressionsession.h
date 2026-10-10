@@ -157,6 +157,7 @@ struct PlayerBotSpellTrainingPlan {
 	uint32_t travelSteps = 0;
 	uint64_t reserve = 0;
 	uint32_t potionReserve = 1;
+	uint64_t fare = 0;
 };
 
 enum class PlayerBotSpellTrainingStage : uint8_t {
