@@ -81,6 +81,7 @@ sh server/tests/playerbothunttiming_contracts.sh
 sh server/tests/playerbotdamage_contracts.sh
 sh server/tests/playerbotrouting_contracts.sh
 sh server/tests/playerbottrainer_contracts.sh
+sh server/tests/playerbotserviceroute_contracts.sh
 sh server/tests/playerbotselllootapproach_contracts.sh
 sh server/tests/playerbotselllootbasket_contracts.sh
 sh server/tests/playerbotselllootfilter_contracts.sh
@@ -110,6 +111,8 @@ The trainer contracts exercise paid-fare plus spell/supply reserve boundaries, s
 The Maealil keyword check loads the actual NPC script and keyword handler. It verifies that healing spell names reach their paid offers while the word `heal` still provides free healing and condition removal. Use LuaJIT or Lua 5.4: the existing NPC modules do not load under Lua 5.5.
 
 A zero exit status and each script's explicit pass marker are the pass signal. These checks prove policy, arithmetic, parsing, and fixture contracts; they do not execute an ordinary live world.
+
+The service-route contracts exercise the production sliced-request builder and quote checks with the real service workflow, sliced tile-search kernel, navigation runtime, and planning budget. They cover walking-only sales (including remote destinations), food's walking-only restriction, paid/free NPC-trip rejection, pending continuations, blocked-step detours, interruption route installation, changed risk/world evidence, and bounded incomplete or unreachable searches. Use the same `CPPFLAGS` shown above. The graph and movement dispatch are synthetic: these checks do not run the loaded-world hierarchical router, NPC dialogue, or an actual loot sale. Use `-Focused -SellLoot` for integrated sale checks.
 
 ### Depot liquidation timing
 

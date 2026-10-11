@@ -731,6 +731,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 			uint32_t providerId = 0;
 			uint64_t reserve = 0, pass = 0;
 			bool sellEconomy = false;
+			bool walkingOnly = false;
 			uint32_t turns = 0;
 			std::shared_ptr<PlayerBotHuntTravelWork> work;
 		};
