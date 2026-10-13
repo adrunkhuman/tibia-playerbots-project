@@ -243,6 +243,14 @@ class PlayerBotHuntRuntime
 		uint32_t effectiveDurationSeconds() const { return plannedHuntDurationSeconds; }
 		bool active() const { return activeRegion.has_value(); }
 		std::optional<PlayerBotHuntRegion> region() const { return activeRegion; }
+		bool refreshRecoveryDeparture(PlayerBotHuntRegion proof)
+		{
+			if (!activeRegion || arrived() || !proof.recoveryLoadoutId || !proof.routeValidated ||
+			    proof.atlasVariantId != activeRegion->atlasVariantId || proof.recoveryLoadoutId != activeRegion->recoveryLoadoutId ||
+			    !proof.recoverySustainable()) return false;
+			activeRegion = std::move(proof);
+			return true;
+		}
 		bool insideHuntArea(const Position& position, uint32_t westRange, uint32_t eastRange,
 		                    uint32_t northRange, uint32_t southRange) const;
 		bool matchesMonster(const std::string& name) const;

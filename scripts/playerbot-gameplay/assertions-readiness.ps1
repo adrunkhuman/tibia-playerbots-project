@@ -70,6 +70,16 @@ function Assert-CombatReadinessEvents {
         $equip = @($events | Where-Object { $_.event -eq "action_result" -and $_.action -eq "equip_readiness" -and $_.result -eq "success" -and $_.item_id -eq 2384 })
         if ($equip.Count -ne 1) { throw "Carried legal weapon was not equipped and verified." }
     }
+    if ($Mode -eq "upgrade_full_bag") {
+        # A full source container blocks the engine swap, so the worn weapon goes to the depot first.
+        $deposit = @($events | Where-Object {
+            $_.action -eq "deposit" -and $_.result -eq "requested" -and $_.item_id -eq 2382 -and $_.source_slot -eq 6
+        })
+        $equip = @($events | Where-Object { $_.action -eq "equip_readiness" -and $_.result -eq "success" -and $_.item_id -eq 2384 })
+        if ($deposit.Count -lt 1 -or $equip.Count -ne 1 -or $deposit[0].sequence -gt $equip[0].sequence) {
+            throw "Full-bag carried upgrade did not deposit the worn weapon before equipping."
+        }
+    }
 	if ($Mode -eq "food_capacity") {
 		$initial = $readiness[0]
 		$capacity = @($initial.requirements | Where-Object {
@@ -217,6 +227,40 @@ function Assert-EquipmentPurchaseEvents {
 		} | ForEach-Object { $_ | ConvertTo-Json -Compress }) -join "; "
 		throw "Justified equipment purchase was incomplete. selections=$($selections.Count), purchases=$($purchases.Count), equips=$($equips.Count), results=$($results.Count), terminal=$($terminal.Count)[$terminalReasons], carried=$($purchase.carried_before)/$($purchase.carried_after), bank=$($purchase.bank_before)/$($purchase.bank_after), ready=$($equip.combat_ready), preserved=$($equip.displaced_items_preserved). trace=[$trace]"
 	}
+}
+
+function Assert-UnfundedArmorPurchaseEvents {
+    param([string]$Logs)
+
+    $events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
+    for ($i = 0; $i -lt $events.Count; $i++) { $events[$i] | Add-Member -NotePropertyName log_index -NotePropertyValue $i -Force }
+    $terminal = @($events | Where-Object { $_.event -eq "terminal" })
+    if ($terminal.Count -gt 0) { throw "Unfunded armor fixture stopped: $($terminal[-1].reason)." }
+    $equips = @($events | Where-Object {
+        $_.event -eq "action_result" -and $_.action -eq "equip_equipment" -and $_.result -eq "success" -and $_.slot -eq 4
+    })
+    if ($equips.Count -ne 1 -or $Logs -notmatch '(?m)^PLAYERBOT_GAMEPLAY_TEST EQUIPMENT_BUY_UNFUNDED_ARMOR_PASS\r?$') {
+        throw "Unfunded armor repair lacks a verified armor equip and Lua inventory pass."
+    }
+    $equip = $equips[0]
+    $buys = @($events | Where-Object {
+        $_.event -eq "action_result" -and $_.action -eq "buy_equipment" -and $_.result -eq "success" -and
+        $_.item_id -eq $equip.item_id -and $_.npc_id -eq $equip.npc_id
+    })
+    if ($buys.Count -ne 1 -or $buys[0].log_index -ge $equip.log_index) {
+        throw "Unfunded armor equip lacks one matching earlier paid purchase."
+    }
+    $buy = $buys[0]
+    $repair = @($events | Where-Object {
+        $_.event -eq "equipment_offer_candidate" -and $_.result -eq "feasible" -and $_.rule -eq "fills_readiness_gap" -and
+        $_.item_id -eq $buy.item_id -and $_.npc_id -eq $buy.npc_id -and $_.price -eq $buy.price -and
+        $_.price -gt 0 -and $_.price -le 42 -and $_.reserve -gt 42 -and
+        $_.carried_money -eq 42 -and $_.bank_balance -eq 0 -and $_.log_index -lt $buy.log_index
+    })
+    if ($repair.Count -lt 1 -or $buy.carried_before -ne 42 -or $buy.bank_before -ne 0 -or $buy.bank_after -ne 0 -or
+        $null -eq $buy.carried_after -or $buy.carried_after -ne (42 - $buy.price)) {
+        throw "Missing armor was not bought from exactly 42 gold below the supply reserve with the normal payment delta."
+    }
 }
 
 function Assert-EquipmentToolReplenishmentEvents {
@@ -447,6 +491,54 @@ function Assert-SpearRecoveryIncomeEvents {
 	if ($attack.Count -ne 1 -or $corpse.Count -ne 1 -or $defeated.Count -ne 1 -or $loot.Count -ne 1 -or
 		$pass[0].log_index -le $defeated[0].log_index -or $forbidden.Count -gt 0) {
 		throw "Recovery income did not follow selected-area normal combat and corpse looting, or reserve-one readiness interrupted it."
+	}
+}
+
+function Assert-UnfundedAlternativeRecoveryEvents {
+	param([string]$Logs)
+	$events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
+	for ($i = 0; $i -lt $events.Count; $i++) { $events[$i] | Add-Member -NotePropertyName log_index -NotePropertyValue $i -Force }
+	$start = @($events | Where-Object {
+		$_.event -eq 'spear_fixture' -and $_.scenario -eq 'spear_unfunded' -and $_.phase -eq 'start' -and
+		$_.spears -eq 0 -and $_.carried_gold -eq 0 -and $_.bank_gold -eq 0 -and $_.right_item_id -eq 2525
+	})
+	if ($start.Count -ne 1) { throw 'Alternative recovery lacks the zero-funded Paladin seed.' }
+	$selected = @($events | Where-Object { $_.event -eq 'recovery_loadout' -and $_.result -eq 'selected' })
+	$terminal = @($events | Where-Object { $_.event -eq 'terminal' })
+	if ($selected.Count -eq 0) {
+		if ($terminal.Count -ne 1 -or $terminal[0].reason -notin @('recovery_no_safe_income_outing', 'hunt_planning_incomplete', 'recovery_loadout_unavailable')) {
+			throw 'No safe alternative must finish with a bounded recovery failure, not the normal spear-readiness gate.'
+		}
+		$after = @($events | Where-Object { $_.log_index -gt $terminal[0].log_index -and $_.event -ne 'spear_fixture' })
+		$hunts = @($events | Where-Object { $_.action -eq 'hunt_cycle' })
+		if ($after.Count -or $hunts.Count) { throw 'Recovery executed an unproved outing or emitted after terminal.' }
+		return
+	}
+	$selection = $selected[0]
+	if ($terminal.Count -or $selection.left_item_id -ne 0 -or $selection.right_item_id -ne 2525 -or
+		$selection.expected_net_gold_per_minute -le 0) { throw 'Unfunded fists lack a positive-income selection with the original shield.' }
+	$proof = @($events | Where-Object {
+		$_.event -eq 'hunt_region_candidate' -and $_.candidate_phase -eq 'route_validation' -and
+		$_.recovery_loadout_id -eq $selection.loadout_id -and $_.region_id -eq $selection.region_id -and
+		$_.planning_pass -eq $selection.planning_pass -and $_.scoring_revision -eq $selection.scoring_revision -and
+		$_.route_validated -and $_.suitable -and
+		$_.supply_recovery -and $_.recovery_net_gold_per_minute -gt 0 -and $_.log_index -lt $selection.log_index
+	})
+	$equipped = @($events | Where-Object {
+		$_.event -eq 'recovery_loadout' -and $_.result -eq 'equipped' -and $_.left_item_id -eq 0 -and
+		$_.right_item_id -eq 2525 -and $_.log_index -gt $selection.log_index
+	})
+	$area = @($events | Where-Object { $_.event -eq 'hunt_area_entered' -and $equipped.Count -and $_.log_index -gt $equipped[0].log_index })
+	$loot = @($events | Where-Object {
+		$_.action -eq 'loot' -and $_.result -eq 'success' -and $_.coin_gold_acquired -gt 0 -and
+		$area.Count -and $_.log_index -gt $area[0].log_index
+	})
+	$weaponBuys = @($events | Where-Object {
+		$_.action -eq 'buy_throwing_weapons' -and $_.result -eq 'success' -and
+		(-not $loot.Count -or $_.log_index -lt $loot[0].log_index)
+	})
+	if (-not $proof.Count -or -not $equipped.Count -or -not $area.Count -or -not $loot.Count -or $weaponBuys.Count) {
+		throw 'Recovery needs route proof, authoritative hands, area arrival and normal coin looting before any spear purchase.'
 	}
 }
 

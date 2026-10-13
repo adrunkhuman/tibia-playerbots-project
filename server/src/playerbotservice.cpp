@@ -1048,8 +1048,77 @@ void PlayerBotController::beginService(Player* player, const Position& position,
 	beginReturn(player, position, reason);
 }
 
+void PlayerBotController::initializeRecoveryProgress(const Player& player)
+{
+	if (recoveryProgress.active()) return;
+	recoveryFundingBasis.clear();
+	for (const auto& stock : supplyStocks(player)) {
+		// Preserve the normal funding goal and the entry stock buffers. Spending
+		// a carried potion must not look like profit merely because its remaining
+		// stack is still above the normal floor. Prices are fixed for this episode.
+		recoveryFundingBasis.push_back({{stock.rule.kind, stock.rule.itemId, stock.rule.safetyFloor},
+		    std::max(stock.count, stock.rule.safetyFloor), cheapestShopPrice(player, stock.rule.itemId)});
+	}
+	// The first unfunded service precedes hunt selection. Keep the bounded
+	// carried alternatives available instead of liquidating the fallback we
+	// are about to evaluate (for example, selling a Paladin's carried sword).
+	recoveryCandidateEquipment.clear();
+	std::vector<PlayerBotEquipmentItemSnapshot> carried;
+	for (uint8_t slot = CONST_SLOT_FIRST; slot <= CONST_SLOT_LAST; ++slot) {
+		const Item* root = player.getInventoryItem(static_cast<slots_t>(slot));
+		const Container* container = root ? root->getContainer() : nullptr;
+		if (!container) continue;
+		for (auto it = container->iterator(); it.hasNext(); it.advance()) {
+			if ((*it)->getCharges() == 0) carried.push_back(PlayerBotEquipmentAdapter::item(**it));
+		}
+	}
+	const auto alternatives = equipmentPolicy.recoveryLoadouts(PlayerBotEquipmentAdapter::player(player),
+	    PlayerBotEquipmentAdapter::loadout(player), carried);
+	for (const auto& alternative : alternatives) {
+		for (slots_t hand : {CONST_SLOT_LEFT, CONST_SLOT_RIGHT}) {
+			const uint16_t id = alternative.itemIds[hand];
+			if (id && std::find(recoveryCandidateEquipment.begin(), recoveryCandidateEquipment.end(), id) ==
+			    recoveryCandidateEquipment.end()) recoveryCandidateEquipment.push_back(id);
+		}
+	}
+	recoveryProgress.enter(recoveryFundingShortfall(player));
+}
+
+int64_t PlayerBotController::recoveryFundingShortfall(const Player& player) const
+{
+	std::vector<PlayerBotSupplyFloorCost> costs;
+	for (const auto& basis : recoveryFundingBasis) {
+		costs.push_back({inventoryPolicy.inventoryItemCount(player, basis.normal.itemId),
+		    basis.referenceStock, basis.unitPrice});
+	}
+	return playerBotRecoveryFundingShortfall(playerBotSupplyFloorSpendingReserve(0, costs),
+	    player.getMoney() + player.getBankBalance());
+}
+
+bool PlayerBotController::completeRecoveryAttempt(const Player& player, const Position& position)
+{
+	if (telemetry.terminalLogged()) return false;
+	const int64_t shortfall = recoveryFundingShortfall(player);
+	const auto result = recoveryProgress.returned(shortfall);
+	if (result == PlayerBotRecoveryProgressResult::NotPending) return true;
+	emit("recovery_progress", position, "\"result\":" + jsonString(
+	    result == PlayerBotRecoveryProgressResult::Progress ? "progress" :
+	    result == PlayerBotRecoveryProgressResult::Exhausted ? "exhausted" : "no_progress") +
+	    ",\"attempts_without_progress\":" + std::to_string(recoveryProgress.failures()) +
+	    ",\"maximum_attempts\":" + std::to_string(PlayerBotRecoveryProgressBudget::maximumAttempts) +
+	    ",\"funding_shortfall\":" + (shortfall == INT64_MAX ? "null" : std::to_string(shortfall)) +
+	    ",\"best_funding_shortfall\":" + (recoveryProgress.best() == INT64_MAX ? "null" : std::to_string(recoveryProgress.best())));
+	if (result == PlayerBotRecoveryProgressResult::Progress) preparationBudget.reset();
+	if (result != PlayerBotRecoveryProgressResult::Exhausted) return true;
+	stop("recovery_income_no_progress", position);
+	return false;
+}
+
 void PlayerBotController::updateSupplyRecovery(const Player& player, const Position& position)
 {
+	// Intended hand changes cannot discharge the normal hunt's funding debt,
+	// nor change the selected outing halfway through its return leg.
+	if (recoveryEquipment || recoveryWeaponPlanning) return;
 	if (huntSupplyHandoff.refresh(huntSupplyFacts(const_cast<Player&>(player))))
 		supplyRecovery.clearRestockDeferral();
 	const uint64_t funds = player.getMoney() + player.getBankBalance();
@@ -1058,6 +1127,12 @@ void PlayerBotController::updateSupplyRecovery(const Player& player, const Posit
 	const uint64_t spending = supplyFloorSpendingReserve(player);
 	const uint64_t budget = spending == UINT64_MAX ? spending : spending - carriedGoldReserve;
 	supplyRecovery.update(funds, budget);
+	if (supplyRecovery.active()) initializeRecoveryProgress(player);
+	else if (recoveryProgress.active()) {
+		recoveryProgress.clear();
+		recoveryFundingBasis.clear();
+		recoveryCandidateEquipment.clear();
+	}
 	if (wasActive == supplyRecovery.active()) return;
 	huntCoordinator.setSupplyRecovery(supplyRecovery.active());
 	serviceWorkflow.setSurvivalRestock(supplyRecovery.active());
@@ -1075,6 +1150,7 @@ void PlayerBotController::updateSupplyRecovery(const Player& player, const Posit
 void PlayerBotController::enterSupplyRecovery(const Position& position, uint64_t funds, uint64_t potionBudget,
                                               const char* reason)
 {
+	if (Player* player = g_game.getPlayerByID(playerId)) initializeRecoveryProgress(*player);
 	if (supplyRecovery.enter()) {
 		huntCoordinator.setSupplyRecovery(true);
 		serviceWorkflow.setSurvivalRestock(true);
@@ -1143,6 +1219,7 @@ uint32_t PlayerBotController::serviceDistance(const Position& from, const Servic
 
 void PlayerBotController::processService(Player* player, const Position& currentPosition)
 {
+	if (restoreRecoveryEquipment(*player, currentPosition)) return;
 	const PlayerBotServiceSnapshot service = serviceWorkflow.snapshot();
 	const bool preparationPurchase = serviceWorkflow.intent() == PlayerBotServiceIntent::PreparationPurchase;
 	const bool localSaleService = serviceWorkflow.intent() == PlayerBotServiceIntent::ResupplyWithLocalSale;
@@ -1643,6 +1720,11 @@ void PlayerBotController::processService(Player* player, const Position& current
 			    [&transaction](const PlayerBotServiceSupply& value) { return value.itemId == transaction.itemId; });
 			const PlayerBotSupplyKind kind = supply == observation.supplies.end() ? PlayerBotSupplyKind::HealthPotion :
 			    supply->kind.value_or(PlayerBotSupplyKind::HealthPotion);
+			if (preparationPurchase) {
+				const uint64_t before = transaction.money + transaction.balance;
+				const uint64_t after = observation.money + observation.bankBalance;
+				if (before > after) recoveryPreparationCost += before - after;
+			}
 			const char* action = preparationPurchase ? "buy_food" : sellingLocalLoot ? "sell" : kind == PlayerBotSupplyKind::Ammunition ? "buy_ammunition" :
 			    kind == PlayerBotSupplyKind::ThrowingWeapon ? "buy_throwing_weapons" : "buy_potions";
 			emit("action_result", currentPosition, "\"action\":" + jsonString(action) + ",\"result\":\"success\",\"item_id\":" +
@@ -2876,13 +2958,25 @@ void PlayerBotController::processDeposit(Player* player, const Position& current
 	refreshItemValues();
 	Item* upgrade = nullptr;
 	EquipmentUpgrade upgradeInfo{};
-	if (PlayerBotEquipmentAdapter::findCarriedUpgrade(equipmentPolicy, *player, upgrade, upgradeInfo)) {
-		if (!beginReadinessEquipment(player, currentPosition, "depot_carried_upgrade", true)) {
+	const bool hasUpgrade = !recoveryEquipment &&
+	    PlayerBotEquipmentAdapter::findCarriedUpgrade(equipmentPolicy, *player, upgrade, upgradeInfo);
+	Item* worn = hasUpgrade ? player->getInventoryItem(upgradeInfo.slot) : nullptr;
+	const Container* upgradeContainer = upgrade ? dynamic_cast<const Container*>(upgrade->getParent()) : nullptr;
+	const auto upgradeAction = playerBotDepotUpgradeAction(recoveryEquipment.has_value(), hasUpgrade, worn != nullptr,
+	    upgradeContainer && upgradeContainer->size() >= upgradeContainer->capacity(),
+	    worn && recoveryEquipmentProtected(worn->getID()));
+	if (upgradeAction == PlayerBotDepotUpgradeAction::Equip) {
+		if (!beginReadinessEquipment(player, currentPosition, "depot_carried_upgrade", true))
 			schedule(navigationDecisionDelay(*player));
-		}
 		return;
 	}
-	if (!findDepositableItem(*player, backpack, source, depositItem, count)) {
+	if (upgradeAction == PlayerBotDepotUpgradeAction::DepositWorn) {
+		// A full source container rejects the engine's worn-item exchange.
+		// Only ordinary, unprotected equipment may use this depot workaround.
+		depositItem = worn;
+		sourceSlot = upgradeInfo.slot;
+		count = static_cast<uint8_t>(std::min<uint32_t>(worn->getItemCount(), UINT8_MAX));
+	} else if (!findDepositableItem(*player, backpack, source, depositItem, count)) {
 		depositItem = findActionableSlottedItem(*player, 0, sourceSlot);
 		if (depositItem) {
 			const uint32_t carried = inventoryPolicy.inventoryItemCount(*player, depositItem->getID());
@@ -2892,6 +2986,9 @@ void PlayerBotController::processDeposit(Player* player, const Position& current
 			count = static_cast<uint8_t>(std::min<uint32_t>(movable, UINT8_MAX));
 		}
 	}
+	// Also guard exceptional full-container/slotted moves, not just the
+	// ordinary backpack filter. No depot path may evict recovery-held gear.
+	if (depositItem && recoveryEquipmentProtected(depositItem->getID())) count = 0;
 	if ((!depositItem || count == 0) && inventoryPolicy.huntFreeCapacity(*player) < returnCapacityThreshold) {
 		stop("depot_capacity_not_recovered", currentPosition);
 		return;

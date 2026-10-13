@@ -31,8 +31,8 @@ uint32_t playerbot::recoveryPotionRouteReserve(uint16_t vocationId, int32_t maxi
 }
 
 PlayerBotInventoryPolicy::PlayerBotInventoryPolicy(const PlayerBotInventoryPolicy::SellValues& sellValues,
-                                                    EquipmentUpgradePredicate equipmentUpgrade) :
-	sellValues(sellValues), equipmentUpgrade(std::move(equipmentUpgrade))
+                                                    EquipmentUpgradePredicate equipmentUpgrade, std::function<bool(uint16_t)> heldEquipment) :
+	sellValues(sellValues), equipmentUpgrade(std::move(equipmentUpgrade)), heldEquipment(std::move(heldEquipment))
 {
 }
 
@@ -131,6 +131,7 @@ uint32_t PlayerBotInventoryPolicy::itemUnitValue(uint16_t itemId) const
 
 uint32_t PlayerBotInventoryPolicy::protectedItemReserve(const Player& player, uint16_t itemId) const
 {
+	if (heldEquipment && heldEquipment(itemId)) return UINT32_MAX;
 	if (itemId == ropeItemId || itemId == 2554) {
 		return 1;
 	}
@@ -186,7 +187,7 @@ PlayerBotSupplyStocks PlayerBotInventoryPolicy::additionalSupplyStocks(const Pla
 bool PlayerBotInventoryPolicy::isProtectedInventoryItem(const Item& item) const
 {
 	const ItemType& type = Item::items[item.getID()];
-	return type.isContainer() || item.getID() == ropeItemId || item.getID() == 2554 ||
+	return (heldEquipment && heldEquipment(item.getID())) || type.isContainer() || item.getID() == ropeItemId || item.getID() == 2554 ||
 	       ((type.slotPosition & SLOTP_TWO_HAND) != 0 && type.weaponType != WEAPON_NONE) ||
 	       isFoodItem(item.getID()) || item.getID() == smallHealthPotionItemId || item.getID() == healthPotionItemId || item.getWorth() != 0 ||
 	       sellValues.find(item.getID()) == sellValues.end();

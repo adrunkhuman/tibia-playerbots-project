@@ -37,6 +37,10 @@ function F.login.onLogin(player)
         end
     end
 	F.selectHealthPotion(player)
+    if mode == "recovery_fists" or mode == "recovery_melee" then
+        F.setupRecoveryLoadout(player)
+        return true
+    end
     assert(mode == "transit_return" or mode == "mainland" or mode == "carlin_local_service" or mode == "cycle" or mode == "depot" or mode == "depot_risk_fallback" or mode == "slotted_loot_seller" or mode == "slotted_loot_no_seller" or mode == "sell_loot" or mode == "sell_loot_remote_depot" or mode == "navigation" or mode == "navigation_recovery" or mode == "carlin_service_route" or mode == "mutable_portal_route" or mode == "patrol_recovery" or mode == "target_approach" or mode == "target_approach_unreachable" or mode == "target_attacker_priority" or mode == "ranged_position" or mode == "ranged_position_corner" or mode == "ranged_position_control" or mode == "hunt_area_arrival" or mode == "remote_hunt" or mode == "corpse" or mode == "corpse_detour" or mode == "corpse_inaccessible" or mode == "death" or mode == "healing" or mode == "mana_potion" or mode == "spell_use" or
         mode == "healing_resupply" or mode == "value" or mode == "cargo_currency" or mode == "cargo_partial" or
         mode == "cargo_nested" or mode == "cargo_protected" or mode == "progression" or mode == "progression_bundle" or
@@ -47,11 +51,11 @@ function F.login.onLogin(player)
         mode == "spell_training_low_supplies_unaffordable" or mode == "stamina_bonus" or
         mode == "stamina_boundary" or mode == "stamina_normal" or mode == "hunt_planning" or mode == "supply_recovery" or mode == "spell_calibration" or
         mode == "readiness_ready" or mode == "adaptive_challenge" or mode == "readiness_upgrade" or
-        mode == "readiness_missing_weapon" or mode == "readiness_supplies" or mode == "readiness_no_food" or
+        mode == "readiness_upgrade_full_bag" or mode == "readiness_missing_weapon" or mode == "readiness_supplies" or mode == "readiness_no_food" or
         mode == "readiness_low_wealth" or mode == "readiness_food_capacity" or mode == "readiness_retention" or
         mode == "equipment_shadow" or mode == "equipment_shadow_unaffordable" or mode == "equipment_shadow_no_upgrade" or
         mode == "equipment_buy" or mode == "equipment_buy_resume" or mode == "equipment_buy_space" or
-        mode == "equipment_buy_provider_moved" or
+        mode == "equipment_buy_provider_moved" or mode == "equipment_buy_unfunded_armor" or
         mode == "equipment_buy_provider_unreachable" or
         mode == "equipment_buy_rejected" or mode == "equipment_buy_spear" or mode == "spear_unfunded" or
         mode == "spear_mirrored" or mode == "equipment_tools" or
@@ -70,7 +74,7 @@ function F.login.onLogin(player)
         mode == "equipment_buy" or mode == "equipment_buy_resume" or mode == "equipment_buy_space" or
         mode == "equipment_buy_provider_moved" or mode == "equipment_buy_provider_unreachable" or
         mode == "equipment_buy_rejected" or mode == "equipment_tools" or
-        mode == "equipment_tools_nested" then
+        mode == "equipment_tools_nested" or mode == "equipment_buy_unfunded_armor" then
         if mode ~= "equipment_buy_provider_moved" then
             local thais = Town(F.thaisTownId)
             assert(thais and player:setTown(thais) and player:teleportTo(thais:getTemplePosition()),
@@ -159,6 +163,9 @@ function F.login.onLogin(player)
             -- A level-8-legal two-handed weapon; an unwieldable one would be a readiness gap.
             assert(player:addItem(F.broadswordItemId, 1, false, 1, CONST_SLOT_LEFT),
                 "equipment shadow fixture could not equip the broadsword")
+        elseif mode == "equipment_buy_unfunded_armor" then
+            local armor = player:getSlotItem(CONST_SLOT_ARMOR)
+            assert(armor and armor:remove(), "unfunded armor fixture could not strip the armor")
         end
         assert(player:setBankBalance(100), "equipment fixture could not normalize the bank balance")
         if mode == "equipment_shadow" or mode == "equipment_shadow_no_upgrade" then
@@ -166,6 +173,15 @@ function F.login.onLogin(player)
             assert(backpack and backpack:addItem(2152, 20), "equipment shadow fixture could not add surplus money")
         elseif mode == "equipment_shadow_unaffordable" then
             F.removeAll(player, ITEM_GOLD_COIN)
+        elseif mode == "equipment_buy_unfunded_armor" then
+            -- Bot Four after its deaths: 42 gold total, far below the 100 gold
+            -- carried reserve, yet enough for the cheapest legal armor.
+            F.removeAll(player, ITEM_GOLD_COIN)
+            local backpack = player:getSlotItem(CONST_SLOT_BACKPACK)
+            assert(player:setBankBalance(0) and backpack and backpack:addItem(ITEM_GOLD_COIN, 42),
+                "unfunded armor fixture could not set 42 gold")
+            -- Not ready to hunt, the bot first returns to a depot; start at the Thais one as Bot Four did.
+            assert(player:teleportTo(F.thaisDepotPosition), "unfunded armor fixture could not reach the Thais depot")
         elseif mode == "equipment_buy_resume" then
             F.removeAll(player, F.equipmentPurchaseItemId)
             F.removeAll(player, ITEM_GOLD_COIN)
@@ -190,11 +206,13 @@ function F.login.onLogin(player)
         local left = player:getSlotItem(CONST_SLOT_LEFT)
         local right = player:getSlotItem(CONST_SLOT_RIGHT)
         local armor = player:getSlotItem(CONST_SLOT_ARMOR)
-        assert(left and armor, "equipment shadow fixture lost required equipment")
+        assert(left and (armor or mode == "equipment_buy_unfunded_armor"), "equipment shadow fixture lost required equipment")
         if mode == "equipment_buy_space" then
             addEvent(F.verifyEquipmentPurchaseSpace, 500, player:getId())
         elseif mode == "equipment_buy_provider_moved" then
             addEvent(F.verifyMovedProviderPurchase, 500, player:getId(), 360)
+        elseif mode == "equipment_buy_unfunded_armor" then
+            addEvent(F.verifyUnfundedArmorPurchase, 500, player:getId(), 360)
         elseif mode == "equipment_buy" or mode == "equipment_buy_resume" or
             mode == "equipment_buy_rejected" then
             addEvent(F.verifyEquipmentPurchase, 500, player:getId(), mode == "equipment_buy_rejected", mode == "equipment_buy_resume", 360)
@@ -528,17 +546,24 @@ function F.login.onLogin(player)
         F.restoreRookgaardBaseline(player, mode ~= "cycle")
     end
 	F.selectHealthPotion(player)
-    if mode == "readiness_ready" or mode == "readiness_upgrade" or mode == "readiness_missing_weapon" or mode == "readiness_supplies" or mode == "readiness_no_food" or mode == "readiness_low_wealth" or mode == "readiness_food_capacity" or mode == "readiness_retention" then
+    if mode == "readiness_ready" or mode == "readiness_upgrade" or mode == "readiness_upgrade_full_bag" or mode == "readiness_missing_weapon" or mode == "readiness_supplies" or mode == "readiness_no_food" or mode == "readiness_low_wealth" or mode == "readiness_food_capacity" or mode == "readiness_retention" then
         assert(player:setVocation(4), "readiness fixture could not select Knight vocation")
 		F.selectHealthPotion(player)
         assert(player:teleportTo(F.depotPosition), "readiness fixture could not reach the depot")
         F.removeAll(player, F.potionItemId)
         assert(player:addItem(F.potionItemId, 10), "readiness fixture could not normalize healing supplies")
         F.suppressNearbyMonsters(player:getId())
-        if mode == "readiness_upgrade" then
+        if mode == "readiness_upgrade" or mode == "readiness_upgrade_full_bag" then
             local backpack = player:getSlotItem(CONST_SLOT_BACKPACK)
             assert(backpack and backpack:addItem(F.pickupRewardId, 1), "readiness upgrade fixture could not add carried weapon")
-            addEvent(F.verifyReadiness, 500, player:getId(), "upgrade", 120)
+            if mode == "readiness_upgrade_full_bag" then
+                -- Bot Three: the engine cannot swap the worn weapon into a full container.
+                assert(player:setCapacity(100000), "full-bag fixture could not reserve capacity")
+                while backpack:getSize() < backpack:getCapacity() do
+                    assert(backpack:addItem(F.ropeItemId, 1), "full-bag fixture could not fill the backpack")
+                end
+            end
+            addEvent(F.verifyReadiness, 500, player:getId(), (mode:gsub("readiness_", "")), 120)
         elseif mode == "readiness_missing_weapon" then
             F.removeAll(player, F.starterWeaponId)
             F.removeAll(player, F.pickupRewardId)

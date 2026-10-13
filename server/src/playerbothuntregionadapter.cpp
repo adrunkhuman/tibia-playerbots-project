@@ -429,6 +429,9 @@ namespace {
 		region.atlasFloorCount = cached.floorCount;
 		region.cashPressure = planningProfile.cashPressure;
 		region.supplyRecovery = planningProfile.supplyRecovery;
+		region.recoveryLoadoutId = planningProfile.recoveryLoadoutId;
+		region.recoveryPreparationCost = planningProfile.recoveryPreparationCost;
+		region.combat = planningProfile.combat;
 		region.floor = cached.center.z;
 		region.center = cached.center;
 		std::map<std::string, PlayerBotHuntMonsterProfile> profiles;
@@ -570,7 +573,7 @@ namespace {
 		region.healthPotionUnitPrice = planningProfile.healthPotionUnitPrice;
 		region.supplyGlobalLearning = planningProfile.supplyGlobalLearning;
 		region.supplyCapability = playerBotSupplyCapability(planningProfile);
-		if (const auto found = performance.find(region.atlasVariantId);
+		if (const auto found = planningProfile.recoveryLoadoutId ? performance.end() : performance.find(region.atlasVariantId);
 		    found != performance.end() && found->second.atlasRevision == region.atlasRevision) {
 			// Retain incompatible local evidence for an honest rejection reason;
 			// reconciliation falls back to the independent global multiplier.
@@ -657,8 +660,8 @@ namespace {
 		region.spawnExperiencePerMinute *= experienceStage;
 		region.clearExperiencePerMinute *= experienceStage;
 		region.staminaMinutes = staminaMinutes;
-		const PlayerBotHuntCorrection correction = playerBotHuntCorrectionForVariant(
-		    region.atlasVariantId, region.atlasRevision, performance);
+		const PlayerBotHuntCorrection correction = planningProfile.recoveryLoadoutId ? PlayerBotHuntCorrection{} :
+		    playerBotHuntCorrectionForVariant(region.atlasVariantId, region.atlasRevision, performance);
 		region.observedExperiencePerMinute = correction.observedExperiencePerMinute;
 		region.observedCoinGoldPerMinute = correction.observedCoinGoldPerMinute;
 		region.observedCorrection = correction.correction;

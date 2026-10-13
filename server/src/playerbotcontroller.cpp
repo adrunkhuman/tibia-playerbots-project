@@ -43,11 +43,11 @@ namespace {
 	}
 }
 
-PlayerBotNavigationCostPolicy PlayerBotController::navigationCostPolicy(const Player& player) const
+PlayerBotNavigationCostPolicy PlayerBotController::navigationCostPolicy(const Player& player, const PlayerBotCombatProfile* overrideCombat) const
 {
 	const PlayerBotEquipmentPlayerSnapshot playerFacts = PlayerBotEquipmentAdapter::player(player);
 	const PlayerBotEquipmentLoadout loadout = PlayerBotEquipmentAdapter::loadout(player);
-	const PlayerBotCombatProfile combat = equipmentPolicy.combatProfile(playerFacts, loadout);
+	const PlayerBotCombatProfile combat = overrideCombat ? *overrideCombat : equipmentPolicy.combatProfile(playerFacts, loadout);
 	struct LocalSample {
 		double danger;
 		PlayerBotRouteChanges::Watch watch;
@@ -188,10 +188,10 @@ PlayerBotController::PlayerBotController(const Player& player, std::string contr
 	playerId(player.getID()), playerGuid(player.getGUID()), playerName(player.getName()), fixtureDriver(playerBotTestPolicyFromEnvironment()),
 	telemetry(player.getName(), player.getGUID(), std::move(controllerId)),
 	inventoryPolicy(economyCatalog.sellValues(), [this](const Player& candidatePlayer, const Item& item) {
-		return equipmentPolicy.evaluateUpgrade(PlayerBotEquipmentAdapter::player(candidatePlayer),
+		return recoveryEquipmentProtected(item.getID()) || equipmentPolicy.evaluateUpgrade(PlayerBotEquipmentAdapter::player(candidatePlayer),
 		                                      PlayerBotEquipmentAdapter::loadout(candidatePlayer),
 		                                      PlayerBotEquipmentAdapter::item(item)).has_value();
-	}), huntCoordinator({
+	}, [this](uint16_t itemId) { return recoveryEquipmentProtected(itemId); }), huntCoordinator({
 		{traversalCombatTimeout, traversalTargetSuppression},
 		{maxCorpseSearchAttempts, maximumCorpseNavigationFailures, corpseNavigationSuspendThreshold,
 		 std::chrono::milliseconds(corpseNavigationRetryInterval), corpseLootTimeout, preferredFoodCount},

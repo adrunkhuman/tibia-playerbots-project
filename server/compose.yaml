@@ -111,8 +111,10 @@ services:
     logging:
       driver: local
       options:
-        max-size: "10m"
-        max-file: "10"
+        # Unattended multi-day runs need the evidence before a stop or loop;
+        # rotated local-driver files compress to a few percent of this.
+        max-size: "50m"
+        max-file: "20"
     volumes:
       - ./config.lua:/app/config.lua:ro
       - ./data:/app/data

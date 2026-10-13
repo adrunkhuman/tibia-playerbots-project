@@ -19,7 +19,9 @@ const playerbot::PlayerBotTestPolicy& playerbot::playerBotTestPolicyFromEnvironm
 		const char* regressionModeValue = std::getenv("PLAYERBOT_REGRESSION_MODE");
 		const char* gameplayMode = gameplayModeValue && *gameplayModeValue != '\0' ? gameplayModeValue : nullptr;
 		const char* regressionMode = regressionModeValue && *regressionModeValue != '\0' ? regressionModeValue : nullptr;
-		const bool progressionMode = gameplayMode &&
+		const bool recoveryLoadoutFixture = gameplayMode &&
+		    (std::strcmp(gameplayMode, "recovery_fists") == 0 || std::strcmp(gameplayMode, "recovery_melee") == 0);
+		const bool progressionMode = recoveryLoadoutFixture || (gameplayMode &&
 			(std::strcmp(gameplayMode, "supply_recovery") == 0 ||
 			 std::strcmp(gameplayMode, "progression") == 0 ||
 			 std::strcmp(gameplayMode, "progression_bundle") == 0 ||
@@ -48,6 +50,7 @@ const playerbot::PlayerBotTestPolicy& playerbot::playerBotTestPolicyFromEnvironm
 			 std::strcmp(gameplayMode, "equipment_buy_provider_unreachable") == 0 ||
 			 std::strcmp(gameplayMode, "equipment_buy_rejected") == 0 ||
 			 std::strcmp(gameplayMode, "equipment_buy_spear") == 0 ||
+			 std::strcmp(gameplayMode, "equipment_buy_unfunded_armor") == 0 ||
 			 std::strcmp(gameplayMode, "spear_unfunded") == 0 ||
 			 std::strcmp(gameplayMode, "spear_mirrored") == 0 ||
 			 std::strcmp(gameplayMode, "equipment_tools") == 0 ||
@@ -57,7 +60,7 @@ const playerbot::PlayerBotTestPolicy& playerbot::playerBotTestPolicyFromEnvironm
 			 std::strcmp(gameplayMode, "sell_loot") == 0 ||
 			 std::strcmp(gameplayMode, "sell_loot_remote_depot") == 0 ||
 			 (std::strncmp(gameplayMode, "magic_training", 14) == 0 &&
-			  std::strcmp(gameplayMode, "magic_training_hunt") != 0));
+			  std::strcmp(gameplayMode, "magic_training_hunt") != 0)));
 		const bool huntAreaArrivalFixture = gameplayMode && std::strcmp(gameplayMode, "hunt_area_arrival") == 0;
 		const bool remoteHuntFixture = gameplayMode && std::strcmp(gameplayMode, "remote_hunt") == 0;
 		const bool depotRiskFallbackFixture = gameplayMode && std::strcmp(gameplayMode, "depot_risk_fallback") == 0;
@@ -65,7 +68,7 @@ const playerbot::PlayerBotTestPolicy& playerbot::playerBotTestPolicyFromEnvironm
 			std::strcmp(gameplayMode, "navigation_fare_rejection") == 0 ? NavigationPreflightFixture::Fare :
 			std::strcmp(gameplayMode, "navigation_risk_rejection") == 0 ? NavigationPreflightFixture::Risk :
 			NavigationPreflightFixture::None;
-		const bool startInHunt = gameplayMode &&
+		const bool startInHunt = recoveryLoadoutFixture || (gameplayMode &&
 			(std::strcmp(gameplayMode, "navigation") == 0 || std::strcmp(gameplayMode, "navigation_recovery") == 0 ||
 			 std::strcmp(gameplayMode, "carlin_service_route") == 0 ||
 			 std::strcmp(gameplayMode, "mutable_portal_route") == 0 ||
@@ -89,17 +92,18 @@ const playerbot::PlayerBotTestPolicy& playerbot::playerBotTestPolicyFromEnvironm
 			 std::strcmp(gameplayMode, "spear_restock") == 0 || std::strcmp(gameplayMode, "spear_restock_scaled") == 0 ||
 			 std::strcmp(gameplayMode, "spear_break") == 0 || std::strcmp(gameplayMode, "spear_last_break") == 0 ||
 			 std::strcmp(gameplayMode, "equipment_buy_spear") == 0 ||
+			 std::strcmp(gameplayMode, "equipment_buy_unfunded_armor") == 0 ||
 			 std::strcmp(gameplayMode, "spear_unfunded") == 0 ||
 			 std::strcmp(gameplayMode, "spear_mirrored") == 0 ||
 			 std::strcmp(gameplayMode, "readiness_retention") == 0 || std::strcmp(gameplayMode, "spell_use") == 0 ||
 			 std::strcmp(gameplayMode, "magic_training_hunt") == 0 ||
 			 std::strcmp(gameplayMode, "magic_training_post_hunt") == 0 ||
 			 std::strcmp(gameplayMode, "magic_training_post_hunt_no_overflow") == 0 ||
-			 std::strcmp(gameplayMode, "spell_calibration") == 0);
+			 std::strcmp(gameplayMode, "spell_calibration") == 0));
 		const bool adaptiveChallengeFixture = gameplayMode && std::strcmp(gameplayMode, "adaptive_challenge") == 0;
 		const bool spellCalibrationFixture = gameplayMode && std::strcmp(gameplayMode, "spell_calibration") == 0;
 		const bool magicTrainingFixture = gameplayMode && std::strncmp(gameplayMode, "magic_training", 14) == 0;
-		const bool fixedFixtureRoute = gameplayMode && std::strcmp(gameplayMode, "supply_recovery") != 0 &&
+		const bool fixedFixtureRoute = !recoveryLoadoutFixture && gameplayMode && std::strcmp(gameplayMode, "supply_recovery") != 0 &&
 		                               std::strcmp(gameplayMode, "stamina_bonus") != 0 &&
 		                               std::strcmp(gameplayMode, "stamina_boundary") != 0 &&
 		                               std::strcmp(gameplayMode, "stamina_normal") != 0 &&
@@ -117,6 +121,7 @@ const playerbot::PlayerBotTestPolicy& playerbot::playerBotTestPolicyFromEnvironm
 		                               std::strcmp(gameplayMode, "spear_break") != 0 &&
 		                               std::strcmp(gameplayMode, "spear_last_break") != 0 &&
 		                               std::strcmp(gameplayMode, "equipment_buy_spear") != 0 &&
+		                               std::strcmp(gameplayMode, "equipment_buy_unfunded_armor") != 0 &&
 		                               std::strcmp(gameplayMode, "spear_unfunded") != 0 &&
 		                               std::strcmp(gameplayMode, "spear_mirrored") != 0 &&
 		                               std::strcmp(gameplayMode, "spell_training") != 0 &&
@@ -158,7 +163,8 @@ const playerbot::PlayerBotTestPolicy& playerbot::playerBotTestPolicyFromEnvironm
 			                  std::strcmp(gameplayMode, "equipment_shadow_unaffordable") != 0 &&
 			                  std::strcmp(gameplayMode, "equipment_shadow_no_upgrade") != 0),
 			gameplayMode && std::strncmp(gameplayMode, "equipment_buy", 13) == 0 &&
-			    std::strcmp(gameplayMode, "equipment_buy_spear") != 0,
+			    std::strcmp(gameplayMode, "equipment_buy_spear") != 0 &&
+			    std::strcmp(gameplayMode, "equipment_buy_unfunded_armor") != 0,
 			gameplayMode && (std::strcmp(gameplayMode, "equipment_tools") == 0 ||
 			                 std::strcmp(gameplayMode, "equipment_tools_nested") == 0),
 			gameplayMode && std::strcmp(gameplayMode, "equipment_buy_rejected") == 0,
@@ -166,7 +172,7 @@ const playerbot::PlayerBotTestPolicy& playerbot::playerBotTestPolicyFromEnvironm
 			gameplayMode && std::strcmp(gameplayMode, "equipment_buy_provider_unreachable") == 0,
 			adaptiveChallengeFixture,
 			adaptiveChallengeFixture,
-			gameplayMode && (std::strcmp(gameplayMode, "mainland_reward") == 0 ||
+			gameplayMode && (recoveryLoadoutFixture || std::strcmp(gameplayMode, "mainland_reward") == 0 ||
 			                 std::strcmp(gameplayMode, "spell_training") == 0 ||
 			                 std::strcmp(gameplayMode, "spell_training_shortlist") == 0 ||
 			                 std::strcmp(gameplayMode, "spell_training_low_supplies") == 0 ||

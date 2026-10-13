@@ -64,10 +64,10 @@ class PlayerBotHuntSupplyHandoff
 			if (!retainShortage) {
 				required.clear();
 				evidence.reset();
+				failures.clear();
+				incompleteAttempts = 0;
 			}
 			goalReadiness = {};
-			failures.clear();
-			incompleteAttempts = 0;
 		}
 		// Only a completed selection counts. Pending routes/search yields are
 		// neither failure nor progress, and cannot terminal-stop a controller.

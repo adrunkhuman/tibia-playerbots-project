@@ -87,6 +87,7 @@ struct PlayerBotEquipmentItemSnapshot {
 	bool container = false;
 	bool inContainer = false;
 	bool equipped = false;
+	bool consumingCharges = false;
 };
 
 struct PlayerBotEquipmentPlayerSnapshot {
@@ -161,6 +162,10 @@ struct PlayerBotEquipmentOfferEvaluation {
 	bool toolAcquisition = false;
 	bool bagUpgrade = false;
 	bool simulated = false;
+	// Fills a missing weapon or armor. Without one the bot earns nothing, so
+	// this purchase may spend the supply reserve (degraded supply recovery
+	// hunts without a full restock).
+	bool gapFilled = false;
 	std::string rejection;
 	PlayerBotEquipmentDecisionRule rule = PlayerBotEquipmentDecisionRule::None;
 	uint32_t travelSteps = 0;
@@ -220,6 +225,10 @@ class PlayerBotEquipmentPolicy
 		std::optional<PlayerBotEquipmentCarriedUpgrade> findCarriedUpgrade(const PlayerBotEquipmentPlayerSnapshot& player,
 		                                                                   const PlayerBotEquipmentLoadout& loadout,
 		                                                                   const std::vector<PlayerBotEquipmentCarriedCandidate>& candidates) const;
+		// Recovery only: current legal hands, fists, and carried non-consuming melee.
+		// Normal style readiness and purchasing remain unchanged.
+		std::vector<PlayerBotEquipmentLoadout> recoveryLoadouts(const PlayerBotEquipmentPlayerSnapshot& player,
+		    const PlayerBotEquipmentLoadout& current, const std::vector<PlayerBotEquipmentItemSnapshot>& carried) const;
 		PlayerBotCombatProfile combatProfile(const PlayerBotEquipmentPlayerSnapshot& player,
 		                                     const PlayerBotEquipmentLoadout& loadout) const;
 		bool loadoutReady(const PlayerBotEquipmentPlayerSnapshot& player, const PlayerBotEquipmentLoadout& loadout,

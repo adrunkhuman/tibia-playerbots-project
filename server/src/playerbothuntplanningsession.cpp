@@ -21,6 +21,10 @@ PlayerBotHuntPlanningSession::PlayerBotHuntPlanningSession(PlayerBotHuntPlanning
 	scanSnapshotTimeUs(start.scan.snapshotTimeUs), scanClusteringTimeUs(start.scan.clusteringTimeUs),
 	topologyDistanceTimeUs(start.topologyDistanceTimeUs)
 {
+	// Move the catalog once. Per-candidate work must not recursively copy it.
+	recoveryProfiles = std::move(planningProfile.recoveryAlternatives);
+	planningProfile.recoveryAlternatives.clear();
+	candidateCount *= 1 + recoveryProfiles.size();
 	scoredRegions.reserve(candidateCount);
 	if (start.originReachability && transportOffers && !transportOffers->empty()) {
 		transportArrivals.push_back({planningSnapshot.playerPosition, 0, 0, std::move(start.originReachability)});
@@ -104,7 +108,16 @@ std::optional<PlayerBotHuntPlanningScoreWork> PlayerBotHuntPlanningSession::next
 		return std::nullopt;
 	}
 	++scoringCandidatesThisTurn;
-	return PlayerBotHuntPlanningScoreWork{candidateIndices[nextScoringCandidate++]};
+	const size_t index = nextScoringCandidate++;
+	return PlayerBotHuntPlanningScoreWork{candidateIndices[index % candidateIndices.size()], index / candidateIndices.size()};
+}
+
+PlayerBotHuntPlanningProfile PlayerBotHuntPlanningSession::scoreProfile(size_t index) const
+{
+	auto result = index == 0 ? planningProfile : recoveryProfiles.at(index - 1);
+	result.recoveryAlternatives.clear();
+	result.transportArrivals = planningProfile.transportArrivals;
+	return result;
 }
 
 void PlayerBotHuntPlanningSession::scoreCompleted(PlayerBotHuntRegion region)

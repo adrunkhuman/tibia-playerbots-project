@@ -616,10 +616,28 @@ void healingCalibrationProgression()
 		assert(outcome->rankingEstimate > 19 && outcome->rankingEstimate < 19.5);
 	}
 }
+void recoveryOutingSurvival()
+{
+	auto state = snapshot();
+	state.recoveryOuting = state.hunting = true;
+	state.health = 100; state.mana = 0;
+	PlayerBotSurvivalRuntime healthy;
+	assert(healthy.decideHealing(state, now).type == Command::None); // no automatic mana top-up
+	assert(healthy.decideOffensiveSpell(state, now).type == Command::None);
+	state.routeSteps = 100;
+	assert(healthy.decideSupportSpell(state, now).type == Command::None);
+	state.health = 20;
+	PlayerBotSurvivalRuntime critical;
+	expectPotion(critical.decideHealing(state, now), healthPotion);
+	state.health = 50; state.mana = healingCost;
+	PlayerBotSurvivalRuntime wounded;
+	expectHealingSpell(wounded, wounded.decideHealing(state, now));
+}
 } // namespace
 
 int main()
 {
+	recoveryOutingSurvival();
 	spellFirstAndCriticalOverride();
 	percentageBoundaries();
 	typedHealthPreparation();

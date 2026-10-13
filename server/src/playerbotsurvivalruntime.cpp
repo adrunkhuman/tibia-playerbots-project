@@ -105,7 +105,7 @@ PlayerBotPotionAttempt PlayerBotSurvivalRuntime::potionObservation(const PlayerB
 // regeneration refills the pool. Health recovery always comes first.
 bool PlayerBotSurvivalRuntime::needsManaPotion(const PlayerBotSurvivalSnapshot& snapshot) const
 {
-	return snapshot.manaPotionItemId != 0 && snapshot.manaPotionCount != 0 && (snapshot.hunting || snapshot.combatActive) &&
+	return !snapshot.recoveryOuting && snapshot.manaPotionItemId != 0 && snapshot.manaPotionCount != 0 && (snapshot.hunting || snapshot.combatActive) &&
 	       snapshot.mana < healingManaReserve(snapshot);
 }
 
@@ -298,14 +298,14 @@ PlayerBotSurvivalCommand PlayerBotSurvivalRuntime::decideSpell(const PlayerBotSu
 PlayerBotSurvivalCommand PlayerBotSurvivalRuntime::decideSupportSpell(const PlayerBotSurvivalSnapshot& snapshot,
 	std::chrono::steady_clock::time_point now)
 {
-	if (snapshot.hasteActive || snapshot.routeSteps < minimumHasteRouteSteps || needsHealing(snapshot)) return {};
+	if (snapshot.recoveryOuting || snapshot.hasteActive || snapshot.routeSteps < minimumHasteRouteSteps || needsHealing(snapshot)) return {};
 	return decideSpell(snapshot, "Haste", "safe_route", now);
 }
 
 PlayerBotSurvivalCommand PlayerBotSurvivalRuntime::decideOffensiveSpell(const PlayerBotSurvivalSnapshot& snapshot,
 	std::chrono::steady_clock::time_point now)
 {
-	if (needsHealing(snapshot)) return {};
+	if (snapshot.recoveryOuting || needsHealing(snapshot)) return {};
 	// The default is the highest-level castable spell. A confidently calibrated
 	// alternative replaces it only when it ranks higher against this target class.
 	// Without a castable spell, the lowest-level one reports why it is unavailable.

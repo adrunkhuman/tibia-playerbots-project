@@ -35,6 +35,8 @@
 #include "playerbotprogressionplanners.h"
 #include "playerbotsurvivalruntime.h"
 #include "playerbotsupplyrecovery.h"
+#include "playerbotrecoveryloadout.h"
+#include "playerbotrecoveryprogress.h"
 #include "playerbothuntsupplyhandoff.h"
 #include "playerbottestpolicy.h"
 #include "playerbotfixturedriver.h"
@@ -266,7 +268,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		void pause(const Position& position);
 
 		bool findPath(Player* player, const Position& target, std::vector<Direction>& result, const FindPathParams& pathParams);
-		PlayerBotNavigationCostPolicy navigationCostPolicy(const Player& player) const;
+		PlayerBotNavigationCostPolicy navigationCostPolicy(const Player& player, const PlayerBotCombatProfile* overrideCombat = nullptr) const;
 
 		bool attackVisibleMonster(Player* player, const Position& currentPosition, uint32_t preferredTargetId = 0,
 		                          bool routeValidated = false);
@@ -615,6 +617,42 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		PlayerBotEquipmentPolicy equipmentPolicy;
 		playerbot::PlayerBotInventoryPolicy inventoryPolicy;
 		PlayerBotSurvivalRuntime survivalRuntime;
+		// Recovery owns its hands through the return leg; normal service stocks
+		// and the original funding requirement are separate from hunt supplies.
+		struct RecoveryEquipment {
+			EquipmentLoadout original;
+			EquipmentLoadout target;
+			PlayerBotSupplyRequirements funding;
+			PlayerBotSupplyProfile supplies;
+			bool switching = false;
+			bool restoring = false;
+			bool departurePending = false;
+			uint32_t attempts = 0;
+			uint16_t receiptItem = 0;
+			slots_t receiptSlot = CONST_SLOT_WHEREEVER;
+			uint32_t receiptTotal = 0;
+			bool receiptStow = false;
+		};
+		std::optional<RecoveryEquipment> recoveryEquipment;
+		std::vector<EquipmentLoadout> recoveryLoadoutCatalog;
+		bool recoveryWeaponPlanning = false;
+		uint64_t recoveryPreparationCost = 0;
+		PlayerBotRecoveryProgressBudget recoveryProgress;
+		struct RecoveryFundingStock {
+			PlayerBotSupplyRequirement normal;
+			uint32_t referenceStock = 0;
+			uint32_t unitPrice = UINT32_MAX;
+		};
+		std::vector<RecoveryFundingStock> recoveryFundingBasis;
+		std::vector<uint16_t> recoveryCandidateEquipment;
+		void initializeRecoveryProgress(const Player& player);
+		int64_t recoveryFundingShortfall(const Player& player) const;
+		bool completeRecoveryAttempt(const Player& player, const Position& position);
+		bool recoveryEquipmentProtected(uint16_t itemId) const;
+		bool recoveryLoadoutSpace(const Player& player, const EquipmentLoadout& target) const;
+		void processRecoveryEquipment(Player& player, const Position& position);
+		bool restoreRecoveryEquipment(Player& player, const Position& position);
+		PlayerBotSupplyStocks activeHuntStocks(const Player& player) const;
 		PlayerBotSupplyRecoveryState supplyRecovery;
 		std::optional<PlayerBotNavigationRiskProfile> navigationPlanningRisk;
 		PlayerBotHuntSupplyHandoff huntSupplyHandoff;
@@ -641,6 +679,9 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		// Consecutive failed purchases of a missing weapon or armor. Readiness
 		// repair bypasses the goal cooldown, so this bounds the retries.
 		uint32_t readinessRepairFailures = 0;
+		// Total funds when an unaffordable weapon or armor repair last sent the bot
+		// to service. Unchanged funds on the next check make the gap terminal.
+		std::optional<uint64_t> unfundedReadinessRepairFunds;
 		uint16_t backpackUpgradeDepotId = 0;
 		size_t equipmentProviderScanOffset = 0;
 		size_t equipmentOfferScanOffset = 0;

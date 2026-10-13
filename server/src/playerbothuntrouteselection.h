@@ -32,6 +32,8 @@ struct PlayerBotHuntRouteRequest {
 	// Optional destination alternatives, never ordered checkpoints.
 	std::vector<Position> destinations;
 	std::set<Position> blockedPositions;
+	uint32_t recoveryLoadoutId = 0;
+	std::optional<PlayerBotCombatProfile> combat;
 };
 
 struct PlayerBotHuntSupplyApproaches {

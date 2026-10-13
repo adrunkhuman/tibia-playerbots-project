@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<spawns>
+    <!-- Four normal chicken/sheep tiles. The atlas requires a renewing pocket,
+         not one synthetic kill; the quarry uses engine ignoreSpawnBlock. -->
+    <spawn centerx="32400" centery="32238" centerz="7" radius="1">
+        <monster name="Playerbot Recovery Quarry" x="0" y="0" z="7" spawntime="10"/>
+    </spawn>
+    <spawn centerx="32399" centery="32239" centerz="7" radius="1">
+        <monster name="Playerbot Recovery Quarry" x="0" y="0" z="7" spawntime="10"/>
+    </spawn>
+    <spawn centerx="32400" centery="32242" centerz="7" radius="1">
+        <monster name="Playerbot Recovery Quarry" x="0" y="0" z="7" spawntime="10"/>
+    </spawn>
+    <spawn centerx="32405" centery="32236" centerz="7" radius="1">
+        <monster name="Playerbot Recovery Quarry" x="0" y="0" z="7" spawntime="10"/>
+    </spawn>
+    <spawn centerx="32359" centery="32198" centerz="7" radius="2">
+        <npc name="Sam" x="2" y="0" z="7" spawntime="240" direction="2"/>
+    </spawn>
+    <spawn centerx="32378" centery="32200" centerz="7" radius="2">
+        <npc name="Gorn" x="-1" y="0" z="7" spawntime="240" direction="2"/>
+    </spawn>
+    <spawn centerx="32354" centery="32209" centerz="7" radius="2">
+        <npc name="Frodo" x="1" y="0" z="7" spawntime="240" direction="2"/>
+    </spawn>
+    <spawn centerx="32399" centery="32220" centerz="7" radius="2">
+        <npc name="Xodet" x="0" y="2" z="7" spawntime="240" direction="2"/>
+    </spawn>
+    <spawn centerx="32342" centery="32245" centerz="6" radius="2">
+        <npc name="Galuna" x="1" y="0" z="6" spawntime="240" direction="2"/>
+    </spawn>
+    <spawn centerx="32414" centery="32178" centerz="7" radius="1">
+        <npc name="Turvy" x="0" y="-1" z="7" spawntime="240" direction="2"/>
+    </spawn>
+</spawns>

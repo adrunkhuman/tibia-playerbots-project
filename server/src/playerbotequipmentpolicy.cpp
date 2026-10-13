@@ -259,7 +259,13 @@ std::optional<PlayerBotEquipmentUpgrade> PlayerBotEquipmentPolicy::evaluateUpgra
 	else if (candidate.armorSlot) { target = armor; metric = "armor"; candidateValue = candidate.armor; }
 	else if (candidate.legs) { target = legs; metric = "armor"; candidateValue = candidate.armor; }
 	else if (candidate.feet) { target = feet; metric = "armor"; candidateValue = candidate.armor; }
-	else if (candidate.weaponType == PlayerBotEquipmentWeaponType::Shield) { target = right; metric = "defense"; candidateValue = candidate.defense; }
+	else if (candidate.weaponType == PlayerBotEquipmentWeaponType::Shield) {
+		// A shield displaces a two-handed weapon. That is a loadout trade-off for
+		// offer evaluation, not a slot upgrade; treating it as one makes the
+		// weapon-repair branch above re-equip the weapon forever.
+		if (loadout.items[static_cast<uint8_t>(left)].twoHanded || loadout.items[static_cast<uint8_t>(right)].twoHanded) return std::nullopt;
+		target = right; metric = "defense"; candidateValue = candidate.defense;
+	}
 	else if (!candidate.twoHanded && candidate.weaponType != PlayerBotEquipmentWeaponType::None && candidate.weaponType != PlayerBotEquipmentWeaponType::Ammo) {
 		target = left; metric = "attack"; candidateValue = candidate.attack;
 	}
@@ -343,6 +349,62 @@ bool PlayerBotEquipmentPolicy::applyOffer(const PlayerBotEquipmentPlayerSnapshot
 		loadout.itemIds[static_cast<uint8_t>(target)] = candidate.itemId; loadout.items[static_cast<uint8_t>(target)] = candidate;
 	}
 	return true;
+}
+
+std::vector<PlayerBotEquipmentLoadout> PlayerBotEquipmentPolicy::recoveryLoadouts(
+	const PlayerBotEquipmentPlayerSnapshot& player, const PlayerBotEquipmentLoadout& current,
+	const std::vector<PlayerBotEquipmentItemSnapshot>& carried) const
+{
+	std::vector<PlayerBotEquipmentLoadout> result;
+	if (!managesEquipment(player) || !armorReady(player, current)) return result;
+	auto legal = [&](const auto& item) { return item.itemId == 0 || isLegalEquipmentItem(player, item); };
+	auto supported = [&](const auto& item) {
+		return legal(item) && !launcher(item) && !item.consumingCharges &&
+		    item.weaponType != PlayerBotEquipmentWeaponType::Other && item.weaponType != PlayerBotEquipmentWeaponType::Ammo;
+	};
+	// Unmodeled weapons cannot inherit a fist damage/consumption estimate.
+	if (supported(current.items[left]) && supported(current.items[right])) result.push_back(current);
+	auto fists = current;
+	for (slots_t hand : {left, right}) {
+		if (fists.items[hand].weaponType == PlayerBotEquipmentWeaponType::Shield && legal(fists.items[hand])) continue;
+		fists.items[hand] = {};
+		fists.itemIds[hand] = 0;
+	}
+	if (result.empty() || result.front().itemIds != fists.itemIds) result.push_back(fists);
+	// Bound atlas work independently of backpack depth/count: retain offense
+	// and defense leaders in each skill/two-handed class (at most 12 melee
+	// choices plus current hands and fists). Both extremes matter for safety.
+	std::array<std::optional<PlayerBotEquipmentLoadout>, 12> leaders;
+	for (const auto& item : carried) {
+		if (!isLegalEquipmentItem(player, item) || !inFamily(PlayerBotWeaponFamily::Melee, item.weaponType) ||
+		    item.breakChance != 0 || item.consumingCharges || item.ammoType != 0 || item.attack <= 0 || (!item.left && !item.right)) continue;
+		auto loadout = fists;
+		const slots_t target = item.twoHanded ? left :
+		    fists.items[left].weaponType == PlayerBotEquipmentWeaponType::Shield ? right : left;
+		if ((target == left && !item.left) || (target == right && !item.right)) continue;
+		if (item.twoHanded) { loadout.items[right] = {}; loadout.itemIds[right] = 0; }
+		loadout.items[target] = item;
+		loadout.itemIds[target] = item.itemId;
+		const size_t family = item.weaponType == PlayerBotEquipmentWeaponType::Sword ? 0 :
+		    item.weaponType == PlayerBotEquipmentWeaponType::Club ? 1 : 2;
+		const size_t base = family * 4 + (item.twoHanded ? 2 : 0);
+		const auto profile = combatProfile(player, loadout);
+		for (size_t preference = 0; preference < 2; ++preference) {
+			auto& leader = leaders[base + preference];
+			if (!leader) { leader = loadout; continue; }
+			const auto previous = combatProfile(player, *leader);
+			const auto rank = [&](const auto& value) {
+				return preference == 0 ? std::pair{value.attack, value.defense} : std::pair{value.defense, value.attack};
+			};
+			if (rank(profile) > rank(previous) || (rank(profile) == rank(previous) && loadout.itemIds < leader->itemIds))
+				leader = loadout;
+		}
+	}
+	for (auto& leader : leaders) {
+		if (leader && std::none_of(result.begin(), result.end(), [&](const auto& other) { return other.itemIds == leader->itemIds; }))
+			result.push_back(std::move(*leader));
+	}
+	return result;
 }
 
 PlayerBotCombatProfile PlayerBotEquipmentPolicy::combatProfile(const PlayerBotEquipmentPlayerSnapshot& player,
@@ -444,7 +506,10 @@ PlayerBotEquipmentOfferEvaluation PlayerBotEquipmentPolicy::evaluateCandidate(co
 	                       (!armorReady(player, currentLoadout) && armorReady(player, candidateLoadout));
 	if (currentReady && !evaluation.candidateReady) evaluation.rejection = "regresses_readiness";
 	// Filling a missing weapon or armor outranks every trade-off: without it the bot cannot hunt.
-	else if (gapFilled) evaluation.rule = PlayerBotEquipmentDecisionRule::ReadinessRepair;
+	else if (gapFilled) {
+		evaluation.rule = PlayerBotEquipmentDecisionRule::ReadinessRepair;
+		evaluation.gapFilled = true;
+	}
 	else if (!noWorse) evaluation.rejection = better ? "ambiguous_tradeoff" : "non_improving";
 	else if (!better) evaluation.rejection = "non_improving";
 	else evaluation.rule = !currentReady && evaluation.candidateReady ? PlayerBotEquipmentDecisionRule::ReadinessRepair : evaluation.hunts.suitableRegions > currentHunts.suitableRegions ? PlayerBotEquipmentDecisionRule::UnlocksHunt : PlayerBotEquipmentDecisionRule::ParetoImprovement;

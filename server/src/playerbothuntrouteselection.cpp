@@ -24,6 +24,8 @@ PlayerBotHuntRouteRequest PlayerBotHuntRouteSelection::next()
 	request.stage = stage;
 	request.sequence = ++sequence;
 	if (current) {
+		request.recoveryLoadoutId = current->recoveryLoadoutId;
+		if (current->recoveryLoadoutId) request.combat = current->combat;
 		request.outboundDangerCost = current->routeDangerCost;
 		request.returnDangerCost = current->returnRouteDangerCost;
 		switch (stage) {
@@ -78,7 +80,9 @@ PlayerBotHuntRouteResult PlayerBotHuntRouteSelection::reject(PlayerBotHuntRegion
 	const bool stockOrEconomy = candidate.rejectionReason == "hunt_supply_window_unavailable" ||
 	    candidate.rejectionReason == "travel_fare_breaks_recovery_reserve" ||
 	    candidate.rejectionReason == "recovery_hunt_not_sustainable";
-	if (!searchIncomplete && !stockOrEconomy) rejectedVariants.push_back(candidate.atlasVariantId);
+	// A loadout-specific rejection must not cool down the normal weapon or
+	// another alternative at the same atlas variant.
+	if (!searchIncomplete && !stockOrEconomy && !candidate.recoveryLoadoutId) rejectedVariants.push_back(candidate.atlasVariantId);
 	PlayerBotHuntRouteResult result;
 	result.accepted = result.yield = true;
 	result.completedCandidate = std::move(candidate);

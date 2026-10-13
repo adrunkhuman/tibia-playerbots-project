@@ -134,6 +134,8 @@ class PlayerBotHuntCoordinator
 		bool huntDeadlineReached(std::chrono::steady_clock::time_point now) const;
 		uint32_t completedHuntCycles() const;
 		bool huntActive() const;
+		std::optional<PlayerBotHuntRegion> huntRegion() const { return huntRuntime.region(); }
+		bool refreshRecoveryDeparture(PlayerBotHuntRegion proof) { return huntRuntime.refreshRecoveryDeparture(std::move(proof)); }
 		bool huntArrived() const { return huntRuntime.arrived(); }
 		void observeHuntArrivalTimeout(std::chrono::steady_clock::time_point now);
 		uint32_t effectiveHuntDurationSeconds() const { return huntRuntime.effectiveDurationSeconds(); }

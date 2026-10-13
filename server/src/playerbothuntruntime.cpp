@@ -118,7 +118,7 @@ PlayerBotHuntRuntimeOutcome PlayerBotHuntRuntime::advancePlanning(const PlayerBo
 	if (planning->scoring()) {
 		while (const auto work = planning->nextScoringWork(256)) {
 			pendingScoreCandidates.push_back(work->candidateIndex);
-			outcome.scoreWork.push_back({work->candidateIndex, planning->profile(), planning->snapshot().cacheRevision,
+			outcome.scoreWork.push_back({work->candidateIndex, planning->scoreProfile(work->loadoutIndex), planning->snapshot().cacheRevision,
 				planning->snapshot().excludedVariants, policy.regionPerformance(), planning->topology(),
 				plannedHuntDurationSeconds});
 		}
@@ -422,8 +422,11 @@ PlayerBotHuntPlanningProfile PlayerBotHuntRuntime::planningProfile(PlayerBotHunt
 {
 	profile.challengeFrontier = playerBotSupplyRecoveryChallengeFrontier(policy.challengeFrontier(), supplyRecoveryDegraded);
 	profile.supplyRecovery = supplyRecoveryDegraded;
-	profile.supplyGlobalLearning = policy.supplyGlobalLearning();
-	for (PlayerBotSupplyKindProfile& kind : profile.supply.kinds) kind.demand = policy.supplyDemand(kind.kind);
+	if (!profile.recoveryLoadoutId) {
+		profile.supplyGlobalLearning = policy.supplyGlobalLearning();
+		for (PlayerBotSupplyKindProfile& kind : profile.supply.kinds) kind.demand = policy.supplyDemand(kind.kind);
+	}
+	for (auto& alternative : profile.recoveryAlternatives) alternative = planningProfile(std::move(alternative));
 	return profile;
 }
 
@@ -465,12 +468,12 @@ std::optional<PlayerBotHuntRuntimeCompletion> PlayerBotHuntRuntime::complete(con
 	result.levelBefore = huntStartLevel;
 	result.combat = policy.combatSummary();
 	result.coinGoldAcquired = supplyBaseline ? coinGoldAcquired : 0;
-	if (supplyBaseline) result.performance = policy.observePerformance(activeRegion->atlasVariantId, activeRegion->atlasRevision,
+	if (supplyBaseline && !activeRegion->recoveryLoadoutId) result.performance = policy.observePerformance(activeRegion->atlasVariantId, activeRegion->atlasRevision,
 	    {result.durationSeconds, result.combat.activeSeconds, result.combat.kills, result.experienceGained,
 	     activeRegion->projectedExperience, activeRegion->observedCorrection,
 	     plannedHuntDurationSeconds ? plannedHuntDurationSeconds : configuredDurationSeconds,
 	     result.combat.dangerObserved, result.combat.deathObserved});
-	if (supplyBaseline) {
+	if (supplyBaseline && !activeRegion->recoveryLoadoutId) {
 		PlayerBotHuntRegion supplyRegion = *activeRegion;
 		supplyRegion.currentHealth = supplyBaseline->player.health;
 		supplyRegion.maximumHealth = supplyBaseline->player.maximumHealth;
@@ -510,11 +513,11 @@ std::optional<PlayerBotHuntRuntimeCompletion> PlayerBotHuntRuntime::complete(con
 		result.supplyObservation.endingMaximumHealth = player.maximumHealth;
 		result.supplyObservation.endingMana = player.mana;
 		result.supplyObservation.endingMaximumMana = player.supplyCapability.maximumMana;
-		result.supplyObservation.reason = "hunt_arrival_not_observed";
-		result.performance.evidenceReason = "hunt_arrival_not_observed";
+		result.supplyObservation.reason = activeRegion->recoveryLoadoutId ? "recovery_loadout_static" : "hunt_arrival_not_observed";
+		result.performance.evidenceReason = result.supplyObservation.reason;
 	}
 	result.region.supplyCalibration = result.supplyObservation.calibration;
-	if (supplyBaseline) result.challenge = policy.updateChallengeFrontier({result.durationSeconds, player.maximumHealth});
+	if (supplyBaseline && !activeRegion->recoveryLoadoutId) result.challenge = policy.updateChallengeFrontier({result.durationSeconds, player.maximumHealth});
 	else result.challenge.frontierBefore = result.challenge.frontierAfter = policy.challengeFrontier();
 	activeRegion.reset();
 	supplyBaseline.reset();

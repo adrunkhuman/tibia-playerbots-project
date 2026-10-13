@@ -15,6 +15,184 @@
 #include "playerbottopology.h"
 using namespace playerbot;
 
+bool PlayerBotController::recoveryEquipmentProtected(uint16_t itemId) const
+{
+	if (itemId == 0) return false;
+	if (recoveryProgress.active() && std::find(recoveryCandidateEquipment.begin(),
+	    recoveryCandidateEquipment.end(), itemId) != recoveryCandidateEquipment.end()) return true;
+	if (!recoveryEquipment) return false;
+	const auto& recovery = *recoveryEquipment;
+	return std::find(recovery.original.itemIds.begin(), recovery.original.itemIds.end(), itemId) != recovery.original.itemIds.end() ||
+	       std::find(recovery.target.itemIds.begin(), recovery.target.itemIds.end(), itemId) != recovery.target.itemIds.end();
+}
+
+bool PlayerBotController::recoveryLoadoutSpace(const Player& player, const EquipmentLoadout& target) const
+{
+	const Item* back = player.getInventoryItem(CONST_SLOT_BACKPACK);
+	const Container* bag = back ? back->getContainer() : nullptr;
+	if (!bag) return false;
+	uint32_t slots = 0;
+	for (slots_t hand : {CONST_SLOT_LEFT, CONST_SLOT_RIGHT}) {
+		const Item* item = player.getInventoryItem(hand);
+		if (item && item->getID() != target.itemIds[hand]) ++slots;
+	}
+	// Deliberately do not rely on auto-swapping or merging stacks to preserve
+	// gear. Stow all displaced hands before equipping, including two-handers.
+	return playerBotRecoveryLoadoutSpace(bag->capacity(), bag->size(), slots);
+}
+
+void PlayerBotController::processRecoveryEquipment(Player& player, const Position& position)
+{
+	if (telemetry.terminalLogged() || !recoveryEquipment) return;
+	auto& recovery = *recoveryEquipment;
+	g_game.playerSetAttackedCreature(playerId, 0);
+	g_game.playerFollowCreature(playerId, 0);
+	g_game.playerStopAutoWalk(playerId);
+	if (recovery.receiptItem) {
+		const Item* hand = player.getInventoryItem(recovery.receiptSlot);
+		const bool verified = playerBotRecoveryMoveVerified(recovery.receiptItem, hand ? hand->getID() : 0,
+		    recovery.receiptTotal, inventoryPolicy.inventoryItemCount(player, recovery.receiptItem), recovery.receiptStow);
+		if (!verified) { stop("recovery_loadout_move_not_verified", position); return; }
+		emit("recovery_loadout", position, "\"result\":\"move_verified\",\"item_id\":" +
+		    std::to_string(recovery.receiptItem) + ",\"slot\":" + std::to_string(recovery.receiptSlot) +
+		    ",\"inventory_count\":" + std::to_string(recovery.receiptTotal) + ",\"stowed\":" + (recovery.receiptStow ? "true" : "false"));
+		recovery.receiptItem = 0;
+	}
+	const auto current = PlayerBotEquipmentAdapter::loadout(player);
+	if (current.itemIds[CONST_SLOT_LEFT] == recovery.target.itemIds[CONST_SLOT_LEFT] &&
+	    current.itemIds[CONST_SLOT_RIGHT] == recovery.target.itemIds[CONST_SLOT_RIGHT]) {
+		const auto facts = PlayerBotEquipmentAdapter::player(player);
+		if (!playerBotRecoveryCombatMatches(equipmentPolicy.combatProfile(facts, current),
+		    equipmentPolicy.combatProfile(facts, recovery.target))) {
+			stop("recovery_loadout_profile_changed", position);
+			return;
+		}
+		recovery.switching = false;
+		const bool restored = recovery.restoring;
+		if (!restored) {
+			recovery.departurePending = true;
+			// Selection used hypothetical hands. Force the existing sliced
+			// outbound/return preflight to observe actual equipment and health;
+			// never reuse hypothetical route coverage for departure.
+			selectedHuntRoute.reset();
+			huntReturnCoverage.invalidate();
+			huntPatrolValidatedDestination.reset();
+			resetNavigation();
+		}
+		emit("recovery_loadout", position, std::string("\"result\":\"") + (restored ? "restored" : "equipped") + "\",\"left_item_id\":" +
+		    std::to_string(current.itemIds[CONST_SLOT_LEFT]) + ",\"right_item_id\":" + std::to_string(current.itemIds[CONST_SLOT_RIGHT]));
+		if (restored) {
+			auto funding = std::move(recovery.funding);
+			recoveryEquipment.reset();
+			recoveryWeaponPlanning = false;
+			// Rebase the original stock requirement onto the restored hands.
+			// Intentional equipment changes must not turn reserved funds into
+			// optional spending before the normal service has bought that stock.
+			huntSupplyHandoff.require(std::move(funding), huntSupplyFacts(player));
+			updateSupplyRecovery(player, position);
+		} else {
+			beginHuntCycle(&player, position, "recovery_loadout_verified");
+		}
+		schedule(navigationDecisionDelay(player));
+		return;
+	}
+	if (!player.canDoAction()) { schedule(navigationDecisionDelay(player)); return; }
+	if (++recovery.attempts > 32) { stop("recovery_loadout_action_limit", position); return; }
+	Item* item = nullptr;
+	slots_t slot = CONST_SLOT_WHEREEVER;
+	bool stow = false;
+	for (slots_t hand : {CONST_SLOT_LEFT, CONST_SLOT_RIGHT}) {
+		Item* held = player.getInventoryItem(hand);
+		if (held && held->getID() != recovery.target.itemIds[hand]) { item = held; slot = hand; stow = true; break; }
+	}
+	if (!stow) {
+		for (slots_t hand : {CONST_SLOT_LEFT, CONST_SLOT_RIGHT}) {
+			if (recovery.target.itemIds[hand] && !player.getInventoryItem(hand)) {
+				slot = hand;
+				item = g_game.findItemOfType(&player, recovery.target.itemIds[hand], true);
+				break;
+			}
+		}
+	}
+	if (!item || item->getTopParent() != &player) { stop("recovery_loadout_item_missing", position); return; }
+	Item* back = player.getInventoryItem(CONST_SLOT_BACKPACK);
+	Container* bag = back ? back->getContainer() : nullptr;
+	Container* access = stow ? bag : dynamic_cast<Container*>(item->getParent());
+	if (!access || (stow && bag->size() >= bag->capacity())) { stop("recovery_loadout_no_space", position); return; }
+	if (player.getContainerID(access) < 0) {
+		while (Container* parent = dynamic_cast<Container*>(access->getParent())) {
+			if (player.getContainerID(parent) >= 0) break;
+			access = parent;
+		}
+		uint8_t id = rewardContainerIdBase;
+		while (id <= maximumContainerId && player.getContainerByID(id)) ++id;
+		if (id > maximumContainerId) { stop("recovery_loadout_container_limit", position); return; }
+		Position source; uint8_t index = 0;
+		g_game.internalGetPosition(access, source, index);
+		telemetry.recordActionAttempt();
+		g_game.playerUseItem(playerId, source, index, id, access->getClientID());
+		schedule(navigationDecisionDelay(player));
+		return;
+	}
+	Position source; uint8_t index = 0;
+	g_game.internalGetPosition(item, source, index);
+	const Position destination = stow ? Position(0xFFFF, 0x40 | player.getContainerID(bag), bag->size()) :
+	    Position(0xFFFF, slot, 0);
+	recovery.receiptItem = item->getID();
+	recovery.receiptSlot = slot;
+	recovery.receiptStow = stow;
+	recovery.receiptTotal = inventoryPolicy.inventoryItemCount(player, item->getID());
+	telemetry.recordActionAttempt();
+	g_game.playerMoveItem(&player, source, item->getClientID(), index, destination, item->getItemCount(), item, stow ? bag : nullptr);
+	emit("recovery_loadout", position, "\"result\":\"move_requested\",\"item_id\":" +
+	    std::to_string(recovery.receiptItem) + ",\"slot\":" + std::to_string(slot) +
+	    ",\"inventory_count\":" + std::to_string(recovery.receiptTotal) + ",\"stowed\":" + (stow ? "true" : "false"));
+	schedule(navigationDecisionDelay(player));
+}
+
+bool PlayerBotController::restoreRecoveryEquipment(Player& player, const Position& position)
+{
+	if (!recoveryEquipment || recoveryEquipment->switching) return false;
+	if (!completeRecoveryAttempt(player, position)) return true;
+	const uint64_t reserve = supplyFloorSpendingReserve(player);
+	if (reserve == UINT64_MAX || player.getMoney() + player.getBankBalance() < reserve - carriedGoldReserve) return false;
+	auto target = recoveryEquipment->original;
+	for (slots_t hand : {CONST_SLOT_LEFT, CONST_SLOT_RIGHT}) {
+		if (target.itemIds[hand] && inventoryPolicy.inventoryItemCount(player, target.itemIds[hand]) == 0) {
+			target.itemIds[hand] = 0;
+			target.items[hand] = {};
+		}
+	}
+	if (!equipmentPolicy.weaponReady(PlayerBotEquipmentAdapter::player(player), target)) {
+		Item* carried = nullptr; EquipmentUpgrade upgrade{};
+		const bool available = PlayerBotEquipmentAdapter::findCarriedUpgrade(equipmentPolicy, player, carried, upgrade) &&
+		    carried && equipmentPolicy.isStyleWeapon(PlayerBotEquipmentAdapter::player(player), PlayerBotEquipmentAdapter::item(*carried));
+		if (!available) {
+			const auto offer = evaluateEquipmentOffers(player, position);
+			if (!offer || !equipmentPolicy.isStyleWeapon(PlayerBotEquipmentAdapter::player(player),
+			    PlayerBotEquipmentAdapter::item(offer->itemId))) return false;
+		}
+	}
+	const Item* back = player.getInventoryItem(CONST_SLOT_BACKPACK);
+	const Container* bag = back ? back->getContainer() : nullptr;
+	uint32_t displaced = 0;
+	for (slots_t hand : {CONST_SLOT_LEFT, CONST_SLOT_RIGHT}) {
+		const Item* held = player.getInventoryItem(hand);
+		if (held && held->getID() != target.itemIds[hand]) ++displaced;
+	}
+	if (!bag || !playerBotRecoveryLoadoutSpace(bag->capacity(), bag->size(), displaced, false)) {
+		stop("recovery_restore_no_space", position); return true;
+	}
+	g_game.playerSetAttackedCreature(playerId, 0);
+	g_game.playerFollowCreature(playerId, 0);
+	g_game.playerStopAutoWalk(playerId);
+	recoveryEquipment->target = std::move(target);
+	recoveryEquipment->restoring = recoveryEquipment->switching = true;
+	recoveryEquipment->attempts = 0;
+	schedule(SCHEDULER_MINTICKS);
+	return true;
+}
+
 namespace {
 	constexpr size_t maximumEquipmentHuntRegions = 32;
 	constexpr size_t maximumEquipmentCatalogProviders = 16;
@@ -464,16 +642,18 @@ std::optional<PlayerBotController::EquipmentOfferEvaluation> PlayerBotController
 			});
 		}
 		// A missing weapon or armor blocks hunting outright; keep its fillers in the bounded catalog.
-		if (!equipmentPolicy.weaponReady(playerFacts, currentLoadout) || !equipmentPolicy.armorReady(playerFacts, currentLoadout)) {
-			std::stable_partition(allCatalogOffers.begin(), allCatalogOffers.end(), [this, &playerFacts, &currentLoadout](const CatalogOffer& candidate) {
-				return equipmentPolicy.fillsReadinessGap(playerFacts, currentLoadout, PlayerBotEquipmentAdapter::item(candidate.offer->itemId));
-			});
-		}
-		std::stable_partition(allCatalogOffers.begin(), allCatalogOffers.end(), [&carriedCatalogItems, totalMoney, reserve](const CatalogOffer& candidate) {
+		const bool readinessGap = !equipmentPolicy.weaponReady(playerFacts, currentLoadout) || !equipmentPolicy.armorReady(playerFacts, currentLoadout);
+		auto fillsGap = [this, readinessGap, &playerFacts, &currentLoadout](const CatalogOffer& candidate) {
+			return readinessGap && equipmentPolicy.fillsReadinessGap(playerFacts, currentLoadout, PlayerBotEquipmentAdapter::item(candidate.offer->itemId));
+		};
+		if (readinessGap) std::stable_partition(allCatalogOffers.begin(), allCatalogOffers.end(), fillsGap);
+		// Gap fillers ignore the supply reserve, matching the provider planner.
+		std::stable_partition(allCatalogOffers.begin(), allCatalogOffers.end(), [&carriedCatalogItems, &fillsGap, totalMoney, reserve](const CatalogOffer& candidate) {
 			const uint64_t price = candidate.offer->buyPrice;
+			const uint64_t offerReserve = fillsGap(candidate) ? 0 : reserve;
 			return carriedCatalogItems.find(candidate.offer->itemId) != carriedCatalogItems.end() ||
-			       (price != 0 && reserve != std::numeric_limits<uint64_t>::max() &&
-			        totalMoney >= reserve && price <= totalMoney - reserve);
+			       (price != 0 && offerReserve != std::numeric_limits<uint64_t>::max() &&
+			        totalMoney >= offerReserve && price <= totalMoney - offerReserve);
 		});
 		const size_t count = std::min(maximumEquipmentCatalogOffers, allCatalogOffers.size());
 		catalog.assign(allCatalogOffers.begin(), allCatalogOffers.begin() + count);
@@ -750,7 +930,7 @@ void PlayerBotController::processEquipmentPurchase(Player* player, const Positio
 		observation.providerInRange = npc && Position::areInRange<3, 3, 0>(position, npc->getPosition());
 		observation.shopReady = shopOwner == npc && !player->getShopItemList().empty();
 		observation.otherShopOpen = shopOwner && shopOwner != npc;
-		const uint64_t reserve = spellTrainingReserve(*player);
+		const uint64_t reserve = purchase.gapFilled ? 0 : spellTrainingReserve(*player);
 		const uint64_t money = player->getMoney() + player->getBankBalance();
 		observation.fundingAvailable = reserve != std::numeric_limits<uint64_t>::max() && money >= purchase.price && money - purchase.price >= reserve;
 		observation.bankFundingAvailable = reserve != std::numeric_limits<uint64_t>::max() &&

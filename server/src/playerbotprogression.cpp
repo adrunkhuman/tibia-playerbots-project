@@ -210,11 +210,31 @@ bool PlayerBotController::ensureCombatReady(Player* player, const Position& posi
 	EquipmentUpgrade upgrade{};
 	const PlayerBotEquipmentPlayerSnapshot playerFacts = PlayerBotEquipmentAdapter::player(*player);
 	const EquipmentLoadout loadout = PlayerBotEquipmentAdapter::loadout(*player);
+	if (recoveryEquipment || recoveryWeaponPlanning ||
+	    (supplyRecovery.active() && fixtureDriver.huntObservation().selectRegion && !equipmentPolicy.weaponReady(playerFacts, loadout) &&
+	     !PlayerBotEquipmentAdapter::findCarriedUpgrade(equipmentPolicy, *player, carriedUpgrade, upgrade))) {
+		const auto input = equipmentReadinessInput(*player);
+		if (equipmentPolicy.armorReady(playerFacts, loadout) && input.backpackReady &&
+		    (!requireCapacity || input.effectiveFreeCapacity >= input.minimumFreeCapacity)) {
+			if (recoveryEquipment && huntCoordinator.huntActive() && !recoveryEquipment->switching &&
+			    (loadout.itemIds[CONST_SLOT_LEFT] != recoveryEquipment->target.itemIds[CONST_SLOT_LEFT] ||
+			     loadout.itemIds[CONST_SLOT_RIGHT] != recoveryEquipment->target.itemIds[CONST_SLOT_RIGHT] ||
+			     !playerBotRecoveryCombatMatches(equipmentPolicy.combatProfile(playerFacts, loadout),
+			         equipmentPolicy.combatProfile(playerFacts, recoveryEquipment->target)))) {
+				finishHuntAndReturn(player, position, "recovery_loadout_changed");
+				schedule(SCHEDULER_MINTICKS);
+				return false;
+			}
+			if (!recoveryEquipment) recoveryWeaponPlanning = true;
+			return true;
+		}
+	}
 	PlayerBotEquipmentReadinessInput readinessInput = equipmentReadinessInput(*player);
 	if (!requireCapacity) readinessInput.minimumFreeCapacity = 0;
 	const PlayerBotEquipmentReadiness readiness = equipmentPolicy.combatReadiness(
 		playerFacts, loadout, PlayerBotEquipmentAdapter::findCarriedUpgrade(equipmentPolicy, *player, carriedUpgrade, upgrade), readinessInput);
 	if (readiness.ready) {
+		unfundedReadinessRepairFunds.reset();
 		if (std::strcmp(reason, "readiness_continuous_check") != 0) {
 			emitCombatReadiness(*player, position, "ready", {}, {});
 		}
@@ -253,6 +273,24 @@ bool PlayerBotController::ensureCombatReady(Player* player, const Position& posi
 		}
 		const std::string missing = readiness.recovery == "acquire_weapon" ?
 		    std::string("missing_") + PlayerBotEquipmentPolicy::weaponRequirement(playerFacts) : "missing_legal_armor";
+		// Death can strip gear and coins. A depot visit may sell stored loot and
+		// fund the repair, so try service once per observed fund level before
+		// treating the gap as terminal.
+		const uint64_t funds = player->getMoney() + player->getBankBalance();
+		if (unfundedReadinessRepairFunds != funds) {
+			unfundedReadinessRepairFunds = funds;
+			emitCombatReadiness(*player, position, "recovery", readiness.recovery, missing + "_unfunded",
+			    readinessInput.minimumFreeCapacity);
+			beginService(player, position, "readiness_repair_unfunded");
+			schedule(navigationInterval);
+			return false;
+		}
+		if (readiness.recovery == "acquire_weapon" && fixtureDriver.huntObservation().selectRegion &&
+		    equipmentPolicy.armorReady(playerFacts, loadout) && readinessInput.backpackReady) {
+			enterSupplyRecovery(position, funds, UINT64_MAX, "normal_weapon_unfunded");
+			recoveryWeaponPlanning = true;
+			return true; // Permission to plan, not to execute without a proved outing.
+		}
 		emitCombatReadiness(*player, position, "failed", readiness.recovery, missing, readinessInput.minimumFreeCapacity);
 		stop(("combat_readiness_" + missing).c_str(), position);
 		return false;
@@ -1029,6 +1067,12 @@ void PlayerBotController::beginPickupReward(Player& player, const Position& posi
 bool PlayerBotController::selectTopLevelGoal(Player& player, const Position& position, const char* decisionReason)
 {
 	trainerGoalSelectionPending = false;
+	if (recoveryEquipment && (std::strcmp(decisionReason, "service_complete") == 0 ||
+	    std::strcmp(decisionReason, "depot_deposit_complete") == 0)) {
+		if (restoreRecoveryEquipment(player, position)) return true;
+		startHunt(&player, position, "recovery_income_continue");
+		return true;
+	}
 	if (preparationOption != PlayerBotPreparationOption::None ||
 	    serviceWorkflow.intent() == PlayerBotServiceIntent::PreparationPurchase)
 		retirePreparation(&player, position, "arbitration_reentered");
@@ -1043,7 +1087,8 @@ bool PlayerBotController::selectTopLevelGoal(Player& player, const Position& pos
 	const uint32_t potionCount = inventoryPolicy.inventoryItemCount(player, potionItemId);
 	updateSupplyRecovery(player, position);
 	huntPotionRestockTarget = potionStockTarget(player);
-	const PlayerBotSupplyStocks stocks = supplyStocks(player);
+	const PlayerBotSupplyStocks stocks = recoveryEquipment && turnRouter.cyclePhase() == CyclePhase::Hunt ?
+	    activeHuntStocks(player) : supplyStocks(player);
 	const PlayerBotSupplyDeficit supplyDeficit = playerBotMandatorySupplyDeficit(stocks, supplyRecovery.active());
 	const bool criticalHealing = survivalRuntime.needsHealing(survivalSnapshot(player)) &&
 	                             potionCount <= huntPotionReturnThreshold;
@@ -1072,7 +1117,7 @@ bool PlayerBotController::selectTopLevelGoal(Player& player, const Position& pos
 			trainerDecisionWatch = {};
 		}
 		PlayerBotSpellTrainingPlan plan;
-		const bool found = !spellTrainingCoolingDown && findSpellTraining(player, position, plan);
+		const bool found = !recoveryEquipment && !spellTrainingCoolingDown && findSpellTraining(player, position, plan);
 		return PlayerBotTrainerArbitration<PlayerBotSpellTrainingPlan>::Result{
 		    trainerDiscovery.has_value(), found ? std::optional<PlayerBotSpellTrainingPlan>(std::move(plan)) : std::nullopt};
 	});
@@ -1088,7 +1133,7 @@ bool PlayerBotController::selectTopLevelGoal(Player& player, const Position& pos
 	PlayerBotRewardPlan reward;
 	std::deque<PlayerBotNavigationStep> rewardSteps;
 	const bool pickupCoolingDown = progressionRuntime.isCoolingDown(TopLevelGoal::PickupReward, now);
-	const bool pickupFound = !pickupCoolingDown && findPickupReward(player, position, reward, rewardSteps);
+	const bool pickupFound = !recoveryEquipment && !pickupCoolingDown && findPickupReward(player, position, reward, rewardSteps);
 	const PlayerBotRewardPlannerSnapshot rewardSnapshot{
 		0, pickupRewardBaseUtility, economicPickupBaseUtility, huntGoalUtility,
 		riskProfile.maximumHealthLossPerSecond,
@@ -1096,11 +1141,11 @@ bool PlayerBotController::selectTopLevelGoal(Player& player, const Position& pos
 	};
 	const int32_t pickupUtility = pickupFound ? rewardPlanner.utility(reward, rewardSnapshot) : 0;
 	const bool equipmentPurchaseCoolingDown = progressionRuntime.isCoolingDown(TopLevelGoal::BuyEquipment, now);
-	const std::optional<EquipmentOfferEvaluation> equipment = equipmentPurchaseCoolingDown ? std::nullopt :
+	const std::optional<EquipmentOfferEvaluation> equipment = (recoveryEquipment || equipmentPurchaseCoolingDown) ? std::nullopt :
 	                                                        evaluateEquipmentOffers(player, position);
 	const bool equipmentFound = fixtureDriver.observeEquipmentOffer(equipment.has_value()).available;
 	const bool magicTrainingCoolingDown = progressionRuntime.isCoolingDown(TopLevelGoal::MagicTraining, now);
-	const char* magicTrainingReason = magicTrainingCoolingDown ? "cooldown" :
+	const char* magicTrainingReason = recoveryEquipment ? "recovery_outing" : magicTrainingCoolingDown ? "cooldown" :
 	                                  survivalRuntime.magicTrainingReason(survivalSnapshot(player));
 	const bool sellLootCoolingDown = progressionRuntime.isCoolingDown(TopLevelGoal::SellLoot, now);
 	const uint32_t sellable = saleableItemCount(player);
@@ -1124,7 +1169,7 @@ bool PlayerBotController::selectTopLevelGoal(Player& player, const Position& pos
 		spellTrainingFound && playerBotSpellDescriptor(spellTraining.spellName.c_str()) &&
 		    playerBotSpellDescriptor(spellTraining.spellName.c_str())->role == PlayerBotSpellRole::Healing,
 	};
-	if (huntSupplyHandoff.refresh(huntSupplyFacts(player))) preparationBudget.reset();
+	if (!recoveryEquipment && !recoveryWeaponPlanning) huntSupplyHandoff.refresh(huntSupplyFacts(player));
 	snapshot.huntReadiness = huntSupplyHandoff.readiness();
 	snapshot.preparations = evaluatePreparation(player, position);
 	if (preparationEvaluationPending) return true; // Deferred work scheduled its budget retry.
@@ -1150,7 +1195,7 @@ bool PlayerBotController::selectTopLevelGoal(Player& player, const Position& pos
 		emit("goal_selection", position,
 		     "\"decision_id\":" + std::to_string(decision.id) + ",\"decision_reason\":" +
 		         jsonString(decisionReason) + ",\"result\":\"failed\",\"reason\":\"no_feasible_goal\"");
-		stop("no_feasible_goal", position);
+		stop(supplyRecovery.active() ? "recovery_no_safe_income_outing" : "no_feasible_goal", position);
 		return false;
 	}
 	const GoalCandidate& selected = *decision.selected;
