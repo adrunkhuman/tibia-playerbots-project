@@ -56,6 +56,7 @@ namespace {
 		result.extraDefense = type.extraDefense;
 		result.attack = type.attack;
 		result.weight = type.weight;
+		result.consumingCharges = type.charges != 0;
 		return result;
 	}
 }
@@ -78,6 +79,7 @@ PlayerBotEquipmentItemSnapshot PlayerBotEquipmentAdapter::item(const Item& item)
 	result.hitChance = item.getHitChance();
 	result.shootRange = item.getShootRange();
 	result.count = item.getItemCount();
+	result.consumingCharges = result.consumingCharges || item.getCharges() != 0;
 	result.container = item.getContainer() != nullptr;
 	return result;
 }

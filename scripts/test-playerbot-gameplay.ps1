@@ -83,10 +83,10 @@ $scenarioCatalog = @(
 	"pickup_progression", "pickup_progression_bundle", "pickup_progression_nested", "pickup_progression_resume",
 	"pickup_progression_nested_resume", "pickup_progression_space", "goal_arbitration", "goal_arbitration_interrupt",
 	"stamina_bonus_projection", "stamina_boundary_projection", "stamina_normal_projection", "hunt_region_planning", "supply_recovery",
-	"combat_readiness_ready", "combat_readiness_upgrade", "combat_readiness_missing_weapon", "combat_readiness_supplies",
+	"combat_readiness_ready", "combat_readiness_upgrade", "combat_readiness_upgrade_full_bag", "combat_readiness_missing_weapon", "combat_readiness_supplies",
 	"combat_readiness_no_food", "combat_readiness_low_wealth", "combat_readiness_food_capacity",
-	"combat_readiness_retention", "paladin_spear_restock", "paladin_spear_break", "paladin_spear_last_break", "paladin_spear_recovery_income", "hunt_area_arrival", "remote_hunt", "equipment_offer_shadow_upgrade", "equipment_offer_shadow_unaffordable",
-	"equipment_offer_shadow_no_upgrade", "equipment_purchase", "equipment_purchase_resume", "equipment_purchase_provider_moved", "equipment_purchase_provider_unreachable", "equipment_purchase_space",
+	"combat_readiness_retention", "recovery_fists", "recovery_melee", "paladin_spear_restock", "paladin_spear_break", "paladin_spear_last_break", "paladin_spear_recovery_income", "hunt_area_arrival", "remote_hunt", "equipment_offer_shadow_upgrade", "equipment_offer_shadow_unaffordable",
+	"equipment_offer_shadow_no_upgrade", "equipment_purchase", "equipment_purchase_resume", "equipment_purchase_provider_moved", "equipment_purchase_provider_unreachable", "equipment_purchase_space", "equipment_purchase_unfunded_armor",
 	"equipment_purchase_rejected", "equipment_purchase_spear", "equipment_tool_replenishment", "equipment_tool_nested_inventory", "adaptive_challenge", "mainland_equipment_reward", "oracle_departure",
 		"oracle_level_eight_interrupt", "oracle_level_eight_recovery",
 		"navigation", "navigation_recovery", "svargrond_local_route_recovery", "navigation_fare_rejection", "navigation_risk_rejection", "door_passages", "carlin_service_route", "mutable_portal_route", "mutable_portal_open_no_shovel", "patrol_recovery", "target_approach", "target_approach_unreachable", "target_attacker_priority", "ranged_position_control", "ranged_position", "ranged_position_corner",
@@ -105,8 +105,8 @@ foreach ($scenarioName in $scenarioCatalog) {
 		throw "Duplicate gameplay scenario name: $scenarioName"
 	}
 }
-if ($scenarioCatalog.Count -ne 118) {
-	throw "The gameplay scenario catalog must contain 118 scenarios; found $($scenarioCatalog.Count)."
+if ($scenarioCatalog.Count -ne 122) {
+	throw "The gameplay scenario catalog must contain 122 scenarios; found $($scenarioCatalog.Count)."
 }
 $requestedScenarioNames = @($Scenario | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
 $exactScenarioSelection = $requestedScenarioNames.Count -gt 0
@@ -159,6 +159,7 @@ $minimumServerOnlineEvents = 0
 . $PSScriptRoot/playerbot-gameplay/assertions-cycle.ps1
 . $PSScriptRoot/playerbot-gameplay/assertions-progression.ps1
 . $PSScriptRoot/playerbot-gameplay/assertions-readiness.ps1
+. $PSScriptRoot/playerbot-gameplay/assertions-recovery.ps1
 . $PSScriptRoot/playerbot-gameplay/assertions-navigation.ps1
 . $PSScriptRoot/playerbot-gameplay/assertions-spells.ps1
 . $PSScriptRoot/playerbot-gameplay/assertions-magic-training.ps1
@@ -214,6 +215,8 @@ try {
 	. $PSScriptRoot/playerbot-gameplay/scenarios-service.ps1
 
 	. $PSScriptRoot/playerbot-gameplay/scenarios-progression.ps1
+
+	. $PSScriptRoot/playerbot-gameplay/scenarios-recovery.ps1
 
 	. $PSScriptRoot/playerbot-gameplay/scenarios-navigation.ps1
 

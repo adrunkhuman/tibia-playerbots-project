@@ -68,7 +68,9 @@ function F.verifyReadiness(playerId, mode, attempts)
     local ready = player:getVocation():getId() == 4 and player:getSlotItem(CONST_SLOT_ARMOR) and
         player:getSlotItem(CONST_SLOT_LEFT) and player:getItemCount(F.potionItemId) > 1
     if mode == "supplies" then ready = ready and player:getItemCount(F.potionItemId) >= 20 end
-    if mode == "upgrade" then ready = ready and player:getSlotItem(CONST_SLOT_LEFT):getId() == F.pickupRewardId end
+    if mode == "upgrade" or mode == "upgrade_full_bag" then
+        ready = ready and player:getSlotItem(CONST_SLOT_LEFT):getId() == F.pickupRewardId
+    end
     if mode == "retention" then ready = ready and player:getItemCount(2050) >= 1 and player:getItemCount(F.starterWeaponId) >= 1 end
     if mode == "no_food" then ready = ready and player:getItemCount(F.meatItemId) == 0 end
     if mode == "food_capacity" then
@@ -161,6 +163,20 @@ function F.verifyEquipmentPurchaseSpace(playerId)
         player:getMoney() + player:getBankBalance() == 105,
         "equipment storage rejection mutated equipment or money")
     print("PLAYERBOT_GAMEPLAY_TEST EQUIPMENT_BUY_SPACE_PASS")
+end
+
+function F.verifyUnfundedArmorPurchase(playerId, attempts)
+    local player = Player(playerId)
+    assert(player and not player:isRemoved(), "Bot One disappeared during unfunded armor fixture")
+    local armor = player:getSlotItem(CONST_SLOT_ARMOR)
+    local spent = player:getMoney() + player:getBankBalance() < 42
+    if not (armor and spent) and attempts > 0 then
+        addEvent(F.verifyUnfundedArmorPurchase, 500, playerId, attempts - 1)
+        return
+    end
+    assert(armor and spent, "unfunded Knight did not buy armor from its last 42 gold")
+    print("PLAYERBOT_GAMEPLAY_TEST EQUIPMENT_BUY_UNFUNDED_ARMOR_PASS")
+    io.flush()
 end
 
 function F.verifyOracleDeparture(playerId, attempts)

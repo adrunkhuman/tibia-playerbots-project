@@ -341,6 +341,15 @@ PlayerBotSupplyStocks PlayerBotController::supplyStocks(const Player& player) co
 	                              inventoryPolicy.inventoryItemCount(player, potionItemId)}};
 	for (const PlayerBotSupplyStock& stock : PlayerBotInventoryPolicy::additionalSupplyStocks(player)) stocks.push_back(stock);
 	playerBotRequireSupplies(stocks, huntSupplyHandoff.requirements());
+	if (recoveryEquipment) {
+		for (const auto& requirement : recoveryEquipment->funding) {
+			if (std::none_of(stocks.begin(), stocks.end(), [&](const auto& stock) {
+			        return stock.rule.kind == requirement.kind && stock.rule.itemId == requirement.itemId; }))
+				stocks.push_back({{requirement.kind, requirement.itemId, requirement.count, 0, requirement.count},
+				    inventoryPolicy.inventoryItemCount(player, requirement.itemId)});
+		}
+		playerBotRequireSupplies(stocks, recoveryEquipment->funding);
+	}
 	return stocks;
 }
 
@@ -353,9 +362,21 @@ uint32_t PlayerBotController::carriedSupplyReserve(const Player& player, uint16_
 	return reserve;
 }
 
+PlayerBotSupplyStocks PlayerBotController::activeHuntStocks(const Player& player) const
+{
+	if (!recoveryEquipment) return supplyStocks(player);
+	PlayerBotSupplyStocks stocks;
+	for (const auto& kind : recoveryEquipment->supplies.kinds) {
+		const uint32_t reserve = playerBotSupplyHuntReserve(kind.kind, kind.returnThreshold, true);
+		stocks.push_back({{kind.kind, kind.itemId, reserve + 1, reserve, reserve + 1},
+		    inventoryPolicy.inventoryItemCount(player, kind.itemId)});
+	}
+	return stocks;
+}
+
 bool PlayerBotController::huntSuppliesReady(const Player& player) const
 {
-	const PlayerBotSupplyStocks stocks = supplyStocks(player);
+	const PlayerBotSupplyStocks stocks = activeHuntStocks(player);
 	return std::all_of(stocks.begin(), stocks.end(), [this](const PlayerBotSupplyStock& stock) {
 		return !stock.rule.active() || stock.count >
 		    playerBotSupplyHuntReserve(stock.rule.kind, stock.rule.returnThreshold, supplyRecovery.active());

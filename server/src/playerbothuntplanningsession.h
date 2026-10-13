@@ -58,6 +58,7 @@ struct PlayerBotHuntPlanningTransportWork {
 
 struct PlayerBotHuntPlanningScoreWork {
 	size_t candidateIndex = 0;
+	size_t loadoutIndex = 0;
 };
 
 enum class PlayerBotHuntPlanningProgress : uint8_t {
@@ -81,6 +82,7 @@ class PlayerBotHuntPlanningSession
 		bool scoring() const { return phase == Phase::Scoring; }
 		bool ready() const { return phase == Phase::Ready; }
 		const PlayerBotHuntPlanningProfile& profile() const { return planningProfile; }
+		PlayerBotHuntPlanningProfile scoreProfile(size_t index) const;
 		const PlayerBotHuntPlanningSnapshot& snapshot() const { return planningSnapshot; }
 		const std::shared_ptr<const PlayerBotTopologyDistances>& topology() const { return topologyDistances; }
 		const std::string& reason() const { return planningReason; }
@@ -128,6 +130,7 @@ class PlayerBotHuntPlanningSession
 		std::string planningReason;
 		std::chrono::steady_clock::time_point planningStarted;
 		PlayerBotHuntPlanningProfile planningProfile;
+		std::vector<PlayerBotHuntPlanningProfile> recoveryProfiles;
 		PlayerBotHuntPlanningSnapshot planningSnapshot;
 		std::shared_ptr<const PlayerBotTopologyDistances> topologyDistances;
 		size_t nextTransportOffer = 0;

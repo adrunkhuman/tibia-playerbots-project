@@ -194,6 +194,13 @@
             Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST READINESS_UPGRADE_PASS' | Out-Null
             Assert-CombatReadinessEvents -Logs (Get-ServerLogs) -Mode "upgrade"
         }
+        Invoke-Scenario -Name "combat_readiness_upgrade_full_bag" -DefaultTimeoutSeconds 120 -Body {
+            Invoke-Compose down --volumes --remove-orphans
+            $env:PLAYERBOT_GAMEPLAY_MODE = "readiness_upgrade_full_bag"
+            Invoke-Compose up --detach
+            Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST READINESS_UPGRADE_FULL_BAG_PASS' | Out-Null
+            Assert-CombatReadinessEvents -Logs (Get-ServerLogs) -Mode "upgrade_full_bag"
+        }
         Invoke-Scenario -Name "combat_readiness_missing_weapon" -DefaultTimeoutSeconds 45 -Body {
             Invoke-Compose down --volumes --remove-orphans
             $env:PLAYERBOT_GAMEPLAY_MODE = "readiness_missing_weapon"
@@ -395,6 +402,20 @@
 				throw "Equipment purchase did not reject insufficient displaced-item storage before payment."
 			}
 		}
+		Invoke-Scenario -Name "equipment_purchase_unfunded_armor" -DefaultTimeoutSeconds 240 -Body {
+			Invoke-Compose down --volumes --remove-orphans
+			$env:PLAYERBOT_GAMEPLAY_MODE = "equipment_buy_unfunded_armor"
+			$env:PLAYERBOT_HUNT_DURATION_SECONDS = "900"
+			Invoke-Compose up --detach
+			$armorLogs = Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST EQUIPMENT_BUY_UNFUNDED_ARMOR_PASS|"event":"terminal"'
+			$terminal = @(ConvertFrom-PlayerbotLogs -Logs $armorLogs | Where-Object { $_.event -eq "terminal" })
+			if ($terminal.Count -gt 0) {
+				throw "Unfunded armor fixture stopped before repair: $($terminal[-1].reason)."
+			}
+			# Lua may observe the equipped item before the controller verifies the move.
+			$armorLogs = Wait-ForLog -Pattern '"action":"equip_equipment","result":"success".*"slot":4[,}]|"event":"terminal"'
+			Assert-UnfundedArmorPurchaseEvents -Logs $armorLogs
+		}
 		Invoke-Scenario -Name "equipment_purchase_rejected" -DefaultTimeoutSeconds 240 -Body {
 			Invoke-Compose down --volumes --remove-orphans
 			$env:PLAYERBOT_GAMEPLAY_MODE = "equipment_buy_rejected"
@@ -426,11 +447,13 @@
 					Assert-ZeroSpearRecoveryEvents -Logs $mirroredLogs -Mode "mirrored"
 				} else {
 					Wait-ForPlayerbotEvent {
-						$_.event -eq "terminal" -and $_.reason -eq "combat_readiness_throwing_weapon_restock_blocked"
+						$_.event -eq "terminal" -or ($_.action -eq "loot" -and $_.result -eq "success" -and
+						$_.coin_gold_acquired -gt 0 -and @($script:serverPlayerbotEvents | Where-Object {
+							$_.event -eq "recovery_loadout" -and $_.result -eq "equipped"
+						}).Count -gt 0)
 					} | Out-Null
-					# Observe multiple scheduler turns after terminal, not only the stop line.
 					Start-Sleep -Seconds 3
-					Assert-ZeroSpearRecoveryEvents -Logs (Get-ServerLogs) -Mode "unfunded"
+					Assert-UnfundedAlternativeRecoveryEvents -Logs (Get-ServerLogs)
 				}
 			}
 		}

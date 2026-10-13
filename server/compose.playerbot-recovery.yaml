@@ -1,0 +1,7 @@
+# Used only by recovery_fists/recovery_melee gameplay scenarios.
+# Keep the real map, depot and shop APIs; replace only the static spawn catalog.
+services:
+  server:
+    volumes:
+      - ./tests/playerbot-gameplay/recovery-spawn.xml:/app/data/world/World-spawn.xml:ro
+      - ./tests/playerbot-gameplay/recovery-monster.inc:/app/data/monster/lua/playerbot_recovery.lua:ro

@@ -67,6 +67,10 @@ struct PlayerBotHuntTransportOffer {
 
 struct PlayerBotHuntPlanningProfile {
 	PlayerBotCombatProfile combat;
+	uint32_t recoveryLoadoutId = 0;
+	uint64_t recoveryPreparationCost = 0;
+	// One shared scan and budget; each loadout/region pair is a scoring unit.
+	std::vector<PlayerBotHuntPlanningProfile> recoveryAlternatives;
 	int32_t currentHealth = 0;
 	uint32_t mana = 0;
 	uint32_t magicLevel = 0;
@@ -168,6 +172,9 @@ inline int playerBotCompareHuntEconomicKeys(const PlayerBotHuntEconomicKey& left
 
 struct PlayerBotHuntRegion {
 	uint32_t id = 0;
+	uint32_t recoveryLoadoutId = 0;
+	uint64_t recoveryPreparationCost = 0;
+	PlayerBotCombatProfile combat;
 	uint64_t atlasSiteId = 0;
 	uint64_t atlasVariantId = 0;
 	uint64_t atlasRevision = 0;
@@ -265,9 +272,28 @@ struct PlayerBotHuntRegion {
 		    availableHuntSeconds * std::clamp(combatFraction, 0.0, 1.0) >= predictedFightSeconds);
 	}
 
+	double recoveryNetIncomePerMinute() const
+	{
+		const double seconds = availableHuntSeconds + nonproductiveTripSeconds();
+		if (seconds <= 0 || !std::isfinite(seconds)) return -std::numeric_limits<double>::infinity();
+		double cost = static_cast<double>(outboundFare) + exitFare + supplyFare + recoveryPreparationCost;
+		if (supplyBudget.expectedPotions > 0 && healthPotionUnitPrice == 0)
+			return -std::numeric_limits<double>::infinity();
+		cost += supplyBudget.expectedPotions * healthPotionUnitPrice;
+		for (const auto& budget : supplyKindBudgets) {
+			const auto kind = std::find_if(supplyProfile.kinds.begin(), supplyProfile.kinds.end(),
+			    [&](const auto& value) { return value.kind == budget.kind; });
+			if (kind == supplyProfile.kinds.end() || (budget.expected > 0 && kind->unitPrice == 0))
+				return -std::numeric_limits<double>::infinity();
+			cost += budget.expected * kind->unitPrice;
+		}
+		const double net = coinGoldPerMinute * availableHuntSeconds / 60.0 - cost;
+		return std::isfinite(net) ? net * 60.0 / seconds : -std::numeric_limits<double>::infinity();
+	}
+
 	bool recoverySustainable() const
 	{
-		return !supplyRecovery || (coinGoldPerMinute > 0 && supplyBudget.fits && productiveWindow() &&
+		return !supplyRecovery || (coinGoldPerMinute > 0 && (!routeValidated || recoveryNetIncomePerMinute() > 0) && supplyBudget.fits && productiveWindow() &&
 		    currentHealth >= static_cast<int32_t>(playerBotSupplyRecoveryRequiredHealth(std::max(0, maximumHealth))));
 	}
 
@@ -369,6 +395,25 @@ struct PlayerBotHuntRegion {
 			upper = availableHuntSeconds;
 		}
 		reconcileSupplies(reserve, optimisticTransitCombat);
+		if (supplyRecovery && routeValidated) {
+			// Whole-second bounded probes also avoid paying another rounded
+			// consumable for a marginal extension. No untested window is chosen.
+			const double fitting = availableHuntSeconds;
+			double bestSeconds = fitting;
+			double bestNet = productiveWindow() && supplyBudget.fits ? recoveryNetIncomePerMinute() :
+			    -std::numeric_limits<double>::infinity();
+			const double minimum = combatFraction > 0 ? std::ceil(predictedFightSeconds / combatFraction) : fitting;
+			for (int probe = 0; probe <= 64; ++probe) {
+				availableHuntSeconds = probe == 0 ? minimum : std::floor(fitting * probe / 64);
+				if (availableHuntSeconds > fitting) continue;
+				reconcileSupplies(reserve, optimisticTransitCombat);
+				if (!productiveWindow() || !supplyBudget.fits) continue;
+				const double net = recoveryNetIncomePerMinute();
+				if (net > bestNet) { bestNet = net; bestSeconds = availableHuntSeconds; }
+			}
+			availableHuntSeconds = bestSeconds;
+			reconcileSupplies(reserve, optimisticTransitCombat);
+		}
 		projectedExperience = experiencePerMinute * observedCorrection * staminaExperienceMultiplier * availableHuntSeconds / 60.0;
 		score = projectedExperience;
 	}
@@ -662,6 +707,12 @@ inline bool playerBotPreferHuntRegion(const PlayerBotHuntRegion& left, const Pla
 		const double rightPressure = playerBotHuntSupplyPressure(right);
 		if (leftPressure != rightPressure) return leftPressure < rightPressure;
 	}
+	if (left.supplyRecovery && right.supplyRecovery && left.routeValidated && right.routeValidated) {
+		const double leftNet = left.recoveryNetIncomePerMinute(), rightNet = right.recoveryNetIncomePerMinute();
+		if (leftNet != rightNet) return leftNet > rightNet;
+		if (left.threatRatio != right.threatRatio) return left.threatRatio < right.threatRatio;
+		return left.score > right.score;
+	}
 	const auto leftKey = left.economicKey(), rightKey = right.economicKey();
 	const bool recovery = leftKey.supplyRecovery && rightKey.supplyRecovery;
 	const int economicOrder = playerBotCompareHuntEconomicKeys(leftKey, rightKey);
@@ -870,6 +921,14 @@ inline bool playerBotHuntCandidateCanBeatValidated(
 	// A fitting incumbent outranks every non-fitting result, so the candidate
 	// must fit after validation to win.
 	if (candidate.optimisticFittingExperience < 0) return false;
+	// Frozen travel-adjusted gross income is not a bound on final net. Only
+	// zero-cost, zero-travel raw income is an admissible recovery upper bound.
+	if (candidate.supplyRecovery && validated.supplyRecovery) {
+		if (!validated.routeValidated) return true;
+		const double net = validated.recoveryNetIncomePerMinute();
+		return !std::isfinite(candidate.coinGoldPerMinute) || !std::isfinite(net) ||
+		    candidate.coinGoldPerMinute >= net;
+	}
 	const auto candidateKey = candidate.economicKey(), validatedKey = validated.economicKey();
 	const int economicOrder = playerBotCompareHuntEconomicKeys(candidateKey, validatedKey);
 	if (economicOrder != 0) return economicOrder > 0;

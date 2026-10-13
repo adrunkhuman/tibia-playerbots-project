@@ -97,8 +97,9 @@ PlayerBotEquipmentProviderDecision PlayerBotEquipmentProviderPlanner::select(con
 			rejection = "insufficient_displaced_item_space";
 		}
 		if (!rejection && !evaluation.carried && !offer.purchaseAvailable) rejection = "offer_not_for_sale";
-		if (!rejection && !evaluation.carried && !snapshot.reserveAvailable) rejection = "recovery_reserve_unavailable";
-		if (!rejection && !evaluation.carried && snapshot.totalMoney < snapshot.reserve + evaluation.price) rejection = "unaffordable_after_reserves";
+		const uint64_t reserve = evaluation.gapFilled ? 0 : snapshot.reserve;
+		if (!rejection && !evaluation.carried && !evaluation.gapFilled && !snapshot.reserveAvailable) rejection = "recovery_reserve_unavailable";
+		if (!rejection && !evaluation.carried && snapshot.totalMoney < reserve + evaluation.price) rejection = "unaffordable_after_reserves";
 		if (!rejection && !evaluation.carried && !offer.route.reachable) rejection = offer.routeBudgetExhausted ? "provider_evaluation_budget_exhausted" :
 		                                                               offer.route.nodeLimitReached ? "provider_route_node_budget_exhausted" : "provider_unreachable";
 		if (!rejection && !evaluation.carried && offer.route.dangerCost > snapshot.maximumRouteDangerCost) rejection = "route_danger_above_tolerance";

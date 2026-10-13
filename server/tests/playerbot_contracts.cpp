@@ -24,6 +24,8 @@
 #include "playerbothuntrouteretention.h"
 #include "playerbotinventorypolicy.h"
 #include "playerbotsupplyrecovery.h"
+#include "playerbotrecoveryloadout.h"
+#include "playerbotrecoveryprogress.h"
 #include "playerbothuntsupplyhandoff.h"
 #include "playerbotsupplystock.h"
 #include "playerbottelemetry.h"
@@ -1219,9 +1221,9 @@ void typedSupplyRouteContracts()
 			auto candidate = routeFixture(43);
 			candidate.availableHuntSeconds = 60;
 			candidate.combatFraction = 1;
-			candidate.coinGoldPerMinute = 1;
+			candidate.coinGoldPerMinute = 60;
 			candidate.currentHealth = candidate.maximumHealth = 100;
-			candidate.supplyProfile.kinds = {{mana.kind, mana.itemId, count, mana.returnThreshold, {demand, 1}}};
+			candidate.supplyProfile.kinds = {{mana.kind, mana.itemId, count, mana.returnThreshold, {demand, 1}, 0, 50}};
 			candidate.reconcileSupplies(1);
 			assert(!candidate.supplyBudget.fits); // zero demand alone cannot waive ordinary floors
 			candidate.supplyRecovery = true;
@@ -4485,6 +4487,47 @@ void projection()
 	assert(region.score == 0);
 }
 
+void readinessGapPlannerReserve()
+{
+	// A bot stripped of armor by death cannot hunt to refill its supply reserve.
+	// Only the gap filler may spend that reserve.
+	PlayerBotEquipmentProviderPlanner planner;
+	PlayerBotEquipmentProviderPlannerSnapshot snapshot;
+	snapshot.enabled = true;
+	snapshot.reserve = 1100;
+	snapshot.totalMoney = 42;
+	snapshot.reserveAvailable = true;
+	snapshot.freeCapacity = 10000;
+	snapshot.maximumRouteDangerCost = 100;
+	snapshot.maximumRouteDanger = 100;
+	auto offer = [](uint16_t itemId, uint32_t price, bool gapFilled, PlayerBotEquipmentDecisionRule rule) {
+		PlayerBotEquipmentProviderOfferSnapshot value;
+		value.evaluation.itemId = itemId;
+		value.evaluation.price = price;
+		value.evaluation.gapFilled = gapFilled;
+		value.evaluation.rule = rule;
+		value.itemWeight = 100;
+		value.freeBackpackSlots = 1;
+		value.backpackAvailable = value.purchaseAvailable = value.route.reachable = true;
+		return value;
+	};
+	const auto leatherArmor = offer(2467, 35, true, PlayerBotEquipmentDecisionRule::ReadinessRepair);
+	const auto chainArmor = offer(2464, 200, true, PlayerBotEquipmentDecisionRule::ReadinessRepair);
+	const auto helmet = offer(2461, 12, false, PlayerBotEquipmentDecisionRule::ParetoImprovement);
+	snapshot.offers = {chainArmor, helmet, leatherArmor};
+	auto decision = planner.select(snapshot);
+	assert(decision.selected && decision.selected->itemId == 2467);
+	assert(decision.rejections.size() == 2);
+	for (const auto& rejected : decision.rejections) assert(rejected.reason == "unaffordable_after_reserves");
+
+	snapshot.reserveAvailable = false;
+	decision = planner.select(snapshot);
+	assert(decision.selected && decision.selected->itemId == 2467);
+	snapshot.totalMoney = 34;
+	decision = planner.select(snapshot);
+	assert(!decision.selected);
+}
+
 void toolReplenishmentPlannerGuards()
 {
 	PlayerBotEquipmentProviderPlanner planner;
@@ -4704,6 +4747,26 @@ static void carriedShieldUpgrade()
 	                 PlayerBotEquipmentWeaponType::Club}) {
 		shield.weaponType = type;
 		assert(policy.findCarriedUpgrade(knight, loadout, {{shield, true}}));
+	}
+
+	// A shield displaces a wielded two-handed weapon; weapon repair would then
+	// re-equip the weapon, so neither direction may count as a slot upgrade.
+	PlayerBotEquipmentItemSnapshot twoHanded;
+	twoHanded.itemId = 2377;
+	twoHanded.weaponType = PlayerBotEquipmentWeaponType::Sword;
+	twoHanded.attack = 30;
+	twoHanded.left = twoHanded.right = twoHanded.twoHanded = twoHanded.pickupable = true;
+	PlayerBotEquipmentItemSnapshot dwarvenShield;
+	dwarvenShield.itemId = 2525;
+	dwarvenShield.weaponType = PlayerBotEquipmentWeaponType::Shield;
+	dwarvenShield.defense = 26;
+	dwarvenShield.right = dwarvenShield.pickupable = dwarvenShield.inContainer = true;
+	for (uint8_t hand : {uint8_t{5}, uint8_t{6}}) {
+		PlayerBotEquipmentLoadout twoHandedLoadout;
+		twoHandedLoadout.items[hand] = twoHanded;
+		twoHandedLoadout.itemIds[hand] = twoHanded.itemId;
+		assert(policy.weaponReady(knight, twoHandedLoadout));
+		assert(!policy.findCarriedUpgrade(knight, twoHandedLoadout, {{dwarvenShield, true}}));
 	}
 }
 
@@ -4949,6 +5012,247 @@ static void paladinLoadouts()
 	assert(meleeProfile.hitChance == 100 && meleeProfile.blockedByShield && meleeProfile.attackRange == 1);
 }
 
+void recoveryAlternativeContracts()
+{
+	using DepotUpgrade = PlayerBotDepotUpgradeAction;
+	assert(playerBotDepotUpgradeAction(false, true, true, false, false) == DepotUpgrade::Equip);
+	assert(playerBotDepotUpgradeAction(false, true, true, true, false) == DepotUpgrade::DepositWorn);
+	assert(playerBotDepotUpgradeAction(false, true, false, true, false) == DepotUpgrade::Equip);
+	assert(playerBotDepotUpgradeAction(true, true, false, false, false) == DepotUpgrade::None); // fists must retain stowed spear
+	assert(playerBotDepotUpgradeAction(true, true, true, true, false) == DepotUpgrade::None); // full bag must not evict melee
+	assert(playerBotDepotUpgradeAction(false, true, true, true, true) == DepotUpgrade::None); // protected fallback
+
+	using Progress = PlayerBotRecoveryProgressResult;
+	PlayerBotRecoveryProgressBudget progress;
+	progress.enter(18); // normal three-spear target, one owned, no funds
+	for (int attempt = 1; attempt <= 3; ++attempt) {
+		for (int selection = 0; selection < 20; ++selection) {
+			progress.enter(0); // re-entry, changed identity or capability cannot rewrite the baseline
+			progress.selected();
+		}
+		// Includes departure rejection before arrival and an empty completed hunt.
+		const auto result = progress.returned(18);
+		assert(result == (attempt == 3 ? Progress::Exhausted : Progress::NoProgress));
+		assert(progress.failures() == static_cast<uint32_t>(attempt));
+		if (attempt < 3) assert(progress.returned(18) == Progress::NotPending); // service stages count once
+	}
+	assert(progress.returned(0) == Progress::Exhausted); // terminal exhaustion is latched
+	progress.clear(); progress.enter(18);
+	progress.selected(); assert(progress.returned(18) == Progress::NoProgress);
+	progress.selected(); assert(progress.returned(9) == Progress::Progress); // verified net funding or stock repair
+	assert(progress.failures() == 0);
+	progress.selected(); assert(progress.returned(18) == Progress::NoProgress); // funds spent
+	progress.selected(); assert(progress.returned(9) == Progress::NoProgress); // recovering old high water is not progress
+	progress.selected(); assert(progress.returned(8) == Progress::Progress);
+	progress.selected(); assert(progress.returned(8) == Progress::NoProgress); // fair-price stock purchase changes identity only
+
+	// Fixed entry buffers, not just mandatory floors: one coin does not pay
+	// for a consumed 45-gold potion, even with nineteen potions still carried.
+	const uint64_t replacement = playerBotSupplyFloorSpendingReserve(0, {{19, 20, 45}, {1, 3, 9}});
+	assert(playerBotRecoveryFundingShortfall(replacement, 1) == 62);
+	progress.clear(); progress.enter(18); progress.selected();
+	assert(progress.returned(playerBotRecoveryFundingShortfall(replacement, 1)) == Progress::NoProgress);
+	const auto repaired = playerBotSupplyFloorSpendingReserve(0, {{20, 20, 45}, {2, 3, 9}});
+	assert(playerBotRecoveryFundingShortfall(repaired, 0) == 9);
+	assert(playerBotRecoveryFundingShortfall(18, 9) == playerBotRecoveryFundingShortfall(repaired, 0)); // paying nine for a spear is not new progress
+	progress.selected(); assert(progress.returned(9) == Progress::Progress);
+	assert(playerBotRecoveryFundingShortfall(9, 100) == -91);
+	assert(playerBotRecoveryFundingShortfall(0, UINT64_MAX) == -(INT64_MAX - 1));
+	progress.clear(); progress.enter(0); progress.selected();
+	assert(progress.returned(playerBotRecoveryFundingShortfall(0, 1)) == Progress::Progress); // funds toward a missing melee weapon
+	assert(playerBotRecoveryFundingShortfall(UINT64_MAX, UINT64_MAX) == INT64_MAX);
+	progress.clear(); progress.enter(INT64_MAX);
+	for (int attempt = 1; attempt <= 3; ++attempt) {
+		progress.selected();
+		assert(progress.returned(INT64_MAX) == (attempt == 3 ? Progress::Exhausted : Progress::NoProgress));
+	}
+	PlayerBotHuntSupplyHandoff recoveringHandoff;
+	PlayerBotHuntSupplyFacts recoveryFacts;
+	recoveringHandoff.require({{PlayerBotSupplyKind::ThrowingWeapon, 2389, 3}}, recoveryFacts);
+	assert(!recoveringHandoff.noProgress(PlayerBotHuntRouteOutcome::Unavailable, recoveryFacts));
+	recoveringHandoff.selected(true);
+	assert(!recoveringHandoff.noProgress(PlayerBotHuntRouteOutcome::Unavailable, recoveryFacts));
+	recoveringHandoff.selected(true);
+	assert(recoveringHandoff.noProgress(PlayerBotHuntRouteOutcome::Unavailable, recoveryFacts));
+	assert(recoveringHandoff.requirements().front().count == 3);
+	constexpr uint8_t CONST_SLOT_ARMOR = 4, CONST_SLOT_RIGHT = 5, CONST_SLOT_LEFT = 6;
+	PlayerBotEquipmentPolicy equipment;
+	PlayerBotEquipmentPlayerSnapshot player;
+	player.vocationId = 3; player.level = 8; player.maximumHealth = 215;
+	player.fistSkill = 11; player.swordSkill = 17; player.axeSkill = 22;
+	player.distanceSkill = 40; player.shieldSkill = 30;
+	PlayerBotEquipmentLoadout normal;
+	auto& armor = normal.items[CONST_SLOT_ARMOR];
+	armor.itemId = 2467; armor.armor = 6; armor.pickupable = armor.armorSlot = true;
+	normal.itemIds[CONST_SLOT_ARMOR] = armor.itemId;
+	auto& spear = normal.items[CONST_SLOT_LEFT];
+	spear.itemId = 2389; spear.attack = 25; spear.breakChance = 3;
+	spear.pickupable = spear.left = spear.right = true;
+	spear.weaponType = PlayerBotEquipmentWeaponType::Distance;
+	spear.shootRange = 3; spear.maxHitChance = 76;
+	normal.itemIds[CONST_SLOT_LEFT] = spear.itemId;
+	auto& shield = normal.items[CONST_SLOT_RIGHT];
+	shield.itemId = 2525; shield.defense = 22; shield.pickupable = true;
+	shield.weaponType = PlayerBotEquipmentWeaponType::Shield;
+	normal.itemIds[CONST_SLOT_RIGHT] = shield.itemId;
+	PlayerBotEquipmentItemSnapshot sword;
+	sword.itemId = 2376; sword.attack = 14; sword.defense = 12;
+	sword.pickupable = sword.left = sword.right = sword.inContainer = true;
+	sword.weaponType = PlayerBotEquipmentWeaponType::Sword;
+	auto axe = sword; axe.itemId = 2387; axe.twoHanded = true;
+	axe.weaponType = PlayerBotEquipmentWeaponType::Axe;
+	auto illegal = sword; illegal.itemId = 999; illegal.minimumLevel = 100;
+	auto consuming = sword; consuming.itemId = 998; consuming.breakChance = 1;
+	auto charged = sword; charged.itemId = 997; charged.consumingCharges = true;
+	const auto loadouts = equipment.recoveryLoadouts(player, normal, {sword, sword, axe, illegal, consuming, charged});
+	assert(loadouts.size() == 4 && loadouts[0].itemIds == normal.itemIds);
+	std::vector<PlayerBotEquipmentItemSnapshot> largeCatalog;
+	for (uint16_t id = 1000; id < 2000; ++id) {
+		auto item = sword;
+		item.itemId = id;
+		item.attack = id - 990;
+		item.extraDefense = 2000 - id;
+		largeCatalog.push_back(item);
+	}
+	const auto bounded = equipment.recoveryLoadouts(player, normal, largeCatalog);
+	assert(bounded.size() <= 14);
+	assert(std::any_of(bounded.begin(), bounded.end(), [](const auto& loadout) { return loadout.itemIds[6] == 1999; }));
+	assert(std::any_of(bounded.begin(), bounded.end(), [](const auto& loadout) { return loadout.itemIds[6] == 1000; }));
+	assert(loadouts[1].itemIds[CONST_SLOT_LEFT] == 0 && loadouts[1].itemIds[CONST_SLOT_RIGHT] == shield.itemId);
+	assert(loadouts[2].itemIds[CONST_SLOT_LEFT] == sword.itemId && loadouts[2].itemIds[CONST_SLOT_RIGHT] == shield.itemId);
+	assert(loadouts[3].itemIds[CONST_SLOT_RIGHT] == 0); // two-handed catalog explicitly stows shield
+	auto mirrored = normal;
+	std::swap(mirrored.items[CONST_SLOT_LEFT], mirrored.items[CONST_SLOT_RIGHT]);
+	std::swap(mirrored.itemIds[CONST_SLOT_LEFT], mirrored.itemIds[CONST_SLOT_RIGHT]);
+	const auto mirroredChoices = equipment.recoveryLoadouts(player, mirrored, {sword});
+	assert(mirroredChoices[2].itemIds[CONST_SLOT_RIGHT] == sword.itemId &&
+	       mirroredChoices[2].itemIds[CONST_SLOT_LEFT] == shield.itemId);
+	assert(equipment.weaponReady(player, normal));
+	assert(!equipment.weaponReady(player, loadouts[1]) && !equipment.weaponReady(player, loadouts[2]));
+	assert(!equipment.isStyleWeapon(player, sword)); // no global Paladin policy bypass
+	const auto fists = equipment.combatProfile(player, loadouts[1]);
+	const auto melee = equipment.combatProfile(player, loadouts[2]);
+	const auto ranged = equipment.combatProfile(player, normal);
+	assert(fists.attack == 7 && fists.attackSkill == 11 && fists.hitChance == 100 && fists.attackRange == 1);
+	assert(fists.defense == ranged.defense && fists.armor == ranged.armor && melee.attackSkill == 17);
+	assert(ranged.attackRange == 3 && ranged.hitChance == 76 && !ranged.blockedByShield);
+	assert(equipment.combatProfile(player, loadouts[3]).attackSkill == 22);
+	assert(!playerBotRecoveryLoadoutSpace(20, 18, 1));
+	assert(playerBotRecoveryLoadoutSpace(20, 17, 1));
+	assert(playerBotRecoveryLoadoutSpace(20, 18, 2, false));
+	assert(playerBotRecoveryMoveVerified(2389, 0, 4, 4, true));
+	assert(!playerBotRecoveryMoveVerified(2389, 2389, 4, 4, true));
+	assert(!playerBotRecoveryMoveVerified(2389, 0, 4, 3, true));
+	assert(playerBotRecoveryMoveVerified(2376, 2376, 1, 1, false));
+	assert(!playerBotRecoveryMoveVerified(2376, 2389, 1, 1, false));
+	assert(playerBotRecoveryCombatMatches(melee, melee));
+	auto altered = melee; --altered.attack;
+	assert(!playerBotRecoveryCombatMatches(altered, melee)); // same item ID is not proof of custom combat attributes
+
+	PlayerBotHuntPlanningStart start;
+	start.scan.candidateIndices = {10, 20}; start.scan.candidateCount = 2;
+	start.profile.recoveryLoadoutId = 1; start.profile.combat = ranged;
+	PlayerBotHuntPlanningProfile alternative;
+	alternative.recoveryLoadoutId = 2; alternative.combat = fists;
+	start.profile.recoveryAlternatives.push_back(alternative);
+	PlayerBotHuntPlanningSession session(start);
+	assert(session.totalCandidates() == 4);
+	assert(session.profile().recoveryAlternatives.empty()); // no catalog copied in each of 256 score-work items
+	for (size_t i = 0; i < 4; ++i) {
+		const auto work = session.nextScoringWork(1);
+		assert(work && work->candidateIndex == (i % 2 ? 20 : 10) && work->loadoutIndex == i / 2);
+		const auto profile = session.scoreProfile(work->loadoutIndex);
+		assert(profile.recoveryLoadoutId == i / 2 + 1 && profile.combat.attackRange == (i < 2 ? 3 : 1));
+		assert(!session.nextScoringWork(1)); // extra loadouts cannot escape the per-turn allowance
+		session.scoreCompleted(routeFixture(i));
+		assert((session.completeScoring() == PlayerBotHuntPlanningProgress::Scored) == (i == 3));
+	}
+
+	auto current = routeFixture(900), fallback = routeFixture(900);
+	for (auto* region : {&current, &fallback}) {
+		region->supplyRecovery = true;
+		region->currentHealth = region->maximumHealth = 215;
+		region->supplyProfile.potions = 0;
+		region->predictedFightSeconds = 5;
+		region->combatFraction = 0.5;
+		region->expectedDamagePerSecond = 0.01;
+		region->coinGoldPerMinute = 6;
+	}
+	current.recoveryLoadoutId = 1; current.combat = ranged; current.coinGoldPerMinute = 12;
+	current.supplyProfile.kinds = {{PlayerBotSupplyKind::ThrowingWeapon, 2389, 4, 1, {}, 0.1, 9}};
+	fallback.recoveryLoadoutId = 2; fallback.combat = fists;
+	PlayerBotHuntRouteSelection selector({current, fallback});
+	for (const auto* region : {&current, &fallback}) {
+		auto request = selector.next();
+		assert(request.recoveryLoadoutId == region->recoveryLoadoutId && request.combat);
+		assert(request.combat->attackRange == region->combat.attackRange);
+		auto facts = routeFacts(); facts.approaches = {Position(200, 100, 7)};
+		facts.supplyProfile = region->supplyProfile; facts.huntDurationSeconds = 60;
+		selector.observe(request, facts);
+		selector.observe(selector.next(), facts);
+		assert(selector.next().stage == PlayerBotHuntRouteStage::Final);
+		const auto result = selector.observe(selector.next(), facts);
+		if (region == &current) {
+			assert(!result.selectedRouteRegion && result.completedCandidate && result.completedCandidate->recoveryNetIncomePerMinute() <= 0);
+			assert(result.rejectedVariants.empty()); // a weapon failure does not cool down fists at the same site
+		} else {
+			assert(result.terminal && result.selectedRouteRegion && result.selectedRouteRegion->recoveryLoadoutId == 2);
+			assert(result.selectedRouteRegion->routeValidated && result.selectedRouteRegion->recoveryNetIncomePerMinute() > 0);
+		}
+	}
+	fallback.routeValidated = true;
+	fallback.recoveryRouteHealthLoss = 92; // reported route exceeds 215 - ceil(0.8 * 215) == 43
+	fallback.fitSupplyWindow(1);
+	assert(!fallback.recoverySustainable() && !fallback.healthPreparation(1));
+	fallback.recoveryRouteHealthLoss = 0; fallback.fitSupplyWindow(1);
+	fallback.exitFare = 100;
+	assert(!fallback.recoverySustainable());
+	fallback.exitFare = 0;
+	fallback.recoveryPreparationCost = 100;
+	assert(!fallback.recoverySustainable());
+	fallback.recoveryPreparationCost = 0;
+	assert(playerBotHuntTravelAffordable(20, 0, 10, 10));
+	assert(!playerBotHuntTravelAffordable(19, 0, 10, 10)); // future loot cannot pay a promised return fare
+	auto higherGross = fallback;
+	higherGross.outboundFare = 5;
+	higherGross.coinGoldPerMinute = 7;
+	assert(playerBotPreferHuntRegion(fallback, higherGross));
+	assert(playerBotHuntCandidateCanBeatValidated(higherGross, fallback)); // gross key must not prune final net
+
+	using namespace std::chrono;
+	PlayerBotHuntRuntime runtime({});
+	PlayerBotHuntRuntimePlayerObservation actor;
+	actor.health = actor.maximumHealth = 215;
+	const auto now = steady_clock::time_point{} + seconds(1);
+	runtime.selectPlanningRegion(fallback, actor, now);
+	auto liveDeparture = fallback;
+	liveDeparture.recoveryRouteHealthLoss = 92;
+	liveDeparture.reconcileSupplies(1);
+	assert(!runtime.refreshRecoveryDeparture(liveDeparture)); // live return proof cannot spend the 80% floor
+	liveDeparture = fallback;
+	liveDeparture.returnRouteDangerCost = 10;
+	assert(runtime.refreshRecoveryDeparture(liveDeparture));
+	assert(runtime.region()->returnRouteDangerCost == 10); // arrival must use fresh, not hypothetical travel evidence
+	liveDeparture.recoveryLoadoutId = 99;
+	assert(!runtime.refreshRecoveryDeparture(liveDeparture));
+	runtime.beginCycle(now, 60);
+	assert(runtime.enterHuntArea(actor, fallback.supplyProfile, now));
+	runtime.sampleCombat({true, now, 215, 215, 100, 100, 1});
+	runtime.sampleCombat({true, now + seconds(30), 215, 215, 100, 100, 1});
+	for (int i = 0; i < 5; ++i) runtime.observeKill();
+	actor.experience = 100;
+	const auto outcome = runtime.complete(actor, now + seconds(60), 60);
+	assert(outcome && outcome->supplyDemand.empty() && runtime.regionPerformance().empty());
+	assert(runtime.supplyGlobalLearning().samples == 0);
+	assert(std::string(outcome->supplyObservation.reason) == "recovery_loadout_static");
+	assert(outcome->challenge.frontierBefore == outcome->challenge.frontierAfter);
+
+	PlayerBotPreparationBudget food;
+	assert(!food.completed(0, true));
+	assert(!food.completed(0, true));
+	assert(food.completed(0, true)); // renewed temporary food is not unlimited progress
+}
+
 void productiveHuntTripContracts()
 {
 	using namespace std::chrono;
@@ -4996,7 +5300,8 @@ void productiveHuntTripContracts()
 
 	auto limited = routeFixture(701);
 	limited.currentHealth = limited.maximumHealth = 100;
-	limited.coinGoldPerMinute = 6;
+	limited.coinGoldPerMinute = 600; // This contract isolates stock/arrival, not an unfunded net loss.
+	limited.healthPotionUnitPrice = 45;
 	limited.combatFraction = 1;
 	limited.expectedDamagePerSecond = 1;
 	limited.supplyProfile.potionHealing = 125;
@@ -5200,6 +5505,13 @@ void frozenHuntEconomicRankingContracts()
 		}
 		assert(selector.next().stage == PlayerBotHuntRouteStage::Final);
 		const auto selected = selector.observe(selector.next(), live);
+		if (recovery) {
+			// Recovery ranks final net income, not the frozen gross hint. This
+			// expensive supply itinerary must not authorize a loss-making outing.
+			assert(!selected.selectedRouteRegion && selected.completedCandidate);
+			assert(selected.completedCandidate->rejectionReason == "recovery_hunt_not_sustainable");
+			continue;
+		}
 		assert(selected.terminal && selected.selectedRouteRegion);
 		sameKey(*selected.selectedRouteRegion, frozen);
 		assert(selected.selectedRouteRegion->availableHuntSeconds == 30);
@@ -5274,7 +5586,7 @@ void frozenHuntEconomicRankingContracts()
 		}
 		for (const auto& validated : outcomes) for (const auto& result : outcomes) {
 			const int order = playerBotCompareHuntEconomicKeys(result.economicKey(), validated.economicKey());
-			if (order < 0) assert(!playerBotHuntCandidateCanBeatValidated(result, validated));
+			if (order < 0 && !recovery) assert(!playerBotHuntCandidateCanBeatValidated(result, validated));
 			if (!playerBotPreferHuntRegion(result, validated)) continue;
 			auto coarse = result;
 			coarse.estimatedTravelSeconds = 1000;
@@ -5500,12 +5812,14 @@ int main()
 	typedStockOptimisticXpContracts();
 	frozenHuntEconomicRankingContracts();
 	optimisticCoarseSupplyAdmissionContracts();
+	recoveryAlternativeContracts();
 	productiveHuntTripContracts();
 	backpackAcquisition();
 	paladinLoadouts();
 	carriedShieldUpgrade();
 	combatStyles();
 	toolReplenishmentPlannerGuards();
+	readinessGapPlannerReserve();
 	loggingContracts();
 	huntEconomy();
 	patrolOpportunity();

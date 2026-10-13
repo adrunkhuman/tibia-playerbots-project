@@ -68,7 +68,8 @@ namespace playerbot {
 			using SellValues = std::map<uint16_t, uint32_t>;
 			using EquipmentUpgradePredicate = std::function<bool(const Player&, const Item&)>;
 
-			PlayerBotInventoryPolicy(const SellValues& sellValues, EquipmentUpgradePredicate equipmentUpgrade);
+			PlayerBotInventoryPolicy(const SellValues& sellValues, EquipmentUpgradePredicate equipmentUpgrade,
+			                         std::function<bool(uint16_t)> heldEquipment = {});
 
 			uint32_t inventoryItemCount(const Player& player, uint16_t itemId) const;
 			uint64_t desiredCarriedGold(const Player& player) const;
@@ -92,6 +93,7 @@ namespace playerbot {
 		private:
 			const SellValues& sellValues;
 			EquipmentUpgradePredicate equipmentUpgrade;
+			std::function<bool(uint16_t)> heldEquipment;
 	};
 }
 

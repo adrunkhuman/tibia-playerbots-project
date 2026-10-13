@@ -32,7 +32,26 @@ The Knight scenarios `spell_training_low_supplies` and `spell_training_low_suppl
 
 Paladin healing has exact scenarios `paladin_spell_training` (paid learning, casting, and restart), `paladin_healing_economy` (spell choice and reserve), `paladin_mana_healing`, `paladin_healing_fallback`, and `paladin_supply_restock`. They seed Bot One as a Paladin, omit the other three bots, and do not establish sustained progression. `-SpellTraining`, `-SpellUse`, and `-Healing` include the relevant Paladin cases alongside Knight checks.
 
-`-Scenario paladin_spear_restock` checks paid restocking and hunt resumption in fresh level-8 and level-16 runs; `paladin_spear_break` checks equipping a backpack spare, ending the hunt at the reserve, and restocking. `equipment_purchase_spear` checks supply recovery from zero spears at startup in both hand orientations with only 39 gold, plus a zero-funds case that must stop after one unsuccessful service rather than loop or hunt unarmed. `paladin_spear_last_break` checks losing the final spear after hunting starts. Funded cases must buy three spears, equip them, and resume hunting without a terminal event. `paladin_spear_recovery_income` starts at 128/185 health with one spear and six gold. It requires a verified departure-healing potion use, a planner-selected stock-fitting recovery hunt, area arrival, combat, and coin looting without a reserve-one interruption. It controls corpse gold, not weapon breakage or sustainable economics. These scenarios use normalized gear and capacity, not the normal seed's capacity budget. `lua scripts/test-playerbot-spear-fixture.lua` checks their setup and verifiers without Docker.
+`-Scenario paladin_spear_restock` checks paid restocking and hunt resumption in fresh level-8 and level-16 runs; `paladin_spear_break` checks equipping a backpack spare, ending the hunt at the reserve, and restocking. `equipment_purchase_spear` checks supply recovery from zero spears at startup in both hand orientations with only 39 gold, plus a zero-funds case requiring a validated positive-net fist hunt, arrival and coin loot, or a bounded recovery-planning failure. A readiness bypass alone cannot pass. `paladin_spear_last_break` checks losing the final spear after hunting starts. Funded cases must buy three spears, equip them, and resume hunting without a terminal event. `paladin_spear_recovery_income` starts at 128/185 health with one spear and six gold. It requires a verified departure-healing potion use, a planner-selected stock-fitting recovery hunt, area arrival, combat, and coin looting without a reserve-one interruption. It controls corpse gold, not weapon breakage or sustainable economics. These scenarios use normalized gear and capacity, not the normal seed's capacity budget. `lua scripts/test-playerbot-spear-fixture.lua` checks their setup and verifiers without Docker.
+
+Recovery checks separate policy from engine integration:
+
+| Non-Docker check | Covers |
+| --- | --- |
+| `sh server/tests/playerbot_contracts.sh` | Legal loadouts, skills, receipts, space and gear protection, sliced scoring, net income, safety and no-progress bounds |
+| `sh server/tests/playerbotsurvival_contracts.sh` | Suppressed routine spending; emergency healing preserved |
+| `pwsh -File scripts/test-playerbot-recovery-assertions.ps1` | Valid recovery evidence or bounded rejection in the zero-funds scenario |
+| `lua server/tests/playerbot_recovery_fixture_contracts.lua`; `pwsh -File server/tests/playerbot_recovery_fixture_assertions.ps1` | Positive fixture setup, round-trip assertions, negative controls and fail-fast waits |
+
+These checks do not execute engine hand moves. With a rebuilt image, run both positive round trips:
+
+```powershell
+pwsh -File scripts/test-playerbot-gameplay.ps1 -Scenario recovery_fists,recovery_melee -SkipBuild
+```
+
+The [recovery overlay](../server/compose.playerbot-recovery.yaml) keeps real Thais terrain, depot and shops. It substitutes four renewing 20-HP quarry spawns (`ignoreSpawnBlock`), normalizes skills, gear, capacity and food, sets spear breakage to 100%, and starts with one equipped spear and zero carried/bank gold. Genuine combat deaths yield fixed 2,000-gold corpses; hit/damage rolls and item APIs remain normal.
+
+Both scenarios require matching safe, positive-net planning, verified temporary hands and live departure checks, area arrival, damage/death, normal corpse loot, depot return, gear restoration and paid restocking to three spears. Any terminal event fails immediately; each deadline is 900 seconds. Three-return exhaustion has policy coverage, not a live fixture. Passing proves the controlled pipeline, not natural profitability or unattended recovery.
 
 Ranged positioning (#235) has `ranged_position_control` (the Paladin fights like a melee class), `ranged_position` (open room: observed displacement, more than half the fight at distance 2–3, and less damage than the control), and `ranged_position_corner` (a shallow wall blocks immediate retreats; must fall back with `retreat_blocked`). Select them with `-Focused -RangedPosition`; exact `-Scenario ranged_position` automatically includes its control. These disposable fixtures use an isolated synthetic arena with a 64-tile retreat runway, normalize spear hits/damage/breakage and chaser damage, count damage through health-change events rather than sampled health loss, and require the chaser's defeat and subsequent coin loot. They do not test wall sliding or natural combat rolls. Non-Docker fixture checks are `lua server/tests/playerbot_ranged_fixture_contracts.lua` and `pwsh -File server/tests/playerbot_ranged_fixture_assertions.ps1`.
 
@@ -59,6 +78,7 @@ Run the assertion scripts relevant to the change:
 pwsh -File scripts/test-playerbot-navigation-assertions.ps1
 pwsh -File scripts/test-playerbot-cycle-assertions.ps1
 pwsh -File scripts/test-playerbot-readiness-assertions.ps1
+pwsh -File scripts/test-playerbot-recovery-assertions.ps1
 pwsh -File scripts/test-playerbot-log-parsing.ps1
 pwsh -File scripts/test-playerbot-runtime.ps1
 pwsh -File scripts/test-playerbot-scenario-isolation.ps1
@@ -81,6 +101,7 @@ sh server/tests/playerbothunttiming_contracts.sh
 sh server/tests/playerbotdamage_contracts.sh
 sh server/tests/playerbotrouting_contracts.sh
 sh server/tests/playerbottrainer_contracts.sh
+sh server/tests/playerbotserviceroute_contracts.sh
 sh server/tests/playerbotselllootapproach_contracts.sh
 sh server/tests/playerbotselllootbasket_contracts.sh
 sh server/tests/playerbotselllootfilter_contracts.sh
@@ -110,6 +131,8 @@ The trainer contracts exercise paid-fare plus spell/supply reserve boundaries, s
 The Maealil keyword check loads the actual NPC script and keyword handler. It verifies that healing spell names reach their paid offers while the word `heal` still provides free healing and condition removal. Use LuaJIT or Lua 5.4: the existing NPC modules do not load under Lua 5.5.
 
 A zero exit status and each script's explicit pass marker are the pass signal. These checks prove policy, arithmetic, parsing, and fixture contracts; they do not execute an ordinary live world.
+
+The [service-route contracts](../server/tests/playerbotserviceroute_contracts.cpp) exercise production sliced requests and quote checks with the real workflow, navigation runtime and planning budget. They cover walking-only sales/food, NPC-trip rejection, continuations, detours, interruptions, stale evidence and bounded search failure. Use the `CPPFLAGS` above. Graph and movement dispatch are synthetic; `-Focused -SellLoot` checks loaded-world routing, dialogue and sales.
 
 ### Depot liquidation timing
 

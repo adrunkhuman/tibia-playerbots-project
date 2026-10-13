@@ -228,9 +228,12 @@ void PlayerBotController::lootCorpse(Player* player, const Position& currentPosi
 			const int8_t sourceId = player->getContainerID(&source);
 			if (sourceId < 0) return;
 			const size_t containerSnapshotIndex = snapshot.inventory.containers.size();
+			const bool recoveryBag = recoveryEquipment && player->getInventoryItem(CONST_SLOT_BACKPACK) == &source;
+			const uint32_t capacity = recoveryBag ? std::max<uint32_t>(source.size(),
+			    source.capacity() - std::min<uint32_t>(source.capacity(), playerBotRecoveryEquipmentSlots)) : source.capacity();
 			snapshot.inventory.containers.push_back({&source, source.getID(), source.getClientID(),
 				static_cast<uint8_t>(source.size()),
-				static_cast<uint8_t>(std::min<uint32_t>(source.capacity(), UINT8_MAX)), sourceId, true});
+				static_cast<uint8_t>(std::min<uint32_t>(capacity, UINT8_MAX)), sourceId, true});
 			const ItemDeque& items = source.getItemList();
 			for (size_t index = 0; index < items.size(); ++index) {
 				if (snapshot.inventory.cargo.size() >= maximumLootCargoItems) {

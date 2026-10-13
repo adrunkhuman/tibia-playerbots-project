@@ -208,7 +208,7 @@ std::optional<PlayerBotNavigationRoutePlan> PlayerBotController::advanceHuntTrav
 	if (completedEvidence) completedEvidence->reset();
 	const auto began = std::chrono::steady_clock::now();
 	timing.requestSequence = request.sequence;
-	const auto combat = equipmentPolicy.combatProfile(PlayerBotEquipmentAdapter::player(player),
+	const auto combat = request.combat ? *request.combat : equipmentPolicy.combatProfile(PlayerBotEquipmentAdapter::player(player),
 	                                                 PlayerBotEquipmentAdapter::loadout(player));
 	const bool rope = g_game.findItemOfType(&player, playerbot::ropeItemId, true) != nullptr;
 	const bool shovel = g_game.findItemOfType(&player, shovelToolItemId, true) != nullptr;
@@ -266,7 +266,7 @@ std::optional<PlayerBotNavigationRoutePlan> PlayerBotController::advanceHuntTrav
 		w.profile = key.str();
 		w.restartBudget = restartBudget;
 		w.riskRevision = riskRevision;
-		w.policy = navigationCostPolicy(player);
+		w.policy = navigationCostPolicy(player, request.combat ? &*request.combat : nullptr);
 		w.policy.risk = riskProfile;
 		w.riskProfile = riskProfile;
 		w.walking.metrics.attempted = true;

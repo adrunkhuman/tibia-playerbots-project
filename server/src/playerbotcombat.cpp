@@ -184,10 +184,34 @@ namespace {
 
 	PlayerBotCombatProfile huntCombatProfile(Player& player)
 	{
-		const Item* weapon = player.getWeapon(true);
-		return {player.getLevel(), player.getMaxHealth(), player.getArmor(), player.getDefense(),
-		        weapon ? weapon->getAttack() : 7,
-		        weapon ? player.getWeaponSkill(weapon) : player.getSkillLevel(SKILL_FIST), player.getAttackFactor()};
+		return PlayerBotEquipmentPolicy().combatProfile(PlayerBotEquipmentAdapter::player(player),
+		    PlayerBotEquipmentAdapter::loadout(player));
+	}
+
+	PlayerBotHuntPlanningProfile recoveryPlanningFacts(Player& player, const PlayerBotEquipmentLoadout& loadout, uint32_t id)
+	{
+		const PlayerBotEquipmentPolicy policy;
+		auto facts = PlayerBotEquipmentAdapter::player(player);
+		auto profile = huntPlanningFacts(player, policy.combatProfile(facts, loadout));
+		profile.recoveryLoadoutId = id;
+		profile.equipmentItemIds = loadout.itemIds;
+		facts.defenseFactor = 1.0f;
+		profile.supplyCapabilityDefense = policy.combatProfile(facts, loadout).defense;
+		// Emergency healing is available, but cannot subsidize an income proof.
+		profile.lightHealingLegal = profile.supply.spellLegal = false;
+		profile.potionCount = profile.supply.potions = 0;
+		profile.supply.kinds.clear();
+		for (slots_t hand : {CONST_SLOT_RIGHT, CONST_SLOT_LEFT}) {
+			const auto& weapon = loadout.items[hand];
+			if (weapon.weaponType != PlayerBotEquipmentWeaponType::Distance) continue;
+			const Item* held = player.getInventoryItem(hand);
+			const uint32_t interval = held && held->getID() == weapon.itemId && held->getAttackSpeed() ?
+			    held->getAttackSpeed() : player.getVocation()->getAttackSpeed();
+			profile.supply.kinds = {{PlayerBotSupplyKind::ThrowingWeapon, weapon.itemId,
+			    static_cast<const Cylinder&>(player).getItemTypeCount(weapon.itemId), 0, {},
+			    playerBotThrowingBreakDemand(weapon.breakChance, interval)}};
+		}
+		return profile;
 	}
 
 	std::optional<std::pair<double, double>> manageablePassageFight(
@@ -351,6 +375,7 @@ PlayerBotSurvivalSnapshot PlayerBotController::survivalSnapshot(const Player& pl
 		}
 		snapshot.spells.push_back(std::move(spell));
 	}
+	snapshot.recoveryOuting = recoveryEquipment.has_value();
 	return snapshot;
 }
 
@@ -546,7 +571,7 @@ void PlayerBotController::finishPreparation(Player& player, const Position& posi
 	emit("goal_result", position, std::string("\"goal\":\"prepare\",\"reason\":") + jsonString(reason) +
 	    ",\"remaining_gap\":" + std::to_string(gap));
 	retirePreparation(&player, position, reason);
-	if (exhausted) { stop("preparation_no_progress", position); return; }
+	if (exhausted) { stop(supplyRecovery.active() ? "recovery_no_safe_income_outing" : "preparation_no_progress", position); return; }
 	huntSupplyHandoff.replan();
 	// Only a fresh authoritative hunt evaluation can authorize departure.
 	startHunt(&player, position, "preparation_observed");
@@ -651,6 +676,13 @@ bool PlayerBotController::handleHealing(Player* player, const Position& currentP
 	if (command.potionVerification) {
 		const auto& verification = *command.potionVerification;
 		if (verification.result == PlayerBotPotionVerificationResult::Success) {
+			if (supplyRecovery.active()) {
+				// The recovery proof does not budget routine potions. Preparatory
+				// or emergency consumption is real debt, not free future income.
+				const uint32_t price = cheapestShopPrice(*player, verification.before.itemId);
+				recoveryPreparationCost = price == UINT32_MAX ? UINT64_MAX :
+				    recoveryPreparationCost + std::min<uint64_t>(price, UINT64_MAX - recoveryPreparationCost);
+			}
 			logHealResult(verification.before.itemId, "success", nullptr, verification.before, verification.after, currentPosition);
 			// Hunt recovery evidence counts health potions only; mana potions have typed demand.
 			if (!verification.before.restoresMana) recordHuntRecovery(true);
@@ -1357,6 +1389,9 @@ void PlayerBotController::emitHuntRegionCandidate(const PlayerBotHuntRegion& reg
 	       << ",\"expected_coin_gold_per_minute\":" << region.coinGoldPerMinute
 	       << ",\"cash_pressure\":" << (region.cashPressure ? "true" : "false")
 	       << ",\"supply_recovery\":" << (region.supplyRecovery ? "true" : "false")
+	       << ",\"recovery_loadout_id\":" << region.recoveryLoadoutId
+	       << ",\"recovery_net_gold_per_minute\":" << (std::isfinite(region.recoveryNetIncomePerMinute()) ?
+	           std::to_string(region.recoveryNetIncomePerMinute()) : "null")
 	       << ",\"recovery_route_health_loss\":" << region.recoveryRouteHealthLoss
 	       << ",\"estimated_return_seconds\":" << region.estimatedReturnSeconds
 	       << ",\"estimated_supply_seconds\":" << region.estimatedSupplySeconds
@@ -1730,6 +1765,7 @@ void PlayerBotController::finishHuntRegion(const Player& player, const Position&
 	       << ",\"retreat_observed\":" << (std::strcmp(reason, "hunt_region_observed_danger") == 0 ? "true" : "false")
 	       << ",\"danger_observed\":" << (combat.dangerObserved ? "true" : "false") << ",\"death_observed\":" << (combat.deathObserved ? "true" : "false")
 	       << ",\"frontier_before\":" << completion->challenge.frontierBefore << ",\"frontier_after\":" << completion->challenge.frontierAfter;
+	recoveryPreparationCost -= std::min(recoveryPreparationCost, completion->coinGoldAcquired);
 	emit("hunt_region_outcome", position, fields.str());
 	if (Player* speakingPlayer = g_game.getPlayerByID(playerId)) say(*speakingPlayer, "Leaving hunt: " + std::string(reason) + ". " + std::to_string(combat.kills) + " kills, " + std::to_string(completion->experienceGained) + " experience.");
 }
@@ -1825,12 +1861,51 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 				kind.unitPrice = price == UINT32_MAX ? 0 : price;
 			}
 
+			recoveryLoadoutCatalog.clear();
+			if (supplyRecovery.active()) {
+				const auto current = PlayerBotEquipmentAdapter::loadout(player);
+				std::vector<PlayerBotEquipmentItemSnapshot> carried;
+				for (uint8_t slot = CONST_SLOT_FIRST; slot <= CONST_SLOT_LAST; ++slot) {
+					const Item* root = player.getInventoryItem(static_cast<slots_t>(slot));
+					const Container* container = root ? root->getContainer() : nullptr;
+					if (!container) continue;
+					for (auto it = container->iterator(); it.hasNext(); it.advance()) {
+						const auto type = (*it)->getWeaponType();
+						if ((*it)->getCharges() == 0 && (type == WEAPON_SWORD || type == WEAPON_CLUB || type == WEAPON_AXE))
+							carried.push_back(PlayerBotEquipmentAdapter::item(**it));
+					}
+				}
+				for (const auto& loadout : equipmentPolicy.recoveryLoadouts(PlayerBotEquipmentAdapter::player(player), current, carried))
+					if (recoveryLoadoutSpace(player, loadout)) recoveryLoadoutCatalog.push_back(loadout);
+				std::vector<PlayerBotHuntPlanningProfile> alternatives;
+				for (size_t index = 0; index < recoveryLoadoutCatalog.size(); ++index) {
+					auto alternative = recoveryPlanningFacts(player, recoveryLoadoutCatalog[index], index + 1);
+					alternative.cashPressure = profile.cashPressure;
+					alternative.recoveryPreparationCost = recoveryPreparationCost;
+					alternative.healthPotionUnitPrice = profile.healthPotionUnitPrice;
+					for (auto& kind : alternative.supply.kinds) {
+						const auto price = cheapestShopPrice(player, kind.itemId);
+						kind.unitPrice = price == UINT32_MAX ? 0 : price;
+					}
+					alternatives.push_back(std::move(alternative));
+				}
+				if (alternatives.empty()) {
+					stop("recovery_loadout_unavailable", position);
+					return input;
+				}
+				if (!alternatives.empty()) {
+					profile = std::move(alternatives.front());
+					alternatives.erase(alternatives.begin());
+					profile.recoveryAlternatives = std::move(alternatives);
+				}
+			}
 			input.start = {{std::move(scan), std::move(profile), std::move(topologyDistances),
 			                std::move(topologyReachability), huntTransportCatalog(), topologyTimeUs}};
 		}
 		return input;
 	};
 	PlayerBotHuntRuntimeOutcome outcome = huntCoordinator.advancePlanning(planningInput(), now, fixtureObservation);
+	if (telemetry.terminalLogged()) return false;
 	if (outcome.invalidateCache) {
 		const uint64_t invalidatedPlanningPass = outcome.planningPass;
 		const uint64_t invalidatedScoringRevision = outcome.scoringRevision;
@@ -2073,7 +2148,8 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 			if (request->routeAvailable) {
 				const auto routeStarted = std::chrono::steady_clock::now();
 				auto pendingPlan = advanceHuntTravelRoute(player, *request,
-				    request->stage == PlayerBotHuntRouteStage::Outbound ? position : request->from, routes, carriedGoldReserve, false,
+				    request->stage == PlayerBotHuntRouteStage::Outbound ? position : request->from, routes,
+				    request->recoveryLoadoutId ? 0 : carriedGoldReserve, false,
 				    nullptr, retained ? &completedEvidence : nullptr);
 				routeTime += std::chrono::steady_clock::now() - routeStarted;
 				routedThisTurn = true;
@@ -2114,7 +2190,9 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 			if (request->stage == PlayerBotHuntRouteStage::Depot && observation.reached &&
 			    playerBotNavigationRiskAccepts(riskProfile, observation.dangerCost, observation.peakDanger)) {
 				observation.potionReserve = routePotionReserve(request->outboundDangerCost, observation.dangerCost);
-				observation.supplyProfile = huntPlanningFacts(player, huntCombatProfile(player)).supply;
+				observation.supplyProfile = request->recoveryLoadoutId ?
+				    recoveryPlanningFacts(player, recoveryLoadoutCatalog.at(request->recoveryLoadoutId - 1), request->recoveryLoadoutId).supply :
+				    huntPlanningFacts(player, huntCombatProfile(player)).supply;
 				observation.funds = player.getMoney() + player.getBankBalance();
 			}
 		} else if (request->stage == PlayerBotHuntRouteStage::DiscoverSupply) {
@@ -2133,7 +2211,9 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 		} else if (request->stage == PlayerBotHuntRouteStage::Final) {
 			observation.potionReserve = routePotionReserve(
 			    request->outboundDangerCost, request->returnDangerCost);
-			observation.supplyProfile = huntPlanningFacts(player, huntCombatProfile(player)).supply;
+			observation.supplyProfile = request->recoveryLoadoutId ?
+			    recoveryPlanningFacts(player, recoveryLoadoutCatalog.at(request->recoveryLoadoutId - 1), request->recoveryLoadoutId).supply :
+			    huntPlanningFacts(player, huntCombatProfile(player)).supply;
 			observation.funds = player.getMoney() + player.getBankBalance();
 			observation.recoverySpendingReserve = recoverySpendingReserve(
 			    player, potionStockTarget(player, observation.potionReserve));
@@ -2142,8 +2222,11 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 				otherFloorCosts.push_back({stock.count, stock.rule.safetyFloor,
 				    stock.count < stock.rule.safetyFloor ? cheapestShopPrice(player, stock.rule.itemId) : 0});
 			}
-			observation.recoverySpendingReserve = playerBotSupplyFloorSpendingReserve(
+			observation.recoverySpendingReserve = request->recoveryLoadoutId ? 0 : playerBotSupplyFloorSpendingReserve(
 			    observation.recoverySpendingReserve, otherFloorCosts);
+			// Recovery proves no routine healing spend. It may fund a profitable
+			// fare instead of reserving an already unaffordable normal restock;
+			// final admission still requires both fares in current funds.
 			observation.recoveryRouteHealthLoss =
 			    (static_cast<double>(request->outboundDangerCost) + request->returnDangerCost) *
 			    player.getMaxHealth() / riskProfile.healthLossCost;
@@ -2228,7 +2311,7 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 		}
 		if (huntSupplyHandoff.noProgress(routeResult.outcome, facts) || preparationExhausted) {
 			stop(routeResult.outcome == PlayerBotHuntRouteOutcome::Incomplete ?
-			    "hunt_planning_incomplete" : "hunt_supply_no_progress", position);
+			    "hunt_planning_incomplete" : supplyRecovery.active() ? "recovery_no_safe_income_outing" : "hunt_supply_no_progress", position);
 			return false;
 		}
 		if (routeResult.outcome == PlayerBotHuntRouteOutcome::NeedsSupplies && routeResult.supplyShortage) {
@@ -2264,9 +2347,40 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 	huntPatrolTrip.reset();
 	huntTransitProgress.reset();
 	PlayerBotHuntRegion selected = std::move(*safeSelection);
-	preparationBudget.reset();
-	huntSupplyHandoff.selected(selected.supplyRecovery &&
-	    playerBotMandatorySupplyDeficit(supplyStocks(player), false).missing != 0);
+	if (selected.recoveryLoadoutId) {
+		initializeRecoveryProgress(player);
+		recoveryProgress.selected();
+		if (selected.recoveryLoadoutId > recoveryLoadoutCatalog.size() ||
+		    !recoveryLoadoutSpace(player, recoveryLoadoutCatalog[selected.recoveryLoadoutId - 1])) {
+			stop("recovery_loadout_inventory_changed", position);
+			return false;
+		}
+		if (!recoveryEquipment) {
+			recoveryEquipment.emplace();
+			recoveryEquipment->original = PlayerBotEquipmentAdapter::loadout(player);
+			for (const auto& basis : recoveryFundingBasis)
+				recoveryEquipment->funding.push_back(basis.normal);
+		}
+		// Stop engine-owned attack/follow/walk work before the hypothetical
+		// profile becomes selected. No old-weapon attack may race item moves.
+		g_game.playerSetAttackedCreature(playerId, 0);
+		g_game.playerFollowCreature(playerId, 0);
+		g_game.playerStopAutoWalk(playerId);
+		recoveryEquipment->target = recoveryLoadoutCatalog[selected.recoveryLoadoutId - 1];
+		recoveryEquipment->supplies = selected.supplyProfile;
+		recoveryEquipment->switching = true;
+		recoveryEquipment->attempts = 0;
+		recoveryWeaponPlanning = false;
+		emit("recovery_loadout", position, "\"result\":\"selected\",\"loadout_id\":" +
+		    std::to_string(selected.recoveryLoadoutId) + ",\"region_id\":" + std::to_string(selected.id) +
+		    ",\"planning_pass\":" + std::to_string(routeResult.planningPass) +
+		    ",\"scoring_revision\":" + std::to_string(routeResult.scoringRevision) + ",\"left_item_id\":" +
+		    std::to_string(recoveryEquipment->target.itemIds[CONST_SLOT_LEFT]) + ",\"right_item_id\":" +
+		    std::to_string(recoveryEquipment->target.itemIds[CONST_SLOT_RIGHT]) + ",\"expected_net_gold_per_minute\":" +
+		    std::to_string(selected.recoveryNetIncomePerMinute()));
+	}
+	if (!selected.supplyRecovery) preparationBudget.reset();
+	huntSupplyHandoff.selected(selected.supplyRecovery);
 	selectedHuntRoute = huntRouteRetention.take(selected);
 	if (selectedHuntRoute) {
 		selectedHuntRoute->revision = selected.atlasRevision;
@@ -2352,12 +2466,16 @@ bool PlayerBotController::selectHuntRegion(Player& player, const Position& posit
 		recordHuntPlanningSlice(std::move(record));
 	}
 	budgetCharge.finish(); // Include slice telemetry in actual charged service.
-	if (stopForScopeExhaustion) stop("hunt_scope_exhausted", position);
+	if (stopForScopeExhaustion) stop(supplyRecovery.active() ? "recovery_no_safe_income_outing" : "hunt_scope_exhausted", position);
 	return selected;
 }
 
 void PlayerBotController::beginHuntCycle(Player* player, const Position& position, const char* reason)
 {
+	if (recoveryEquipment && recoveryEquipment->switching) {
+		schedule(SCHEDULER_MINTICKS);
+		return;
+	}
 	pendingHuntCompletionReason.clear();
 	const uint32_t duration = static_cast<uint32_t>(std::max<int32_t>(1, g_config.getNumber(ConfigManager::PLAYERBOT_HUNT_DURATION_SECONDS)));
 	huntCoordinator.beginHuntCycle(std::chrono::steady_clock::now(), duration);
@@ -2463,6 +2581,7 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 		playerBotHuntPlanningBudget().cancel(playerId, std::chrono::steady_clock::now());
 	}};
 	if (turnRouter.cyclePhase() == CyclePhase::Hunt && huntCoordinator.huntActive() && !huntRegionReached &&
+	    !(recoveryEquipment && recoveryEquipment->departurePending) &&
 	    huntCoordinator.insideHuntArea(currentPosition, Map::maxClientViewportX, Map::maxClientViewportX + 1,
 	                                    Map::maxClientViewportY, Map::maxClientViewportY + 1)) {
 		if (!ensureCombatReady(player, currentPosition, "hunt_arrival")) return;
@@ -2470,7 +2589,8 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 			schedule(1000);
 			return;
 		}
-		PlayerBotHuntPlanningProfile arrivalProfile = huntPlanningFacts(*player, huntCombatProfile(*player));
+		PlayerBotHuntPlanningProfile arrivalProfile = recoveryEquipment ?
+		    recoveryPlanningFacts(*player, PlayerBotEquipmentAdapter::loadout(*player), 1) : huntPlanningFacts(*player, huntCombatProfile(*player));
 		PlayerBotHuntRuntimePlayerObservation arrival = huntPlayerObservation(*player);
 		arrival.supplyCapability = playerBotSupplyCapability(arrivalProfile);
 		const auto arrivalTime = std::chrono::steady_clock::now();
@@ -2496,7 +2616,8 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 		processReadinessEquipment(player, currentPosition);
 		return;
 	}
-	if (huntCoordinator.hasDefensiveCombat()) {
+	const bool changingRecoveryHands = recoveryEquipment && recoveryEquipment->switching;
+	if (!changingRecoveryHands && huntCoordinator.hasDefensiveCombat()) {
 		if (PlayerBotTransitCombat::lootDeadlineRequiresRelease(
 		        turnRouter.scenarioStage() == ScenarioStage::LootCorpse,
 		        huntCoordinator.lootTimedOut(std::chrono::steady_clock::now()))) {
@@ -2508,14 +2629,15 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 		processDefensiveCombat(player, currentPosition);
 		return;
 	}
-	if (attackDefensiveThreat(player, currentPosition)) {
+	if (!changingRecoveryHands && attackDefensiveThreat(player, currentPosition)) {
 		interruptTrainerRouteWork();
 		schedule(navigationInterval);
 		return;
 	}
 	PlayerBotTurnObservation turn;
 	turn.trainerDiscoveryActive = trainerGoalSelectionPending || trainerDiscovery.has_value();
-	turn.progressionActive = progressionRuntime.session().active() != PlayerBotProgressionProcedure::None;
+	turn.progressionActive = progressionRuntime.session().active() != PlayerBotProgressionProcedure::None ||
+	    (recoveryEquipment && recoveryEquipment->switching);
 	turn.magicTrainingActive = !preparationEvaluationPending && progressionRuntime.activeGoal() == TopLevelGoal::MagicTraining;
 	turn.preparationActive = preparationEvaluationPending || preparationOption != PlayerBotPreparationOption::None;
 	if (!turn.trainerDiscoveryActive && !turn.progressionActive && !turn.magicTrainingActive && !turn.preparationActive) {
@@ -2538,7 +2660,8 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 		return;
 	}
 	if (turnCommand == PlayerBotTurnCommand::Progression) {
-		processProgression(player, currentPosition);
+		if (recoveryEquipment && recoveryEquipment->switching) processRecoveryEquipment(*player, currentPosition);
+		else processProgression(player, currentPosition);
 		return;
 	}
 	if (turnCommand == PlayerBotTurnCommand::Prepare) {
@@ -2653,7 +2776,7 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 		schedule(navigationInterval);
 		return;
 	}
-	if (attackVisibleMonster(player, currentPosition)) {
+	if (!(recoveryEquipment && recoveryEquipment->departurePending) && attackVisibleMonster(player, currentPosition)) {
 		schedule(navigationInterval);
 		return;
 	}
@@ -3077,6 +3200,57 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 			huntReturnCoverage.validate(huntReturnCoverageVariantId, coverageRevision,
 			                            huntReturnCoverageContext(*player, patrol.destination));
 		}
+		if (recoveryEquipment && recoveryEquipment->departurePending && validateReturn) {
+			// The ordinary route ceiling alone is not the recovery health floor.
+			// Refit the selected productive outing with live health, stocks and
+			// the freshly proved travel legs before spending any of that floor.
+			auto proof = huntCoordinator.huntRegion();
+			if (!proof) { stop("recovery_departure_proof_missing", currentPosition); return; }
+			const auto live = recoveryPlanningFacts(*player, PlayerBotEquipmentAdapter::loadout(*player), proof->recoveryLoadoutId);
+			const auto prices = proof->supplyProfile.kinds;
+			proof->currentHealth = player->getHealth();
+			proof->maximumHealth = player->getMaxHealth();
+			proof->supplyProfile = live.supply;
+			for (auto& kind : proof->supplyProfile.kinds) {
+				const auto price = std::find_if(prices.begin(), prices.end(), [&](const auto& old) {
+					return old.kind == kind.kind && old.itemId == kind.itemId;
+				});
+				if (price != prices.end()) kind.unitPrice = price->unitPrice;
+			}
+			const auto& outbound = huntPatrolOutboundPlan->metrics;
+			proof->routeDangerCost = outbound.dangerCost;
+			proof->returnRouteDangerCost = preflight.metrics.dangerCost;
+			proof->recoveryRouteHealthLoss = (static_cast<double>(outbound.dangerCost) + preflight.metrics.dangerCost) *
+			    player->getMaxHealth() / riskProfile.healthLossCost;
+			const auto seconds = [&](const auto& leg) {
+				return leg.estimatedTravelSeconds > 0 ? leg.estimatedTravelSeconds :
+				    playerBotHuntCoarseTravelSeconds(leg.steps, static_cast<const Creature&>(*player).getStepSpeed());
+			};
+			proof->estimatedTravelSeconds = seconds(outbound);
+			proof->estimatedReturnSeconds = seconds(preflight.metrics);
+			proof->outboundFare = outbound.fare;
+			proof->exitFare = preflight.metrics.fare;
+			proof->recoveryPreparationCost = recoveryPreparationCost;
+			proof->availableHuntSeconds = std::min<double>(proof->availableHuntSeconds, huntCoordinator.effectiveHuntDurationSeconds());
+			proof->reconcileSupplies(proof->supplyProfile.reserve);
+			const double departureNet = proof->recoveryNetIncomePerMinute();
+			const double departureHealthLoss = proof->recoveryRouteHealthLoss;
+			if (!huntCoordinator.refreshRecoveryDeparture(std::move(*proof))) {
+				emit("navigation_progress", currentPosition, "\"result\":\"skipped\",\"reason\":\"recovery_departure_not_sustainable\"");
+				finishHuntAndReturn(player, currentPosition, "recovery_departure_not_sustainable");
+				schedule(SCHEDULER_MINTICKS);
+				return;
+			}
+			recoveryEquipment->departurePending = false;
+			const auto actual = huntCombatProfile(*player);
+			emit("navigation_progress", currentPosition,
+			     "\"result\":\"recovery_departure_validated\",\"health\":" + std::to_string(player->getHealth()) +
+			         ",\"attack\":" + std::to_string(actual.attack) + ",\"attack_skill\":" + std::to_string(actual.attackSkill) +
+			         ",\"outbound_danger\":" + std::to_string(huntPatrolOutboundPlan->metrics.dangerCost) +
+			         ",\"return_danger\":" + std::to_string(preflight.metrics.dangerCost) +
+			         ",\"route_health_loss\":" + std::to_string(departureHealthLoss) +
+			         ",\"expected_net_gold_per_minute\":" + std::to_string(departureNet));
+		}
 		PlayerBotNavigationRoutePlan outboundPlan = validateReturn ?
 		    std::move(*huntPatrolOutboundPlan) : std::move(preflight);
 		resetNavigation();
@@ -3131,7 +3305,8 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 	if (reached.command == PlayerBotHuntPatrolCommand::WaypointReached) {
 		if (!huntRegionReached) {
 			if (!ensureCombatReady(player, currentPosition, "hunt_arrival")) return;
-			PlayerBotHuntPlanningProfile arrivalProfile = huntPlanningFacts(*player, huntCombatProfile(*player));
+			PlayerBotHuntPlanningProfile arrivalProfile = recoveryEquipment ?
+			    recoveryPlanningFacts(*player, PlayerBotEquipmentAdapter::loadout(*player), 1) : huntPlanningFacts(*player, huntCombatProfile(*player));
 			PlayerBotHuntRuntimePlayerObservation arrival = huntPlayerObservation(*player);
 			arrival.supplyCapability = playerBotSupplyCapability(arrivalProfile);
 			if (!huntCoordinator.enterHuntArea(arrival, arrivalProfile.supply, now)) {
