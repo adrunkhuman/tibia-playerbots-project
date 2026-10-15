@@ -32,6 +32,7 @@ param(
     [switch]$FullNavigation,
 	[switch]$TargetApproach,
 	[switch]$RangedPosition,
+	[switch]$RaidTravel,
     [switch]$CorpseLoot,
     [switch]$DeathTelemetry,
 	[switch]$Healing,
@@ -90,6 +91,7 @@ $scenarioCatalog = @(
 	"equipment_purchase_rejected", "equipment_purchase_spear", "equipment_tool_replenishment", "equipment_tool_nested_inventory", "adaptive_challenge", "mainland_equipment_reward", "oracle_departure",
 		"oracle_level_eight_interrupt", "oracle_level_eight_recovery",
 		"navigation", "navigation_recovery", "svargrond_local_route_recovery", "navigation_fare_rejection", "navigation_risk_rejection", "door_passages", "carlin_service_route", "mutable_portal_route", "mutable_portal_open_no_shovel", "patrol_recovery", "target_approach", "target_approach_unreachable", "target_attacker_priority", "ranged_position_control", "ranged_position", "ranged_position_corner",
+	"raid_travel", "raid_recovery",
 	"paladin_spell_training", "paladin_healing_economy", "paladin_mana_healing", "paladin_healing_fallback", "paladin_supply_restock",
 	"spell_training", "spell_training_shortlist", "spell_training_low_supplies", "spell_training_low_supplies_unaffordable", "spell_use", "spell_calibration", "magic_training_haste", "magic_training_great_light",
 	"magic_training_light", "magic_training_refresh", "magic_training_reserve", "magic_training_exact_full",
@@ -105,8 +107,8 @@ foreach ($scenarioName in $scenarioCatalog) {
 		throw "Duplicate gameplay scenario name: $scenarioName"
 	}
 }
-if ($scenarioCatalog.Count -ne 122) {
-	throw "The gameplay scenario catalog must contain 122 scenarios; found $($scenarioCatalog.Count)."
+if ($scenarioCatalog.Count -ne 124) {
+	throw "The gameplay scenario catalog must contain 124 scenarios; found $($scenarioCatalog.Count)."
 }
 $requestedScenarioNames = @($Scenario | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
 $exactScenarioSelection = $requestedScenarioNames.Count -gt 0
@@ -161,6 +163,7 @@ $minimumServerOnlineEvents = 0
 . $PSScriptRoot/playerbot-gameplay/assertions-readiness.ps1
 . $PSScriptRoot/playerbot-gameplay/assertions-recovery.ps1
 . $PSScriptRoot/playerbot-gameplay/assertions-navigation.ps1
+. $PSScriptRoot/playerbot-gameplay/assertions-raid.ps1
 . $PSScriptRoot/playerbot-gameplay/assertions-spells.ps1
 . $PSScriptRoot/playerbot-gameplay/assertions-magic-training.ps1
 
@@ -168,7 +171,7 @@ if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
 	throw "Docker is required to run the playerbot gameplay suite."
 }
 
-$focusedScenarioRequested = $FullNavigation -or $TargetApproach -or $RangedPosition -or $CorpseLoot -or $DeathTelemetry -or $Healing -or $ValueLoot -or
+$focusedScenarioRequested = $FullNavigation -or $TargetApproach -or $RangedPosition -or $RaidTravel -or $CorpseLoot -or $DeathTelemetry -or $Healing -or $ValueLoot -or
 	$PickupProgression -or $GoalArbitration -or $OracleDeparture -or $StaminaProjection -or $HuntRegionPlanning -or
 	$AdaptiveChallenge -or
 	$CombatReadiness -or $EquipmentOffers -or $EquipmentPurchases -or $MainlandRewards -or $Depot -or $SlottedLoot -or $SellLoot -or $MainlandLoop -or $SpellTraining -or $SpellUse -or $SpellCalibration -or $MagicTraining -or $MagicTrainingCase
@@ -176,7 +179,7 @@ if ($Focused -and -not $focusedScenarioRequested) {
 	throw "-Focused requires at least one focused scenario switch."
 }
 if (-not $Focused) {
-	$FullNavigation = $TargetApproach = $RangedPosition = $CorpseLoot = $DeathTelemetry = $Healing = $ValueLoot = $true
+	$FullNavigation = $TargetApproach = $RangedPosition = $RaidTravel = $CorpseLoot = $DeathTelemetry = $Healing = $ValueLoot = $true
 	$PickupProgression = $GoalArbitration = $OracleDeparture = $StaminaProjection = $HuntRegionPlanning = $true
 	$AdaptiveChallenge = $CombatReadiness = $EquipmentOffers = $EquipmentPurchases = $MainlandRewards = $true
 	$Depot = $SlottedLoot = $SellLoot = $MainlandLoop = $SpellTraining = $SpellUse = $SpellCalibration = $MagicTraining = $true
@@ -223,6 +226,8 @@ try {
 	. $PSScriptRoot/playerbot-gameplay/scenarios-spells.ps1
 
 	. $PSScriptRoot/playerbot-gameplay/scenarios-combat-loot.ps1
+
+	. $PSScriptRoot/playerbot-gameplay/scenarios-raid.ps1
 	if (-not $Focused) {
 		$resultNames = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
 		foreach ($result in $scenarioResults) {

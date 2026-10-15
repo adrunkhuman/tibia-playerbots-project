@@ -5,6 +5,7 @@
 #include "playerbothuntrouteselection.h"
 #include "playerbotroutechanges.h"
 #include "playerbotnavigationruntime.h"
+#include "playerbottravelsafety.h"
 
 #include <map>
 #include <memory>
@@ -19,6 +20,9 @@ struct PlayerBotHuntTravelEvidence {
 	using Offer = std::tuple<uint32_t, Position, Position, uint32_t, uint32_t, bool, std::vector<std::string>>;
 	Position source, destination;
 	Actor actor;
+	std::string travelSafetyIdentity; // Raid/planning epoch, not the observation cache key.
+	std::string observationIdentity;
+	std::shared_ptr<const PlayerBotTravelRouteExposure> travelExposure;
 	uint64_t topologyGeneration = 0, riskRevision = 0, transportReserve = 0;
 	PlayerBotNavigationRiskProfile risk;
 	PlayerBotRouteChanges::Watch watch;

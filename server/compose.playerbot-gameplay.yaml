@@ -18,3 +18,7 @@ services:
     volumes:
       - ./tests/playerbot-gameplay:/app/data/scripts/playerbot-gameplay:ro
       - ./tests/playerbot-monsters/corpse.lua:/app/data/monster/lua/playerbot_corpse_monsters.lua:ro
+      - ./tests/playerbot-gameplay/raids:/app/data/raids/playerbot-fixture:ro
+      # Ordinary scenarios retain the normal catalog. Only raid scenarios select
+      # the isolated catalog; no host config or production raid file is rewritten.
+      - ${PLAYERBOT_RAID_CATALOG:-./data/raids/raids.xml}:/app/data/raids/raids.xml:ro

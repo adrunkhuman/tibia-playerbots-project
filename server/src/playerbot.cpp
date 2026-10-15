@@ -265,7 +265,7 @@ bool PlayerBotManager::load(const RecordPtr& record, bool recovered)
 	if (speedBonus) g_game.changeSpeed(player, speedBonus);
 	if (!record->state.managed() || record->lifecycleGeneration != placementGeneration || player->isRemoved()) return false;
 	record->activeControllerId = std::to_string(record->guid) + "-" + std::to_string(++nextControllerGeneration);
-	record->controller = std::make_shared<PlayerBotController>(*player, record->activeControllerId, record->huntRegionCooldowns);
+	record->controller = std::make_shared<PlayerBotController>(*player, record->activeControllerId, record->huntRegionCooldowns, record->travelSafety);
 	record->lastSpawnedAt = std::chrono::steady_clock::now();
 	const uint64_t generation = record->lifecycleGeneration;
 	const auto startingController = record->controller;

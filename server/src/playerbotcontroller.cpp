@@ -20,6 +20,7 @@
 #include "playerbotroutecache.h"
 #include "playerbottransportsearch.h"
 
+#include <array>
 #include <tuple>
 
 // Playerbot lifecycle, scheduling, navigation execution, and telemetry.
@@ -94,6 +95,14 @@ PlayerBotNavigationCostPolicy PlayerBotController::navigationCostPolicy(const Pl
 		if (!sharedHit) samples.insert(key, danger, watch, 0);
 		local->samples.emplace(position, LocalSample{danger, std::move(watch)});
 		return danger;
+	};
+	// Private, immutable dynamic evidence never enters the shared static-sample LRU.
+	const auto dynamic = travelDangerField(combat);
+	policy.transientHealthLossPerSecond = [dynamic](const Position& position) { return dynamic->dangerAt(position); };
+	const auto baseline = policy.expectedHealthLossPerSecond;
+	policy.staticHealthLossPerSecond = baseline;
+	policy.expectedHealthLossPerSecond = [baseline, dynamic](const Position& position) {
+		return std::max(baseline(position), dynamic->dangerAt(position));
 	};
 	return policy;
 }
@@ -184,8 +193,9 @@ bool PlayerBotController::processNpcApproach(Player* player, const Position& cur
 }
 
 PlayerBotController::PlayerBotController(const Player& player, std::string controllerId,
-	                            std::map<uint64_t, std::chrono::steady_clock::time_point>& sharedHuntRegionCooldowns) :
-	playerId(player.getID()), playerGuid(player.getGUID()), playerName(player.getName()), fixtureDriver(playerBotTestPolicyFromEnvironment()),
+	                            std::map<uint64_t, std::chrono::steady_clock::time_point>& sharedHuntRegionCooldowns,
+	                            PlayerBotTravelSafetyMemory& safetyMemory) :
+	playerId(player.getID()), playerGuid(player.getGUID()), playerName(player.getName()), travelSafety(safetyMemory), fixtureDriver(playerBotTestPolicyFromEnvironment()),
 	telemetry(player.getName(), player.getGUID(), std::move(controllerId)),
 	inventoryPolicy(economyCatalog.sellValues(), [this](const Player& candidatePlayer, const Item& item) {
 		return recoveryEquipmentProtected(item.getID()) || equipmentPolicy.evaluateUpgrade(PlayerBotEquipmentAdapter::player(candidatePlayer),
@@ -432,6 +442,8 @@ playerbot::PlayerBotTelemetrySummary PlayerBotController::telemetrySummary() con
 	if (summary.planning.empty() && (turnRouter.cyclePhase() == CyclePhase::ReturnToDepot ||
 	                                  turnRouter.cyclePhase() == CyclePhase::DepositLoot) &&
 	    depotWorkflow.snapshot().stage == PlayerBotDepotStage::Discover) summary.planning = "depot";
+	if (travelWithdrawing) summary.recovery = "travel_withdrawal";
+	else if (travelDeferred) summary.waitingReason = "travel_threat";
 	if (supplyRecovery.active()) summary.recovery = "supply";
 	else if (huntCoordinator.retreatingFromDanger()) summary.recovery = "danger_retreat";
 	return summary;
@@ -520,6 +532,7 @@ bool PlayerBotController::findPath(Player* player, const Position& target, std::
 void PlayerBotController::resetNavigation()
 {
 	navigationRuntime.reset();
+	travelNavigationExposure.reset();
 	navigationPlanningRisk.reset();
 	rangedMovement.clear();
 	rangedMovement.clearBlockedPositions();
@@ -530,13 +543,40 @@ void PlayerBotController::resetNavigation()
 	huntPatrolValidatedDestination.reset();
 }
 
-void PlayerBotController::observeNavigationPlan(const Position& destination, std::deque<PlayerBotNavigationStep> steps)
+PlayerBotNavigationRuntimeOutcome PlayerBotController::observeNavigationPlan(Player& player,
+    const PlayerBotNavigationGoal& goal, PlayerBotNavigationRoutePlan plan, bool startsNavigation,
+    const PlayerBotNavigationCostPolicy* originalPolicy)
 {
-	PlayerBotNavigationRoutePlan plan;
-	plan.metrics.result = PlayerBotNavigationResult::Reached;
-	plan.metrics.steps = steps.size();
-	plan.steps = std::move(steps);
-	navigationRuntime.observePlan({PlayerBotNavigationGoal::exact(destination), std::move(plan), true, true, std::chrono::steady_clock::now()});
+	auto livePolicy = navigationCostPolicy(player);
+	if (originalPolicy) livePolicy.risk = originalPolicy->risk;
+	const auto& policy = originalPolicy ? *originalPolicy : livePolicy;
+	auto exposure = travelRouteExposure(player, player.getPosition(), plan, policy);
+	const auto combat = equipmentPolicy.combatProfile(PlayerBotEquipmentAdapter::player(player), PlayerBotEquipmentAdapter::loadout(player));
+	const auto refreshed = exposure.refreshed(*travelDangerField(combat));
+	const auto rejected = playerBotNavigationTransientRejection(plan, livePolicy,
+	    [&player](const PlayerBotNavigationStep& step) { return step.action == PlayerBotNavigationAction::Move ?
+	        player.getStepDuration(step.direction) : 1000u; });
+	// Replacement is one dispatcher operation: never leave a prior route's
+	// exposure or observation epoch attached to newly installed steps.
+	travelNavigationExposure.reset();
+	travelNavigationIdentity = travelSafetyIdentity();
+	travelNavigationEpoch = travelPlanningIdentity();
+	travelNavigationExposurePosition = player.getPosition();
+	navigationPlanningRisk = policy.risk;
+	if (rejected || refreshed.transientRiskRejected) {
+		navigationRuntime.deferPlan();
+		deferUnsafeTravel(player.getPosition(), rejected ? *rejected : refreshed.maximumHealthLossPerSecond, "installed_route_threat");
+		PlayerBotNavigationRuntimeOutcome outcome;
+		outcome.routeUnsafe = true;
+		return outcome;
+	}
+	if (plan.metrics.result == PlayerBotNavigationResult::Reached) {
+		plan.metrics.dangerCost = std::max(plan.metrics.dangerCost, refreshed.dangerCost);
+		plan.metrics.maximumHealthLossPerSecond = std::max(plan.metrics.maximumHealthLossPerSecond, refreshed.maximumHealthLossPerSecond);
+		travelNavigationExposure = std::move(exposure);
+	}
+	return navigationRuntime.observePlan({goal, std::move(plan), player.canDoAction(), startsNavigation,
+	    std::chrono::steady_clock::now()});
 }
 
 void PlayerBotController::onDeath(const Player& player, const Creature* killer, const Creature* mostDamageKiller)
@@ -624,6 +664,10 @@ std::optional<PlayerBotNavigationStep> PlayerBotController::resolveTopologyPorta
 
 bool PlayerBotController::executeNavigationStep(Player* player, const PlayerBotNavigationStep& step)
 {
+	if (!travelEscapeDispatch && !travelStepSafe(*player, step)) {
+		deferUnsafeTravel(player->getPosition(), navigationCostPolicy(*player).dangerAt(step.expectedPosition), "step_threat");
+		return false;
+	}
 	telemetry.recordActionAttempt();
 	if (step.action == PlayerBotNavigationAction::Move) {
 		if (!fixtureDriver.navigationStepCommand().dispatch) {
@@ -804,8 +848,11 @@ PlayerBotNavigationRoutePlan PlayerBotController::planCompleteNavigationRoute(
 		    maximumExpandedNodes > plan.metrics.expandedNodes ? maximumExpandedNodes - plan.metrics.expandedNodes : 0,
 		    &plan.metrics.closestPosition, &costPolicy, &segmentCost);
 		plan.metrics.expandedNodes += segmentNodes;
+		plan.metrics.transientRiskRejected = segmentCost.transientRiskRejected;
 		if (result != PlayerBotNavigationResult::Reached) {
 			plan.metrics.result = result;
+			plan.metrics.maximumHealthLossPerSecond = std::max(
+			    plan.metrics.maximumHealthLossPerSecond, segmentCost.maximumHealthLossPerSecond);
 			break;
 		}
 		plan.metrics.movementCost = static_cast<uint32_t>(std::min<uint64_t>(
@@ -885,6 +932,7 @@ PlayerBotNavigationRoutePlan PlayerBotController::planNavigationRoute(Player& pl
 		                                          &routePlan.metrics.closestPosition, &costPolicy, &costSummary,
 		                                          sameFloorOnly);
 		routePlan.metrics.movementCost = costSummary.movementCost;
+		routePlan.metrics.transientRiskRejected = costSummary.transientRiskRejected;
 		routePlan.metrics.dangerEvidence = PlayerBotNavigationDangerEvidence::Detailed;
 		routePlan.metrics.localDangerCost = costSummary.dangerCost;
 		routePlan.metrics.localMaximumHealthLossPerSecond = costSummary.maximumHealthLossPerSecond;
@@ -933,6 +981,7 @@ PlayerBotNavigationRoutePlan PlayerBotController::planNavigationRoute(Player& pl
 	                                          routePlan.metrics.expandedNodes, maximumExpandedNodes,
 	                                          &routePlan.metrics.closestPosition, &costPolicy, &costSummary);
 	routePlan.metrics.movementCost = costSummary.movementCost;
+	routePlan.metrics.transientRiskRejected = costSummary.transientRiskRejected;
 	routePlan.metrics.localDangerCost = costSummary.dangerCost;
 	routePlan.metrics.localMaximumHealthLossPerSecond = costSummary.maximumHealthLossPerSecond;
 	// The local search itself is complete when the topology waypoint is the
@@ -1404,10 +1453,19 @@ bool PlayerBotController::huntTravelFareAffordable(
 PlayerBotHuntReturnCoverageContext PlayerBotController::huntReturnCoverageContext(
 	Player& player, const Position& coveredPosition) const
 {
-	return {PlayerBotTopology::instance().generation(), g_game.getNpcGeneration(), player.getLevel(),
+	PlayerBotHuntReturnCoverageContext context{PlayerBotTopology::instance().generation(), g_game.getNpcGeneration(), player.getLevel(),
 	        coveredPosition, huntReturnDestination, huntExitFareReserve,
 	        g_game.findItemOfType(&player, playerbot::ropeItemId, true) != nullptr,
-	        g_game.findItemOfType(&player, shovelToolItemId, true) != nullptr, player.isPremium()};
+	        g_game.findItemOfType(&player, shovelToolItemId, true) != nullptr, player.isPremium(), travelPlanningIdentity()};
+	const auto proof = selectedHuntRoute && selectedHuntRoute->evidence.depot ?
+	    selectedHuntRoute->evidence.depot : lastCompletedTravelEvidence;
+	if (proof && proof->source == coveredPosition && proof->destination == huntReturnDestination)
+		context.travelExposure = proof->travelExposure;
+	else context.travelExposure = huntReturnCoverage.travelExposureAt(coveredPosition);
+	const auto combat = equipmentPolicy.combatProfile(PlayerBotEquipmentAdapter::player(player), PlayerBotEquipmentAdapter::loadout(player));
+	context.travelField = travelDangerField(combat);
+	context.observationIdentity = travelSafetyIdentity();
+	return context;
 }
 
 PlayerBotNavigationRoutePlan PlayerBotController::planHuntTravelRoute(
@@ -1605,6 +1663,26 @@ bool PlayerBotController::processNavigation(Player* player, const Position& curr
 {
 	const Position destination = goal.representative();
 	const auto now = std::chrono::steady_clock::now();
+	const std::string safetyIdentity = travelSafetyIdentity();
+	const std::string safetyEpoch = travelPlanningIdentity();
+	if (travelNavigationExposure && travelNavigationExposurePosition != currentPosition) {
+		travelNavigationExposure->passed(currentPosition);
+		travelNavigationExposurePosition = currentPosition;
+	}
+	if (travelNavigationEpoch != safetyEpoch || travelNavigationIdentity != safetyIdentity) {
+		const auto combat = equipmentPolicy.combatProfile(PlayerBotEquipmentAdapter::player(*player), PlayerBotEquipmentAdapter::loadout(*player));
+		if (travelNavigationEpoch != safetyEpoch || (travelNavigationExposure &&
+		    travelNavigationExposure->refreshed(*travelDangerField(combat)).transientRiskRejected)) {
+			navigationRuntime.deferPlan();
+			travelNavigationExposure.reset();
+		}
+		travelNavigationIdentity = safetyIdentity;
+		travelNavigationEpoch = safetyEpoch;
+	}
+	if (travelDeferred && now < travelRetryAt) {
+		schedule(blockedRouteRetryInterval);
+		return false;
+	}
 	if (allowRoutePlanning) {
 		const auto& requestedRisk = risk ? *risk : riskProfile;
 		if ((navigationPlanningRisk && *navigationPlanningRisk != requestedRisk) ||
@@ -1647,11 +1725,24 @@ bool PlayerBotController::processNavigation(Player* player, const Position& curr
 			routePlan = planNavigationRoute(*player, outcome.routeRequest->goal, blockedPositions,
 			                                std::min(fixturePlan.maximumExpandedNodes, routeNodeBudget), sameFloorOnly, risk);
 		}
+		PlayerBotNavigationCostPolicy transientPolicy = navigationCostPolicy(*player);
+		if (risk) transientPolicy.risk = *risk;
+		const auto transientRejection = playerBotNavigationTransientRejection(routePlan, transientPolicy,
+		    [player](const PlayerBotNavigationStep& step) -> uint32_t {
+			    return step.action == PlayerBotNavigationAction::Move ? player->getStepDuration(step.direction) : 1000;
+		    });
+		if (transientRejection) {
+			deferUnsafeTravel(currentPosition, *transientRejection, "route_threat");
+			navigationRuntime.deferPlan();
+			approachTravelFrontier(*player, goal);
+			schedule(blockedRouteRetryInterval);
+			return false;
+		}
 		const PlayerBotPendingMovementResult movementResult = outcome.movementResult;
 		const std::optional<Position> failedMovementTarget = outcome.failedMovementTarget;
 		std::optional<PlayerBotNavigationStep> failedMovementStep = std::move(outcome.failedMovementStep);
 		const bool positionalProgress = outcome.positionalProgress;
-		outcome = navigationRuntime.observePlan({goal, std::move(routePlan), player->canDoAction(), false, now});
+		outcome = observeNavigationPlan(*player, goal, std::move(routePlan), false, &transientPolicy);
 		outcome.movementResult = movementResult;
 		outcome.failedMovementTarget = failedMovementTarget;
 		outcome.failedMovementStep = std::move(failedMovementStep);
@@ -1681,6 +1772,7 @@ bool PlayerBotController::processNavigation(Player* player, const Position& curr
 		schedule(blockedRouteRetryInterval);
 		return false;
 	}
+	if (outcome.plan.attempted && !outcome.routeUnavailable) resumeSafeTravel(currentPosition);
 	if (risk && outcome.plan.attempted && !outcome.routeUnavailable) {
 		if (playerBotNavigationRiskVerdict(*risk, outcome.plan) == PlayerBotNavigationRiskVerdict::Rejected ||
 		    (outcome.plan.dangerEvidence == PlayerBotNavigationDangerEvidence::Coarse &&
@@ -1865,11 +1957,20 @@ bool PlayerBotController::processNavigation(Player* player, const Position& curr
 	if (step.topologyPortal || step.action == PlayerBotNavigationAction::UseShovel) {
 		resolvedStep = resolveTopologyPortal(*player, step, navigationRuntime.activeBlockedPositions(now));
 	}
-	if (risk && resolvedStep) {
-		const PlayerBotNavigationCostPolicy costPolicy = navigationCostPolicy(*player);
+	if (resolvedStep) {
+		PlayerBotNavigationCostPolicy costPolicy = navigationCostPolicy(*player);
+		if (risk) costPolicy.risk = *risk;
 		const uint32_t exposureMs = resolvedStep->action == PlayerBotNavigationAction::Move ?
 		    player->getStepDuration(resolvedStep->direction) : 1000;
-		if (playerBotNavigationRiskVerdict(*risk, PlayerBotNavigationDangerEvidence::Detailed,
+		const auto transient = playerBotNavigationTransientRouteRisk(costPolicy, std::array{*resolvedStep},
+		    [exposureMs](const PlayerBotNavigationStep&) { return exposureMs; });
+		if (transient.transientRiskRejected) {
+			deferUnsafeTravel(currentPosition, transient.maximumHealthLossPerSecond, "step_threat");
+			navigationRuntime.deferPlan();
+			schedule(blockedRouteRetryInterval);
+			return false;
+		}
+		if (risk && playerBotNavigationRiskVerdict(*risk, PlayerBotNavigationDangerEvidence::Detailed,
 		        costPolicy.dangerCost(resolvedStep->expectedPosition, exposureMs),
 		        costPolicy.dangerAt(resolvedStep->expectedPosition)) == PlayerBotNavigationRiskVerdict::Rejected) {
 			huntCoordinator.clearTransitMovementFallback();
@@ -1941,6 +2042,12 @@ bool PlayerBotController::processNavigation(Player* player, const Position& curr
 			}
 		}
 		if (!blocker || blocker == player) huntCoordinator.observeViableTransitMovement();
+	}
+	if (resolvedStep && !travelStepSafe(*player, *resolvedStep)) {
+		deferUnsafeTravel(currentPosition, navigationCostPolicy(*player).dangerAt(resolvedStep->expectedPosition), "step_threat");
+		navigationRuntime.deferPlan();
+		schedule(blockedRouteRetryInterval);
+		return false;
 	}
 	if (!resolvedStep || !executeNavigationStep(player, *resolvedStep)) {
 		if ((resolvedStep && resolvedStep->action == PlayerBotNavigationAction::Move) ||
@@ -2031,6 +2138,8 @@ void PlayerBotController::navigate()
 			if (!selectTopLevelGoal(*player, currentPosition, "startup")) {
 				return;
 			}
+		} else if (fixtureDriver.travelSafetyGoal()) {
+			progressionRuntime.enterHunt();
 		} else if (fixtureDriver.startInHunt()) {
 			progressionRuntime.enterHunt();
 			startHunt(player, currentPosition, "focused_fixture");
@@ -2038,6 +2147,15 @@ void PlayerBotController::navigate()
 			beginService(player, currentPosition, "startup");
 		}
 		schedule(navigationInterval);
+		return;
+	}
+	observeTravelSafety(*player);
+	PlayerBotTurnObservation safetyTurn;
+	safetyTurn.travelSafetyRequired = travelSafetyRequired(*player);
+	if (turnRouter.route(safetyTurn) == PlayerBotTurnCommand::TravelSafety && processTravelSafety(player, currentPosition)) return;
+	if (const auto goal = fixtureDriver.travelSafetyGoal()) {
+		if (processNavigation(player, currentPosition, *goal, nullptr, playerBotNavigationMaximumExpandedNodes, true))
+			schedule(navigationInterval);
 		return;
 	}
 	telemetry.maybeEmitSummary(currentPosition, telemetrySummary());

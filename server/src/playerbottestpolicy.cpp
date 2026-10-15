@@ -61,6 +61,8 @@ const playerbot::PlayerBotTestPolicy& playerbot::playerBotTestPolicyFromEnvironm
 			 std::strcmp(gameplayMode, "sell_loot_remote_depot") == 0 ||
 			 (std::strncmp(gameplayMode, "magic_training", 14) == 0 &&
 			  std::strcmp(gameplayMode, "magic_training_hunt") != 0)));
+		const bool raidTravelFixture = gameplayMode &&
+		    (std::strcmp(gameplayMode, "raid_travel") == 0 || std::strcmp(gameplayMode, "raid_recovery") == 0);
 		const bool huntAreaArrivalFixture = gameplayMode && std::strcmp(gameplayMode, "hunt_area_arrival") == 0;
 		const bool remoteHuntFixture = gameplayMode && std::strcmp(gameplayMode, "remote_hunt") == 0;
 		const bool depotRiskFallbackFixture = gameplayMode && std::strcmp(gameplayMode, "depot_risk_fallback") == 0;
@@ -68,7 +70,7 @@ const playerbot::PlayerBotTestPolicy& playerbot::playerBotTestPolicyFromEnvironm
 			std::strcmp(gameplayMode, "navigation_fare_rejection") == 0 ? NavigationPreflightFixture::Fare :
 			std::strcmp(gameplayMode, "navigation_risk_rejection") == 0 ? NavigationPreflightFixture::Risk :
 			NavigationPreflightFixture::None;
-		const bool startInHunt = recoveryLoadoutFixture || (gameplayMode &&
+		const bool startInHunt = raidTravelFixture || recoveryLoadoutFixture || (gameplayMode &&
 			(std::strcmp(gameplayMode, "navigation") == 0 || std::strcmp(gameplayMode, "navigation_recovery") == 0 ||
 			 std::strcmp(gameplayMode, "carlin_service_route") == 0 ||
 			 std::strcmp(gameplayMode, "mutable_portal_route") == 0 ||
@@ -172,7 +174,7 @@ const playerbot::PlayerBotTestPolicy& playerbot::playerBotTestPolicyFromEnvironm
 			gameplayMode && std::strcmp(gameplayMode, "equipment_buy_provider_unreachable") == 0,
 			adaptiveChallengeFixture,
 			adaptiveChallengeFixture,
-			gameplayMode && (recoveryLoadoutFixture || std::strcmp(gameplayMode, "mainland_reward") == 0 ||
+			gameplayMode && (raidTravelFixture || recoveryLoadoutFixture || std::strcmp(gameplayMode, "mainland_reward") == 0 ||
 			                 std::strcmp(gameplayMode, "spell_training") == 0 ||
 			                 std::strcmp(gameplayMode, "spell_training_shortlist") == 0 ||
 			                 std::strcmp(gameplayMode, "spell_training_low_supplies") == 0 ||
@@ -195,6 +197,7 @@ const playerbot::PlayerBotTestPolicy& playerbot::playerBotTestPolicyFromEnvironm
 			navigationPreflightFixture,
 			gameplayMode && std::strcmp(gameplayMode, "hunt_planning") == 0,
 			gameplayMode && std::strcmp(gameplayMode, "ranged_position_control") == 0,
+			raidTravelFixture,
 		};
 	}();
 	return policy;

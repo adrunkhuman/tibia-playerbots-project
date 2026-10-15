@@ -1048,7 +1048,13 @@ void PlayerBotController::beginPickupReward(Player& player, const Position& posi
 	progressionRuntime.beginReward(std::move(reward), std::move(displaced));
 	const auto& selected = progressionRuntime.reward().plan();
 	if (!selected.resumeEquipment) {
-		observeNavigationPlan(selected.approachPosition, std::move(rewardSteps));
+		PlayerBotNavigationRoutePlan route;
+		route.metrics.result = PlayerBotNavigationResult::Reached;
+		route.metrics.steps = selected.travelSteps;
+		route.metrics.dangerCost = selected.travelDangerCost;
+		route.metrics.maximumHealthLossPerSecond = selected.maximumTravelDanger;
+		route.steps = std::move(rewardSteps);
+		observeNavigationPlan(player, PlayerBotNavigationGoal::exact(selected.approachPosition), std::move(route));
 	}
 	std::ostringstream fields;
 	fields << "\"goal\":\"pickup_reward\",\"acquisition_source\":\"map_reward\",\"candidate_id\":" << selected.uniqueId

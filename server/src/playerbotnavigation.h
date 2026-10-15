@@ -317,6 +317,12 @@ struct PlayerBotNavigationCostPolicy {
 	PlayerBotNavigationRiskProfile risk;
 	std::function<double(const Position&)> expectedHealthLossPerSecond;
 	uint32_t topologyExposureMs = 16000;
+	// Private observation/raid evidence imposes a peak ceiling even on callers
+	// that retain legacy weighted static-risk acceptance (for example depots).
+	std::function<double(const Position&)> transientHealthLossPerSecond{};
+	// Preserve cause when individually acceptable static and transient exposure
+	// combine into an unsafe route. This is the cached static model, not occupancy.
+	std::function<double(const Position&)> staticHealthLossPerSecond{};
 
 	bool enabled() const { return static_cast<bool>(expectedHealthLossPerSecond) && risk.healthLossCost > 0; }
 	double dangerAt(const Position& position) const
@@ -341,7 +347,43 @@ struct PlayerBotNavigationCostSummary {
 	uint32_t movementCost = 0;
 	uint32_t dangerCost = 0;
 	double maximumHealthLossPerSecond = 0;
+	// Evidence from rejected arcs/endpoints, not merely the presence of a raid.
+	bool transientRiskRejected = false;
 };
+
+// Inspect only the route that would actually execute, including appended
+// portals. A harmless/off-route observation must not hide static risk failures.
+template<class Steps, class Exposure>
+PlayerBotNavigationCostSummary playerBotNavigationTransientRouteRisk(
+    const PlayerBotNavigationCostPolicy& policy, const Steps& steps, Exposure exposure)
+{
+	PlayerBotNavigationCostSummary summary, baseline, combined;
+	if (!policy.transientHealthLossPerSecond) return summary;
+	auto add = [&](PlayerBotNavigationCostSummary& value, double peak, uint32_t milliseconds) {
+		value.maximumHealthLossPerSecond = std::max(value.maximumHealthLossPerSecond, peak);
+		value.dangerCost = static_cast<uint32_t>(std::min<uint64_t>(UINT32_MAX,
+		    uint64_t(value.dangerCost) + policy.dangerCostForSample(peak, milliseconds)));
+	};
+	for (const auto& step : steps) {
+		const uint32_t milliseconds = exposure(step);
+		const double peak = policy.transientHealthLossPerSecond(step.expectedPosition);
+		add(summary, peak, milliseconds);
+		if (policy.staticHealthLossPerSecond) {
+			const double fixed = policy.staticHealthLossPerSecond(step.expectedPosition);
+			add(baseline, fixed, milliseconds);
+			add(combined, std::max(fixed, peak), milliseconds);
+		}
+	}
+	const auto accepted = [&](const PlayerBotNavigationCostSummary& value) {
+		return playerBotNavigationRiskAccepts(policy.risk, value.dangerCost, value.maximumHealthLossPerSecond);
+	};
+	summary.transientRiskRejected = !accepted(summary);
+	if (policy.staticHealthLossPerSecond && accepted(baseline) && !accepted(combined)) {
+		combined.transientRiskRejected = true;
+		return combined;
+	}
+	return summary;
+}
 
 class PlayerBotNavigator
 {

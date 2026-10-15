@@ -42,6 +42,7 @@
 #include "playerbotfixturedriver.h"
 #include "playerbottelemetry.h"
 #include "playerbotserviceworkflow.h"
+#include "playerbotservicerouteretry.h"
 #include "playerbotturnrouter.h"
 #include "playerbottransitcombat.h"
 #include "playerbotroutechanges.h"
@@ -179,7 +180,8 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 
 	public:
 		explicit PlayerBotController(const Player& player, std::string controllerId,
-		                            std::map<uint64_t, std::chrono::steady_clock::time_point>& sharedHuntRegionCooldowns);
+		                            std::map<uint64_t, std::chrono::steady_clock::time_point>& sharedHuntRegionCooldowns,
+		                            PlayerBotTravelSafetyMemory& travelSafety);
 
 		void start(const Position& position, bool recovered, uint32_t recoveryCount);
 
@@ -530,7 +532,9 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		                       bool allowRoutePlanning = true);
 		bool processNpcApproach(Player* player, const Position& currentPosition, Npc* npc,
 		                        const Position& coarseDestination, bool& unavailable);
-		void observeNavigationPlan(const Position& destination, std::deque<PlayerBotNavigationStep> steps);
+		PlayerBotNavigationRuntimeOutcome observeNavigationPlan(Player& player, const PlayerBotNavigationGoal& goal,
+    PlayerBotNavigationRoutePlan plan, bool startsNavigation = true,
+    const PlayerBotNavigationCostPolicy* originalPolicy = nullptr);
 
 		bool findDepositableItem(const Player& player, Container* container, Container*& source,
 		                         Item*& depositItem, uint8_t& count) const;
@@ -587,6 +591,19 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 
 		void navigate();
 
+		void observeTravelSafety(Player& player);
+		std::shared_ptr<const PlayerBotTravelDangerField> travelDangerField(const PlayerBotCombatProfile& combat) const;
+		std::string travelSafetyIdentity() const;
+std::string travelPlanningIdentity() const;
+PlayerBotTravelRouteExposure travelRouteExposure(const Player& player, const Position& source,
+    const PlayerBotNavigationRoutePlan& route, const PlayerBotNavigationCostPolicy& policy) const;
+		bool travelSafetyRequired(const Player& player) const;
+		bool processTravelSafety(Player* player, const Position& position);
+		void deferUnsafeTravel(const Position& position, double danger, const char* reason);
+		void resumeSafeTravel(const Position& position);
+		bool travelStepSafe(const Player& player, const PlayerBotNavigationStep& step) const;
+		void approachTravelFrontier(Player& player, const PlayerBotNavigationGoal& goal);
+
 		void beginLoot(Player* player, const Position& currentPosition, const PlayerBotCombatDecision& defeatedTarget);
 
 		void finishLoot(Player* player, const Position& currentPosition);
@@ -600,6 +617,20 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		uint32_t playerGuid;
 		std::string playerName;
 		PlayerBotTurnRouter turnRouter;
+		PlayerBotTravelSafetyMemory& travelSafety;
+		std::chrono::steady_clock::time_point travelObservedAt{}, travelRetryAt{}, travelSafetyLoggedAt{};
+		Position travelObservedPosition;
+		uint64_t travelObservedRaidRevision = 0;
+		std::string travelNavigationIdentity, travelNavigationEpoch;
+std::optional<PlayerBotTravelRouteExposure> travelNavigationExposure;
+Position travelNavigationExposurePosition;
+std::shared_ptr<PlayerBotHuntTravelEvidence> lastCompletedTravelEvidence;
+		mutable std::string travelFieldIdentity;
+		mutable std::map<std::array<uint32_t, 10>, std::shared_ptr<const PlayerBotTravelDangerField>> travelFields;
+		bool travelDeferred = false, travelWithdrawing = false, travelEscapeDispatch = false;
+		std::optional<Position> travelEscapeExpected;
+		Position travelEscapeFrom;
+		std::chrono::steady_clock::time_point travelEscapeStarted{};
 		uint32_t scheduledTurnEvent = 0;
 		uint64_t scheduledTurnGeneration = 0;
 		std::chrono::steady_clock::time_point scheduledTurnDeadline;
@@ -777,6 +808,7 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 			std::shared_ptr<PlayerBotHuntTravelWork> work;
 		};
 		std::optional<ServiceRouteSearch> serviceRouteSearch;
+		PlayerBotServiceRouteRetry serviceRouteRetry;
 		uint64_t serviceRouteSerial = 0;
 		// Trainer discovery and execution never borrow service/hunt frontiers.
 		struct TrainerRouteSearch : ServiceRouteSearch {

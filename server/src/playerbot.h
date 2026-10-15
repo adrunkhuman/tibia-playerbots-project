@@ -13,6 +13,7 @@
 
 #include "position.h"
 #include "playerbotlifecycle.h"
+#include "playerbottravelsafety.h"
 
 #include <cstdint>
 #include <chrono>
@@ -91,6 +92,7 @@ class PlayerBotManager
 			bool awaitingDeathRemoval = false;
 			bool removingForRecovery = false;
 			std::map<uint64_t, std::chrono::steady_clock::time_point> huntRegionCooldowns;
+			PlayerBotTravelSafetyMemory travelSafety;
 			std::chrono::steady_clock::time_point lastSpawnedAt;
 		};
 		using RecordPtr = std::shared_ptr<Record>;

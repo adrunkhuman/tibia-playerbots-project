@@ -119,6 +119,14 @@ playerbot::PlayerBotFixtureLocalRouteRecovery playerbot::PlayerBotFixtureDriver:
 	return {policy.localRouteRecoveryFixture, svargrondRecoveryDestination, svargrondRecoverySuppressedPosition};
 }
 
+std::optional<Position> playerbot::PlayerBotFixtureDriver::travelSafetyGoal() const
+{
+	// Keep the same destination across recovery; only ordinary safety/navigation
+	// may decide when to approach it. The matching runway is fixture Lua data.
+	if (policy.raidTravelFixture) return Position(60208, 60200, 7);
+	return std::nullopt;
+}
+
 Position playerbot::PlayerBotFixtureDriver::navigationPreflightGoal() const
 {
 	return fixtureHuntPatrol.front();

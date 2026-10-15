@@ -6,6 +6,7 @@
 #include "position.h"
 
 #include <functional>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -69,6 +70,7 @@ namespace playerbot {
 			PlayerBotFixtureLocalRouteRecovery localRouteRecovery() const;
 			NavigationPreflightFixture navigationPreflightFixture() const { return policy.navigationPreflightFixture; }
 			Position navigationPreflightGoal() const;
+			std::optional<Position> travelSafetyGoal() const;
 			uint32_t huntPlanningDuration(uint32_t configuredDurationSeconds) const
 			{
 				return playerBotFixtureHuntPlanningDuration(policy.mainlandLoopFixture, configuredDurationSeconds);

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<raid>
+    <!-- Unique Lua fixture species avoids later XML monster overrides.
+         Exact tile: no spawn RNG or ordinary Spawn registration. -->
+    <singlespawn delay="1000" name="Raid Safety Wolf" x="60169" y="60200" z="7" />
+</raid>
