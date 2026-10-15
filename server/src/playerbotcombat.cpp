@@ -2554,8 +2554,7 @@ const char* PlayerBotController::continueHuntPatrolTrip(Player& player, const Po
 	       << ",\"blocked_positions\":" << positionListJson(blockedPositions)
 	       << ",\"continuations\":" << trip.continuations;
 	emit("navigation_progress", currentPosition, fields.str());
-	navigationRuntime.observePlan({PlayerBotNavigationGoal::exact(destination), std::move(leg), player.canDoAction(),
-	                               startsNavigation, std::chrono::steady_clock::now()});
+	observeNavigationPlan(player, PlayerBotNavigationGoal::exact(destination), std::move(leg), startsNavigation);
 	huntPatrolValidatedDestination = destination;
 	return nullptr;
 }
@@ -3144,6 +3143,7 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 		const uint64_t coverageRevision = PlayerBotHuntRegionPlanner::getCacheRevision();
 		bool destinationCovered = false;
 		bool extendsCoverage = false;
+		std::shared_ptr<PlayerBotTravelRouteExposure> extendedExposure;
 		if (!validateReturn) {
 			destinationCovered = huntReturnCoverage.covers(
 			    huntReturnCoverageVariantId, coverageRevision,
@@ -3152,6 +3152,21 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 			    huntReturnCoverageVariantId, coverageRevision,
 			    huntReturnCoverageContext(*player, currentPosition)) &&
 			    playerBotNavigationIsReversibleLocalWalk(currentPosition, patrol.destination, preflight);
+			if (extendsCoverage && !destinationCovered) {
+				const auto inherited = huntReturnCoverage.travelExposure();
+				if (inherited && inherited->samples.size() + preflight.steps.size() <= playerBotNavigationMaximumExpandedNodes) {
+					PlayerBotNavigationRoutePlan reverse;
+					reverse.metrics.result = PlayerBotNavigationResult::Reached;
+					reverse.steps = playerBotTravelReverseWalk(currentPosition, preflight.steps);
+					const auto policy = navigationCostPolicy(*player);
+					extendedExposure = std::make_shared<PlayerBotTravelRouteExposure>(*inherited);
+					extendedExposure->prepend(travelRouteExposure(*player, patrol.destination, reverse, policy));
+					const auto context = huntReturnCoverageContext(*player, currentPosition);
+					const auto combined = extendedExposure->refreshed(*context.travelField);
+					extendsCoverage = playerBotNavigationRiskAccepts(extendedExposure->risk,
+					    combined.dangerCost, combined.maximumHealthLossPerSecond);
+				} else extendsCoverage = false; // Missing/overlong concrete proof needs a fresh return route.
+			}
 			if (!destinationCovered && !extendsCoverage) {
 				huntPatrolValidationDestination = patrol.destination;
 				huntPatrolValidationOrigin = currentPosition;
@@ -3197,8 +3212,9 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 			huntReturnCoverage.validate(huntReturnCoverageVariantId, coverageRevision,
 			                            huntReturnCoverageContext(*player, patrol.destination));
 		} else if (extendsCoverage && !destinationCovered) {
-			huntReturnCoverage.validate(huntReturnCoverageVariantId, coverageRevision,
-			                            huntReturnCoverageContext(*player, patrol.destination));
+			auto context = huntReturnCoverageContext(*player, patrol.destination);
+			context.travelExposure = std::move(extendedExposure);
+			huntReturnCoverage.validate(huntReturnCoverageVariantId, coverageRevision, context);
 		}
 		if (recoveryEquipment && recoveryEquipment->departurePending && validateReturn) {
 			// The ordinary route ceiling alone is not the recovery health floor.
@@ -3256,7 +3272,7 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 		resetNavigation();
 		huntPatrolTrip = HuntPatrolTrip{patrol.destination, huntReturnDestination, huntReturnCoverageVariantId,
 		                                outboundPlan.metrics.fare, std::move(search.outboundOffers)};
-		observeNavigationPlan(patrol.destination, std::move(outboundPlan.steps));
+		observeNavigationPlan(*player, PlayerBotNavigationGoal::exact(patrol.destination), std::move(outboundPlan));
 		huntPatrolValidatedDestination = patrol.destination;
 		schedule(SCHEDULER_MINTICKS);
 		return;

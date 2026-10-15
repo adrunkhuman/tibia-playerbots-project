@@ -57,6 +57,8 @@ Ranged positioning (#235) has `ranged_position_control` (the Paladin fights like
 
 Each changed positioning decision or retreat request emits `ranged_position` with `action` (`hold`, `retreat`, `close`, `fight_in_place`), `reason`, `distance`, `range`, raw speeds, current cardinal step durations (`self_step_ms`, `target_step_ms`), and the requested retreat `tile`. `ranged_position_step` records observed `completed` or `failed` movement; a request alone is not displacement evidence.
 
+Raid travel safety (#267) has `raid_travel` and `raid_recovery`, selected with `-Focused -RaidTravel` or exact `-Scenario` names. Both use real raid XML to spawn one Lua-defined **Raid Safety Wolf** on an isolated runway. The unique species avoids later XML loading overwriting its fixed 40-HP life drain every two seconds and speed 160. Position samples must prove withdrawal, a five-second live-threat guard, and arrival after controlled removal; safety telemetry alone cannot pass. The guard rejects unsafe forward retries, not distance lost to a closing pursuer while the bot waits for an ordinary step. Recovery injects one combat death, then requires normal recovery and protection against the same surviving threat. These controlled scenarios do not establish natural raid survival or sustained progression. Non-Docker checks are `lua server/tests/playerbot_raid_fixture_contracts.lua` and `pwsh -File server/tests/playerbot_raid_fixture_assertions.ps1`.
+
 `-Scenario deep_hunt_return` seeds a level-15 Knight at `(33101,31745,9)` and checks arrival at the planner-selected depot locker approach. It does not prove unattended hunt progression.
 
 `-SkipBuild` requires a known-current `angelion-server:latest` image and does not prove it matches the worktree. `-KeepStack` preserves the final stack for debugging. `-TimeoutSeconds` accepts 30–3600 seconds. Most focused scenarios use controlled state or destinations; map-derived planning modes improve integration evidence but still do not prove long-running progression.
@@ -110,6 +112,12 @@ sh server/tests/playerbotroutecorridor_contracts.sh
 sh server/tests/playerbotguidedtree_contracts.sh
 sh server/tests/playerbotroutecache_contracts.sh
 sh server/tests/playerbotdangersamplekey_contracts.sh
+sh server/tests/playerbotraidhazards_contracts.sh
+sh server/tests/playerbottravelsafety_contracts.sh
+sh server/tests/playerbottravelchurn_contracts.sh
+sh server/tests/playerbotservicerouteretry_contracts.sh
+# Uses server development headers; set CPPFLAGS as described below.
+sh server/tests/playerbottransientnavigation_contracts.sh
 sh server/tests/playerbotplanningbudget_contracts.sh
 sh server/tests/playerbotdepottelemetry_contracts.sh
 sh server/tests/playerbot_loot_contracts.sh

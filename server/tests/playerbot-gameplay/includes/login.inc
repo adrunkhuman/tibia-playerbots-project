@@ -41,6 +41,10 @@ function F.login.onLogin(player)
         F.setupRecoveryLoadout(player)
         return true
     end
+    if mode == "raid_travel" or mode == "raid_recovery" then
+        F.setupRaidTravel(player)
+        return true
+    end
     assert(mode == "transit_return" or mode == "mainland" or mode == "carlin_local_service" or mode == "cycle" or mode == "depot" or mode == "depot_risk_fallback" or mode == "slotted_loot_seller" or mode == "slotted_loot_no_seller" or mode == "sell_loot" or mode == "sell_loot_remote_depot" or mode == "navigation" or mode == "navigation_recovery" or mode == "carlin_service_route" or mode == "mutable_portal_route" or mode == "patrol_recovery" or mode == "target_approach" or mode == "target_approach_unreachable" or mode == "target_attacker_priority" or mode == "ranged_position" or mode == "ranged_position_corner" or mode == "ranged_position_control" or mode == "hunt_area_arrival" or mode == "remote_hunt" or mode == "corpse" or mode == "corpse_detour" or mode == "corpse_inaccessible" or mode == "death" or mode == "healing" or mode == "mana_potion" or mode == "spell_use" or
         mode == "healing_resupply" or mode == "value" or mode == "cargo_currency" or mode == "cargo_partial" or
         mode == "cargo_nested" or mode == "cargo_protected" or mode == "progression" or mode == "progression_bundle" or

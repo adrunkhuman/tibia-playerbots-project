@@ -555,6 +555,7 @@ std::optional<PlayerBotNavigationResult> PlayerBotNavigator::advance(
 	const auto& start = search.start;
 	const auto& goal = search.goal;
 	if (costPolicy) search.constrain(costPolicy->risk);
+	if (costPolicy && search.rejectUnsafeTransientEndpoints(*costPolicy)) return search.result;
 	if (costPolicy && search.rejectUnsafeEndpoints([&](const Position& target) { return costPolicy->dangerAt(target); })) {
 		return search.result;
 	}
@@ -569,8 +570,11 @@ std::optional<PlayerBotNavigationResult> PlayerBotNavigator::advance(
 		                        uint32_t movementCost, uint32_t exposureMs, const PlayerBotNavigationStep& step) {
 			if (!search.sourceTree && !search.unbounded && !isInsideSearchBounds(to, start, goal)) return;
 			if (corridor && !corridor->contains(PlayerBotTopology::instance().walkNode(to))) return;
-			arcs.push_back({step, movementCost, costPolicy ? costPolicy->dangerCost(to, exposureMs) : 0,
-			               costPolicy ? costPolicy->dangerAt(to) : 0});
+			if (costPolicy && costPolicy->transientHealthLossPerSecond &&
+			    search.rejectTransientArc(costPolicy->transientHealthLossPerSecond(to),
+			                              costPolicy->risk.maximumHealthLossPerSecond)) return;
+			const double peak = costPolicy ? costPolicy->dangerAt(to) : 0;
+			arcs.push_back({step, movementCost, costPolicy ? costPolicy->dangerCostForSample(peak, exposureMs) : 0, peak});
 		};
 		for (Direction direction : directions) {
 			Position next;

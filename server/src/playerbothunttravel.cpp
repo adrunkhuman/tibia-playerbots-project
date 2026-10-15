@@ -72,6 +72,7 @@ struct PlayerBotHuntTravelWork {
 	PlayerBotRouteChanges::Watch watch;
 	PlayerBotNavigationCostPolicy policy;
 	PlayerBotNavigationRiskProfile riskProfile;
+	std::string travelSafetyIdentity;
 	PlayerBotNavigationRoutePlan walking;
 	std::unique_ptr<PlayerBotHuntWalkSearch> local;
 	std::string profile;
@@ -178,6 +179,9 @@ bool PlayerBotController::huntTravelEvidenceValid(Player& player, const Position
 	                                                 PlayerBotEquipmentAdapter::loadout(player));
 	const bool rope = g_game.findItemOfType(&player, ropeItemId, true) != nullptr;
 	const bool shovel = g_game.findItemOfType(&player, shovelToolItemId, true) != nullptr;
+	if (evidence.travelSafetyIdentity != travelPlanningIdentity()) return false;
+	if (evidence.observationIdentity != travelSafetyIdentity() && evidence.travelExposure &&
+	    evidence.travelExposure->refreshed(*travelDangerField(combat)).transientRiskRejected) return false;
 	if (!evidence.validContext(source, destination, actorFacts(player, combat, rope, shovel),
 	    PlayerBotTopology::instance().generation(), PlayerBotHuntRegionPlanner::getCacheRevision(), riskProfile)) return false;
 	if (evidence.paid && !evidence.validOffers(offerFacts(player, source, playerBotHuntTransportFunds(
@@ -193,6 +197,9 @@ const char* PlayerBotController::trainerTravelExecutionChange(Player& player, Pl
 	                                                 PlayerBotEquipmentAdapter::loadout(player));
 	const bool rope = g_game.findItemOfType(&player, ropeItemId, true) != nullptr;
 	const bool shovel = g_game.findItemOfType(&player, shovelToolItemId, true) != nullptr;
+	if (evidence.travelSafetyIdentity != travelPlanningIdentity()) return "travel_threat_changed";
+	if (evidence.observationIdentity != travelSafetyIdentity() && evidence.travelExposure &&
+	    evidence.travelExposure->refreshed(*travelDangerField(combat)).transientRiskRejected) return "travel_threat_changed";
 	return evidence.executionContextChange(actorFacts(player, combat, rope, shovel), static_cast<const Creature&>(player).getStepSpeed(),
 	    PlayerBotTopology::instance().generation(), PlayerBotHuntRegionPlanner::getCacheRevision(), riskProfile);
 }
@@ -219,14 +226,16 @@ std::optional<PlayerBotNavigationRoutePlan> PlayerBotController::advanceHuntTrav
 	const auto offers = offerFacts(player, source, money, request.walkingOnly, unavailableTravelOffers);
 	const uint64_t generation = PlayerBotTopology::instance().generation();
 	const uint64_t riskRevision = PlayerBotHuntRegionPlanner::getCacheRevision();
+	const std::string safetyIdentity = travelPlanningIdentity();
 	const bool sameRequest = huntTravelWork && huntTravelWork->sameRequest(request, source, transportReserve, sellEconomy, riskProfile);
 	const auto journalReason = sameRequest ? huntTravelWork->watch.check() : PlayerBotRouteChanges::Reason::None;
 	const char* invalidationReason = !sameRequest ? "request" :
+	    huntTravelWork->travelSafetyIdentity != safetyIdentity ? "travel_threat" :
 	    huntTravelWork->actor != actor ? "actor" :
 	    huntTravelWork->topologyGeneration != generation ? "topology" :
 	    huntTravelWork->riskRevision != riskRevision ? "risk" :
 	    PlayerBotRouteChanges::reasonName(journalReason);
-	const bool reuse = sameRequest && huntTravelWork->actor == actor &&
+	const bool reuse = sameRequest && huntTravelWork->travelSafetyIdentity == safetyIdentity && huntTravelWork->actor == actor &&
 	    huntTravelWork->topologyGeneration == generation && huntTravelWork->riskRevision == riskRevision &&
 	    journalReason == PlayerBotRouteChanges::Reason::None;
 	if (!reuse) {
@@ -263,7 +272,10 @@ std::optional<PlayerBotNavigationRoutePlan> PlayerBotController::advanceHuntTrav
 		std::ostringstream key;
 		key << std::setprecision(17);
 		std::apply([&](const auto&... fields) { ((key << fields << ';'), ...); }, profile);
-		w.profile = key.str();
+		w.travelSafetyIdentity = safetyIdentity;
+		// The frontier keeps this immutable observation snapshot for its entire
+		// request. Shared caches still require the EXACT private field identity.
+		w.profile = key.str() + ";safety:" + safetyIdentity + ":" + travelSafetyIdentity();
 		w.restartBudget = restartBudget;
 		w.riskRevision = riskRevision;
 		w.policy = navigationCostPolicy(player, request.combat ? &*request.combat : nullptr);
@@ -276,18 +288,43 @@ std::optional<PlayerBotNavigationRoutePlan> PlayerBotController::advanceHuntTrav
 	}
 	const auto work = huntTravelWork; // Keep the scoped tile observer alive through return.
 	auto& w = *work;
-	auto retainEvidence = [&](const PlayerBotNavigationRoutePlan& route) {
-		if (!completedEvidence || !safe(route, riskProfile)) return;
+	auto refreshRoute = [&](PlayerBotNavigationRoutePlan& route) -> std::shared_ptr<PlayerBotTravelRouteExposure> {
+		if (!safe(route, riskProfile)) return nullptr;
+		auto exposure = std::make_shared<PlayerBotTravelRouteExposure>(travelRouteExposure(player, source, route, w.policy));
+		const auto refreshed = exposure->refreshed(*travelDangerField(combat));
+		auto livePolicy = navigationCostPolicy(player, &combat);
+		livePolicy.risk = riskProfile;
+		const auto transient = playerBotNavigationTransientRouteRisk(livePolicy, route.steps,
+		    [&](const PlayerBotNavigationStep& step) { return step.action == PlayerBotNavigationAction::Move ?
+		        player.getStepDuration(step.direction) : 1000u; });
+		if (refreshed.transientRiskRejected || transient.transientRiskRejected) {
+			route.metrics.result = PlayerBotNavigationResult::RiskRejected;
+			route.metrics.transientRiskRejected = true;
+			route.metrics.dangerCost = std::max(refreshed.dangerCost, transient.dangerCost);
+			route.metrics.maximumHealthLossPerSecond = std::max(refreshed.maximumHealthLossPerSecond, transient.maximumHealthLossPerSecond);
+			return nullptr;
+		}
+		route.metrics.dangerCost = refreshed.dangerCost;
+		route.metrics.maximumHealthLossPerSecond = refreshed.maximumHealthLossPerSecond;
+		return exposure;
+	};
+	auto retainEvidence = [&](PlayerBotNavigationRoutePlan& route) {
+		auto exposure = refreshRoute(route);
+		if (!exposure) return;
 		auto evidence = std::make_shared<PlayerBotHuntTravelEvidence>();
 		evidence->source = w.source; evidence->destination = w.destination;
 		evidence->actor = w.actor; evidence->topologyGeneration = w.topologyGeneration;
 		evidence->riskRevision = w.riskRevision; evidence->transportReserve = w.transportReserve;
 		evidence->risk = w.riskProfile; evidence->watch = w.watch;
+		evidence->travelSafetyIdentity = w.travelSafetyIdentity;
+		evidence->observationIdentity = travelSafetyIdentity();
+		evidence->travelExposure = std::move(exposure);
 		evidence->retainExecutionLeg(route, static_cast<const Creature&>(player).getStepSpeed());
 		evidence->paid = route.metrics.firstNpcTravelOffer.has_value();
 		evidence->walkingOnly = w.walkingOnly;
 		if (evidence->paid) { evidence->offers = w.offers; evidence->providers = w.providerValidation; }
-		*completedEvidence = std::move(evidence);
+		lastCompletedTravelEvidence = evidence;
+		if (completedEvidence) *completedEvidence = std::move(evidence);
 	};
 	if (!w.transport) {
 		// NPC movement/offers cannot invalidate the independent walking frontier.
@@ -349,6 +386,9 @@ std::optional<PlayerBotNavigationRoutePlan> PlayerBotController::advanceHuntTrav
 		if (const auto peak = rejectedEndpoints(source, w.destinations, "walking")) {
 			w.walking.metrics.result = PlayerBotNavigationResult::RiskRejected;
 			w.walking.metrics.maximumHealthLossPerSecond = *peak;
+			w.walking.metrics.transientRiskRejected = policy.transientHealthLossPerSecond &&
+			    playerBotNavigationRejectedEndpointPeak(source, PlayerBotNavigationGoal::anyOf(w.destinations),
+			        riskProfile.maximumHealthLossPerSecond, policy.transientHealthLossPerSecond).has_value();
 			if (walkingAlternative) *walkingAlternative = w.walking;
 			PlayerBotNavigationRoutePlan rejected = std::move(w.walking);
 			huntTravelWork.reset();
@@ -410,6 +450,7 @@ std::optional<PlayerBotNavigationRoutePlan> PlayerBotController::advanceHuntTrav
 		w.walking.metrics.result = *result;
 		w.walking.metrics.expandedNodes = w.local->expanded;
 		w.walking.metrics.movementCost = w.local->summary.movementCost;
+		w.walking.metrics.transientRiskRejected = w.local->summary.transientRiskRejected;
 		w.walking.metrics.dangerCost = w.local->summary.dangerCost;
 		w.walking.metrics.maximumHealthLossPerSecond = w.local->summary.maximumHealthLossPerSecond;
 		w.walking.metrics.estimatedTravelSeconds = w.local->seconds;
@@ -420,9 +461,9 @@ std::optional<PlayerBotNavigationRoutePlan> PlayerBotController::advanceHuntTrav
 		w.walkingDone = true;
 		timing.walkingReached += *result == PlayerBotNavigationResult::Reached;
 		if (w.preferSafeWalking && safe(w.walking, riskProfile) && !w.walking.steps.empty()) {
-			if (walkingAlternative) *walkingAlternative = w.walking;
 			PlayerBotNavigationRoutePlan route = std::move(w.walking);
 			retainEvidence(route);
+			if (walkingAlternative) *walkingAlternative = route;
 			huntTravelWork.reset();
 			return route;
 		}
@@ -503,7 +544,10 @@ std::optional<PlayerBotNavigationRoutePlan> PlayerBotController::advanceHuntTrav
 		++timing.npcReturned; ++timing.npcReached;
 		timing.npcReturnedExpandedNodes += w.npcNodes;
 	}
-	if (walkingAlternative) *walkingAlternative = w.walking;
+	if (walkingAlternative) {
+		*walkingAlternative = w.walking;
+		refreshRoute(*walkingAlternative);
+	}
 	PlayerBotNavigationRoutePlan result = std::move(w.walking);
 	if (const auto& paid = w.transport->bestPaid; paid && (!safe(result, riskProfile) || paid->cost < cost(result, w.sellEconomy))) {
 		result = {};

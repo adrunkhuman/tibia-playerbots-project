@@ -1444,7 +1444,7 @@ void PlayerBotController::processService(Player* player, const Position& current
 	}
 	PlayerBotServiceCommand command = serviceWorkflow.advance(observation, economyCatalog, dispositionPolicy);
 	const std::vector<PlayerBotServiceDiscovery> discoveries = command.discoveries;
-	std::deque<PlayerBotNavigationStep> approachSteps;
+	PlayerBotNavigationRoutePlan approachPlan;
 	uint32_t routeValidations = 0;
 	PlayerBotNavigationResult lastRouteResult = PlayerBotNavigationResult::Unreachable;
 	uint64_t lastRouteExpandedNodes = 0;
@@ -1461,6 +1461,8 @@ void PlayerBotController::processService(Player* player, const Position& current
 			revalidatingSelectedApproach = true;
 		}
 	}
+	if (command.type != PlayerBotServiceCommandType::ValidateProviderRoute &&
+	    command.type != PlayerBotServiceCommandType::NavigateProvider) serviceRouteRetry.reset();
 	// Keep a sliced search when an exhausted approach needs validation again.
 	if (command.type != PlayerBotServiceCommandType::ValidateProviderRoute && serviceRouteSearch) {
 		serviceRouteSearch.reset();
@@ -1585,7 +1587,7 @@ void PlayerBotController::processService(Player* player, const Position& current
 		// A creature blocking a validated step (usually a wandering NPC or pet)
 		// is not a route failure. Walk around it, or wait for it to move.
 		bool routeBlocked = false;
-		const auto firstTravel = std::find_if(routePlan.steps.begin(), routePlan.steps.end(), [](const auto& step) {
+		auto firstTravel = std::find_if(routePlan.steps.begin(), routePlan.steps.end(), [](const auto& step) {
 			return step.action == PlayerBotNavigationAction::NpcTravel;
 		});
 		if (command.destination != currentPosition && routePlan.metrics.result == PlayerBotNavigationResult::Reached &&
@@ -1614,6 +1616,56 @@ void PlayerBotController::processService(Player* player, const Position& current
 			} else {
 				routeBlocked = true;
 			}
+		}
+		firstTravel = std::find_if(routePlan.steps.begin(), routePlan.steps.end(), [](const auto& step) {
+			return step.action == PlayerBotNavigationAction::NpcTravel;
+		});
+		auto freshPolicy = navigationCostPolicy(*player);
+		if (preparationPurchase) freshPolicy.risk.maximumRouteHealthLoss = freshPolicy.risk.maximumHealthLossPerSecond = 0;
+		const auto transientRejection = playerBotNavigationTransientRejection(routePlan, freshPolicy,
+		    [player](const PlayerBotNavigationStep& step) -> uint32_t {
+			    return step.action == PlayerBotNavigationAction::Move ? player->getStepDuration(step.direction) : 1000;
+		    });
+		using Retry = PlayerBotServiceRouteRetry;
+		const auto retry = serviceRouteRetry.observe(routeProviderId, currentPosition, routeDestination,
+		    routePlan.metrics.result, transientRejection.has_value(), !blockedPositions.empty());
+		if (retry != Retry::Decision::Proceed || routePlan.metrics.result != PlayerBotNavigationResult::Reached) {
+			const char* reason = retry == Retry::Decision::TransientThreat ? "transient_route_threat" :
+			    retry == Retry::Decision::TemporaryExclusion ? "temporary_route_exclusion" :
+			    retry == Retry::Decision::RetryIncomplete ? "node_limit_retry" :
+			    retry == Retry::Decision::IncompleteExhausted ? "planning_incomplete" : "route_rejected";
+			std::ostringstream fields;
+			fields << "\"reason\":" << jsonString(reason) << ",\"npc_id\":" << routeProviderId
+			       << ",\"destination\":{\"x\":" << routeDestination.x << ",\"y\":" << routeDestination.y
+			       << ",\"z\":" << unsigned(routeDestination.z) << "},\"route_result\":"
+			       << jsonString(playerBotNavigationResultName(routePlan.metrics.result))
+			       << ",\"expanded_nodes\":" << routePlan.metrics.expandedNodes
+			       << ",\"transient_risk_rejected\":" << (transientRejection ? "true" : "false")
+			       << ",\"incomplete_retries\":" << serviceRouteRetry.retryCount()
+			       << ",\"blocked_position_count\":" << blockedPositions.size() << ",\"blocked_positions\":[";
+			size_t logged = 0;
+			for (const auto& blocked : blockedPositions) {
+				if (logged == 8) break;
+				if (logged++) fields << ',';
+				fields << "{\"x\":" << blocked.x << ",\"y\":" << blocked.y << ",\"z\":" << unsigned(blocked.z) << '}';
+			}
+			fields << ']';
+			emit("service_route_validation", currentPosition, fields.str());
+		}
+		if (retry == Retry::Decision::IncompleteExhausted) {
+			stop("service_route_planning_incomplete", currentPosition);
+			return;
+		}
+		if (retry != Retry::Decision::Proceed) {
+			// Do not feed a temporary or incomplete route failure to the workflow:
+			// that rejects approaches and eventually blacklists the provider.
+			navigationRuntime.deferPlan();
+			if (transientRejection) {
+				deferUnsafeTravel(currentPosition, *transientRejection, "service_route_threat");
+				approachTravelFrontier(*player, PlayerBotNavigationGoal::exact(routeDestination));
+			}
+			schedule(Retry::RetryDelayMs);
+			return;
 		}
 		if (!routeBlocked) serviceWorkflow.approach().unblocked();
 		const auto* quote = sellingLocalLoot ? &*serviceWorkflow.liquidation() : nullptr;
@@ -1644,8 +1696,11 @@ void PlayerBotController::processService(Player* player, const Position& current
 		lastRouteRequiresNpcTravel = validatedNpcTravel || std::any_of(routePlan.steps.begin(), routePlan.steps.end(),
 			[](const PlayerBotNavigationStep& step) { return step.action == PlayerBotNavigationAction::NpcTravel; });
 		routeObservation.approachRoute.requiresNpcTravel = lastRouteRequiresNpcTravel;
-		if (reached) approachSteps = std::move(routePlan.steps);
-		else if (routePlan.metrics.result != PlayerBotNavigationResult::Reached) {
+		if (reached) {
+			resumeSafeTravel(currentPosition);
+			approachPlan.metrics = routePlan.metrics;
+			approachPlan.steps = std::move(routePlan.steps);
+		} else if (routePlan.metrics.result != PlayerBotNavigationResult::Reached) {
 			huntCoordinator.observeTransitMovementFailure(currentPosition);
 		}
 		const auto* liquidation = sellingLocalLoot ? &*serviceWorkflow.liquidation() : nullptr;
@@ -1825,7 +1880,7 @@ void PlayerBotController::processService(Player* player, const Position& current
 	}
 	Npc* provider = command.providerId == 0 ? nullptr : g_game.getNpcByID(command.providerId);
 	if (command.type == PlayerBotServiceCommandType::NavigateProvider && provider) {
-		if (!approachSteps.empty()) observeNavigationPlan(command.destination, std::move(approachSteps));
+		if (!approachPlan.steps.empty()) observeNavigationPlan(*player, PlayerBotNavigationGoal::exact(command.destination), std::move(approachPlan));
 		if (Position::areInRange<3, 3, 0>(currentPosition, provider->getPosition())) {
 			resetNavigation();
 			schedule(SCHEDULER_MINTICKS);
@@ -2104,6 +2159,10 @@ bool PlayerBotController::discoverDepot(Player& player, const Position& currentP
 {
 	const auto now = std::chrono::steady_clock::now();
 	using DepotTelemetry = playerbot::PlayerBotDepotTelemetry;
+	if (travelDeferred && now < travelRetryAt) {
+		schedule(blockedRouteRetryInterval);
+		return false;
+	}
 	if (!depotDiscoveryTelemetry.active() && depotWorkflow.snapshot().stage == PlayerBotDepotStage::Discover) {
 		depotDiscoveryTelemetry.begin(now, currentPosition, sellLootPlan ? DepotTelemetry::Intent::Liquidation :
 		    huntTravelBudgetPhase == HuntTravelBudgetPhase::ReturnToDepot ? DepotTelemetry::Intent::ForcedReturn :
@@ -2234,7 +2293,7 @@ bool PlayerBotController::discoverDepot(Player& player, const Position& currentP
 	}
 
 	if (command.type != PlayerBotDepotCommandType::ValidateRoute) depotSourceRouteSearch.reset();
-	std::deque<PlayerBotNavigationStep> steps;
+	PlayerBotNavigationRoutePlan selectedRoute;
 	uint32_t routeValidations = 0;
 	uint32_t lastDangerCost = 0;
 	double lastMaximumHealthLossPerSecond = 0;
@@ -2343,6 +2402,23 @@ bool PlayerBotController::discoverDepot(Player& player, const Position& currentP
 			    huntTravelBudgetPhase == HuntTravelBudgetPhase::ReturnToDepot ?
 			        PlayerBotRouteIntent::ForcedReturn : PlayerBotRouteIntent::Optional);
 		}
+		const auto transientRejection = valid && candidate.approachPosition != currentPosition ?
+		    playerBotNavigationTransientRejection(routePlan, navigationCostPolicy(player),
+		        [&player](const PlayerBotNavigationStep& step) -> uint32_t {
+			        return step.action == PlayerBotNavigationAction::Move ? player.getStepDuration(step.direction) : 1000;
+		        }) : std::nullopt;
+		if (transientRejection) {
+			// Leave this candidate pending. Unsafe/Unreachable observations would
+			// suppress its approach and spend discovery/fixed-goal failure bounds.
+			deferUnsafeTravel(currentPosition, *transientRejection, "depot_route_threat");
+			navigationRuntime.deferPlan();
+			depotDiscoveryTelemetry.pending(std::chrono::duration_cast<std::chrono::microseconds>(
+			    std::chrono::steady_clock::now() - startedAt));
+			emitDepotDiscovery(DepotTelemetry::Result::Progress, currentPosition, "transient_route_threat");
+			approachTravelFrontier(player, PlayerBotNavigationGoal::exact(candidate.approachPosition));
+			schedule(blockedRouteRetryInterval);
+			return false;
+		}
 		const auto verdict = playerBotNavigationRiskVerdict(riskProfile, routePlan.metrics);
 		const bool routeSafe = candidate.approachPosition == currentPosition ||
 		    verdict == PlayerBotNavigationRiskVerdict::Accepted;
@@ -2398,7 +2474,9 @@ bool PlayerBotController::discoverDepot(Player& player, const Position& currentP
 		depotDiscoveryTelemetry.validated(std::move(routeEvidence), observation.routeResult, routePlan.metrics.expandedNodes,
 		    std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - startedAt));
 		if (reached) {
-			steps = std::move(routePlan.steps);
+			resumeSafeTravel(currentPosition);
+			selectedRoute.metrics = routePlan.metrics;
+			selectedRoute.steps = std::move(routePlan.steps);
 		} else if (!preferredExit && routePlan.metrics.attempted &&
 		           routePlan.metrics.result != PlayerBotNavigationResult::Reached) {
 			huntCoordinator.observeTransitMovementFailure(currentPosition);
@@ -2430,8 +2508,8 @@ bool PlayerBotController::discoverDepot(Player& player, const Position& currentP
 		return false;
 	}
 	if (command.type == PlayerBotDepotCommandType::Navigate && command.snapshot.hasSelectedDepot) {
-		if (!steps.empty()) {
-			observeNavigationPlan(command.snapshot.selected.approachPosition, std::move(steps));
+		if (!selectedRoute.steps.empty()) {
+			observeNavigationPlan(player, PlayerBotNavigationGoal::exact(command.snapshot.selected.approachPosition), std::move(selectedRoute));
 		}
 		if (routeValidations == 0) return true; // Already selected; do not report another discovery every movement turn.
 		emitDepotDiscovery(DepotTelemetry::Result::Selected, currentPosition);

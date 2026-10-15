@@ -58,6 +58,7 @@ struct PlayerBotNavigationPlanMetrics {
 	bool dangerAware = false;
 	std::chrono::microseconds elapsed = std::chrono::microseconds::zero();
 	bool attempted = false;
+	bool transientRiskRejected = false;
 };
 
 inline PlayerBotNavigationRiskVerdict playerBotNavigationRiskVerdict(
@@ -88,6 +89,25 @@ struct PlayerBotNavigationRoutePlan {
 	PlayerBotNavigationPlanMetrics metrics;
 	std::deque<PlayerBotNavigationStep> steps;
 };
+
+// A temporary threat is not an unavailable destination. Require explicit
+// rejected-search evidence or unsafe transient exposure on the actual plan.
+// Node limits, static risk and unrelated warnings retain their normal bounds.
+template<class Exposure>
+std::optional<double> playerBotNavigationTransientRejection(const PlayerBotNavigationRoutePlan& plan,
+    const PlayerBotNavigationCostPolicy& policy, Exposure exposure)
+{
+	if (plan.metrics.result == PlayerBotNavigationResult::RiskRejected && plan.metrics.transientRiskRejected) {
+		return plan.metrics.maximumHealthLossPerSecond;
+	}
+	// A completed walking path may be relabeled RiskRejected by itinerary
+	// aggregation. Its concrete steps still establish mixed-exposure cause.
+	if (plan.metrics.result != PlayerBotNavigationResult::Reached &&
+	    plan.metrics.result != PlayerBotNavigationResult::RiskRejected) return std::nullopt;
+	const auto transient = playerBotNavigationTransientRouteRisk(policy, plan.steps, exposure);
+	if (transient.transientRiskRejected) return transient.maximumHealthLossPerSecond;
+	return std::nullopt;
+}
 
 // Only a complete, unexposed same-floor walk can extend known return coverage.
 // Added danger needs a new return-risk estimate. Portals, NPC travel, item use,
@@ -289,6 +309,8 @@ class PlayerBotNavigationRuntime
 			fixedTargetFailures.reset();
 			fixedTargetGoal.reset();
 		}
+		// Discard an unsafe route without charging or forgiving fixed-goal failures.
+		void deferPlan() { session.clear(); }
 		void resetPatrolRecovery() { session.clearBlockedPositions(); session.resetStepFailures(); }
 		void clearBlockedPositions() { session.clearBlockedPositions(); }
 

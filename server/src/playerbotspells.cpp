@@ -914,8 +914,8 @@ void PlayerBotController::beginSpellTraining(Player& player, const Position& pos
 	progressionRuntime.beginSpellTraining(std::move(plan));
 	const auto& training = progressionRuntime.spellTraining().plan();
 	resetNavigation();
-	if (trainerJourney) navigationRuntime.observePlan({PlayerBotNavigationGoal::anyOf(trainerJourney->destinations),
-	    trainerJourney->plan, player.canDoAction(), true, std::chrono::steady_clock::now()});
+	if (trainerJourney) observeNavigationPlan(player, PlayerBotNavigationGoal::anyOf(trainerJourney->destinations),
+	    trainerJourney->plan);
 	emit("strategy_selection", position, "\"goal\":\"learn_spell\",\"npc_id\":" +
 	     std::to_string(training.npcId) + ",\"spell\":" + jsonString(training.spellName) +
 	     ",\"keyword\":" + jsonString(training.keyword) + ",\"price\":" +
@@ -1057,8 +1057,7 @@ void PlayerBotController::processSpellTraining(Player* player, const Position& c
 				return;
 			}
 			trainerJourney->plan = *planned;
-			navigationRuntime.observePlan({PlayerBotNavigationGoal::anyOf(destinations), std::move(*planned),
-			    player->canDoAction(), true, std::chrono::steady_clock::now()});
+			observeNavigationPlan(*player, PlayerBotNavigationGoal::anyOf(destinations), std::move(*planned));
 			trainerJourneyNeedsRoute = false;
 		}
 		PlayerBotNavigationRuntimeOutcome navigation;

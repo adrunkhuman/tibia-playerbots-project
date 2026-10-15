@@ -147,7 +147,12 @@ void PlayerBotController::beginOracleDeparture(Player& player, const Position& p
 {
 	progressionRuntime.beginDeparture(std::move(plan));
 	const auto& departure = progressionRuntime.departure().plan();
-	observeNavigationPlan(departure.approachPosition, std::move(steps));
+	PlayerBotNavigationRoutePlan route;
+	route.metrics.result = PlayerBotNavigationResult::Reached;
+	route.metrics.steps = departure.travelSteps;
+	route.metrics.expandedNodes = departure.expandedNodes;
+	route.steps = std::move(steps);
+	observeNavigationPlan(player, PlayerBotNavigationGoal::exact(departure.approachPosition), std::move(route));
 	emit("strategy_selection", position,
 	     "\"goal\":\"oracle_departure\",\"npc_id\":" + std::to_string(departure.npcId) +
 	         ",\"town\":\"thais\",\"town_id\":" + std::to_string(oracleTownId) +

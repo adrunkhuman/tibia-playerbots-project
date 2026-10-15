@@ -13,6 +13,24 @@
 // no Player, Tile, or cost-policy closure survives a yield.
 class PlayerBotPathSearch {
 public:
+	bool rejectTransientArc(double peak, double maximum) {
+		if (playerBotNavigationPeakAccepts(maximum, peak)) return false;
+		transientRiskRejected = true;
+		transientRejectedPeak = std::max(transientRejectedPeak, peak);
+		return true;
+	}
+
+	bool rejectUnsafeTransientEndpoints(const PlayerBotNavigationCostPolicy& policy) {
+		if (result || !policy.transientHealthLossPerSecond) return false;
+		const auto peak = playerBotNavigationRejectedEndpointPeak(start, goal,
+		    std::min(maximumPeakDanger, policy.risk.maximumHealthLossPerSecond), policy.transientHealthLossPerSecond);
+		if (!peak) return false;
+		summary.transientRiskRejected = true;
+		summary.maximumHealthLossPerSecond = *peak;
+		result = PlayerBotNavigationResult::RiskRejected;
+		return true;
+	}
+
 	struct Arc {
 		PlayerBotNavigationStep step;
 		uint32_t movement = 0;
@@ -122,8 +140,13 @@ public:
 			// must be able to continue through this node without re-expanding it.
 			if (sourceTree && targetSettled()) return result = PlayerBotNavigationResult::Reached;
 		}
-		if (open.empty()) result = PlayerBotNavigationResult::Unreachable;
-		else if (expanded >= allowance) result = PlayerBotNavigationResult::NodeLimit;
+		if (open.empty()) {
+			result = transientRiskRejected ? PlayerBotNavigationResult::RiskRejected : PlayerBotNavigationResult::Unreachable;
+			if (transientRiskRejected) {
+				summary.transientRiskRejected = true;
+				summary.maximumHealthLossPerSecond = transientRejectedPeak;
+			}
+		} else if (expanded >= allowance) result = PlayerBotNavigationResult::NodeLimit;
 		return result;
 	}
 
@@ -207,6 +230,8 @@ public:
 	bool zeroDangerOnly = false;
 
 private:
+	bool transientRiskRejected = false;
+	double transientRejectedPeak = 0;
 	struct Node {
 		uint32_t estimate;
 		uint32_t cost;

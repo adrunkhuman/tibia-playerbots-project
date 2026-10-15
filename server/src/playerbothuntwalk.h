@@ -330,7 +330,12 @@ private:
 			PlayerBotNavigationCostSummary cost;
 			tree->search.extract(goals, path, cost);
 			append(player, policy, path);
-		} else if (*state == PlayerBotNavigationResult::NodeLimit) ++timing.nodeLimits;
+		} else {
+			// Preserve definitive transient rejection from the unrestricted
+			// kernel. Restricted failures and node limits remain inconclusive.
+			summary = tree->search.summary;
+			if (*state == PlayerBotNavigationResult::NodeLimit) ++timing.nodeLimits;
+		}
 		result = *state;
 		// Cached settled labels remain final under any consistent target
 		// potential. Charge the maximum potential grid along with the tree.

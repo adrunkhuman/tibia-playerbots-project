@@ -22,6 +22,7 @@
 
 #include "const.h"
 #include "position.h"
+#include "playerbotraidhazards.h"
 #include "baseevents.h"
 
 enum RaidState_t {
@@ -163,6 +164,8 @@ class RaidEvent
 		virtual bool configureRaidEvent(const pugi::xml_node& eventNode);
 
 		virtual bool executeEvent() = 0;
+		// Only statically configured spawns contribute; scripts/announcements do not.
+		virtual void appendPlayerBotHazards(std::vector<PlayerBotRaidFootprint>&) const {}
 		uint32_t getDelay() const {
 			return delay;
 		}
@@ -191,6 +194,7 @@ class SingleSpawnEvent final : public RaidEvent
 		bool configureRaidEvent(const pugi::xml_node& eventNode) override;
 
 		bool executeEvent() override;
+		void appendPlayerBotHazards(std::vector<PlayerBotRaidFootprint>& footprints) const override;
 
 	private:
 		std::string monsterName;
@@ -203,6 +207,7 @@ class AreaSpawnEvent final : public RaidEvent
 		bool configureRaidEvent(const pugi::xml_node& eventNode) override;
 
 		bool executeEvent() override;
+		void appendPlayerBotHazards(std::vector<PlayerBotRaidFootprint>& footprints) const override;
 
 	private:
 		std::list<MonsterSpawn> spawnList;

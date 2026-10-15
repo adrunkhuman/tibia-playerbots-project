@@ -17,6 +17,7 @@
 #include "playerbotsupplypolicy.h"
 #include "playerbotsupplyrecovery.h"
 #include "playerbotpreparation.h"
+#include "playerbottravelsafety.h"
 #include "position.h"
 
 #include <algorithm>
@@ -795,13 +796,19 @@ struct PlayerBotHuntReturnCoverageContext {
 	bool canUseRope = false;
 	bool canUseShovel = false;
 	bool premium = false;
+	// Coarse proofs follow raid epochs, not unrelated observation revisions.
+	std::string travelSafetyIdentity{};
+	std::shared_ptr<const PlayerBotTravelRouteExposure> travelExposure{};
+	std::shared_ptr<const PlayerBotTravelDangerField> travelField{};
+	std::string observationIdentity{};
 
 	bool operator==(const PlayerBotHuntReturnCoverageContext& other) const
 	{
 		return topologyGeneration == other.topologyGeneration && npcGeneration == other.npcGeneration &&
 		       level == other.level && coveredPosition == other.coveredPosition &&
 		       depotDestination == other.depotDestination && fare == other.fare &&
-		       canUseRope == other.canUseRope && canUseShovel == other.canUseShovel && premium == other.premium;
+		       canUseRope == other.canUseRope && canUseShovel == other.canUseShovel && premium == other.premium &&
+		       travelSafetyIdentity == other.travelSafetyIdentity;
 	}
 };
 
@@ -820,8 +827,11 @@ class PlayerBotHuntReturnCoverage
 		bool covers(uint64_t variantId, uint64_t atlasRevision,
 		            const PlayerBotHuntReturnCoverageContext& context) const
 		{
-			return evidence && evidence->routeValid && evidence->variantId == variantId &&
-			       evidence->atlasRevision == atlasRevision && evidence->context == context;
+			if (!evidence || !evidence->routeValid || evidence->variantId != variantId ||
+			    evidence->atlasRevision != atlasRevision || !(evidence->context == context)) return false;
+			const auto& retained = evidence->context;
+			return retained.observationIdentity == context.observationIdentity || !retained.travelExposure ||
+			       !context.travelField || !retained.travelExposure->refreshed(*context.travelField).transientRiskRejected;
 		}
 
 		void invalidate()
@@ -829,6 +839,12 @@ class PlayerBotHuntReturnCoverage
 			if (evidence) evidence->routeValid = false;
 		}
 		bool valid() const { return evidence && evidence->routeValid; }
+		std::shared_ptr<const PlayerBotTravelRouteExposure> travelExposure() const {
+			return evidence ? evidence->context.travelExposure : nullptr;
+		}
+		std::shared_ptr<const PlayerBotTravelRouteExposure> travelExposureAt(Position position) const {
+			return evidence && evidence->context.coveredPosition == position ? evidence->context.travelExposure : nullptr;
+		}
 
 	private:
 		struct Evidence {

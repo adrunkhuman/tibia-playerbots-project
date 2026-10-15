@@ -74,6 +74,7 @@ namespace playerbot {
 		NavigationPreflightFixture navigationPreflightFixture;
 		bool detailAllHuntCandidates; // Planning assertions inspect rejected candidates.
 		bool rangedPositionDisabled; // Control run: ranged weapons fight like melee (#235).
+		bool raidTravelFixture;
 	};
 
 	inline uint32_t playerBotFixtureHuntPlanningDuration(bool mainlandLoopFixture,

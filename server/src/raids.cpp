@@ -155,11 +155,16 @@ void Raids::clear()
 	g_scheduler.stopEvent(checkRaidsEvent);
 	checkRaidsEvent = 0;
 
+	// A running non-repeat raid has already been removed from raidList.
+	if (running) running->stopEvents();
 	for (Raid* raid : raidList) {
 		raid->stopEvents();
 		delete raid;
 	}
 	raidList.clear();
+
+	// Clearing/reloading definitions does not remove spawned monsters. Retain
+	// hazard knowledge independently of the raid objects and their event state.
 
 	loaded = false;
 	started = false;
@@ -240,6 +245,12 @@ void Raid::startRaid()
 {
 	RaidEvent* raidEvent = getNextRaidEvent();
 	if (raidEvent) {
+		std::vector<PlayerBotRaidFootprint> footprints;
+		for (const RaidEvent* event : raidEvents) {
+			event->appendPlayerBotHazards(footprints);
+		}
+		// Local emptiness before any configured wave spawns is not clearance.
+		PlayerBotRaidHazards::instance().activate(name, footprints, true);
 		state = RAIDSTATE_EXECUTING;
 		nextEventEvent = g_scheduler.addEvent(createSchedulerTask(raidEvent->getDelay(), std::bind(&Raid::executeRaidEvent, this, raidEvent)));
 	}
@@ -247,6 +258,21 @@ void Raid::startRaid()
 
 void Raid::executeRaidEvent(RaidEvent* raidEvent)
 {
+	std::vector<PlayerBotRaidFootprint> footprints;
+	raidEvent->appendPlayerBotHazards(footprints);
+	if (!footprints.empty()) {
+		std::vector<PlayerBotRaidFootprint> allFootprints, remainingFootprints;
+		for (size_t i = 0; i < raidEvents.size(); ++i) {
+			raidEvents[i]->appendPlayerBotHazards(allFootprints);
+			if (i > nextEvent) raidEvents[i]->appendPlayerBotHazards(remainingFootprints);
+		}
+		// Earlier waves can survive a weaker later wave. Republish the full
+		// activation forecast with fresh IDs, then update only pending state.
+		// Both changes precede spawning on the dispatcher; no controller sees
+		// the intermediate snapshot. Non-spawn events change nothing.
+		PlayerBotRaidHazards::instance().activate(name, allFootprints);
+		PlayerBotRaidHazards::instance().setPending(name, remainingFootprints);
+	}
 	if (raidEvent->executeEvent()) {
 		nextEvent++;
 		RaidEvent* newRaidEvent = getNextRaidEvent();
@@ -264,6 +290,9 @@ void Raid::executeRaidEvent(RaidEvent* raidEvent)
 
 void Raid::resetRaid()
 {
+	// Event completion/failure does not remove already spawned monsters.
+	// Retain warnings, but failed/cancelled future waves no longer block clearance.
+	PlayerBotRaidHazards::instance().retirePending(name);
 	nextEvent = 0;
 	state = RAIDSTATE_IDLE;
 	g_game.raids.setRunning(nullptr);
@@ -272,6 +301,7 @@ void Raid::resetRaid()
 
 void Raid::stopEvents()
 {
+	PlayerBotRaidHazards::instance().retirePending(name);
 	if (nextEventEvent != 0) {
 		g_scheduler.stopEvent(nextEventEvent);
 		nextEventEvent = 0;
@@ -379,6 +409,11 @@ bool SingleSpawnEvent::configureRaidEvent(const pugi::xml_node& eventNode)
 		return false;
 	}
 	return true;
+}
+
+void SingleSpawnEvent::appendPlayerBotHazards(std::vector<PlayerBotRaidFootprint>& footprints) const
+{
+	footprints.push_back({position, position, {{monsterName, 1}}});
 }
 
 bool SingleSpawnEvent::executeEvent()
@@ -517,6 +552,17 @@ bool AreaSpawnEvent::configureRaidEvent(const pugi::xml_node& eventNode)
 		spawnList.emplace_back(name, minAmount, maxAmount);
 	}
 	return true;
+}
+
+void AreaSpawnEvent::appendPlayerBotHazards(std::vector<PlayerBotRaidFootprint>& footprints) const
+{
+	PlayerBotRaidFootprint footprint{fromPos, toPos, {}};
+	for (const MonsterSpawn& spawn : spawnList) {
+		// uniform_random accepts reversed bounds. Report the configured upper
+		// bound, not a random roll or the number of successful placements.
+		footprint.monsters.push_back({spawn.name, std::max(spawn.minAmount, spawn.maxAmount)});
+	}
+	footprints.push_back(std::move(footprint));
 }
 
 bool AreaSpawnEvent::executeEvent()

@@ -25,6 +25,7 @@ enum class PlayerBotControllerLifecycle : uint8_t {
 
 enum class PlayerBotTurnCommand : uint8_t {
 	None,
+	TravelSafety,
 	Progression,
 	TrainerDiscovery,
 	MagicTraining,
@@ -50,6 +51,7 @@ struct PlayerBotTurnObservation {
 	bool huntCycleFinished = false;
 	bool preparationActive = false;
 	bool trainerDiscoveryActive = false;
+	bool travelSafetyRequired = false;
 };
 
 class PlayerBotTurnRouter
@@ -74,6 +76,7 @@ class PlayerBotTurnRouter
 		constexpr PlayerBotTurnCommand route(const PlayerBotTurnObservation& observation) const
 		{
 			if (!running()) return PlayerBotTurnCommand::None;
+			if (observation.travelSafetyRequired) return PlayerBotTurnCommand::TravelSafety;
 			if (observation.trainerDiscoveryActive) return PlayerBotTurnCommand::TrainerDiscovery;
 			if (observation.progressionActive) return PlayerBotTurnCommand::Progression;
 			if (observation.magicTrainingActive) return PlayerBotTurnCommand::MagicTraining;
