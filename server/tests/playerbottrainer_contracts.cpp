@@ -414,9 +414,9 @@ void executionLegValidity()
 	assert(!evidence.executionContextChange(evidence.actor, 546, 1, 2, evidence.risk));
 	const auto boarding = playerBotTrainerBoardingApproach(route, source);
 	assert(boarding && *boarding == approach);
-	assert(Position::areInRange<3, 3, 0>(*boarding, Position(103, 100, 7)));
-	assert(!Position::areInRange<3, 3, 0>(*boarding, Position(106, 100, 7)));
-	assert(!Position::areInRange<3, 3, 0>(*boarding, Position(102, 100, 6)));
+	assert((Position::areInRange<3, 3, 0>(*boarding, Position(103, 100, 7))));
+	assert((!Position::areInRange<3, 3, 0>(*boarding, Position(106, 100, 7))));
+	assert((!Position::areInRange<3, 3, 0>(*boarding, Position(102, 100, 6))));
 	assert(playerBotTrainerDestinationRetained(route, {trainerTile, Position(203, 200, 7)},
 	    {trainerTile, Position(201, 200, 7)}));
 	assert(!playerBotTrainerDestinationRetained(route, {trainerTile}, {alternativeTile}));

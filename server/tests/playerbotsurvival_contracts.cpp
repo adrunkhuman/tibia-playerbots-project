@@ -478,6 +478,14 @@ void firstHealingBootstrapEligibility()
 		assert(!runtime.preferredHealingSpell(state));
 		assert(reserve(true) == 0 && reserve(false) == 100);
 	}
+
+	state = snapshot();
+	state.spells.front().learned = false;
+	state.spells.front().requirementsMet = false;
+	assert(!runtime.healingSpellWorthLearning(state, "Light Healing"));
+	assert(runtime.healingSpellWorthLearning(state, "Light Healing", false));
+	state.spells.front().vocationAllowed = false;
+	assert(!runtime.healingSpellWorthLearning(state, "Light Healing", false));
 }
 
 void economicalHealing()

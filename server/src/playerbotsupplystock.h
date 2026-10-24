@@ -80,16 +80,17 @@ inline constexpr uint16_t playerBotManaPotionItemId = 7620;
 inline constexpr uint32_t playerBotManaPotionMinimumMana = 75;
 
 // Base rule for kinds without a specialized controller policy. Paladins stock
-// mana potions for spell use; other vocations still drink carried mana potions
-// without a shopping target. Weapon-matched kinds have no item until the
-// loadout selects one.
-inline PlayerBotSupplyRule playerBotSupplyRule(PlayerBotSupplyKind kind, uint16_t vocationId)
+// mana only with an implemented, learned and currently legal consumer. Carried
+// potions remain usable without a shopping target. Weapon-matched kinds have
+// no item until the loadout selects one.
+inline PlayerBotSupplyRule playerBotSupplyRule(PlayerBotSupplyKind kind, uint16_t vocationId,
+                                               bool hasUsableManaConsumer = false)
 {
 	PlayerBotSupplyRule rule;
 	rule.kind = kind;
 	if (kind == PlayerBotSupplyKind::ManaPotion) {
 		rule.itemId = playerBotManaPotionItemId;
-		if (vocationId == 3 || vocationId == 7) {
+		if ((vocationId == 3 || vocationId == 7) && hasUsableManaConsumer) {
 			rule.safetyFloor = 2;
 			rule.returnThreshold = 1;
 			rule.target = 20;

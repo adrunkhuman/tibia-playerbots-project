@@ -13,10 +13,14 @@
 #include "player.h"
 #include "playerbotequipmentadapter.h"
 #include "playerbotinventorypolicy.h"
+#include "playerbotspellcalibration.h"
 
 #include "container.h"
+#include "spells.h"
 
 using namespace playerbot;
+
+extern Spells* g_spells;
 
 uint32_t playerbot::recoveryPotionRouteReserve(uint16_t vocationId, int32_t maximumHealth,
 	                                            uint32_t routeDangerCost, uint32_t healthLossCost)
@@ -148,6 +152,24 @@ uint32_t PlayerBotInventoryPolicy::protectedItemReserve(const Player& player, ui
 }
 
 namespace {
+	bool hasUsableManaConsumer(const Player& player)
+	{
+		if (player.getVocationId() != 3 && player.getVocationId() != 7) return false;
+		for (const PlayerBotSpellDescriptor& descriptor : playerBotSpellDescriptors()) {
+			const InstantSpell* spell = g_spells ? g_spells->getInstantSpellByName(descriptor.name) : nullptr;
+			if (!spell || spell->getWords() != descriptor.words || !spell->isLearnable() ||
+			    !player.hasLearnedInstantSpell(descriptor.name) || !spell->isEnabled() ||
+			    player.getLevel() < spell->getLevel() || player.getMagicLevel() < spell->getMagicLevel() ||
+			    player.getSoul() < spell->getSoulCost() || (spell->isPremium() && !player.isPremium()) ||
+			    (spell->getNeedWeapon() && !player.getWeapon(true))) continue;
+			const VocSpellMap& vocations = spell->getVocMap();
+			if ((vocations.empty() || vocations.count(player.getVocationId()) != 0) && spell->getManaCost(&player) != 0) {
+				return true;
+			}
+		}
+		return false;
+	}
+
 	uint16_t throwingWeaponSupplyItem(const Player& player)
 	{
 		const PlayerBotEquipmentPolicy policy;
@@ -178,7 +200,8 @@ PlayerBotSupplyStocks PlayerBotInventoryPolicy::additionalSupplyStocks(const Pla
 	for (const PlayerBotSupplyKind kind : playerBotSupplyKinds) {
 		if (kind == PlayerBotSupplyKind::HealthPotion) continue;
 		const PlayerBotSupplyRule rule = kind == PlayerBotSupplyKind::ThrowingWeapon ?
-		    playerBotThrowingWeaponRule(throwingWeaponSupplyItem(player), player.getLevel()) : playerBotSupplyRule(kind, player.getVocationId());
+		    playerBotThrowingWeaponRule(throwingWeaponSupplyItem(player), player.getLevel()) :
+		    playerBotSupplyRule(kind, player.getVocationId(), hasUsableManaConsumer(player));
 		if (rule.active()) stocks.push_back({rule, static_cast<const Cylinder&>(player).getItemTypeCount(rule.itemId)});
 	}
 	return stocks;

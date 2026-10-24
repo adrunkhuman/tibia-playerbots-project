@@ -71,7 +71,7 @@ function F.login.onLogin(player)
         mode == "magic_training_expired" or mode == "magic_training_post_hunt" or mode == "magic_training_post_hunt_no_overflow" or
         mode == "svargrond_local_route_recovery" or mode == "navigation_fare_rejection" or
         mode == "navigation_risk_rejection" or mode == "door_passages" or mode == "spear_restock" or mode == "spear_restock_scaled" or
-        mode == "spear_break" or mode == "spear_last_break" or mode == "spear_recovery_income" or mode == "paladin_spell_training" or mode == "paladin_healing_economy" or
+        mode == "spear_break" or mode == "spear_last_break" or mode == "spear_recovery_income" or mode == "paladin_spell_training" or mode == "paladin_first_heal_budget" or mode == "paladin_healing_economy" or
         mode == "paladin_mana_healing" or mode == "paladin_healing_fallback" or mode == "paladin_supply_restock",
         "unknown PLAYERBOT_GAMEPLAY_MODE: " .. mode)
     if mode == "equipment_shadow" or mode == "equipment_shadow_unaffordable" or mode == "equipment_shadow_no_upgrade" or
@@ -232,7 +232,7 @@ function F.login.onLogin(player)
         print("PLAYERBOT_GAMEPLAY_TEST " .. string.upper(mode) .. "_START")
         return true
     end
-    if mode == "paladin_spell_training" or mode == "paladin_healing_economy" or
+    if mode == "paladin_spell_training" or mode == "paladin_first_heal_budget" or mode == "paladin_healing_economy" or
         mode == "paladin_mana_healing" or mode == "paladin_healing_fallback" or mode == "paladin_supply_restock" then
         F.setupPaladinSpellFixture(player, mode)
         return true
@@ -956,8 +956,8 @@ function F.login.onLogin(player)
             "spell trainer shortlist fixture could not select the Carlin Knight")
         local requiredExperience = Game.getExperienceForLevel(9) - player:getExperience()
         if requiredExperience > 0 then player:addExperience(requiredExperience) end
-        assert(player:getLevel() >= 9 and player:forgetSpell("Light Healing"),
-            "spell trainer shortlist fixture could not prepare Light Healing")
+        assert(player:getLevel() == 9 and player:forgetSpell("Light Healing"),
+            "spell trainer shortlist fixture could not prepare its spell")
         F.removeAllHealthPotions(player)
         assert(player:addItem(F.healthPotionItemId, 10),
             "spell trainer shortlist fixture could not supply health potions")
@@ -965,7 +965,7 @@ function F.login.onLogin(player)
         if totalMoney > 0 then assert(player:removeTotalMoney(totalMoney),
             "spell trainer shortlist fixture could not clear funding") end
         assert(player:addMoney(100) and player:getMoney() + player:getBankBalance() == 100,
-            "spell trainer shortlist fixture could not set unaffordable funding")
+            "spell trainer shortlist fixture could not set funding")
         assert(Npc("Trisha") and player:teleportTo(Position(32679, 31683, 7)),
             "spell trainer shortlist fixture could not reach the Carlin mage guild")
         assert(player:setStorageValue(F.fixtureReadyStorage, 1),

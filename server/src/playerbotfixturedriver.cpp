@@ -62,7 +62,8 @@ namespace {
 	{
 		const char* mode = std::getenv("PLAYERBOT_GAMEPLAY_MODE");
 		if (!mode) return policy;
-		const bool training = std::strcmp(mode, "paladin_spell_training") == 0;
+		const bool training = std::strcmp(mode, "paladin_spell_training") == 0 ||
+	                      std::strcmp(mode, "paladin_first_heal_budget") == 0;
 		const bool supply = std::strcmp(mode, "paladin_supply_restock") == 0 ||
 		                    std::strcmp(mode, "spear_recovery_income") == 0;
 		const bool healing = std::strcmp(mode, "paladin_healing_economy") == 0 ||

@@ -74,12 +74,13 @@ const PlayerBotSurvivalSpellObservation* PlayerBotSurvivalRuntime::preferredHeal
 	return selected;
 }
 
-bool PlayerBotSurvivalRuntime::healingSpellWorthLearning(const PlayerBotSurvivalSnapshot& snapshot, const char* name) const
+bool PlayerBotSurvivalRuntime::healingSpellWorthLearning(const PlayerBotSurvivalSnapshot& snapshot, const char* name,
+                                                         bool requireCurrentEligibility) const
 {
 	const auto* candidate = spellObservation(snapshot, name);
 	const auto* descriptor = playerBotSpellDescriptor(name);
 	if (!candidate || !descriptor || descriptor->role != PlayerBotSpellRole::Healing || !candidate->metadataMatches ||
-	    !candidate->vocationAllowed || !candidate->requirementsMet) return false;
+	    !candidate->vocationAllowed || (requireCurrentEligibility && !candidate->requirementsMet)) return false;
 	const PlayerBotHealingSpellValue value{candidate->name, candidate->manaCost,
 	    calibration.ranking(candidate->name, "self", candidate->envelope)};
 	if (playerBotHealingEfficiency(value) <= 0) return false;

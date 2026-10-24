@@ -1081,7 +1081,7 @@ void routeSelectionContracts()
 void typedSupplyRouteContracts()
 {
 	const Position depot(200, 100, 7), supplier(300, 100, 7);
-	const PlayerBotSupplyRule mana = playerBotSupplyRule(PlayerBotSupplyKind::ManaPotion, 3);
+	const PlayerBotSupplyRule mana = playerBotSupplyRule(PlayerBotSupplyKind::ManaPotion, 3, true);
 	const PlayerBotSupplyRule spears = playerBotThrowingWeaponRule(2389, 16);
 	const PlayerBotSupplyRule ammo{PlayerBotSupplyKind::Ammunition, 2544, 6, 5, 40};
 	const uint16_t healthItemId = 7618;
@@ -3496,16 +3496,20 @@ void typedSupplyStock()
 	assert(playerBotSupplyStockKey(stocks) != key);
 	assert(playerBotSupplyStockKey({{health, 7}}) == 7); // health-only key equals the potion count
 
-	// Only Paladins stock mana; Knights and every other vocation keep no mana target.
+	// Paladins stock mana only with a usable consumer. Vocation alone and all
+	// other vocations retain no floor, return threshold or shopping target.
 	for (uint16_t vocation : {0, 1, 2, 3, 4, 5, 6, 7, 8, 9}) {
-		const PlayerBotSupplyRule rule = playerBotSupplyRule(PlayerBotSupplyKind::ManaPotion, vocation);
+		const PlayerBotSupplyRule rule = playerBotSupplyRule(PlayerBotSupplyKind::ManaPotion, vocation, true);
+		const PlayerBotSupplyRule withoutConsumer = playerBotSupplyRule(PlayerBotSupplyKind::ManaPotion, vocation);
+		assert(!withoutConsumer.active() && withoutConsumer.target == 0 && withoutConsumer.safetyFloor == 0 &&
+		       withoutConsumer.returnThreshold == 0 && withoutConsumer.preferredStock == 0);
+		const PlayerBotSupplyStocks inactive{{health, 20}, {withoutConsumer, 0}};
+		assert(!playerBotMandatorySupplyDeficit(inactive, false).first && !playerBotExhaustedSupply(inactive));
 		assert(rule.kind == PlayerBotSupplyKind::ManaPotion && rule.itemId == playerBotManaPotionItemId && rule.itemId == 7620);
 		if (vocation == 3 || vocation == 7) {
 			assert(rule.active() && rule.target == 20 && rule.safetyFloor == 2 && rule.returnThreshold == 1);
 		} else {
 			assert(!rule.active() && rule.target == 0 && rule.safetyFloor == 0 && rule.returnThreshold == 0);
-			const PlayerBotSupplyStocks inactive{{health, 20}, {rule, 0}};
-			assert(!playerBotMandatorySupplyDeficit(inactive, false).first && !playerBotExhaustedSupply(inactive));
 		}
 		for (const PlayerBotSupplyKind kind : {PlayerBotSupplyKind::Ammunition, PlayerBotSupplyKind::ThrowingWeapon}) {
 			assert(!playerBotSupplyRule(kind, vocation).active());
@@ -3513,7 +3517,7 @@ void typedSupplyStock()
 	}
 
 	for (uint16_t vocation : {3, 7}) {
-		const PlayerBotSupplyRule rule = playerBotSupplyRule(PlayerBotSupplyKind::ManaPotion, vocation);
+		const PlayerBotSupplyRule rule = playerBotSupplyRule(PlayerBotSupplyKind::ManaPotion, vocation, true);
 		PlayerBotSupplyStocks supplies{{health, 20}, {rule, rule.safetyFloor}};
 		assert(!playerBotMandatorySupplyDeficit(supplies, false).first && !playerBotExhaustedSupply(supplies));
 		supplies[1].count = rule.returnThreshold;

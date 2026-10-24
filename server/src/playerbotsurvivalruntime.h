@@ -149,7 +149,8 @@ class PlayerBotSurvivalRuntime
 		uint32_t healingManaReserve(const PlayerBotSurvivalSnapshot& snapshot) const;
 		const PlayerBotSurvivalSpellObservation* preferredHealingSpell(const PlayerBotSurvivalSnapshot& snapshot,
 		                                                             bool affordable = false, bool capOverheal = false) const;
-		bool healingSpellWorthLearning(const PlayerBotSurvivalSnapshot& snapshot, const char* name) const;
+		bool healingSpellWorthLearning(const PlayerBotSurvivalSnapshot& snapshot, const char* name,
+	                               bool requireCurrentEligibility = true) const;
 		bool hasPendingDefensiveWork() const;
 		uint16_t pendingFoodItemId() const;
 		void beginPotion(const PlayerBotSurvivalSnapshot& snapshot, uint16_t itemId, const std::string& trigger);
