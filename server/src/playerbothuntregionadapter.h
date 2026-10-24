@@ -4,6 +4,7 @@
 
 #include "playerbothuntregions.h"
 #include "playerbotnavigation.h"
+#include "playerbotdamagemodel.h"
 
 struct PlayerBotFightEstimate {
 	double incomingDamagePerSecond = 0;
@@ -35,6 +36,7 @@ class PlayerBotHuntRegionAdapter
 		static PlayerBotHuntPlanningProfile planningProfile(const Player& player, const PlayerBotCombatProfile& combat,
 		                                                     double challengeFrontier);
 		static double travelDanger(const PlayerBotCombatProfile& combat, const Position& position);
+		static PlayerBotDamageRates damageRates(const PlayerBotCombatProfile& combat, const std::string& monsterName);
 		static PlayerBotFightEstimate fightEstimate(const PlayerBotCombatProfile& combat,
 		                                              const std::string& monsterName,
 		                                              int32_t remainingHealth);

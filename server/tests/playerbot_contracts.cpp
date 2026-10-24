@@ -2431,6 +2431,14 @@ void transitCombat()
 	assert(playerBotPassageFightManageable(500, 0, 20.0, 20.0));
 	assert(!playerBotPassageFightManageable(400, 0, 20.0, 20.0));
 	assert(playerBotPassageFightManageable(350, 100, 20.0, 20.0));
+	// Zero incoming damage is safe, but not permission to spend hours clearing
+	// a blocker for a corpse whose existing work deadline is seconds away.
+	assert(!playerBotPassageFightManageable(200, 0, 0, 50000, 20));
+	assert(playerBotPassageFightManageable(200, 0, 0, 10, 20));
+	assert(!playerBotPassageFightManageable(200, 0, 0, 10, 9));
+	assert(playerBotPassageWorkSeconds(60, 0, false) == 60); // stale completed loot is irrelevant
+	assert(playerBotPassageWorkSeconds(60, 0, true) == 0);
+	assert(playerBotPassageWorkSeconds(60, 12, true) == 12);
 
 	PlayerBotDefensiveTarget easy;
 	easy.id = 10;

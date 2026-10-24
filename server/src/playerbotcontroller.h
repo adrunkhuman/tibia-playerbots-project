@@ -628,7 +628,7 @@ std::optional<PlayerBotTravelRouteExposure> travelNavigationExposure;
 Position travelNavigationExposurePosition;
 std::shared_ptr<PlayerBotHuntTravelEvidence> lastCompletedTravelEvidence;
 		mutable std::string travelFieldIdentity;
-		mutable std::map<std::array<uint32_t, 10>, std::shared_ptr<const PlayerBotTravelDangerField>> travelFields;
+		mutable std::map<std::array<uint32_t, 14>, std::shared_ptr<const PlayerBotTravelDangerField>> travelFields;
 		bool travelDeferred = false, travelWithdrawing = false, travelEscapeDispatch = false;
 		std::optional<Position> travelEscapeExpected;
 		Position travelEscapeFrom;

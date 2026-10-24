@@ -5,6 +5,9 @@
 #include "playerbotapproach.h"
 #include "playerbotdepotworkflow.h"
 #include "playerbothuntregions.h"
+#include "playerbothuntregionadapter.h"
+#include "playerbotphysicaldamage.h"
+#include "weapons.h"
 #include "playerbotnavigation.h"
 #include "playerbottopology.h"
 
@@ -597,6 +600,43 @@ std::vector<playerbot::PlayerBotFixtureEvent> playerbot::PlayerBotFixtureDriver:
 		return fields.str();
 	}();
 
+	const auto physicalContract = [] {
+		bool flags = true, incoming = true, outgoing = true, contention = true;
+		uint32_t checked = 0;
+		for (bool ranged : {false, true}) for (uint32_t level : {8U, 21U}) {
+			PlayerBotCombatProfile profile{level, 185 + static_cast<int32_t>(level - 8) * (ranged ? 10 : 15),
+			    13, 21, ranged ? 25 : 15, ranged ? 40 : 20, 1.0f};
+			profile.sustainedDefense = 10;
+			profile.blockedByShield = !ranged;
+			profile.hitChance = ranged ? 76 : 100;
+			for (const char* name : {"Troll", "Rotworm", "Cyclops"}) {
+				const MonsterType* type = g_monsters.getMonsterType(name);
+				if (!type || type->info.attackSpells.size() != 1) { flags = false; continue; }
+				const auto& attack = type->info.attackSpells.front();
+				flags = flags && attack.isMelee && attack.blocksArmor && attack.blocksShield;
+				const auto rates = PlayerBotHuntRegionAdapter::damageRates(profile, name);
+				const auto fight = PlayerBotHuntRegionAdapter::fightEstimate(profile, name, type->info.healthMax);
+				const double rate = attack.chance / 100.0 * 1000.0 / attack.speed;
+				const int32_t maximum = std::abs(attack.maxCombatValue);
+				incoming = incoming && std::abs(rates.total() - rate *
+				    playerBotExpectedPhysicalHit(0, maximum, 13, 10)) < 1e-9;
+				const int32_t maximumHit = Weapons::getMaxWeaponDamage(level, profile.attackSkill, profile.attack, 1);
+				const double playerDps = playerBotExpectedPhysicalHit(ranged ? static_cast<int32_t>(std::ceil(level * 0.2)) : 0,
+				    maximumHit, type->info.armor, ranged ? 0 : type->info.defense) * profile.hitChance / 100.0 / 2;
+				outgoing = outgoing && playerDps > 0 && std::abs(fight.fightSeconds - type->info.healthMax / playerDps) < 1e-8;
+				PlayerBotDamageRates crowd;
+				for (int i = 0; i < 5; ++i) crowd.merge(rates);
+				contention = contention && crowd.total() >= rates.total() * 5 - 1e-9;
+				++checked;
+			}
+		}
+		std::ostringstream fields;
+		fields << std::boolalpha << "\"profiles\":4,\"checked_fights\":" << checked
+		       << ",\"loaded_physical_flags\":" << flags << ",\"incoming_matches\":" << incoming
+		       << ",\"outgoing_matches\":" << outgoing << ",\"shared_shield_contention\":" << contention;
+		return fields.str();
+	}();
+
 	constexpr Position origin(65000, 65000, 7);
 	constexpr uint16_t ordinaryDoorId = 1210;
 	constexpr uint16_t levelDoorId = 1227;
@@ -1006,7 +1046,8 @@ std::vector<playerbot::PlayerBotFixtureEvent> playerbot::PlayerBotFixtureDriver:
 	            << ",\"poison_spider\":" << boolField(poisonSpiderDecay)
 	            << ",\"blocker_invalidated\":" << boolField(blockerInvalidated);
 	return {{"door_passages_contract", fields.str()}, {"stable_approaches_contract", stableFields.str()},
-	        {"corpse_decay_route_contract", decayFields.str()}, {"condition_damage_contract", conditionContract}};
+	        {"corpse_decay_route_contract", decayFields.str()}, {"condition_damage_contract", conditionContract},
+	    {"physical_forecast_contract", physicalContract}};
 }
 
 std::vector<playerbot::PlayerBotFixtureEvent> playerbot::PlayerBotFixtureDriver::runShovelPassagesContract(Player& player)

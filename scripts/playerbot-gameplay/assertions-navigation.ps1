@@ -208,6 +208,13 @@ function Assert-DoorPassageEvents {
 			throw "Condition damage fixture failed $field."
 		}
 	}
+	$physical = @(ConvertFrom-PlayerbotLogs -Logs $Logs | Where-Object { $_.event -eq 'physical_forecast_contract' })
+	if ($physical.Count -ne 1 -or $physical[0].profiles -ne 4 -or $physical[0].checked_fights -ne 12) {
+		throw 'Physical forecast fixture did not check level-8/21 Knight and Paladin profiles.'
+	}
+	foreach ($field in @('loaded_physical_flags', 'incoming_matches', 'outgoing_matches', 'shared_shield_contention')) {
+		if ($physical[0].$field -ne $true) { throw "Physical forecast fixture failed $field." }
+	}
 }
 
 function Assert-SvargrondLocalRouteRecoveryEvents {

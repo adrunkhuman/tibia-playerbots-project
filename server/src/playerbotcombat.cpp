@@ -121,6 +121,8 @@ namespace {
 		append(PlayerBotSupplyCapabilityAttack, "attack");
 		append(PlayerBotSupplyCapabilityAttackSkill, "attack_skill");
 		append(PlayerBotSupplyCapabilityAttackFactor, "attack_factor");
+		append(PlayerBotSupplyCapabilityAttackInterval, "attack_interval");
+		append(PlayerBotSupplyCapabilityDamageMultiplier, "damage_multiplier");
 		append(PlayerBotSupplyCapabilityMagicLevel, "magic_level");
 		append(PlayerBotSupplyCapabilityMaximumMana, "maximum_mana");
 		append(PlayerBotSupplyCapabilitySpellLegal, "spell_legal");
@@ -214,25 +216,35 @@ namespace {
 		return profile;
 	}
 
+	double passageWorkSeconds(const PlayerBotHuntCoordinator& hunt, bool lootActive)
+	{
+		const double combat = std::chrono::duration<double>(traversalCombatTimeout).count();
+		if (!lootActive || !hunt.lootTargetId()) return combat;
+		const double remaining = std::chrono::duration<double>(corpseLootTimeout).count() -
+		    hunt.lootElapsedMilliseconds(std::chrono::steady_clock::now()) / 1000.0;
+		return playerBotPassageWorkSeconds(combat, remaining, true);
+	}
+
 	std::optional<std::pair<double, double>> manageablePassageFight(
-		Player& player, const std::vector<Creature*>& attackers, const Creature& target)
+		Player& player, const std::vector<Creature*>& attackers, const Creature& target, double workSeconds)
 	{
 		const PlayerBotCombatProfile combat = huntCombatProfile(player);
-		double incomingDamagePerSecond = 0;
+		PlayerBotDamageRates incoming;
 		double targetFightSeconds = 0;
 		for (Creature* attacker : attackers) {
 			const PlayerBotFightEstimate estimate = PlayerBotHuntRegionAdapter::fightEstimate(
 			    combat, attacker->getName(), attacker->getHealth());
-			if (estimate.incomingDamagePerSecond <= 0 || estimate.fightSeconds <= 0) return std::nullopt;
-			incomingDamagePerSecond += estimate.incomingDamagePerSecond;
+			if (!std::isfinite(estimate.fightSeconds) || estimate.fightSeconds <= 0) return std::nullopt;
+			incoming.merge(PlayerBotHuntRegionAdapter::damageRates(combat, attacker->getName()));
 			if (attacker->getID() == target.getID()) targetFightSeconds = estimate.fightSeconds;
 		}
 		if (targetFightSeconds <= 0) return std::nullopt;
+		const double incomingDamagePerSecond = incoming.total();
 		const double predictedDamage = incomingDamagePerSecond * targetFightSeconds;
 		const PlayerBotRecoveryPrediction recovery = playerBotPredictRecovery(
 		    huntPlanningFacts(player, combat), targetFightSeconds);
 		if (!playerBotPassageFightManageable(player.getHealth(), recovery.totalMinimumHealing,
-		                                     incomingDamagePerSecond, targetFightSeconds)) {
+		                                     incomingDamagePerSecond, targetFightSeconds, workSeconds)) {
 			return std::nullopt;
 		}
 		return std::pair{predictedDamage, targetFightSeconds};
@@ -887,7 +899,8 @@ bool PlayerBotController::attackDefensiveThreat(Player* player, const Position& 
 	std::vector<PlayerBotDefensiveTarget> candidates;
 	if (movementFallback) {
 		for (Creature* creature : adjacentAttackers) {
-			const auto risk = manageablePassageFight(*player, adjacentAttackers, *creature);
+			const auto risk = manageablePassageFight(*player, adjacentAttackers, *creature,
+			    passageWorkSeconds(huntCoordinator, turnRouter.scenarioStage() == ScenarioStage::LootCorpse));
 			if (!risk) continue;
 			PlayerBotDefensiveTarget candidate;
 			candidate.id = creature->getID();
@@ -1019,7 +1032,8 @@ void PlayerBotController::processDefensiveCombat(Player* player, const Position&
 			}
 		}
 		const bool targetAdjacent = Position::areInRange<1, 1, 0>(currentPosition, target->getPosition());
-		const bool safe = targetAdjacent && manageablePassageFight(*player, adjacentAttackers, *target).has_value();
+		const bool safe = targetAdjacent && manageablePassageFight(*player, adjacentAttackers, *target,
+		    passageWorkSeconds(huntCoordinator, turnRouter.scenarioStage() == ScenarioStage::LootCorpse)).has_value();
 		if (!huntCoordinator.retainTransitDefense(defensive->id, currentPosition, target->getPosition(), safe)) {
 			const char* reason = !targetAdjacent ? "transit_blocker_moved" :
 			                     !safe ? "transit_passage_unsafe" : "transit_passage_open";
@@ -1440,6 +1454,14 @@ void PlayerBotController::emitHuntRegionCandidate(const PlayerBotHuntRegion& reg
 	       << ",\"supply_kinds\":" << supplyKindBudgetsJson(region.supplyKindBudgets)
 	       << ",\"threat_ratio\":" << region.threatRatio
 	       << ",\"raw_threat_ratio\":" << region.rawThreatRatio
+	       << ",\"physical_damage_model\":\"engine_integer_blocks\""
+	       << ",\"combat_armor\":" << region.combat.armor
+	       << ",\"combat_defense\":" << region.combat.sustainedDefense
+	       << ",\"combat_attack\":" << region.combat.attack
+	       << ",\"combat_attack_skill\":" << region.combat.attackSkill
+	       << ",\"combat_hit_chance\":" << region.combat.hitChance
+	       << ",\"combat_attack_interval_ms\":" << region.combat.attackIntervalMs
+	       << ",\"combat_damage_multiplier\":" << region.combat.damageMultiplier
 	       << ",\"corridor_danger_available\":" << (region.corridorDangerAvailable ? "true" : "false")
 	       << ",\"corridor_danger_ratio\":" << region.corridorDangerRatio
 	       << ",\"corridor_samples\":" << region.corridorSampleCount
@@ -2917,6 +2939,7 @@ void PlayerBotController::processTraversal(Player* player, const Position& curre
 			facts << combat.level << ':' << combat.maximumHealth << ':' << combat.armor << ':' << combat.defense
 			      << ':' << combat.attack << ':' << combat.attackSkill << ':' << combat.attackFactor
 			      << ':' << combat.hitChance << ':' << combat.blockedByShield
+			      << ':' << combat.sustainedDefense << ':' << combat.attackIntervalMs << ':' << combat.damageMultiplier
 			      << ':' << player->getMoney() << ':' << player->getBankBalance() << ':' << player->isPremium()
 			      << ':' << player->isPzLocked() << ':' << player->getStepDuration()
 			      << ':' << player->getStepDuration(DIRECTION_NORTHEAST)

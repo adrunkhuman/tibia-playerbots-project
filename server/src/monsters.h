@@ -81,7 +81,9 @@ struct spellBlock_t {
 		damageCondition(other.damageCondition),
 		conditionOnly(other.conditionOnly),
 		combatSpell(other.combatSpell),
-		isMelee(other.isMelee) {
+		isMelee(other.isMelee),
+		blocksArmor(other.blocksArmor),
+		blocksShield(other.blocksShield) {
 		other.spell = nullptr;
 	}
 
@@ -95,6 +97,8 @@ struct spellBlock_t {
 	bool conditionOnly = false;
 	bool combatSpell = false;
 	bool isMelee = false;
+	bool blocksArmor = false;
+	bool blocksShield = false;
 };
 
 struct voiceBlock_t {

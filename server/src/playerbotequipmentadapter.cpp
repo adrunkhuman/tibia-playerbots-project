@@ -55,6 +55,7 @@ namespace {
 		result.defense = type.defense;
 		result.extraDefense = type.extraDefense;
 		result.attack = type.attack;
+		result.attackIntervalMs = type.attackSpeed;
 		result.weight = type.weight;
 		result.consumingCharges = type.charges != 0;
 		return result;
@@ -67,7 +68,9 @@ PlayerBotEquipmentPlayerSnapshot PlayerBotEquipmentAdapter::player(const Player&
 	        player.getMaxHealth(), player.getSkillLevel(SKILL_FIST), player.getSkillLevel(SKILL_SWORD),
 	        player.getSkillLevel(SKILL_CLUB), player.getSkillLevel(SKILL_AXE), player.getSkillLevel(SKILL_DISTANCE),
 	        player.getSkillLevel(SKILL_SHIELD), player.getAttackFactor(), player.getDefenseFactor(),
-	        player.getVocation()->armorMultiplier, player.getVocation()->defenseMultiplier};
+	        player.getVocation()->armorMultiplier, player.getVocation()->defenseMultiplier,
+	        player.getVocation()->getAttackSpeed(), player.getVocation()->meleeDamageMultiplier,
+	        player.getVocation()->distDamageMultiplier};
 }
 
 PlayerBotEquipmentItemSnapshot PlayerBotEquipmentAdapter::item(const Item& item)
@@ -76,6 +79,7 @@ PlayerBotEquipmentItemSnapshot PlayerBotEquipmentAdapter::item(const Item& item)
 	result.armor = item.getArmor();
 	result.defense = item.getDefense();
 	result.attack = item.getAttack();
+	result.attackIntervalMs = item.getAttackSpeed();
 	result.hitChance = item.getHitChance();
 	result.shootRange = item.getShootRange();
 	result.count = item.getItemCount();

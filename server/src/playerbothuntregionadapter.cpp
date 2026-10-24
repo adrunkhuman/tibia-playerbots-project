@@ -4,6 +4,7 @@
 #include "playerbothuntregionadapter.h"
 #include "playerbothuntapproach.h"
 #include "playerbothunttriptiming.h"
+#include "playerbotphysicaldamage.h"
 
 #include "playerbottopology.h"
 
@@ -43,32 +44,67 @@ namespace {
 		       Position::getDistanceY(left, right) <= heatRadius * 2;
 	}
 
+	double physicalHit(int32_t minimum, int32_t maximum, int32_t armor, int32_t defense)
+	{
+		// Numeric inputs make this cache independent of monster reload/pointer
+		// lifetime. Bound shared storage instead of adding per-bot caches.
+		using Key = std::tuple<int32_t, int32_t, int32_t, int32_t>;
+		static std::map<Key, double> cache;
+		const Key key{minimum, maximum, armor, defense};
+		if (const auto found = cache.find(key); found != cache.end()) return found->second;
+		const double value = playerBotExpectedPhysicalHit(minimum, maximum, armor, defense);
+		if (cache.size() >= 4096) cache.clear();
+		cache.emplace(key, value);
+		return value;
+	}
+
 	PlayerBotDamageRates monsterDamageRates(const MonsterType& monsterType, const PlayerBotCombatProfile& profile)
 	{
 		PlayerBotDamageRates rates;
-		const double mitigation = profile.armor * 0.35 + profile.defense * 0.08;
+		bool unmodeledEffects = false;
+		const int32_t defense = profile.sustainedDefense >= 0 ? profile.sustainedDefense : profile.defense;
 		for (const spellBlock_t& attack : monsterType.info.attackSpells) {
-			const double averageDamage = (std::abs(attack.minCombatValue) + std::abs(attack.maxCombatValue)) / 2.0;
-			const double mitigatedDamage = attack.isMelee && averageDamage > 0 ?
-			    std::max(1.0, averageDamage - mitigation) : averageDamage;
-			rates.addAttack(mitigatedDamage, attack.chance, attack.speed, attack.conditionOnly, attack.damageCondition);
+			if (!attack.chance || !attack.speed) continue;
+			const int32_t minimum = std::min(std::abs(attack.minCombatValue), std::abs(attack.maxCombatValue));
+			const int32_t maximum = std::max(std::abs(attack.minCombatValue), std::abs(attack.maxCombatValue));
+			if (attack.blocksArmor || attack.blocksShield) {
+				const int32_t armor = attack.blocksArmor ? profile.armor : 0;
+				const double unshielded = attack.conditionOnly ? 0 : physicalHit(minimum, maximum, armor, 0);
+				const double shielded = attack.conditionOnly ? 0 : attack.blocksShield ?
+				    physicalHit(minimum, maximum, armor, defense) : unshielded;
+				rates.addPhysicalAttack(unshielded, shielded, attack.chance, attack.speed);
+				rates.addCondition(attack.damageCondition);
+			} else {
+				unmodeledEffects = unmodeledEffects || (minimum == 0 && maximum == 0 && !attack.damageCondition.type);
+				rates.addAttack((minimum + maximum) / 2.0, attack.chance, attack.speed,
+				    attack.conditionOnly, attack.damageCondition);
+			}
 		}
-		rates.direct += std::max(0.0, 0.5 - rates.total());
+		// Keep the legacy fallback for opaque scripts/effects, not for known
+		// physical attacks which the engine can block completely.
+		if (unmodeledEffects) rates.direct += std::max(0.0, 0.5 - rates.total());
 		return rates;
 	}
 
 	double expectedMonsterDamagePerSecond(const MonsterType& monsterType, const PlayerBotCombatProfile& profile)
 	{
-		return monsterDamageRates(monsterType, profile).total();
+		// A scalar sum cannot share shields across sources. Until encounter
+		// timing is known, resource/corridor costs retain the unshielded bound.
+		return monsterDamageRates(monsterType, profile).unshieldedTotal();
 	}
 
 	double expectedPlayerDamagePerSecond(const PlayerBotCombatProfile& profile, const MonsterType& monsterType)
 	{
-		const int32_t maximumDamage = Weapons::getMaxWeaponDamage(profile.level, profile.attackSkill, profile.attack,
-		                                                            profile.attackFactor);
-		const double shieldMitigation = profile.blockedByShield ? monsterType.info.defense * 0.15 : 0.0;
-		const double averageDamage = std::max(1.0, maximumDamage / 2.0 - monsterType.info.armor * 0.25 - shieldMitigation);
-		return averageDamage * (profile.hitChance / 100.0) / 2.0;
+		const int32_t maximumDamage = static_cast<int32_t>(Weapons::getMaxWeaponDamage(profile.level,
+		    profile.attackSkill, profile.attack, profile.attackFactor) * profile.damageMultiplier);
+		const int32_t minimumDamage = profile.blockedByShield ? 0 : static_cast<int32_t>(std::ceil(profile.level * 0.2));
+		const double shielded = physicalHit(minimumDamage, maximumDamage, monsterType.info.armor,
+		    profile.blockedByShield ? monsterType.info.defense : 0);
+		const double unshielded = physicalHit(minimumDamage, maximumDamage, monsterType.info.armor, 0);
+		const double attacksPerSecond = 1000.0 / std::max<uint32_t>(1, profile.attackIntervalMs);
+		const double hitChance = std::clamp(profile.hitChance, 0, 100) / 100.0;
+		const double blockShare = std::min(1.0, 1 / attacksPerSecond);
+		return (shielded * blockShare + unshielded * (1 - blockShare)) * hitChance * attacksPerSecond;
 	}
 
 	std::optional<Position> nearestApproach(Player& player, const PlayerBotCombatProfile& combat, const Position& spawnPosition,
@@ -170,7 +206,7 @@ namespace {
 					PlayerBotDamageRates damage;
 					damage.merge(spawnDamageRates(spawn, combat), reach);
 					for (auto& current : strongest) {
-						if (damage.total() <= current.total()) continue;
+						if (damage.unshieldedTotal() <= current.unshieldedTotal()) continue;
 						std::swap(current, damage);
 					}
 				}
@@ -468,7 +504,14 @@ namespace {
 				monsterProfile.experience = monsterType->info.experience;
 				monsterProfile.health = monsterType->info.healthMax;
 				monsterProfile.expectedDamagePerSecond = expectedMonsterDamagePerSecond(*monsterType, profile);
-				const double fightSeconds = monsterType->info.healthMax / expectedPlayerDamagePerSecond(profile, *monsterType);
+				const double outgoing = expectedPlayerDamagePerSecond(profile, *monsterType);
+				if (outgoing <= 0) {
+					region.monsters.push_back(monsterProfile);
+					region.rejectionReason = "no_expected_damage";
+					withinPlanningScope = true;
+					return region;
+				}
+				const double fightSeconds = monsterType->info.healthMax / outgoing;
 				monsterProfile.predictedFightDamage = monsterProfile.expectedDamagePerSecond * fightSeconds;
 				point.fightSeconds += fightSeconds * probability;
 				point.ignoresBlocking = point.ignoresBlocking && monsterType->info.isIgnoringSpawnBlock;
@@ -498,12 +541,17 @@ namespace {
 			for (size_t neighbor : huntAtlas.spawns[anchor].neighbors) {
 				for (const auto& [monsterType, chance] : huntAtlas.spawns[neighbor].monsters) {
 					(void)chance;
-					localAttackers.push_back({monsterDamageRates(*monsterType, profile),
-					                          monsterType->info.healthMax / expectedPlayerDamagePerSecond(profile, *monsterType)});
+					const double outgoing = expectedPlayerDamagePerSecond(profile, *monsterType);
+					if (outgoing <= 0) {
+						region.rejectionReason = "no_expected_damage";
+						withinPlanningScope = true;
+						return region;
+					}
+					localAttackers.push_back({monsterDamageRates(*monsterType, profile), monsterType->info.healthMax / outgoing});
 				}
 			}
 			std::sort(localAttackers.begin(), localAttackers.end(), [](const LocalAttacker& left, const LocalAttacker& right) {
-				return left.damage.total() > right.damage.total();
+				return left.damage.unshieldedTotal() > right.damage.unshieldedTotal();
 			});
 			const size_t attackers = std::min(maximumModeledAttackers, localAttackers.size());
 			region.modeledMaximumAttackerOverlap = std::max<uint8_t>(
@@ -512,7 +560,7 @@ namespace {
 			// through the modeled fight while removing killed direct attackers.
 			PlayerBotDamageRates lingering;
 			for (size_t index = 0; index < attackers; ++index) lingering.merge(localAttackers[index].damage);
-			lingering.direct = 0;
+			lingering.clearDirect();
 			double fightDamage = 0;
 			double isolatedDamage = 0;
 			double fightSeconds = 0;
@@ -520,7 +568,10 @@ namespace {
 				PlayerBotDamageRates remaining = lingering;
 				for (size_t alive = index; alive < attackers; ++alive) remaining.merge(localAttackers[alive].damage);
 				fightDamage += remaining.total() * localAttackers[index].fightSeconds;
-				isolatedDamage += localAttackers[index].damage.total() * localAttackers[index].fightSeconds;
+				// Match the unshielded scalar baseline used by spawnDamagePerSecond;
+				// a shielded denominator would apply shield savings twice/inflate
+				// almost-blocked weak fights by orders of magnitude.
+				isolatedDamage += localAttackers[index].damage.unshieldedTotal() * localAttackers[index].fightSeconds;
 				fightSeconds += localAttackers[index].fightSeconds;
 			}
 			crowdDamageInflation = std::max(crowdDamageInflation,
@@ -849,13 +900,21 @@ double PlayerBotHuntRegionAdapter::travelDanger(const PlayerBotCombatProfile& co
 	return expectedDamagePerSecondAt(combat, position) / std::max<int32_t>(combat.maximumHealth, 1);
 }
 
+PlayerBotDamageRates PlayerBotHuntRegionAdapter::damageRates(const PlayerBotCombatProfile& combat,
+    const std::string& monsterName)
+{
+	const MonsterType* monsterType = g_monsters.getMonsterType(monsterName, false);
+	return monsterType ? monsterDamageRates(*monsterType, combat) : PlayerBotDamageRates{};
+}
+
 PlayerBotFightEstimate PlayerBotHuntRegionAdapter::fightEstimate(
 	const PlayerBotCombatProfile& combat, const std::string& monsterName, int32_t remainingHealth)
 {
 	const MonsterType* monsterType = g_monsters.getMonsterType(monsterName, false);
 	if (!monsterType) return {};
-	return {expectedMonsterDamagePerSecond(*monsterType, combat),
-	        std::max<int32_t>(remainingHealth, 1) / expectedPlayerDamagePerSecond(combat, *monsterType)};
+	const double outgoing = expectedPlayerDamagePerSecond(combat, *monsterType);
+	return {expectedMonsterDamagePerSecond(*monsterType, combat), outgoing > 0 ?
+	    std::max<int32_t>(remainingHealth, 1) / outgoing : std::numeric_limits<double>::infinity()};
 }
 
 PlayerBotHuntCorridorDanger PlayerBotHuntRegionAdapter::corridorDanger(const PlayerBotCombatProfile& combat,

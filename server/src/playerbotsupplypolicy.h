@@ -60,6 +60,8 @@ enum PlayerBotSupplyCapabilityField : uint64_t {
 	PlayerBotSupplyCapabilitySpellInterval = 1ULL << 12,
 	PlayerBotSupplyCapabilityPotionHealing = 1ULL << 13,
 	PlayerBotSupplyCapabilityEquipment = 1ULL << 14,
+	PlayerBotSupplyCapabilityAttackInterval = 1ULL << 15,
+	PlayerBotSupplyCapabilityDamageMultiplier = 1ULL << 16,
 };
 
 struct PlayerBotSupplyCapabilitySnapshot {
@@ -70,6 +72,8 @@ struct PlayerBotSupplyCapabilitySnapshot {
 	int32_t attack = 0;
 	int32_t attackSkill = 0;
 	int32_t attackFactorMilli = 1000;
+	uint32_t attackIntervalMs = 2000;
+	int32_t damageMultiplierMilli = 1000;
 	uint32_t magicLevel = 0;
 	uint32_t maximumMana = 0;
 	bool spellLegal = false;
@@ -91,7 +95,8 @@ struct PlayerBotSupplyCapabilitySnapshot {
 	{
 		return level == other.level && maximumHealth == other.maximumHealth && armor == other.armor &&
 		       defense == other.defense && attack == other.attack && attackSkill == other.attackSkill &&
-		       attackFactorMilli == other.attackFactorMilli && magicLevel == other.magicLevel &&
+		       attackFactorMilli == other.attackFactorMilli && attackIntervalMs == other.attackIntervalMs &&
+		       damageMultiplierMilli == other.damageMultiplierMilli && magicLevel == other.magicLevel &&
 		       maximumMana == other.maximumMana && spellLegal == other.spellLegal &&
 		       spellHealing == other.spellHealing && spellMana == other.spellMana &&
 		       spellIntervalMilliseconds == other.spellIntervalMilliseconds &&
@@ -152,6 +157,8 @@ inline PlayerBotSupplyCapabilityComparison playerBotCompareSupplyCapabilities(
 	material(before.attack, after.attack, PlayerBotSupplyCapabilityAttack);
 	monotonic(before.attackSkill, after.attackSkill, PlayerBotSupplyCapabilityAttackSkill);
 	material(before.attackFactorMilli, after.attackFactorMilli, PlayerBotSupplyCapabilityAttackFactor);
+	monotonic(before.attackIntervalMs, after.attackIntervalMs, PlayerBotSupplyCapabilityAttackInterval, true);
+	monotonic(before.damageMultiplierMilli, after.damageMultiplierMilli, PlayerBotSupplyCapabilityDamageMultiplier);
 	monotonic(before.magicLevel, after.magicLevel, PlayerBotSupplyCapabilityMagicLevel);
 	monotonic(before.maximumMana, after.maximumMana, PlayerBotSupplyCapabilityMaximumMana);
 	monotonic(before.spellLegal, after.spellLegal, PlayerBotSupplyCapabilitySpellLegal);

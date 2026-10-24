@@ -106,6 +106,8 @@ inline PlayerBotSupplyCapabilitySnapshot playerBotSupplyCapability(const PlayerB
 	capability.attack = profile.combat.attack;
 	capability.attackSkill = profile.combat.attackSkill;
 	capability.attackFactorMilli = static_cast<int32_t>(profile.combat.attackFactor * 1000);
+	capability.attackIntervalMs = profile.combat.attackIntervalMs;
+	capability.damageMultiplierMilli = static_cast<int32_t>(profile.combat.damageMultiplier * 1000);
 	capability.magicLevel = profile.magicLevel;
 	capability.maximumMana = profile.supply.maximumMana;
 	capability.spellLegal = profile.supply.spellLegal;

@@ -341,7 +341,16 @@ $conditionContract = @{ event = "condition_damage_contract"; loaded = $true; typ
     total = 30; start = 0; tick_ms = 4000; condition_dps = 0.5; strongest_tick = 2; applications = 4;
     same_key_merged = $true; engine_total = 30; delayed_no_damage = $true; cleaned = $true;
     modeled_condition_keys = 1; modeled_direct_dps = 20; modeled_condition_dps = 0.5 }
-Assert-DoorPassageEvents -Logs (ConvertTo-FixtureLogs @($doorContract, $stableContract, $decayContract, $conditionContract))
+$physicalContract = @{ event = 'physical_forecast_contract'; profiles = 4; checked_fights = 12;
+    loaded_physical_flags = $true; incoming_matches = $true; outgoing_matches = $true; shared_shield_contention = $true }
+Assert-DoorPassageEvents -Logs (ConvertTo-FixtureLogs @($doorContract, $stableContract, $decayContract, $conditionContract, $physicalContract))
+foreach ($field in @('loaded_physical_flags', 'incoming_matches', 'outgoing_matches', 'shared_shield_contention')) {
+    $failed = $physicalContract.Clone()
+    $failed[$field] = $false
+    Assert-Rejected "Physical forecast contract $field" {
+        Assert-DoorPassageEvents -Logs (ConvertTo-FixtureLogs @($doorContract, $stableContract, $decayContract, $conditionContract, $failed))
+    } "Physical forecast fixture failed $field."
+}
 foreach ($field in @("coarse_danger_reuse", "coarse_danger_rejection", "coarse_danger_dependencies")) {
     $failedContract = $doorContract.Clone()
     $failedContract[$field] = $false

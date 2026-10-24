@@ -73,6 +73,7 @@ struct PlayerBotEquipmentItemSnapshot {
 	int32_t maxHitChance = -1;
 	// Percent chance that one attack consumes a throwing weapon.
 	uint8_t breakChance = 0;
+	uint32_t attackIntervalMs = 0;
 	bool pickupable = false;
 	bool removed = false;
 	bool premiumRequired = false;
@@ -106,6 +107,9 @@ struct PlayerBotEquipmentPlayerSnapshot {
 	float defenseFactor = 1.0f;
 	double armorMultiplier = 1.0;
 	double defenseMultiplier = 1.0;
+	uint32_t attackIntervalMs = 2000;
+	double meleeDamageMultiplier = 1;
+	double distanceDamageMultiplier = 1;
 };
 
 struct PlayerBotEquipmentUpgrade {

@@ -151,9 +151,12 @@ std::shared_ptr<const PlayerBotTravelDangerField> PlayerBotController::travelDan
 		const MonsterType* type = g_monsters.getMonsterType(name, false);
 		// An unknown scripted species is not evidence of zero damage. Known
 		// harmless species, however, must not manufacture a raid danger.
+		auto rates = PlayerBotHuntRegionAdapter::damageRates(combat, name);
+		// This scalar overlay sums independent species/footprints. Do not grant
+		// each one the same finite shield-block budget; use its unshielded bound.
+		rates.shieldSavings = 0;
 		const double value = !type ? 0.10 : !type->info.isHostile ? 0 :
-		    PlayerBotHuntRegionAdapter::fightEstimate(combat, name, 1).incomingDamagePerSecond /
-		        std::max<int32_t>(combat.maximumHealth, 1);
+		    rates.total() / std::max<int32_t>(combat.maximumHealth, 1);
 		species.emplace(name, value);
 		return value;
 	};

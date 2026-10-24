@@ -29,7 +29,12 @@ struct PlayerBotDamageCondition {
 
 struct PlayerBotDamageRates {
 	using ConditionKey = std::tuple<uint32_t, int32_t, uint32_t>;
+	// Direct damage before shield blocks. Armor is per hit; shield blocks
+	// share Creature's one replenished block per second across all attackers.
 	double direct = 0;
+	double shieldSavings = 0;
+	double blockableAttacksPerSecond = 0;
+	double blockableSources = 0;
 	std::map<ConditionKey, double> conditions;
 
 	void addCondition(const PlayerBotDamageCondition& condition) {
@@ -47,10 +52,24 @@ struct PlayerBotDamageRates {
 		// conservative envelope; applying chance again would discount that tail.
 		addCondition(condition);
 	}
+	void addPhysicalAttack(double unshieldedDamage, double shieldedDamage, uint32_t chance, uint32_t intervalMs) {
+		if (!chance || !intervalMs) return;
+		const double rate = (chance / 100.0) * (1000.0 / intervalMs);
+		direct += std::max(0.0, unshieldedDamage) * rate;
+		shieldSavings += std::max(0.0, unshieldedDamage - shieldedDamage) * rate;
+		blockableAttacksPerSecond += rate;
+		blockableSources += 1;
+	}
+	void clearDirect() {
+		direct = shieldSavings = blockableAttacksPerSecond = blockableSources = 0;
+	}
 	// Concurrent sources add direct damage, but Creature::addCondition merges
 	// the same (type,id,subId). A delayed refresh preserves the next tick time.
 	void merge(const PlayerBotDamageRates& other, double reach = 1) {
 		direct += other.direct * reach;
+		shieldSavings += other.shieldSavings * reach;
+		blockableAttacksPerSecond += other.blockableAttacksPerSecond * reach;
+		blockableSources += other.blockableSources * reach;
 		for (const auto& [key, rate] : other.conditions) {
 			auto& current = conditions[key];
 			current = std::max(current, rate * reach);
@@ -62,13 +81,25 @@ struct PlayerBotDamageRates {
 	void addAlternative(const PlayerBotDamageRates& other, double probability) {
 		if (probability <= 0) return;
 		direct += other.direct * probability;
+		shieldSavings += other.shieldSavings * probability;
+		blockableAttacksPerSecond += other.blockableAttacksPerSecond * probability;
+		blockableSources += other.blockableSources * probability;
 		for (const auto& [key, rate] : other.conditions) {
 			auto& current = conditions[key];
 			current = std::max(current, rate);
 		}
 	}
-	double total() const {
+	double unshieldedTotal() const {
 		double result = direct;
+		for (const auto& entry : conditions) result += entry.second;
+		return result;
+	}
+	double total() const {
+		// Slow synchronized volleys cannot bank more than Creature's two
+		// stored blocks, even when their average frequency is below one/sec.
+		const double shieldShare = std::min(blockableAttacksPerSecond > 1 ? 1 / blockableAttacksPerSecond : 1,
+		    blockableSources > 2 ? 2 / blockableSources : 1);
+		double result = std::max(0.0, direct - shieldSavings * shieldShare);
 		for (const auto& entry : conditions) result += entry.second;
 		return result;
 	}
