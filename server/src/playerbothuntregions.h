@@ -232,7 +232,7 @@ struct PlayerBotHuntRegion {
 	double challengeBandMaximum = 0;
 	PlayerBotRecoveryPrediction recovery;
 	std::optional<PlayerBotEncounterForecast> encounterForecast;
-	bool encounterSurvivalProven = false;
+	bool encounterSurvivalForecast = false;
 	PlayerBotSupplyProfile supplyProfile;
 	PlayerBotSupplyBudget supplyBudget;
 	std::vector<PlayerBotSupplyKindBudget> supplyKindBudgets;
@@ -277,14 +277,14 @@ struct PlayerBotHuntRegion {
 	void reconcileEncounterSafety(uint32_t reserve)
 	{
 		if (!encounterForecast) return; // Synthetic policy fixtures have no loaded encounter.
-		encounterSurvivalProven = false;
+		encounterSurvivalForecast = false;
 		recovery.availableBeforeLethal = 0;
-		if (!encounterForecast->audited) {
-			// Opaque scripts retain the gross-damage gate; no invented timing.
-			predictedLethal = currentHealth <= 0 ||
-			    encounterForecast->damage + encounterForecast->conditionTail >= currentHealth;
-			return;
-		}
+		// Keep the gross-damage gate authoritative. The timing forecast is
+		// diagnostic until MP allocation and repeated encounters are audited:
+		// optional casts / earlier fights can spend today's healing pool.
+		predictedLethal = currentHealth <= 0 ||
+		    encounterForecast->damage + encounterForecast->conditionTail >= currentHealth;
+		if (!encounterForecast->audited) return;
 		PlayerBotEncounterRecovery resources;
 		resources.health = currentHealth;
 		resources.maximumHealth = maximumHealth;
@@ -296,9 +296,8 @@ struct PlayerBotHuntRegion {
 		resources.potions = supplyProfile.potions > reserve ? supplyProfile.potions - reserve : 0;
 		resources.potionHealing = supplyProfile.potionHealing;
 		const auto forecast = playerBotEncounterSurvival(*encounterForecast, resources);
-		encounterSurvivalProven = forecast.completed && forecast.survived;
-		predictedLethal = !encounterSurvivalProven;
-		if (encounterSurvivalProven) recovery.availableBeforeLethal = forecast.usefulHealing;
+		encounterSurvivalForecast = forecast.completed && forecast.survived;
+		if (encounterSurvivalForecast) recovery.availableBeforeLethal = forecast.usefulHealing;
 	}
 
 	bool productiveWindow() const

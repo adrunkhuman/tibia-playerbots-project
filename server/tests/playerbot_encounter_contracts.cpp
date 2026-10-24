@@ -52,6 +52,9 @@ int main()
 	assert(spells.completed && spells.survived && spells.spellCasts == 2);
 	actor.spellLegal = false;
 	assert(!playerBotEncounterSurvival(fight, actor).survived);
+	actor.potions = 0;
+	fight.phases = {{30, 2, 50}};
+	assert(!playerBotEncounterSurvival(fight, actor).survived); // A volley between responses matters even when mean damage alone fits.
 	actor.potions = 20;
 	fight.phases = {{1, 200, 0}};
 	assert(!playerBotEncounterSurvival(fight, actor).survived); // Healing after lethal damage does not count.

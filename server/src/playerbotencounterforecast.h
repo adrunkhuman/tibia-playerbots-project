@@ -144,7 +144,9 @@ inline PlayerBotEncounterSurvival playerBotEncounterSurvival(const PlayerBotEnco
 			if (advance <= 0) return result;
 			result.finalHealth -= phase.damagePerSecond * advance;
 			time += advance;
-			if (result.finalHealth <= 0) { result.completed = true; return result; }
+			// The next possible volley can arrive just before a kill/response,
+			// not only at healing events. Check the whole no-action interval.
+			if (result.finalHealth <= phase.volley) { result.completed = true; return result; }
 		}
 	}
 	// A possible fresh condition tail after the last attacker must also fit

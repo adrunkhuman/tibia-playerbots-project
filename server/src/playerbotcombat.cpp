@@ -1462,7 +1462,8 @@ void PlayerBotController::emitHuntRegionCandidate(const PlayerBotHuntRegion& reg
 	       << ",\"physical_damage_model\":\"engine_integer_blocks\""
 	       << ",\"routine_cost_model\":\"local_visible_pack_mean\""
 	       << ",\"encounter_timing_audited\":" << (region.encounterForecast && region.encounterForecast->audited ? "true" : "false")
-	       << ",\"encounter_survival_proven\":" << (region.encounterSurvivalProven ? "true" : "false")
+	       << ",\"encounter_survival_forecast\":" << (region.encounterSurvivalForecast ? "true" : "false")
+	       << ",\"encounter_timing_policy\":\"shadow_gross_gate_authoritative\""
 	       << ",\"combat_armor\":" << region.combat.armor
 	       << ",\"combat_defense\":" << region.combat.sustainedDefense
 	       << ",\"combat_attack\":" << region.combat.attack

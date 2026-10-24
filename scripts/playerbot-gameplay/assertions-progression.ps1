@@ -579,7 +579,8 @@ function Assert-AdaptiveChallengeEvents {
     })
 	$unsafeLethalRecovery = @($candidates | Where-Object {
 		$_.recovery.available_before_lethal -gt 0 -and
-		(-not $_.encounter_timing_audited -or -not $_.encounter_survival_proven -or $_.predicted_lethal)
+		(-not $_.encounter_timing_audited -or -not $_.encounter_survival_forecast -or
+		 $_.encounter_timing_policy -ne "shadow_gross_gate_authoritative")
 	})
 	$exhausted = @($events | Where-Object {
 		$_.event -eq "hunt_scope_exhausted" -and $_.reason -eq "local_scope_exhausted" -and

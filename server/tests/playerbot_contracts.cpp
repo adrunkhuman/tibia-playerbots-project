@@ -4431,16 +4431,16 @@ void encounterResourceRecheckContracts()
 	hunt.encounterForecast->seconds = 30;
 	hunt.encounterForecast->phases = {{30, 4, 10}};
 	hunt.reconcileEncounterSafety(0);
-	assert(!hunt.predictedLethal && hunt.encounterSurvivalProven && hunt.recovery.availableBeforeLethal > 0);
+	assert(hunt.predictedLethal && hunt.encounterSurvivalForecast && hunt.recovery.availableBeforeLethal > 0); // Diagnostic only.
 	hunt.reconcileEncounterSafety(2);
-	assert(hunt.predictedLethal && !hunt.encounterSurvivalProven && hunt.recovery.availableBeforeLethal == 0);
+	assert(hunt.predictedLethal && !hunt.encounterSurvivalForecast && hunt.recovery.availableBeforeLethal == 0);
 	hunt.supplyProfile.mana = hunt.supplyProfile.maximumMana = 50;
 	hunt.supplyProfile.spellLegal = true;
 	hunt.supplyProfile.spellMana = 20;
 	hunt.supplyProfile.spellHealing = 50;
 	hunt.supplyProfile.spellInterval = 1;
 	hunt.reconcileEncounterSafety(2);
-	assert(!hunt.predictedLethal && hunt.encounterSurvivalProven);
+	assert(hunt.predictedLethal && hunt.encounterSurvivalForecast);
 	using namespace std::chrono;
 	const auto start = steady_clock::time_point{} + seconds(1);
 	PlayerBotHuntRuntimePlayerObservation actor;
@@ -4453,14 +4453,22 @@ void encounterResourceRecheckContracts()
 	auto spentMana = hunt.supplyProfile;
 	spentMana.mana = 0;
 	assert(!runtime.enterHuntArea(actor, spentMana, start)); // Outbound spending invalidates recovery credit.
+	assert(!runtime.enterHuntArea(actor, hunt.supplyProfile, start)); // Shadow cannot authorize a gross-lethal arrival.
+	hunt.encounterForecast->damage = 80;
+	hunt.encounterForecast->phases = {{30, 80.0 / 30, 10}};
+	hunt.reconcileEncounterSafety(2);
+	assert(!hunt.predictedLethal);
+	runtime.selectPlanningRegion(hunt, actor, start);
+	runtime.beginCycle(start, 30);
 	assert(runtime.enterHuntArea(actor, hunt.supplyProfile, start));
 	runtime.observeDamage(7, true);
 	runtime.observeDamage(11, false); // Loot/patrol poison, not legacy active combat damage.
 	const auto completed = runtime.complete(actor, start + seconds(30), 30);
 	assert(completed && completed->combat.damageTaken == 7 && completed->reachedHuntDamageTaken == 18);
 	hunt.encounterForecast->audited = false;
+	hunt.encounterForecast->damage = 120;
 	hunt.reconcileEncounterSafety(0);
-	assert(hunt.predictedLethal && !hunt.encounterSurvivalProven && hunt.recovery.availableBeforeLethal == 0);
+	assert(hunt.predictedLethal && !hunt.encounterSurvivalForecast && hunt.recovery.availableBeforeLethal == 0);
 }
 
 void firstHealingBootstrap()
