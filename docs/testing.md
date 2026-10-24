@@ -104,6 +104,7 @@ sh server/tests/playerbotrangedposition_contracts.sh
 sh server/tests/playerbothunttiming_contracts.sh
 sh server/tests/playerbotdamage_contracts.sh
 sh server/tests/playerbotphysicaldamage_test.sh
+sh server/tests/playerbot_encounter_contracts.sh
 sh server/tests/playerbotrouting_contracts.sh
 sh server/tests/playerbottrainer_contracts.sh
 sh server/tests/playerbotserviceroute_contracts.sh

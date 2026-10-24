@@ -160,7 +160,7 @@ PlayerBotHuntTurnObservation PlayerBotHuntCoordinator::observeTurn(bool inHuntPh
 }
 bool PlayerBotHuntCoordinator::matchesHuntMonster(const std::string& name) const { return huntRuntime.matchesMonster(name); }
 void PlayerBotHuntCoordinator::sampleHuntCombat(const PlayerBotHuntCombatSnapshot& snapshot) { huntRuntime.sampleCombat(snapshot); }
-void PlayerBotHuntCoordinator::observeHuntDamage(uint32_t damage) { huntRuntime.observeDamage(damage); }
+void PlayerBotHuntCoordinator::observeHuntDamage(uint32_t damage, bool activeCombat) { huntRuntime.observeDamage(damage, activeCombat); }
 void PlayerBotHuntCoordinator::observeHuntRecovery(bool potion) { huntRuntime.observeRecovery(potion); }
 void PlayerBotHuntCoordinator::observeHuntLevelRestoration(uint32_t health, uint32_t mana)
 {

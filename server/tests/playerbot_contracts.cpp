@@ -4418,6 +4418,51 @@ void currentResourceBudgetContracts()
 	assert(hunt.supplyKindBudgets.front().expected == 1 && !hunt.supplyKindBudgets.front().fits);
 }
 
+void encounterResourceRecheckContracts()
+{
+	PlayerBotHuntRegion hunt;
+	hunt.currentHealth = hunt.maximumHealth = 100;
+	hunt.availableHuntSeconds = hunt.maximumHuntSeconds = hunt.predictedFightSeconds = 30;
+	hunt.combatFraction = 1;
+	hunt.supplyProfile.potions = 2;
+	hunt.supplyProfile.potionHealing = 50;
+	hunt.encounterForecast.emplace();
+	hunt.encounterForecast->damage = 120;
+	hunt.encounterForecast->seconds = 30;
+	hunt.encounterForecast->phases = {{30, 4, 10}};
+	hunt.reconcileEncounterSafety(0);
+	assert(!hunt.predictedLethal && hunt.encounterSurvivalProven && hunt.recovery.availableBeforeLethal > 0);
+	hunt.reconcileEncounterSafety(2);
+	assert(hunt.predictedLethal && !hunt.encounterSurvivalProven && hunt.recovery.availableBeforeLethal == 0);
+	hunt.supplyProfile.mana = hunt.supplyProfile.maximumMana = 50;
+	hunt.supplyProfile.spellLegal = true;
+	hunt.supplyProfile.spellMana = 20;
+	hunt.supplyProfile.spellHealing = 50;
+	hunt.supplyProfile.spellInterval = 1;
+	hunt.reconcileEncounterSafety(2);
+	assert(!hunt.predictedLethal && hunt.encounterSurvivalProven);
+	using namespace std::chrono;
+	const auto start = steady_clock::time_point{} + seconds(1);
+	PlayerBotHuntRuntimePlayerObservation actor;
+	actor.health = actor.maximumHealth = 100;
+	actor.mana = 50;
+	PlayerBotHuntRuntime runtime({});
+	hunt.supplyProfile.reserve = 2;
+	runtime.selectPlanningRegion(hunt, actor, start);
+	runtime.beginCycle(start, 30);
+	auto spentMana = hunt.supplyProfile;
+	spentMana.mana = 0;
+	assert(!runtime.enterHuntArea(actor, spentMana, start)); // Outbound spending invalidates recovery credit.
+	assert(runtime.enterHuntArea(actor, hunt.supplyProfile, start));
+	runtime.observeDamage(7, true);
+	runtime.observeDamage(11, false); // Loot/patrol poison, not legacy active combat damage.
+	const auto completed = runtime.complete(actor, start + seconds(30), 30);
+	assert(completed && completed->combat.damageTaken == 7 && completed->reachedHuntDamageTaken == 18);
+	hunt.encounterForecast->audited = false;
+	hunt.reconcileEncounterSafety(0);
+	assert(hunt.predictedLethal && !hunt.encounterSurvivalProven && hunt.recovery.availableBeforeLethal == 0);
+}
+
 void firstHealingBootstrap()
 {
 	constexpr uint32_t cashBuffer = 100, spellPrice = 170;
@@ -6030,6 +6075,7 @@ int main()
 	supplyBudget();
 	firstHealingBootstrap();
 	currentResourceBudgetContracts();
+	encounterResourceRecheckContracts();
 	recoverySpellPriority();
 	projection();
 	oracleRecovery();

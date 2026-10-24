@@ -12,6 +12,7 @@
 #define FS_PLAYERBOTHUNTREGIONS_H
 
 #include "playerbotcombatprofile.h"
+#include "playerbotencounterforecast.h"
 #include "const.h"
 #include "playerbothunteconomy.h"
 #include "playerbotsupplypolicy.h"
@@ -230,6 +231,8 @@ struct PlayerBotHuntRegion {
 	double challengeBandMinimum = 0;
 	double challengeBandMaximum = 0;
 	PlayerBotRecoveryPrediction recovery;
+	std::optional<PlayerBotEncounterForecast> encounterForecast;
+	bool encounterSurvivalProven = false;
 	PlayerBotSupplyProfile supplyProfile;
 	PlayerBotSupplyBudget supplyBudget;
 	std::vector<PlayerBotSupplyKindBudget> supplyKindBudgets;
@@ -270,6 +273,33 @@ struct PlayerBotHuntRegion {
 	bool inChallengeBand = false;
 	bool predictedLethal = false;
 	std::string rejectionReason;
+
+	void reconcileEncounterSafety(uint32_t reserve)
+	{
+		if (!encounterForecast) return; // Synthetic policy fixtures have no loaded encounter.
+		encounterSurvivalProven = false;
+		recovery.availableBeforeLethal = 0;
+		if (!encounterForecast->audited) {
+			// Opaque scripts retain the gross-damage gate; no invented timing.
+			predictedLethal = currentHealth <= 0 ||
+			    encounterForecast->damage + encounterForecast->conditionTail >= currentHealth;
+			return;
+		}
+		PlayerBotEncounterRecovery resources;
+		resources.health = currentHealth;
+		resources.maximumHealth = maximumHealth;
+		resources.mana = supplyProfile.mana;
+		resources.spellMana = supplyProfile.spellMana;
+		resources.spellHealing = supplyProfile.spellHealing;
+		resources.spellCooldownSeconds = supplyProfile.spellInterval;
+		resources.spellLegal = supplyProfile.spellLegal;
+		resources.potions = supplyProfile.potions > reserve ? supplyProfile.potions - reserve : 0;
+		resources.potionHealing = supplyProfile.potionHealing;
+		const auto forecast = playerBotEncounterSurvival(*encounterForecast, resources);
+		encounterSurvivalProven = forecast.completed && forecast.survived;
+		predictedLethal = !encounterSurvivalProven;
+		if (encounterSurvivalProven) recovery.availableBeforeLethal = forecast.usefulHealing;
+	}
 
 	bool productiveWindow() const
 	{
@@ -513,6 +543,7 @@ struct PlayerBotHuntRegion {
 	void reconcileRecovery(uint32_t reserve, uint64_t funds)
 	{
 		reconcileSupplies(reserve);
+		reconcileEncounterSafety(reserve);
 		if (!frozenEconomicKey) cashPressure = playerBotHuntCashPressure(funds);
 	}
 

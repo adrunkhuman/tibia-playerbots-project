@@ -151,6 +151,7 @@ struct PlayerBotHuntRuntimeCompletion {
 	uint64_t durationSeconds = 0;
 	uint64_t experienceGained = 0;
 	uint64_t coinGoldAcquired = 0;
+	uint64_t reachedHuntDamageTaken = 0;
 	uint32_t levelBefore = 0;
 };
 
@@ -259,7 +260,10 @@ class PlayerBotHuntRuntime
 		                   std::chrono::steady_clock::time_point now);
 
 		void sampleCombat(const PlayerBotHuntCombatSnapshot& snapshot) { policy.sampleCombat(snapshot); }
-		void observeDamage(uint32_t damage) { policy.observeDamage(damage); }
+		void observeDamage(uint32_t damage, bool activeCombat = true) {
+			if (supplyBaseline) reachedHuntDamageTaken += damage;
+			if (activeCombat) policy.observeDamage(damage);
+		}
 		void observeRecovery(bool potion) { policy.observeRecovery(potion); }
 		void observeLevelRestoration(uint32_t health, uint32_t mana) { policy.observeLevelRestoration(health, mana); }
 		void observeKill() { policy.observeKill(); }
@@ -317,6 +321,7 @@ class PlayerBotHuntRuntime
 		uint32_t scopeExhaustions = 0;
 		uint32_t cycles = 0;
 		uint64_t coinGoldAcquired = 0;
+		uint64_t reachedHuntDamageTaken = 0;
 		uint64_t huntStartExperience = 0;
 		uint32_t huntStartLevel = 0;
 		uint32_t plannedHuntDurationSeconds = 0;

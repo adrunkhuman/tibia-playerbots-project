@@ -1460,6 +1460,9 @@ void PlayerBotController::emitHuntRegionCandidate(const PlayerBotHuntRegion& reg
 	       << ",\"threat_ratio\":" << region.threatRatio
 	       << ",\"raw_threat_ratio\":" << region.rawThreatRatio
 	       << ",\"physical_damage_model\":\"engine_integer_blocks\""
+	       << ",\"routine_cost_model\":\"local_visible_pack_mean\""
+	       << ",\"encounter_timing_audited\":" << (region.encounterForecast && region.encounterForecast->audited ? "true" : "false")
+	       << ",\"encounter_survival_proven\":" << (region.encounterSurvivalProven ? "true" : "false")
 	       << ",\"combat_armor\":" << region.combat.armor
 	       << ",\"combat_defense\":" << region.combat.sustainedDefense
 	       << ",\"combat_attack\":" << region.combat.attack
@@ -1788,6 +1791,7 @@ void PlayerBotController::finishHuntRegion(const Player& player, const Position&
 	       << ",\"supply_mana_potion_debt\":" << completion->supplyObservation.manaPotionDebt
 	       << ",\"supply_demand\":" << supplyDemandJson(completion->supplyDemand)
 	       << ",\"kills\":" << combat.kills << ",\"damage_taken\":" << combat.damageTaken
+	       << ",\"reached_hunt_damage_taken\":" << completion->reachedHuntDamageTaken
 	       << ",\"active_combat_seconds\":" << combat.activeSeconds
 	       << ",\"active_combat_uptime\":" << (completion->durationSeconds == 0 ? 0 : combat.activeSeconds / completion->durationSeconds)
 	       << ",\"active_combat_damage_per_minute\":" << activeDamagePerMinute

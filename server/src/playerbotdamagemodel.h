@@ -36,12 +36,15 @@ struct PlayerBotDamageRates {
 	double blockableAttacksPerSecond = 0;
 	double blockableSources = 0;
 	std::map<ConditionKey, double> conditions;
+	std::map<ConditionKey, double> conditionTails;
 
 	void addCondition(const PlayerBotDamageCondition& condition) {
 		const double rate = condition.damagePerSecond();
 		if (rate > 0) {
 			auto& current = conditions[{condition.type, condition.id, condition.subId}];
 			current = std::max(current, rate);
+			auto& tail = conditionTails[{condition.type, condition.id, condition.subId}];
+			tail = std::max(tail, static_cast<double>(condition.maximumTotal));
 		}
 	}
 	void addAttack(double directDamage, uint32_t chance, uint32_t intervalMs,
@@ -74,6 +77,8 @@ struct PlayerBotDamageRates {
 			auto& current = conditions[key];
 			current = std::max(current, rate * reach);
 		}
+		for (const auto& [key, tail] : other.conditionTails)
+			conditionTails[key] = std::max(conditionTails[key], tail * reach);
 	}
 	// Direct damage is an expectation over mutually exclusive alternatives.
 	// Keep possible conditions at full uptime: max(expected rates) across
@@ -88,6 +93,25 @@ struct PlayerBotDamageRates {
 			auto& current = conditions[key];
 			current = std::max(current, rate);
 		}
+		for (const auto& [key, tail] : other.conditionTails)
+			conditionTails[key] = std::max(conditionTails[key], tail);
+	}
+	// A single virtual spawn bounds mutually exclusive types without summing
+	// their simultaneous attackers. Initialize with the first alternative.
+	void boundAlternative(const PlayerBotDamageRates& other) {
+		direct = std::max(direct, other.direct);
+		shieldSavings = std::min(shieldSavings, other.shieldSavings);
+		blockableAttacksPerSecond = std::max(blockableAttacksPerSecond, other.blockableAttacksPerSecond);
+		blockableSources = std::max(blockableSources, other.blockableSources);
+		for (const auto& [key, rate] : other.conditions)
+			conditions[key] = std::max(conditions[key], rate);
+		for (const auto& [key, tail] : other.conditionTails)
+			conditionTails[key] = std::max(conditionTails[key], tail);
+	}
+	double conditionTail() const {
+		double result = 0;
+		for (const auto& entry : conditionTails) result += entry.second;
+		return result;
 	}
 	double unshieldedTotal() const {
 		double result = direct;

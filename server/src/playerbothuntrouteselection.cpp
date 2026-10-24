@@ -267,7 +267,8 @@ PlayerBotHuntRouteResult PlayerBotHuntRouteSelection::observe(const PlayerBotHun
 		const bool affordable = playerBotHuntTravelAffordable(observation.funds, observation.recoverySpendingReserve,
 		    routed.outboundFare, routed.exitFare, routed.supplyFare);
 		if (affordable && !preparationRequirement) preparationRequirement = routed.healthPreparation(observation.potionReserve);
-		if (!routed.recoverySustainable()) routed.rejectionReason = "recovery_hunt_not_sustainable";
+		if (routed.predictedLethal) routed.rejectionReason = "predicted_lethal";
+		else if (!routed.recoverySustainable()) routed.rejectionReason = "recovery_hunt_not_sustainable";
 		else if (!affordable)
 			routed.rejectionReason = "travel_fare_breaks_recovery_reserve";
 		else if (!routed.productiveWindow() || !routed.supplyBudget.fits) routed.rejectionReason = "hunt_supply_window_unavailable";

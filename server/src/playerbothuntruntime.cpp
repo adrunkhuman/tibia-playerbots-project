@@ -383,7 +383,8 @@ bool PlayerBotHuntRuntime::enterHuntArea(const PlayerBotHuntRuntimePlayerObserva
 	arrival.estimatedTravelSeconds = 0;
 	arrival.outboundCompleted = true;
 	arrival.fitSupplyWindow(activeRegion->supplyProfile.reserve);
-	if (player.health <= 0 || !arrival.supplyBudget.fits || !arrival.productiveWindow() ||
+	arrival.reconcileEncounterSafety(activeRegion->supplyProfile.reserve);
+	if (player.health <= 0 || arrival.predictedLethal || !arrival.supplyBudget.fits || !arrival.productiveWindow() ||
 	    !arrival.recoverySustainable()) return false;
 	// Keep the original outbound forecast for trip telemetry, but use
 	// the newly checked productive budget and stock as the learning baseline.
@@ -395,6 +396,7 @@ bool PlayerBotHuntRuntime::enterHuntArea(const PlayerBotHuntRuntimePlayerObserva
 	huntStarted = now;
 	huntStartExperience = player.experience;
 	coinGoldAcquired = 0;
+	reachedHuntDamageTaken = 0;
 	const double exposure = plannedHuntSeconds * std::clamp(activeRegion->combatFraction, 0.0, 1.0);
 	const PlayerBotSupplyBudget staticBudget = playerBotSupplyBudget(
 	    supplyProfile, activeRegion->expectedDamagePerSecond, activeRegion->combatFraction,
@@ -469,6 +471,7 @@ std::optional<PlayerBotHuntRuntimeCompletion> PlayerBotHuntRuntime::complete(con
 	result.levelBefore = huntStartLevel;
 	result.combat = policy.combatSummary();
 	result.coinGoldAcquired = supplyBaseline ? coinGoldAcquired : 0;
+	result.reachedHuntDamageTaken = supplyBaseline ? reachedHuntDamageTaken : 0;
 	if (supplyBaseline && !activeRegion->recoveryLoadoutId) result.performance = policy.observePerformance(activeRegion->atlasVariantId, activeRegion->atlasRevision,
 	    {result.durationSeconds, result.combat.activeSeconds, result.combat.kills, result.experienceGained,
 	     activeRegion->projectedExperience, activeRegion->observedCorrection,
