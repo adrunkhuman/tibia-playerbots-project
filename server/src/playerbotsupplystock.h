@@ -323,7 +323,7 @@ struct PlayerBotSupplyKindBudget {
 };
 
 inline PlayerBotSupplyKindBudget playerBotSupplyKindBudget(const PlayerBotSupplyKindProfile& profile, double combatSeconds,
-                                                          bool recovery = false)
+                                                          bool recovery = false, double resourceCredit = 0)
 {
 	PlayerBotSupplyKindBudget budget;
 	budget.kind = profile.kind;
@@ -331,7 +331,7 @@ inline PlayerBotSupplyKindBudget playerBotSupplyKindBudget(const PlayerBotSupply
 	const uint32_t reserve = playerBotSupplyHuntReserve(profile.kind, profile.returnThreshold, recovery);
 	budget.routine = profile.count > reserve ? profile.count - reserve : 0;
 	budget.expectedUnits = std::max(0.0, playerBotSupplyDemandRate(profile)) * std::max(0.0, combatSeconds);
-	budget.expected = std::ceil(budget.expectedUnits);
+	budget.expected = std::ceil(std::max(0.0, budget.expectedUnits - std::max(0.0, resourceCredit)));
 	// Zero predicted consumption cannot make a missing weapon/ammunition usable.
 	const bool needsStock = profile.kind == PlayerBotSupplyKind::ThrowingWeapon ||
 	                        profile.kind == PlayerBotSupplyKind::Ammunition;

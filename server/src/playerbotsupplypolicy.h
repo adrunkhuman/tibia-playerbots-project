@@ -42,6 +42,12 @@ struct PlayerBotSupplyProfile {
 	std::vector<PlayerBotSupplyKindProfile> kinds;
 };
 
+inline double playerBotSupplyManaCredit(const PlayerBotSupplyProfile& profile)
+{
+	return profile.spellLegal ? std::min(profile.mana, profile.maximumMana) /
+	    static_cast<double>(playerBotManaPotionMinimumMana) : 0;
+}
+
 inline constexpr std::size_t playerBotSupplyEquipmentSlotCount = 11;
 
 enum PlayerBotSupplyCapabilityField : uint64_t {
@@ -306,7 +312,22 @@ struct PlayerBotSupplyBudget {
 	uint32_t reservedPotions = 1;
 	uint32_t routinePotions = 0;
 	bool fits = true;
+	// Current HP can fund a bounded outing without consuming a carried item.
+	// Demand above remains a resource cost for learning and economics.
+	double currentHealthCredit = 0;
+	double currentManaHealingCredit = 0;
 };
+
+inline void playerBotSupplyHealthStock(PlayerBotSupplyBudget& budget, const PlayerBotSupplyProfile& profile,
+                                      double healthCredit = 0, double manaHealingCredit = 0)
+{
+	budget.currentHealthCredit = std::max(0.0, healthCredit);
+	budget.currentManaHealingCredit = std::max(0.0, manaHealingCredit);
+	const double credit = profile.potionHealing > 0 ?
+	    (budget.currentHealthCredit + budget.currentManaHealingCredit) / profile.potionHealing : 0;
+	budget.expectedPotions = std::ceil(std::max(0.0, budget.potionEquivalentDemand - credit));
+	budget.fits = profile.potions >= profile.reserve && budget.expectedPotions <= budget.routinePotions;
+}
 
 inline PlayerBotSupplyBudget playerBotSupplyBudget(const PlayerBotSupplyProfile& profile,
     double damagePerSecond, double combatFraction, double huntSeconds, double travelSeconds)
@@ -316,33 +337,37 @@ inline PlayerBotSupplyBudget playerBotSupplyBudget(const PlayerBotSupplyProfile&
 	result.routinePotions = profile.potions > profile.reserve ? profile.potions - profile.reserve : 0;
 	result.expectedDamage = std::max(0.0, damagePerSecond) * std::max(0.0, huntSeconds);
 	const double combatSeconds = std::max(0.0, huntSeconds) * std::clamp(combatFraction, 0.0, 1.0);
-	// Discard travel regeneration and tick progress. Credit only combat time,
-	// capped by the condition's remaining lifetime after travel.
-	const double regenerationSeconds = std::min(std::max(0.0, huntSeconds),
-	    std::max(0.0, profile.regenerationSeconds - travelSeconds)) * std::clamp(combatFraction, 0.0, 1.0);
-	auto regenerated = [regenerationSeconds](uint32_t gain, double interval) {
-		return interval > 0 ? gain * std::floor(regenerationSeconds / interval) : 0.0;
+	// Food works between fights too, but surplus recovery before expiry cannot
+	// pay for damage afterwards. Discard transit ticks and unknown tick progress.
+	const double fedSeconds = std::min(std::max(0.0, huntSeconds),
+	    std::max(0.0, profile.regenerationSeconds - std::max(0.0, travelSeconds)));
+	auto regenerated = [fedSeconds](uint32_t gain, double interval) {
+		return interval > 0 ? gain * std::floor(fedSeconds / interval) : 0.0;
 	};
-	result.regenerationHealing = std::min(result.expectedDamage, regenerated(profile.healthGain, profile.healthInterval));
-	// The modeled spell is the only learned heal, so its cost is the runtime healing
-	// reserve; one more cast stays unspent for emergencies.
-	const uint64_t manaReserve = 2ULL * profile.spellMana;
-	if (profile.spellLegal && profile.spellMana > 0 && profile.spellInterval > 0 &&
-	    profile.maximumMana >= manaReserve + profile.spellMana) {
-		// One mana pool only: do not assume repeated refill/cast cycles or that
-		// regeneration below the emergency reserve is spendable.
-		const double mana = std::max(0.0, std::min<double>(profile.maximumMana,
-		    profile.mana + regenerated(profile.manaGain, profile.manaInterval)) - manaReserve);
-		const double casts = std::min(std::floor(mana / profile.spellMana),
-		                              std::floor(combatSeconds / profile.spellInterval));
-		result.spellHealing = std::min(result.expectedDamage - result.regenerationHealing, casts * profile.spellHealing);
+	const double fedDamage = std::max(0.0, damagePerSecond) * fedSeconds;
+	result.regenerationHealing = std::min(fedDamage, regenerated(profile.healthGain, profile.healthInterval));
+	if (profile.spellLegal && profile.spellMana > 0 && profile.spellHealing > 0 && profile.spellInterval > 0 &&
+	    profile.maximumMana >= profile.spellMana) {
+		// Healing may spend the healing reserve: it protects mana from OTHER
+		// consumers. Keep a conservative single-pool food credit, respecting
+		// overflow and the casts actually needed during the fed interval.
+		double mana = std::min<double>(profile.maximumMana,
+		    std::min(profile.mana, profile.maximumMana) + regenerated(profile.manaGain, profile.manaInterval));
+		const double fedCombatSeconds = fedSeconds * std::clamp(combatFraction, 0.0, 1.0);
+		auto heal = [&](double damage, double seconds) {
+			const double casts = std::min({std::ceil(std::max(0.0, damage) / profile.spellHealing),
+			    std::floor(mana / profile.spellMana), std::floor(seconds / profile.spellInterval)});
+			mana -= casts * profile.spellMana;
+			return std::min(std::max(0.0, damage), casts * profile.spellHealing);
+		};
+		result.spellHealing = heal(fedDamage - result.regenerationHealing, fedCombatSeconds);
+		result.spellHealing += heal(result.expectedDamage - fedDamage,
+		    std::max(0.0, combatSeconds - fedCombatSeconds));
 	}
 	const double deficit = std::max(0.0, result.expectedDamage - result.regenerationHealing - result.spellHealing);
 	result.potionEquivalentDemand = deficit == 0 ? 0 : profile.potionHealing > 0 ?
 	    deficit / profile.potionHealing : std::numeric_limits<double>::max();
-	result.expectedPotions = std::ceil(result.potionEquivalentDemand);
-	result.fits = (profile.potions > profile.reserve || profile.reserve == 0) &&
-	    result.expectedPotions <= result.routinePotions;
+	playerBotSupplyHealthStock(result, profile);
 	return result;
 }
 

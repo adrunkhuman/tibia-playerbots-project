@@ -378,8 +378,11 @@ bool PlayerBotController::huntSuppliesReady(const Player& player) const
 {
 	const PlayerBotSupplyStocks stocks = activeHuntStocks(player);
 	return std::all_of(stocks.begin(), stocks.end(), [this](const PlayerBotSupplyStock& stock) {
-		return !stock.rule.active() || stock.count >
-		    playerBotSupplyHuntReserve(stock.rule.kind, stock.rule.returnThreshold, supplyRecovery.active());
+		if (!stock.rule.active()) return true;
+		const uint32_t reserve = playerBotSupplyHuntReserve(stock.rule.kind, stock.rule.returnThreshold, supplyRecovery.active());
+		// The planner proves any routine health demand separately. Exactly the
+		// protected return stock is sufficient for a zero-consumption outing.
+		return stock.rule.kind == PlayerBotSupplyKind::HealthPotion ? stock.count >= reserve : stock.count > reserve;
 	});
 }
 

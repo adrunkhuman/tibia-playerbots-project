@@ -1448,6 +1448,8 @@ void PlayerBotController::emitHuntRegionCandidate(const PlayerBotHuntRegion& reg
 	       << ",\"supply_spell_healing\":" << region.supplyBudget.spellHealing
 	       << ",\"supply_expected_potions\":" << region.supplyBudget.expectedPotions
 	       << ",\"supply_potion_equivalent_demand\":" << region.supplyBudget.potionEquivalentDemand
+	       << ",\"supply_current_health_credit\":" << region.supplyBudget.currentHealthCredit
+	       << ",\"supply_current_mana_healing_credit\":" << region.supplyBudget.currentManaHealingCredit
 	       << ",\"recovery_preparation_debt\":" << region.recoveryPreparationCost
 	       << ",\"supply_calibration_samples\":" << region.supplyCalibration.samples
 	       << ",\"supply_potions_per_combat_minute\":"
