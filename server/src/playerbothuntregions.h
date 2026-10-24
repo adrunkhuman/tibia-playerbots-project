@@ -584,6 +584,7 @@ struct PlayerBotHuntRegionPerformance {
 	uint64_t atlasRevision = 0;
 	bool reliable = false;
 	PlayerBotSupplyCalibration supply;
+	PlayerBotSupplyEvidence supplyEvidence{};
 };
 
 inline constexpr double playerBotHuntMinimumXpCorrection = 0.1;

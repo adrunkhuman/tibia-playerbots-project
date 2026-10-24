@@ -72,6 +72,7 @@ enum class PlayerBotHuntChallengeResult : uint8_t {
 struct PlayerBotHuntChallengeSample {
 	uint64_t durationSeconds = 0;
 	int32_t maximumHealth = 0;
+	PlayerBotSupplyCapabilitySnapshot capability{};
 };
 
 struct PlayerBotHuntChallengeUpdate {
@@ -85,6 +86,8 @@ struct PlayerBotHuntChallengeUpdate {
 	double minimumActiveCombatSeconds = 0;
 	uint32_t minimumKills = 0;
 	PlayerBotHuntCombatSummary combat;
+	double pooledActiveCombatSeconds = 0;
+	uint64_t pooledKills = 0;
 };
 
 struct PlayerBotHuntPerformanceSample {
@@ -145,6 +148,12 @@ class PlayerBotHuntPolicy
 		std::chrono::steady_clock::time_point lastSample;
 		std::map<uint64_t, PlayerBotHuntRegionPerformance> performance;
 		PlayerBotSupplyGlobalLearning globalSupplyLearning;
+		PlayerBotSupplyEvidence globalSupplyEvidence;
+		PlayerBotSupplyCapabilitySnapshot challengeCapability;
+		double challengeActiveSeconds = 0;
+		uint64_t challengeKills = 0;
+		uint64_t challengePotions = 0;
+		uint8_t challengeMinimumManaPercent = 100;
 		std::array<PlayerBotSupplyDemand, playerBotSupplyKinds.size()> supplyDemands{};
 		double frontier = 0.20;
 		uint8_t qualifyingHuntsToHold = 0;

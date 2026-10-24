@@ -2588,15 +2588,17 @@ void supplyCalibration()
 	const auto healthDebt = observe(0, 90, 100);
 	assert(healthDebt.accepted && healthDebt.levelAdjustedHealthDebt == 10);
 	assert(healthDebt.potionEquivalentDemand > 0);
-	assert(!observe(0, 100, 100, true).accepted);
-	assert(std::string(observe(0, 100, 100, true).reason) == "interrupted_outing");
+	// Safe interrupted outings have an arrival baseline and accounted debt;
+	// they contribute to the same pooled exposure as completed deadlines.
+	assert(observe(0, 100, 100, true).accepted);
+	assert(observe(0, 100, 100, true).localUpdated);
 	const auto firstSafe = observe(0, 100, 100);
 	assert(firstSafe.calibration.potionsPerCombatSecond > 0);
 	observe(0, 100, 100);
 	region.supplyCalibration = observe(0, 100, 100).calibration;
 	// Zero-demand evidence decays at the local 0.20 blend; it never snaps to zero.
 	assert(region.supplyCalibration.potionsPerCombatSecond > 0);
-	assert(region.supplyCalibration.samples == 4);
+	assert(region.supplyCalibration.samples == 6);
 
 	// Guarded zero evidence does not cross an incompatible stored capability.
 	PlayerBotHuntPolicy contextPolicy;
@@ -2769,21 +2771,21 @@ void supplyCalibration()
 	    guarded, guarded.supplyCapability, 119, 100, 100, 100, 0, false);
 	assert(!shortDuration.accepted && std::string(shortDuration.reason) == "insufficient_duration");
 	assert(shortDuration.durationSeconds == 119 && shortDuration.minimumDurationSeconds == 120);
-	guards.resetCombatEvidence();
+	guards = PlayerBotHuntPolicy{};
 	guards.observeCombat({true, 59, 100, 100, 100, 100, 1});
 	for (unsigned i = 0; i < 3; ++i) guards.observeKill();
 	const auto shortCombat = guards.observeSupplies(
 	    guarded, guarded.supplyCapability, 120, 100, 100, 100, 0, false);
 	assert(!shortCombat.accepted && std::string(shortCombat.reason) == "insufficient_active_combat");
 	assert(shortCombat.activeCombatSeconds == 59 && shortCombat.minimumActiveCombatSeconds == 60);
-	guards.resetCombatEvidence();
+	guards = PlayerBotHuntPolicy{};
 	guards.observeCombat({true, 60, 100, 100, 100, 100, 1});
 	for (unsigned i = 0; i < 2; ++i) guards.observeKill();
 	const auto fewKills = guards.observeSupplies(
 	    guarded, guarded.supplyCapability, 120, 100, 100, 100, 0, false);
 	assert(!fewKills.accepted && std::string(fewKills.reason) == "insufficient_kills");
 	assert(fewKills.kills == 2 && fewKills.minimumKills == 3);
-	guards.resetCombatEvidence();
+	guards = PlayerBotHuntPolicy{};
 	guards.observeCombat({true, 60, 30, 100, 100, 100, 1});
 	for (unsigned i = 0; i < 3; ++i) guards.observeKill();
 	const auto thresholdHealth = guards.observeSupplies(
@@ -3100,6 +3102,7 @@ void globalAndLocalSupplyLearning()
 	PlayerBotHuntRegion zeroStatic = region(10, "Rat", nullptr, 0);
 	zeroStaticPolicy.observeCombat({true, 60, 200, 200, 100, 100, 1});
 	zeroStaticPolicy.observeRecovery(true);
+	for (unsigned kill = 0; kill < 3; ++kill) zeroStaticPolicy.observeKill();
 	const auto firstZeroStatic = zeroStaticPolicy.observeSupplies(
 	    zeroStatic, capability, 120, 200, 200, 100, 20, false);
 	assert(firstZeroStatic.accepted && firstZeroStatic.localUpdated && !firstZeroStatic.globalUpdated);
@@ -3166,15 +3169,16 @@ void globalAndLocalSupplyLearning()
 	assert(policy.supplyGlobalLearning().samples == 1);
 	assert(duplicateA.supplyGlobalLearning.samples == 1 && duplicateB.supplyGlobalLearning.samples == 1);
 
-	// Interrupted, dangerous, and potion-exhausted evidence cannot reduce global
-	// or local estimates.
-	const PlayerBotSupplyGlobalLearning guardedBefore = policy.supplyGlobalLearning();
+	// Safe interrupted exposure can reduce costs. Danger, death and exhausted
+	// potions still cannot supply downward evidence.
+	const auto beforeInterrupted = policy.supplyGlobalLearning();
 	PlayerBotHuntRegion interruptedRegion = region(6, "Troll");
-	interruptedRegion.supplyGlobalLearning = guardedBefore;
+	interruptedRegion.supplyGlobalLearning = beforeInterrupted;
 	const auto interrupted = easyOuting(policy, interruptedRegion, true);
-	assert(!interrupted.accepted && std::string(interrupted.reason) == "interrupted_outing");
-	assert(policy.supplyGlobalLearning().samples == guardedBefore.samples);
-	assert(policy.supplyGlobalLearning().multiplier == guardedBefore.multiplier);
+	assert(interrupted.accepted && interrupted.globalUpdated);
+	assert(policy.supplyGlobalLearning().samples == beforeInterrupted.samples + 1);
+	assert(policy.supplyGlobalLearning().multiplier < beforeInterrupted.multiplier);
+	const auto guardedBefore = policy.supplyGlobalLearning();
 
 	PlayerBotHuntRegion dangerRegion = region(7, "Troll");
 	dangerRegion.supplyGlobalLearning = policy.supplyGlobalLearning();
@@ -4217,8 +4221,8 @@ void supplyCalibrationRounding()
 	region.reconcileSupplies(2);
 	assert(!region.supplyBudget.fits);
 
-	// Learning uses the fractional static denominator, while keeping immediate
-	// upward corrections and slower, guarded global/local downward blends.
+	// Learning uses the fractional static denominator after sufficient safe
+	// exposure, with slower global/local downward blends.
 	region.supplyRecovery = false;
 	region.recoveryRouteHealthLoss = 0;
 	region.supplyGlobalLearning = {};
@@ -4229,8 +4233,9 @@ void supplyCalibrationRounding()
 	PlayerBotHuntPolicy upwardPolicy;
 	upwardPolicy.observeCombat({true, 60, 100, 100, 0, 0, 1});
 	upwardPolicy.observeRecovery(true);
+	for (unsigned kill = 0; kill < 3; ++kill) upwardPolicy.observeKill();
 	const auto upward = upwardPolicy.observeSupplies(
-	    region, region.supplyCapability, 60, 100, 100, 0, 19, true);
+	    region, region.supplyCapability, 120, 100, 100, 0, 19, true);
 	assert(upward.accepted && upward.globalUpdated && upward.localUpdated);
 	assert(upward.globalEstimateDirection == PlayerBotSupplyEstimateDirection::Upward);
 	assert(upward.localEstimateDirection == PlayerBotSupplyEstimateDirection::Upward);

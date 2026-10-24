@@ -39,6 +39,7 @@ Recovery checks separate policy from engine integration:
 | Non-Docker check | Covers |
 | --- | --- |
 | `sh server/tests/playerbot_contracts.sh` | Legal loadouts, skills, receipts, space and gear protection, sliced scoring, net income, safety and no-progress bounds |
+| `sh server/tests/playerbothuntlearning_test.sh` | Short-outing potion-spike regression, pooled local/global exposure, capability/atlas boundaries, and challenge progression with immediate danger backoff |
 | `sh server/tests/playerbotsurvival_contracts.sh` | Suppressed routine spending; emergency healing preserved |
 | `pwsh -File scripts/test-playerbot-recovery-assertions.ps1` | Valid recovery evidence or bounded rejection in the zero-funds scenario |
 | `lua server/tests/playerbot_recovery_fixture_contracts.lua`; `pwsh -File server/tests/playerbot_recovery_fixture_assertions.ps1` | Positive fixture setup, round-trip assertions, negative controls and fail-fast waits |
@@ -94,6 +95,7 @@ On Linux, the C++ contract checks require a C++17 compiler. The survival checks 
 
 ```sh
 sh server/tests/playerbot_contracts.sh
+sh server/tests/playerbothuntlearning_test.sh
 sh server/tests/playerbothealing_contracts.sh
 sh server/tests/playerbotsurvival_contracts.sh
 sh server/tests/playerbotlifecycle_contracts.sh

@@ -517,7 +517,7 @@ std::optional<PlayerBotHuntRuntimeCompletion> PlayerBotHuntRuntime::complete(con
 		result.performance.evidenceReason = result.supplyObservation.reason;
 	}
 	result.region.supplyCalibration = result.supplyObservation.calibration;
-	if (supplyBaseline && !activeRegion->recoveryLoadoutId) result.challenge = policy.updateChallengeFrontier({result.durationSeconds, player.maximumHealth});
+	if (supplyBaseline && !activeRegion->recoveryLoadoutId) result.challenge = policy.updateChallengeFrontier({result.durationSeconds, player.maximumHealth, player.supplyCapability});
 	else result.challenge.frontierBefore = result.challenge.frontierAfter = policy.challengeFrontier();
 	activeRegion.reset();
 	supplyBaseline.reset();

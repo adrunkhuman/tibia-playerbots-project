@@ -180,6 +180,19 @@ inline PlayerBotSupplyCapabilityComparison playerBotCompareSupplyCapabilities(
 	return result;
 }
 
+// Resource debt covers the reached outing; active seconds normalize its cost
+// for the planner's combat-exposure forecast. Pool short/interrupted outings so
+// one indivisible potion is not treated as a reliable per-second rate.
+struct PlayerBotSupplyEvidence {
+	PlayerBotSupplyCapabilitySnapshot capability;
+	uint64_t atlasRevision = 0;
+	double activeSeconds = 0;
+	uint64_t durationSeconds = 0;
+	uint64_t kills = 0;
+	double demand = 0;
+	double staticDemand = 0;
+};
+
 struct PlayerBotSupplyCalibration {
 	PlayerBotSupplyCapabilitySnapshot capability;
 	double potionsPerCombatSecond = 0;
@@ -248,6 +261,9 @@ struct PlayerBotSupplyObservation {
 	uint32_t endingMana = 0;
 	uint32_t endingMaximumMana = 0;
 	double activeCombatSeconds = 0;
+	double pooledActiveCombatSeconds = 0;
+	uint64_t pooledDurationSeconds = 0;
+	uint64_t pooledKills = 0;
 	uint32_t kills = 0;
 	uint8_t p10HealthPercent = 0;
 	uint8_t p10ManaPercent = 100;

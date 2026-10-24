@@ -1342,6 +1342,8 @@ void PlayerBotController::emitChallengeFrontier(const PlayerBotHuntChallengeUpda
 	       << ",\"active_combat_seconds\":" << update.combat.activeSeconds
 	       << ",\"active_combat_uptime\":" << update.activeCombatUptime
 	       << ",\"kills\":" << update.combat.kills
+	       << ",\"pooled_active_combat_seconds\":" << update.pooledActiveCombatSeconds
+	       << ",\"pooled_kills\":" << update.pooledKills
 	       << ",\"minimum_active_combat_seconds\":" << update.minimumActiveCombatSeconds
 	       << ",\"minimum_kills\":" << update.minimumKills
 	       << ",\"minimum_health\":" << (update.combat.minimumHealth == std::numeric_limits<int32_t>::max() ? 0 : update.combat.minimumHealth)
@@ -1724,6 +1726,9 @@ void PlayerBotController::finishHuntRegion(const Player& player, const Position&
 	       << completion->supplyObservation.minimumDurationSeconds
 	       << ",\"supply_guard_active_combat_seconds\":"
 	       << completion->supplyObservation.activeCombatSeconds
+	       << ",\"supply_pooled_active_combat_seconds\":" << completion->supplyObservation.pooledActiveCombatSeconds
+	       << ",\"supply_pooled_duration_seconds\":" << completion->supplyObservation.pooledDurationSeconds
+	       << ",\"supply_pooled_kills\":" << completion->supplyObservation.pooledKills
 	       << ",\"supply_guard_minimum_active_combat_seconds\":"
 	       << completion->supplyObservation.minimumActiveCombatSeconds
 	       << ",\"supply_guard_kills\":" << completion->supplyObservation.kills
