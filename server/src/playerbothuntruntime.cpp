@@ -381,10 +381,11 @@ bool PlayerBotHuntRuntime::enterHuntArea(const PlayerBotHuntRuntimePlayerObserva
 	arrival.recoveryRouteHealthLoss = totalDanger > 0 ?
 	    arrival.recoveryRouteHealthLoss * arrival.returnRouteDangerCost / totalDanger : 0;
 	arrival.estimatedTravelSeconds = 0;
+	arrival.outboundCompleted = true;
 	arrival.fitSupplyWindow(activeRegion->supplyProfile.reserve);
 	if (player.health <= 0 || !arrival.supplyBudget.fits || !arrival.productiveWindow() ||
 	    !arrival.recoverySustainable()) return false;
-	// Keep the original outbound forecast for trip telemetry/economics, but use
+	// Keep the original outbound forecast for trip telemetry, but use
 	// the newly checked productive budget and stock as the learning baseline.
 	arrival.estimatedTravelSeconds = activeRegion->estimatedTravelSeconds;
 	activeRegion = std::move(arrival);

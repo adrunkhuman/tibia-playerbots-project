@@ -318,6 +318,8 @@ struct PlayerBotSupplyKindBudget {
 	uint32_t routine = 0;
 	double expected = 0;
 	bool fits = true;
+	// Fractional consumption for economics; expected rounds up for carrying.
+	double expectedUnits = 0;
 };
 
 inline PlayerBotSupplyKindBudget playerBotSupplyKindBudget(const PlayerBotSupplyKindProfile& profile, double combatSeconds,
@@ -328,7 +330,8 @@ inline PlayerBotSupplyKindBudget playerBotSupplyKindBudget(const PlayerBotSupply
 	budget.count = profile.count;
 	const uint32_t reserve = playerBotSupplyHuntReserve(profile.kind, profile.returnThreshold, recovery);
 	budget.routine = profile.count > reserve ? profile.count - reserve : 0;
-	budget.expected = std::ceil(std::max(0.0, playerBotSupplyDemandRate(profile)) * std::max(0.0, combatSeconds));
+	budget.expectedUnits = std::max(0.0, playerBotSupplyDemandRate(profile)) * std::max(0.0, combatSeconds);
+	budget.expected = std::ceil(budget.expectedUnits);
 	// Zero predicted consumption cannot make a missing weapon/ammunition usable.
 	const bool needsStock = profile.kind == PlayerBotSupplyKind::ThrowingWeapon ||
 	                        profile.kind == PlayerBotSupplyKind::Ammunition;

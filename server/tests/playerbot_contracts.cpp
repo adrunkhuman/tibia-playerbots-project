@@ -5226,7 +5226,7 @@ void recoveryAlternativeContracts()
 	assert(!fallback.recoverySustainable());
 	fallback.exitFare = 0;
 	fallback.recoveryPreparationCost = 100;
-	assert(!fallback.recoverySustainable());
+	assert(fallback.recoverySustainable()); // Past spending cannot forbid positive marginal work.
 	fallback.recoveryPreparationCost = 0;
 	assert(playerBotHuntTravelAffordable(20, 0, 10, 10));
 	assert(!playerBotHuntTravelAffordable(19, 0, 10, 10)); // future loot cannot pay a promised return fare
@@ -5268,6 +5268,62 @@ void recoveryAlternativeContracts()
 	assert(!food.completed(0, true));
 	assert(!food.completed(0, true));
 	assert(food.completed(0, true)); // renewed temporary food is not unlimited progress
+}
+
+void fractionalHuntEconomicsContracts()
+{
+	PlayerBotHuntRegion hunt;
+	hunt.availableHuntSeconds = 60;
+	hunt.coinGoldPerMinute = 12;
+	hunt.healthPotionUnitPrice = 45;
+	hunt.supplyBudget.potionEquivalentDemand = .2;
+	hunt.supplyBudget.expectedPotions = 1;
+	assert(std::abs(hunt.recoveryNetIncomePerMinute() - 3) < 1e-9);
+	PlayerBotSupplyKindProfile spear{PlayerBotSupplyKind::ThrowingWeapon, 2389, 1, 1, {.002, 1}};
+	spear.unitPrice = 10;
+	hunt.supplyProfile.kinds.push_back(spear);
+	hunt.supplyKindBudgets.push_back(playerBotSupplyKindBudget(spear, 60, true));
+	assert(hunt.supplyKindBudgets.front().expected == 1);
+	assert(hunt.supplyKindBudgets.front().fits);
+	assert(std::abs(hunt.recoveryNetIncomePerMinute() - 1.8) < 1e-9);
+	hunt.cashPressure = true;
+	hunt.combatFraction = 1;
+	assert(hunt.cheapEconomicKey().profitabilityHint == PlayerBotHuntProfitabilityHint::LikelySurplus);
+	hunt.supplyProfile.kinds[0].unitPrice = 0;
+	assert(!std::isfinite(hunt.recoveryNetIncomePerMinute())); // No unknown-price credit.
+	hunt.supplyProfile.kinds.clear();
+	hunt.supplyKindBudgets.clear();
+	hunt.supplyBudget.potionEquivalentDemand = hunt.supplyBudget.expectedPotions = 0;
+	hunt.coinGoldPerMinute = 4.4;
+	hunt.supplyRecovery = hunt.routeValidated = true;
+	hunt.supplyBudget.fits = true;
+	hunt.currentHealth = hunt.maximumHealth = 215;
+	hunt.recoveryPreparationCost = 45;
+	assert(hunt.recoverySustainable());
+	assert(hunt.recoveryPreparationCost == 45); // Admission does not erase spending.
+	for (int i = 0; i < 11; ++i)
+		hunt.recoveryPreparationCost = playerBotRemainingPreparationDebt(hunt.recoveryPreparationCost, 4);
+	assert(hunt.recoveryPreparationCost == 1);
+	hunt.recoveryPreparationCost = playerBotRemainingPreparationDebt(hunt.recoveryPreparationCost, 4);
+	assert(hunt.recoveryPreparationCost == 0);
+	hunt.outboundFare = 3;
+	hunt.exitFare = 2;
+	hunt.estimatedTravelSeconds = 30;
+	assert(!hunt.recoverySustainable()); // Future outbound and return still cost money.
+	using namespace std::chrono;
+	const auto start = steady_clock::time_point{} + seconds(1);
+	PlayerBotHuntRuntimePlayerObservation actor;
+	actor.health = actor.maximumHealth = 215;
+	PlayerBotHuntRuntime runtime({});
+	runtime.selectPlanningRegion(hunt, actor, start);
+	runtime.beginCycle(start, 60);
+	assert(runtime.enterHuntArea(actor, hunt.supplyProfile, start + seconds(10)));
+	const auto& arrival = *runtime.region();
+	assert(arrival.outboundCompleted && arrival.outboundFare == 3);
+	assert(std::abs(arrival.recoveryNetIncomePerMinute() - 2.4) < 1e-9);
+	auto expensiveReturn = arrival;
+	expensiveReturn.exitFare = 5;
+	assert(!expensiveReturn.recoverySustainable());
 }
 
 void productiveHuntTripContracts()
@@ -5388,6 +5444,7 @@ void frozenHuntEconomicRankingContracts()
 		region.estimatedTravelSeconds = travel;
 		region.availableHuntSeconds = productive;
 		region.supplyBudget.expectedPotions = 1;
+		region.supplyBudget.potionEquivalentDemand = 1;
 		region.healthPotionUnitPrice = price;
 		region.freezeEconomicKey();
 		return region;
@@ -5456,10 +5513,12 @@ void frozenHuntEconomicRankingContracts()
 	assert(hint(unknown) == Hint::Uncertain);
 	unknown.supplyProfile.kinds.clear();
 	unknown.supplyBudget.expectedPotions = 1;
+	unknown.supplyBudget.potionEquivalentDemand = 1;
 	assert(hint(unknown) == Hint::Uncertain); // Health quote is also required.
 	unknown.healthPotionUnitPrice = 45;
 	assert(hint(unknown) == Hint::LikelySurplus);
 	unknown.supplyBudget.expectedPotions = std::numeric_limits<double>::max();
+	unknown.supplyBudget.potionEquivalentDemand = std::numeric_limits<double>::max();
 	assert(hint(unknown) == Hint::Uncertain); // No health-demand estimate.
 	unknown.supplyBudget.expectedPotions = 0;
 	unknown.cashPressure = false;
@@ -5491,7 +5550,7 @@ void frozenHuntEconomicRankingContracts()
 		auto changed = frozen;
 		changed.estimatedReturnSeconds = changed.estimatedSupplySeconds = 6000;
 		changed.outboundFare = changed.exitFare = changed.supplyFare = 20;
-		changed.healthPotionUnitPrice = 1000;
+		changed.healthPotionUnitPrice = 1000000; // Fractional consumption alone exceeds outing income.
 		changed.supplyProfile.kinds[0].unitPrice = 1000;
 		changed.recoveryRouteHealthLoss = 10;
 		changed.reconcileTravel(30, 6000, 1);
@@ -5831,6 +5890,7 @@ int main()
 	optimisticCoarseSupplyAdmissionContracts();
 	recoveryAlternativeContracts();
 	productiveHuntTripContracts();
+	fractionalHuntEconomicsContracts();
 	backpackAcquisition();
 	paladinLoadouts();
 	carriedShieldUpgrade();

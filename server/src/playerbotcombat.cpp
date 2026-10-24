@@ -61,7 +61,8 @@ namespace {
 			const PlayerBotSupplyKindBudget& budget = budgets[index];
 			json << (index == 0 ? "" : ",") << "{\"kind\":" << jsonString(playerBotSupplyKindName(budget.kind))
 			     << ",\"count\":" << budget.count << ",\"routine\":" << budget.routine
-			     << ",\"expected\":" << budget.expected << ",\"fits\":" << (budget.fits ? "true" : "false") << '}';
+			     << ",\"expected\":" << budget.expected << ",\"expected_units\":" << budget.expectedUnits
+			     << ",\"fits\":" << (budget.fits ? "true" : "false") << '}';
 		}
 		json << ']';
 		return json.str();
@@ -1446,6 +1447,8 @@ void PlayerBotController::emitHuntRegionCandidate(const PlayerBotHuntRegion& reg
 	       << ",\"supply_regeneration_healing\":" << region.supplyBudget.regenerationHealing
 	       << ",\"supply_spell_healing\":" << region.supplyBudget.spellHealing
 	       << ",\"supply_expected_potions\":" << region.supplyBudget.expectedPotions
+	       << ",\"supply_potion_equivalent_demand\":" << region.supplyBudget.potionEquivalentDemand
+	       << ",\"recovery_preparation_debt\":" << region.recoveryPreparationCost
 	       << ",\"supply_calibration_samples\":" << region.supplyCalibration.samples
 	       << ",\"supply_potions_per_combat_minute\":"
 	       << region.supplyAppliedPotionsPerCombatSecond * 60
@@ -1492,6 +1495,7 @@ void PlayerBotController::emitHuntRegionCandidate(const PlayerBotHuntRegion& reg
 	       << ",\"maximum_route_danger\":" << region.maximumRouteDanger
 	       << ",\"outbound_npc_travel\":" << (region.outboundNpcTravel ? "true" : "false")
 	       << ",\"outbound_fare\":" << region.outboundFare
+	       << ",\"outbound_completed\":" << (region.outboundCompleted ? "true" : "false")
 	       << ",\"exit_npc_travel\":" << (region.exitNpcTravel ? "true" : "false")
 	       << ",\"exit_fare\":" << region.exitFare
 	       << ",\"supply_npc_travel\":" << (region.supplyNpcTravel ? "true" : "false")
@@ -1792,7 +1796,7 @@ void PlayerBotController::finishHuntRegion(const Player& player, const Position&
 	       << ",\"retreat_observed\":" << (std::strcmp(reason, "hunt_region_observed_danger") == 0 ? "true" : "false")
 	       << ",\"danger_observed\":" << (combat.dangerObserved ? "true" : "false") << ",\"death_observed\":" << (combat.deathObserved ? "true" : "false")
 	       << ",\"frontier_before\":" << completion->challenge.frontierBefore << ",\"frontier_after\":" << completion->challenge.frontierAfter;
-	recoveryPreparationCost -= std::min(recoveryPreparationCost, completion->coinGoldAcquired);
+	recoveryPreparationCost = playerBotRemainingPreparationDebt(recoveryPreparationCost, completion->coinGoldAcquired);
 	emit("hunt_region_outcome", position, fields.str());
 	if (Player* speakingPlayer = g_game.getPlayerByID(playerId)) say(*speakingPlayer, "Leaving hunt: " + std::string(reason) + ". " + std::to_string(combat.kills) + " kills, " + std::to_string(completion->experienceGained) + " experience.");
 }

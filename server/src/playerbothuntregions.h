@@ -247,6 +247,8 @@ struct PlayerBotHuntRegion {
 	uint32_t returnRouteDangerCost = 0;
 	double recoveryRouteHealthLoss = 0;
 	uint64_t outboundFare = 0;
+	// Preserve the original quote for telemetry after arrival, not future cost.
+	bool outboundCompleted = false;
 	uint64_t exitFare = 0;
 	uint64_t supplyFare = 0;
 	uint32_t recoveryPotionReserve = 0;
@@ -279,16 +281,20 @@ struct PlayerBotHuntRegion {
 	{
 		const double seconds = availableHuntSeconds + nonproductiveTripSeconds();
 		if (seconds <= 0 || !std::isfinite(seconds)) return -std::numeric_limits<double>::infinity();
-		double cost = static_cast<double>(outboundFare) + exitFare + supplyFare + recoveryPreparationCost;
-		if (supplyBudget.expectedPotions > 0 && healthPotionUnitPrice == 0)
+		// Preparation debt records verified past spending. Productive outings
+		// repay it cumulatively; admission must evaluate only future expenses.
+		double cost = static_cast<double>(outboundCompleted ? 0 : outboundFare) + exitFare + supplyFare;
+		if (!std::isfinite(supplyBudget.potionEquivalentDemand) || supplyBudget.potionEquivalentDemand < 0 ||
+		    (supplyBudget.expectedPotions > 0 && healthPotionUnitPrice == 0))
 			return -std::numeric_limits<double>::infinity();
-		cost += supplyBudget.expectedPotions * healthPotionUnitPrice;
+		cost += supplyBudget.potionEquivalentDemand * healthPotionUnitPrice;
 		for (const auto& budget : supplyKindBudgets) {
 			const auto kind = std::find_if(supplyProfile.kinds.begin(), supplyProfile.kinds.end(),
 			    [&](const auto& value) { return value.kind == budget.kind; });
-			if (kind == supplyProfile.kinds.end() || (budget.expected > 0 && kind->unitPrice == 0))
+			if (kind == supplyProfile.kinds.end() || !std::isfinite(budget.expectedUnits) || budget.expectedUnits < 0 ||
+			    (budget.expected > 0 && kind->unitPrice == 0))
 				return -std::numeric_limits<double>::infinity();
-			cost += budget.expected * kind->unitPrice;
+			cost += budget.expectedUnits * kind->unitPrice;
 		}
 		const double net = coinGoldPerMinute * availableHuntSeconds / 60.0 - cost;
 		return std::isfinite(net) ? net * 60.0 / seconds : -std::numeric_limits<double>::infinity();
@@ -329,9 +335,9 @@ struct PlayerBotHuntRegion {
 
 		// Hunt-only demand and known prices give a sign hint, not a net-margin
 		// objective. No fare, supplier itinerary, or route-danger credit/cost.
-		bool known = std::isfinite(supplyBudget.expectedPotions) && supplyBudget.expectedPotions >= 0 &&
-		    supplyBudget.expectedPotions != std::numeric_limits<double>::max();
-		double cost = supplyBudget.expectedPotions * healthPotionUnitPrice;
+		bool known = std::isfinite(supplyBudget.potionEquivalentDemand) && supplyBudget.potionEquivalentDemand >= 0 &&
+		    supplyBudget.potionEquivalentDemand != std::numeric_limits<double>::max();
+		double cost = supplyBudget.potionEquivalentDemand * healthPotionUnitPrice;
 		if (supplyBudget.expectedPotions > 0 && healthPotionUnitPrice == 0) known = false;
 		const double exposure = productive * std::clamp(combatFraction, 0.0, 1.0);
 		if (!std::isfinite(combatFraction)) known = false;
@@ -344,7 +350,7 @@ struct PlayerBotHuntRegion {
 				known = false;
 				continue;
 			}
-			const double expected = std::ceil(demand * exposure);
+			const double expected = demand * exposure;
 			if (expected > 0 && kind.unitPrice == 0) known = false;
 			cost += expected * kind.unitPrice;
 		}
@@ -368,7 +374,7 @@ struct PlayerBotHuntRegion {
 
 	double nonproductiveTripSeconds() const
 	{
-		return estimatedTravelSeconds + estimatedReturnSeconds + estimatedSupplySeconds;
+		return (outboundCompleted ? 0 : estimatedTravelSeconds) + estimatedReturnSeconds + estimatedSupplySeconds;
 	}
 
 	// Find a verified fitting whole-second window, not a fixed short recovery
@@ -399,8 +405,8 @@ struct PlayerBotHuntRegion {
 		}
 		reconcileSupplies(reserve, optimisticTransitCombat);
 		if (supplyRecovery && routeValidated) {
-			// Whole-second bounded probes also avoid paying another rounded
-			// consumable for a marginal extension. No untested window is chosen.
+			// Recheck shorter productive windows for marginal net income. Stock
+			// admission still rounds up; economic consumption does not.
 			const double fitting = availableHuntSeconds;
 			double bestSeconds = fitting;
 			double bestNet = productiveWindow() && supplyBudget.fits ? recoveryNetIncomePerMinute() :
