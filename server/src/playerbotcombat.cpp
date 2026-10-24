@@ -191,6 +191,20 @@ namespace {
 		    PlayerBotEquipmentAdapter::loadout(player));
 	}
 
+	std::string defensiveCombatFacts(Player& player, Creature* target)
+	{
+		const Item* weapon = player.getWeapon(true);
+		const auto profile = huntCombatProfile(player);
+		std::ostringstream fields;
+		fields << ",\"weapon_item_id\":" << (weapon ? weapon->getID() : 0)
+		       << ",\"weapon_count\":" << (weapon ? weapon->getItemCount() : 0)
+		       << ",\"combat_attack\":" << profile.attack
+		       << ",\"combat_attack_skill\":" << profile.attackSkill
+		       << ",\"target_health\":" << (target ? std::to_string(target->getHealth()) : "null")
+		       << ",\"shot_clear\":" << (target && g_game.isSightClear(player.getPosition(), target->getPosition(), true) ? "true" : "false");
+		return fields.str();
+	}
+
 	PlayerBotHuntPlanningProfile recoveryPlanningFacts(Player& player, const PlayerBotEquipmentLoadout& loadout, uint32_t id)
 	{
 		const PlayerBotEquipmentPolicy policy;
@@ -958,7 +972,7 @@ bool PlayerBotController::attackDefensiveThreat(Player* player, const Position& 
 	emit("action_result", currentPosition,
 	     "\"action\":\"defensive_combat\",\"result\":\"started\",\"target_id\":" +
 	         std::to_string(started.target.id) + ",\"chase\":false,\"route_critical\":" +
-	         (started.routeCritical ? "true" : "false"));
+	         (started.routeCritical ? "true" : "false") + defensiveCombatFacts(*player, target));
 	return true;
 }
 
@@ -978,7 +992,8 @@ void PlayerBotController::finishDefensiveCombat(Player* player, const Position& 
 	     ",\"target_id\":null,\"reason\":" + jsonString(reason));
 	std::ostringstream resultFields;
 	resultFields << "\"action\":\"defensive_combat\",\"result\":" << jsonString(result)
-	             << ",\"target_id\":" << previousTarget << ",\"reason\":" << jsonString(reason);
+	             << ",\"target_id\":" << previousTarget << ",\"reason\":" << jsonString(reason)
+	             << defensiveCombatFacts(*player, g_game.getCreatureByID(previousTarget));
 	if (previous && previous->routeCritical) {
 		resultFields << ",\"fallback_cause\":\"movement_stalled\",\"intended_step\":";
 		if (intendedStep) {
