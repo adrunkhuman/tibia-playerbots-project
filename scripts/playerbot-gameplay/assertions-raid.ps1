@@ -90,3 +90,28 @@ function Assert-RaidTravelEvents {
         throw 'Raid travel did not remain death-free.'
     }
 }
+
+function Assert-BridgeRouteEvents {
+    param([string]$Logs)
+
+    $events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
+    $start = @($events | Where-Object { $_.event -eq 'bridge_fixture' -and $_.phase -eq 'start' })
+    $result = @($events | Where-Object { $_.event -eq 'bridge_fixture' -and $_.phase -eq 'result' })
+    if ($start.Count -ne 1 -or $result.Count -ne 1) { throw 'Bridge route lacks one start and one result sample.' }
+    if ($start[0].shovel -lt 1 -or $start[0].rope -lt 1) { throw 'Bridge route must start with a shovel and a rope.' }
+    $plans = @($events | Where-Object { $_.bot -eq 'Bot One' -and $_.event -eq 'action_result' -and $_.action -eq 'plan' })
+    $floors = @($events | Where-Object { $_.event -eq 'bridge_fixture' -and $_.phase -eq 'floor_change' })
+    $safety = @($events | Where-Object { $_.bot -eq 'Bot One' -and $_.event -eq 'travel_safety' })
+    $r = $result[0]
+    Write-Host ("PLAYERBOT_GAMEPLAY_TEST BRIDGE_ROUTE_SUMMARY result={0} plateau_samples={1} z8_samples={2} floor_changes={3} minimum_health={4} travel_safety={5}" -f
+        $r.result, $r.plateau_samples, $r.z8_samples, $r.floor_changes, $r.minimum_health, $safety.Count)
+    foreach ($f in $floors) { Write-Host ("PLAYERBOT_GAMEPLAY_TEST BRIDGE_ROUTE_FLOOR {0},{1},{2} at {3}ms" -f $f.x, $f.y, $f.z, $f.elapsed_ms) }
+    foreach ($plan in ($plans | Select-Object -First 6)) {
+        Write-Host ("PLAYERBOT_GAMEPLAY_TEST BRIDGE_ROUTE_PLAN from={0},{1},{2} waypoint={3},{4},{5} steps={6} danger_cost={7} peak={8} shovel={9}" -f
+            $plan.position.x, $plan.position.y, $plan.position.z, $plan.waypoint.x, $plan.waypoint.y, $plan.waypoint.z,
+            $plan.steps, $plan.danger_cost, $plan.maximum_health_loss_per_second, $plan.shovel_available)
+    }
+    if ($r.result -ne 'arrived' -or $r.plateau_samples -gt 0) {
+        throw "Bridge route must reach the north side without crossing the Dwarven Bridge plateau (result=$($r.result), plateau_samples=$($r.plateau_samples))."
+    }
+}

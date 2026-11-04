@@ -298,6 +298,7 @@ void PlayerBotController::start(const Position& position, bool recovered, uint32
 		});
 		emitFixtureEvents(fixtureDriver.runDoorPassagesContract(*controlledPlayer), position);
 		emitFixtureEvents(fixtureDriver.runShovelPassagesContract(*controlledPlayer), position);
+		emitFixtureEvents(fixtureDriver.runBridgeShovelProbe(*controlledPlayer, navigationCostPolicy(*controlledPlayer)), position);
 	}
 	if (backpackUpgradeResumed) {
 		// Durable backpack recovery owns the normal progression command until resolved.
@@ -1939,7 +1940,12 @@ bool PlayerBotController::processNavigation(Player* player, const Position& curr
 		       << ",\"maximum_health_loss_per_second\":" << outcome.plan.maximumHealthLossPerSecond
 		       << ",\"same_floor\":" << (sameFloorOnly ? "true" : "false")
 		       << ",\"destination\":{\"x\":" << destination.x
-		       << ",\"y\":" << destination.y << ",\"z\":" << static_cast<uint16_t>(destination.z) << '}';
+		       << ",\"y\":" << destination.y << ",\"z\":" << static_cast<uint16_t>(destination.z) << '}'
+		       << ",\"waypoint\":{\"x\":" << outcome.plan.waypoint.x << ",\"y\":" << outcome.plan.waypoint.y
+		       << ",\"z\":" << static_cast<uint16_t>(outcome.plan.waypoint.z) << '}'
+		       // Tool passages are only routable while the tool is carried.
+		       << ",\"rope_available\":" << (g_game.findItemOfType(player, playerbot::ropeItemId, true) ? "true" : "false")
+		       << ",\"shovel_available\":" << (g_game.findItemOfType(player, shovelToolItemId, true) ? "true" : "false");
 		telemetry.emit("action_result", currentPosition, fields.str());
 	}
 	if (outcome.command != PlayerBotNavigationRuntimeCommand::Move &&
@@ -2154,7 +2160,12 @@ void PlayerBotController::navigate()
 	safetyTurn.travelSafetyRequired = travelSafetyRequired(*player);
 	if (turnRouter.route(safetyTurn) == PlayerBotTurnCommand::TravelSafety && processTravelSafety(player, currentPosition)) return;
 	if (const auto goal = fixtureDriver.travelSafetyGoal()) {
-		if (processNavigation(player, currentPosition, *goal, nullptr, playerBotNavigationMaximumExpandedNodes, true))
+		// The real-map leg ends beside live, non-engaged monsters that may stand
+		// on the exact tile; adjacent arrival is the same destination.
+		const auto travelGoal = fixtureDriver.travelSafetySameFloorOnly() ? PlayerBotNavigationGoal::exact(*goal) :
+		    PlayerBotNavigationGoal::withinRange(*goal, 1, 1);
+		if (processNavigation(player, currentPosition, travelGoal, nullptr, playerBotNavigationMaximumExpandedNodes,
+		                      false, fixtureDriver.travelSafetySameFloorOnly()))
 			schedule(navigationInterval);
 		return;
 	}

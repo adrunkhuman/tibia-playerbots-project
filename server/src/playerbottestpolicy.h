@@ -75,6 +75,7 @@ namespace playerbot {
 		bool detailAllHuntCandidates; // Planning assertions inspect rejected candidates.
 		bool rangedPositionDisabled; // Control run: ranged weapons fight like melee (#235).
 		bool raidTravelFixture;
+		bool bridgeRouteFixture; // Real-map Dwarven Bridge route diagnostic.
 	};
 
 	inline uint32_t playerBotFixtureHuntPlanningDuration(bool mainlandLoopFixture,

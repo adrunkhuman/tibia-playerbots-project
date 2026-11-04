@@ -22,4 +22,13 @@ if ($RaidTravel) {
             }
         }
     }
+
+    Invoke-Scenario -Name 'bridge_route' -DefaultTimeoutSeconds 420 -Body {
+        Invoke-Compose down --volumes --remove-orphans
+        $env:PLAYERBOT_GAMEPLAY_MODE = 'bridge_route'
+        $env:PLAYERBOT_HUNT_DURATION_SECONDS = '900'
+        Invoke-Compose up --detach
+        $logs = Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST BRIDGE_ROUTE_RESULT'
+        Assert-BridgeRouteEvents -Logs $logs
+    }
 }

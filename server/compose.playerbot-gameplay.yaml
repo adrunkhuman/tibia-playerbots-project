@@ -15,6 +15,7 @@ services:
       PLAYERBOT_DEPOT_RESTART_PHASE: "${PLAYERBOT_DEPOT_RESTART_PHASE:-}"
       PLAYERBOT_DEPOT_VERIFIER_PHASE: "${PLAYERBOT_DEPOT_VERIFIER_PHASE:-}"
       PLAYERBOT_DEPOT_MOVE_CASE: "${PLAYERBOT_DEPOT_MOVE_CASE:-normal}"
+      PLAYERBOT_BRIDGE_GOAL: "${PLAYERBOT_BRIDGE_GOAL:-}"
     volumes:
       - ./tests/playerbot-gameplay:/app/data/scripts/playerbot-gameplay:ro
       - ./tests/playerbot-monsters/corpse.lua:/app/data/monster/lua/playerbot_corpse_monsters.lua:ro

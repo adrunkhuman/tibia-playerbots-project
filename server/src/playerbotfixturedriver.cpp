@@ -1,5 +1,8 @@
 #include "otpch.h"
 
+#include <cstdio>
+#include <cstdlib>
+
 #include "playerbotfixturedriver.h"
 
 #include "playerbotapproach.h"
@@ -128,6 +131,12 @@ std::optional<Position> playerbot::PlayerBotFixtureDriver::travelSafetyGoal() co
 	// Keep the same destination across recovery; only ordinary safety/navigation
 	// may decide when to approach it. The matching runway is fixture Lua data.
 	if (policy.raidTravelFixture) return Position(60208, 60200, 7);
+	if (policy.bridgeRouteFixture) {
+		// Diagnostic probes may move the goal along the same leg; Lua reads the same variable.
+		int x = 32631, y = 31956, z = 7;
+		if (const char* goal = std::getenv("PLAYERBOT_BRIDGE_GOAL")) std::sscanf(goal, "%d,%d,%d", &x, &y, &z);
+		return Position(static_cast<uint16_t>(x), static_cast<uint16_t>(y), static_cast<uint8_t>(z));
+	}
 	return std::nullopt;
 }
 
@@ -1048,6 +1057,70 @@ std::vector<playerbot::PlayerBotFixtureEvent> playerbot::PlayerBotFixtureDriver:
 	return {{"door_passages_contract", fields.str()}, {"stable_approaches_contract", stableFields.str()},
 	        {"corpse_decay_route_contract", decayFields.str()}, {"condition_damage_contract", conditionContract},
 	    {"physical_forecast_contract", physicalContract}};
+}
+
+std::vector<playerbot::PlayerBotFixtureEvent> playerbot::PlayerBotFixtureDriver::runBridgeShovelProbe(Player& player,
+    const PlayerBotNavigationCostPolicy& costPolicy)
+{
+	if (!policy.bridgeRouteFixture) return {};
+	// Real-map shovel passage on the Dwarven Bridge detour: the loose stone
+	// pile is the tile's ground and the landing ground is a rope spot.
+	constexpr Position approach(32680, 31943, 7);
+	constexpr Position pile(32680, 31944, 7);
+	constexpr Position landing(32680, 31944, 8);
+	auto boolField = [](bool value) { return value ? "true" : "false"; };
+	auto groundId = [](const Tile* tile) { return tile && tile->getGround() ? tile->getGround()->getID() : 0; };
+	Tile* pileTile = g_game.map.getTile(pile);
+	Tile* landingTile = g_game.map.getTile(landing);
+	const Item* passageItem = pileTile ? playerBotShovelPassageItem(*pileTile) : nullptr;
+	PlayerBotNavigationStep semantic;
+	semantic.action = PlayerBotNavigationAction::UseShovel;
+	semantic.direction = DIRECTION_SOUTH;
+	semantic.target = pile;
+	semantic.expectedPosition = landing;
+	semantic.itemId = 468;
+	semantic.expectedItemId = 469;
+	semantic.topologyPortal = true;
+	const PlayerBotNavigator navigator;
+	PlayerBotNavigationStep resolved;
+	const bool resolves = navigator.resolveShovelPassage(player, approach, semantic, {}, resolved);
+	const bool validates = navigator.validateStep(player, approach, semantic, {});
+	const bool landingOccupiable = landingTile &&
+	    landingTile->queryAdd(0, player, 1, FLAG_IGNOREBLOCKCREATURE) == RETURNVALUE_NOERROR;
+	std::deque<PlayerBotNavigationStep> steps;
+	uint64_t expanded = 0;
+	Position closest;
+	const auto plain = navigator.planFrom(player, approach, landing, {}, steps, expanded, 20000, &closest);
+	const bool plannedShovel = std::any_of(steps.begin(), steps.end(),
+	    [](const auto& step) { return step.action == PlayerBotNavigationAction::UseShovel; });
+	std::deque<PlayerBotNavigationStep> costSteps;
+	uint64_t costExpanded = 0;
+	Position costClosest;
+	PlayerBotNavigationCostSummary costSummary;
+	const auto costed = navigator.planFrom(player, approach, landing, {}, costSteps, costExpanded, 20000, &costClosest,
+	    &costPolicy, &costSummary);
+	auto danger = [&](const std::function<double(const Position&)>& sample, const Position& p) {
+		return sample ? sample(p) : -1.0;
+	};
+	const auto& topology = PlayerBotTopology::instance();
+	std::ostringstream fields;
+	fields << "\"pile_ground\":" << groundId(pileTile) << ",\"passage_item\":" << (passageItem ? passageItem->getID() : 0)
+	       << ",\"landing_ground\":" << groundId(landingTile)
+	       << ",\"shovel_available\":" << boolField(g_game.findItemOfType(&player, 2554, true) != nullptr)
+	       << ",\"resolves\":" << boolField(resolves) << ",\"resolved_action\":" << static_cast<int>(resolved.action)
+	       << ",\"validates\":" << boolField(validates) << ",\"landing_occupiable\":" << boolField(landingOccupiable)
+	       << ",\"plain_result\":" << static_cast<int>(plain) << ",\"plain_steps\":" << steps.size()
+	       << ",\"plain_expanded\":" << expanded << ",\"planned_shovel\":" << boolField(plannedShovel)
+	       << ",\"closest\":{\"x\":" << closest.x << ",\"y\":" << closest.y << ",\"z\":" << static_cast<int>(closest.z) << "}"
+	       << ",\"topology_with_shovel\":" << boolField(topology.route(approach, landing, {}, false, true, player.getLevel()).has_value())
+	       << ",\"costed_result\":" << static_cast<int>(costed) << ",\"costed_steps\":" << costSteps.size()
+	       << ",\"risk_peak_limit\":" << costPolicy.risk.maximumHealthLossPerSecond
+	       << ",\"danger_approach\":" << costPolicy.dangerAt(approach) << ",\"danger_pile\":" << costPolicy.dangerAt(pile)
+	       << ",\"danger_landing\":" << costPolicy.dangerAt(landing)
+	       << ",\"transient_landing\":" << danger(costPolicy.transientHealthLossPerSecond, landing)
+	       << ",\"static_landing\":" << danger(costPolicy.staticHealthLossPerSecond, landing)
+	       << ",\"topology_without_shovel\":" << boolField(topology.route(approach, landing, {}, false, false, player.getLevel()).has_value());
+	return {{"bridge_shovel_probe", fields.str()}};
 }
 
 std::vector<playerbot::PlayerBotFixtureEvent> playerbot::PlayerBotFixtureDriver::runShovelPassagesContract(Player& player)

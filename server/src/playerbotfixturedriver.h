@@ -14,6 +14,7 @@ class Player;
 class DepotChest;
 struct PlayerBotHuntPlanningObservation;
 struct PlayerBotHuntRuntimeOutcome;
+struct PlayerBotNavigationCostPolicy;
 
 namespace playerbot {
 	enum class PlayerBotFixtureInitialization : uint8_t { NotPending, Waiting, Cancelled, Ready };
@@ -71,6 +72,8 @@ namespace playerbot {
 			NavigationPreflightFixture navigationPreflightFixture() const { return policy.navigationPreflightFixture; }
 			Position navigationPreflightGoal() const;
 			std::optional<Position> travelSafetyGoal() const;
+			// The raid runway is flat; the real-map bridge leg changes floors.
+			bool travelSafetySameFloorOnly() const { return !policy.bridgeRouteFixture; }
 			uint32_t huntPlanningDuration(uint32_t configuredDurationSeconds) const
 			{
 				return playerBotFixtureHuntPlanningDuration(policy.mainlandLoopFixture, configuredDurationSeconds);
@@ -106,6 +109,7 @@ namespace playerbot {
 			void runMultibotLifecycleProbe(Player& player, bool recovered, std::function<bool()> queuedTurn);
 			std::vector<PlayerBotFixtureEvent> runDoorPassagesContract(Player& player);
 			std::vector<PlayerBotFixtureEvent> runShovelPassagesContract(Player& player);
+			std::vector<PlayerBotFixtureEvent> runBridgeShovelProbe(Player& player, const PlayerBotNavigationCostPolicy& costPolicy);
 			std::vector<PlayerBotFixtureEvent> runSpellCalibration(Player& player);
 			std::vector<PlayerBotFixtureEvent> runMagicTraining(Player& player);
 
