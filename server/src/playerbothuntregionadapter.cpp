@@ -525,7 +525,7 @@ namespace {
 		std::vector<PlayerBotReplenishmentPoint> replenishment;
 		double expectedCycleExperience = 0;
 		double expectedClearSeconds = 0;
-		double spawnCombatFraction = 0;
+		std::vector<size_t> replenishmentMembers;
 		double routineDamagePerSecond = 0;
 		for (size_t member : cached.members) {
 			const CachedSpawnBlock& spawn = huntAtlas.spawns[member];
@@ -560,13 +560,17 @@ namespace {
 				                              (60000.0 / std::max<uint32_t>(spawn.interval, 1));
 				expectedCycleExperience += monsterType->info.experience * probability;
 				expectedClearSeconds += fightSeconds * probability;
-				const double spawnsPerSecond = probability * 1000.0 / std::max<uint32_t>(spawn.interval, 1);
-				spawnCombatFraction += fightSeconds * spawnsPerSecond;
 			}
 			replenishment.push_back(point);
+			replenishmentMembers.push_back(member);
 		}
 
 		if (profiles.empty() || region.patrolPoints.empty()) return region;
+		region.viability = playerBotHuntViability(replenishment, player.getStepDuration() / 1000.0,
+		    Map::maxViewportX, Map::maxViewportY);
+		const auto recurringShares = playerBotHuntRecurringShares(replenishment.size(), region.viability);
+		std::map<size_t, double> memberShares;
+		for (size_t i = 0; i < replenishmentMembers.size(); ++i) memberShares.emplace(replenishmentMembers[i], recurringShares[i]);
 		std::vector<PlayerBotEncounterAttacker> acuteEnvelope;
 		std::map<size_t, std::pair<PlayerBotEncounterAttacker, PlayerBotEncounterAttacker>> encounters;
 		for (size_t anchor : reachableMembers) {
@@ -617,7 +621,7 @@ namespace {
 			const size_t members = routineNeighbors.size();
 			const auto routine = playerBotEncounterForecast(std::move(routineNeighbors));
 			routineDamagePerSecond += playerBotRoutineEncounterCost(routine, encounters.at(anchor).first, members) *
-			    (1000.0 / std::max<uint32_t>(huntAtlas.spawns[anchor].interval, 1));
+			    memberShares.at(anchor) * (1000.0 / std::max<uint32_t>(huntAtlas.spawns[anchor].interval, 1));
 		}
 		region.encounterForecast = playerBotEncounterForecast(std::move(acuteEnvelope));
 		const double worstFightDamage = region.encounterForecast->damage + region.encounterForecast->conditionTail;
@@ -635,8 +639,6 @@ namespace {
 				patrolSeconds += playerBotHuntCoarseTravelSeconds(steps, static_cast<const Creature&>(player).getStepSpeed());
 			}
 		}
-		region.viability = playerBotHuntViability(replenishment, player.getStepDuration() / 1000.0,
-		    Map::maxViewportX, Map::maxViewportY);
 		region.sustainedEligible = region.viability.eligible;
 		region.spawnExperiencePerMinute = region.experiencePerMinute;
 		const double cycleSeconds = expectedClearSeconds + patrolSeconds;
@@ -644,16 +646,18 @@ namespace {
 		if (region.clearExperiencePerMinute > 0) {
 			region.experiencePerMinute = std::min(region.spawnExperiencePerMinute, region.clearExperiencePerMinute);
 		}
-		const double throughput = region.spawnExperiencePerMinute > 0 ?
-		    region.experiencePerMinute / region.spawnExperiencePerMinute : 1;
+		// Costs and income share one recurring-encounter basis: the same duty
+		// shares and clear-throughput cap. Charging blocked spawns' fights while
+		// paying none of their kills made every short outing a guaranteed loss.
+		// The acute envelope above still gates lethality on any pack present.
+		const auto yield = playerBotSustainedHuntYield(replenishment, region.viability, cycleSeconds);
+		const double throughput = yield.spawnExperiencePerMinute > 0 && yield.clearExperiencePerMinute > 0 ?
+		    std::min(1.0, yield.clearExperiencePerMinute / yield.spawnExperiencePerMinute) : 1;
 		// Shared-block encounter costs are absolute: fully shielded isolated
 		// attacks may still cost health in a pack. No zero-baseline ratio or
 		// region-wide worst-crowd multiplier is needed.
 		region.expectedDamagePerSecond = routineDamagePerSecond * throughput;
-		region.combatFraction = std::min(1.0, spawnCombatFraction * throughput);
-		// Blocked members can still be encountered initially: retain their clear
-		// time, danger and supply costs, but never count them as recurring yield.
-		const auto yield = playerBotSustainedHuntYield(replenishment, region.viability, cycleSeconds);
+		region.combatFraction = std::min(1.0, playerBotSustainedCombatFraction(replenishment, recurringShares) * throughput);
 		region.coinGoldPerMinute = yield.coinGoldPerMinute;
 		// Small replenishing spawns can fund recovery without long-hunt throughput.
 		if (region.supplyRecovery && region.coinGoldPerMinute > 0 && expectedCycleExperience > 0)

@@ -127,7 +127,8 @@ local function setup(mode)
         assert(scheduled.delay == 10000 and scheduled.args[3] == 0, 'unfunded inventory sampling must be bounded')
     end
     assert(scheduled.callback == (incomeRecovery and F.verifySpearRecoveryIncome or mode == 'spear_last_break' and F.breakLastSpear or mode == 'spear_break' and F.breakHandSpear or F.verifySpearRestock))
-    assert(suppressed == (incomeRecovery and 0 or 1), 'income hunt must retain ordinary loaded-world monsters')
+    assert(suppressed == ((incomeRecovery or mode == 'spear_unfunded') and 0 or 1),
+        'income hunts must retain ordinary loaded-world monsters')
     if incomeRecovery then assert(scheduled.delay == 250 and scheduled.args[2] == 4800) end
     assert(messages[1]:find('"phase":"start"', 1, true) and
         messages[2] == 'PLAYERBOT_GAMEPLAY_TEST ' .. mode:upper() .. '_START')

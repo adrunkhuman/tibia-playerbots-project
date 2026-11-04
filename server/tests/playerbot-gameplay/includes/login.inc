@@ -325,7 +325,9 @@ function F.login.onLogin(player)
             assert(player:setHealth(128), "spear recovery fixture could not seed departure health")
         end
         F.spearFixtureEvidence(player, mode, "start")
-        if not incomeRecovery then F.suppressNearbyMonsters(player:getId()) end
+        -- Income hunts need ordinary loaded-world monsters: an unfunded
+        -- positive-net outing must be able to reach its coin-loot proof.
+        if not incomeRecovery and not unfunded then F.suppressNearbyMonsters(player:getId()) end
         if incomeRecovery then
             assert(player:getMoney() == 6 and player:getBankBalance() == 0,
                 "spear recovery fixture must not afford even one ordinary spear")

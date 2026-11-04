@@ -203,6 +203,23 @@ void patrolOpportunity()
 	assert(site.minimumUnblockedPatrolRatio >= 0.25);
 	assert(site.minimumEmptyPatrolRatio >= 0.05 && site.minimumEmptyPatrolRatio < 0.25);
 	assert(playerBotSustainedHuntYield(points, site, 70).spawnExperiencePerMinute > 0);
+
+	// Costs use the same recurring duty share as income: a blocked spawn's
+	// fights are neither paid nor charged. Unmodeled points keep full cost.
+	const auto shares = playerBotHuntRecurringShares(points.size(), site);
+	double unshared = 0, shared = 0;
+	for (size_t i = 0; i < points.size(); ++i) {
+		assert(shares[i] == std::min(site.unblockedPatrolRatios[i], site.emptyPatrolRatios[i]));
+		unshared += points[i].fightSeconds / points[i].intervalSeconds;
+		shared += shares[i] * points[i].fightSeconds / points[i].intervalSeconds;
+	}
+	assert(std::abs(playerBotSustainedCombatFraction(points, shares) - shared) < 1e-12 && shared < unshared);
+	auto blocked = site;
+	blocked.replenishingMembers[0] = false;
+	assert(playerBotHuntRecurringShares(points.size(), blocked)[0] == 0);
+	const auto unmodeled = playerBotHuntRecurringShares(points.size(), PlayerBotHuntViability{});
+	assert(std::all_of(unmodeled.begin(), unmodeled.end(), [](double share) { return share == 1; }));
+	assert(std::abs(playerBotSustainedCombatFraction(points, unmodeled) - unshared) < 1e-12);
 }
 
 void mixedSustainedYield()
