@@ -1,6 +1,6 @@
 local F = PlayerbotGameplayFixture
 local mode = os.getenv("PLAYERBOT_GAMEPLAY_MODE")
-if mode ~= "raid_travel" and mode ~= "raid_recovery" then return end
+if mode ~= "raid_travel" and mode ~= "raid_recovery" and mode ~= "raid_trapped" then return end
 
 -- Use a unique fixture species: Lua scripts load before XML monsters, so a
 -- native name would let later XML loading overwrite this normalization. One
@@ -79,7 +79,8 @@ function F.setupRaidTravel(player)
         "raid fixture requires the fresh level-eight Knight")
     -- A straight open-ground runway leaves only the ordinary backward escape.
     -- No alternate lane may bypass the threat before clearance is observed.
-    for x = 60128, 60216 do
+    -- The trapped runway ends at the start tile, so that escape dead-ends.
+    for x = mode == "raid_trapped" and start.x or 60128, 60216 do
         local p = Position(x, start.y, start.z)
         check(not Tile(p), "raid runway overlaps mapped terrain")
         local tile = Game.createTile(p)
@@ -150,8 +151,20 @@ function F.measureRaidTravel()
                 addEvent(F.measureRaidTravel, 100)
                 return
             end
-            o.guardStartedAt = now
-            o.guardPreviousPosition = p
+            if mode ~= "raid_trapped" then
+                o.guardStartedAt = now
+                o.guardPreviousPosition = p
+            end
+        end
+        if mode == "raid_trapped" and o.withdrew and p.x == start.x then
+            -- Pass on the bot's own attack, not on wolf damage: life drain heals it.
+            local target = player:getTarget()
+            if target and target:getId() == o.monsterId then
+                evidence(player, "fought", ',"target_id":' .. o.monsterId)
+                check(wolf:remove() and not Monster(o.monsterId), "controlled wolf removal failed")
+                o.removed = true
+                evidence(player, "removed", ',"target_id":' .. o.monsterId)
+            end
         end
         if o.guardStartedAt then
             check(p.x < spawn.x - 1, "bot retried lethal contact while the raid remained alive")

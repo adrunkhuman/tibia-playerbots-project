@@ -1,5 +1,5 @@
 if ($RaidTravel) {
-    foreach ($raidMode in @('raid_travel', 'raid_recovery')) {
+    foreach ($raidMode in @('raid_travel', 'raid_recovery', 'raid_trapped')) {
         Invoke-Scenario -Name $raidMode -DefaultTimeoutSeconds 180 -Body {
             $previousRaidCatalog = $env:PLAYERBOT_RAID_CATALOG
             $previousSpeedBonus = $env:PLAYERBOT_SPEED_BONUS
@@ -14,7 +14,8 @@ if ($RaidTravel) {
                 Invoke-Compose up --detach
                 $logs = Wait-ForLog -Pattern ('PLAYERBOT_GAMEPLAY_TEST ' + $raidMode.ToUpperInvariant() +
                     '_PASS|PLAYERBOT_GAMEPLAY_TEST RAID_FIXTURE_FAILED|"event":"terminal"(?![^\r\n]*"reason":"controlled_player_dead")')
-                Assert-RaidTravelEvents -Logs $logs -Mode $raidMode
+                if ($raidMode -eq 'raid_trapped') { Assert-RaidTrappedEvents -Logs $logs }
+                else { Assert-RaidTravelEvents -Logs $logs -Mode $raidMode }
             }
             finally {
                 $env:PLAYERBOT_RAID_CATALOG = $previousRaidCatalog

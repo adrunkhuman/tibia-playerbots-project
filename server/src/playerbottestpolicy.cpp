@@ -62,7 +62,8 @@ const playerbot::PlayerBotTestPolicy& playerbot::playerBotTestPolicyFromEnvironm
 			 (std::strncmp(gameplayMode, "magic_training", 14) == 0 &&
 			  std::strcmp(gameplayMode, "magic_training_hunt") != 0)));
 		const bool raidTravelFixture = gameplayMode &&
-		    (std::strcmp(gameplayMode, "raid_travel") == 0 || std::strcmp(gameplayMode, "raid_recovery") == 0);
+		    (std::strcmp(gameplayMode, "raid_travel") == 0 || std::strcmp(gameplayMode, "raid_recovery") == 0 ||
+		     std::strcmp(gameplayMode, "raid_trapped") == 0);
 		const bool bridgeRouteFixture = gameplayMode && std::strcmp(gameplayMode, "bridge_route") == 0;
 		const bool huntAreaArrivalFixture = gameplayMode && std::strcmp(gameplayMode, "hunt_area_arrival") == 0;
 		const bool remoteHuntFixture = gameplayMode && std::strcmp(gameplayMode, "remote_hunt") == 0;

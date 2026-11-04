@@ -91,6 +91,42 @@ function Assert-RaidTravelEvents {
     }
 }
 
+function Assert-RaidTrappedEvents {
+    param([string]$Logs)
+
+    if ($Logs -match 'RAID_FIXTURE_FAILED' -or $Logs -notmatch 'PLAYERBOT_GAMEPLAY_TEST RAID_TRAPPED_PASS') {
+        throw 'Trapped raid travel lacks a successful independent position verifier.'
+    }
+    $events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
+    $phaseOrder = @('start', 'activated', 'spawned', 'withdrew', 'fought', 'removed', 'arrived')
+    $phases = @{}
+    $fight = $null
+    foreach ($e in $events) {
+        if ($e.bot -and $e.bot -ne 'Bot One') { throw 'Raid fixture must seed only Bot One.' }
+        if ($e.event -eq 'lifecycle' -and $e.status -eq 'dead') { throw 'Trapped raid travel caused a death.' }
+        if ($e.event -eq 'terminal') { throw "Raid controller stopped unexpectedly: $($e.reason)" }
+        if ($e.event -eq 'raid_fixture') {
+            if ($e.scenario -ne 'raid_trapped' -or $e.source -ne 'lua_position_verifier' -or
+                $phases.Count -ge $phaseOrder.Count -or $e.phase -ne $phaseOrder[$phases.Count]) {
+                throw 'Raid position evidence is missing, duplicated, or out of order.'
+            }
+            $phases[$e.phase] = $e
+        }
+        # The bot's decision must precede the verifier's observation of its attack.
+        if ($e.event -eq 'travel_safety' -and $e.action -eq 'fight' -and
+            $phases.ContainsKey('withdrew') -and -not $phases.ContainsKey('fought')) { $fight = $e }
+    }
+    if ($phases.Count -ne $phaseOrder.Count -or -not $fight) {
+        throw 'Trapped raid travel needs a dead-end withdrawal, a fight, controlled removal, and arrival.'
+    }
+    if ($fight.reason -ne 'no_lower_exposure' -or [double]$fight.danger -le 0.08 -or
+        $fight.target_id -ne $phases.spawned.target_id -or $phases.fought.target_id -ne $phases.spawned.target_id -or
+        $phases.fought.x -ne $phases.start.x -or $phases.arrived.x -ne $phases.start.goal_x -or
+        $phases.arrived.deaths -ne 0) {
+        throw 'Trapped raid travel did not fight the live threat from the dead end.'
+    }
+}
+
 function Assert-BridgeRouteEvents {
     param([string]$Logs)
 

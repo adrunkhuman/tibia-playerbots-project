@@ -8,7 +8,7 @@ Position = function(x, y, z) return {x = x, y = y, z = z} end
 COMBAT_LIFEDRAIN, CONDITION_MANASHIELD, CONST_ME_NONE, RETURNVALUE_NOERROR = 1, 2, 3, 0
 
 -- Inert outside the exact modes, without any world/monster/event APIs present.
-for _, inactive in ipairs({"cycle", "ranged_position", "raid_travel_typo", ""}) do
+for _, inactive in ipairs({"cycle", "ranged_position", "raid_travel_typo", "raid_trapped_typo", ""}) do
     mode, PlayerbotGameplayFixture = inactive, {}
     dofile(path)
     assert(next(PlayerbotGameplayFixture) == nil, "inactive raid fixture touched the world")
@@ -69,6 +69,7 @@ local function makePlayer(id)
     function p:getHealth() return self.health end
     function p:setHealth(value) self.health = value; return true end
     function p:getPosition() return Position(self.position.x, self.position.y, self.position.z) end
+    function p:getTarget() return self.target end
     function p:teleportTo(value) self.position = value; self.teleports = (self.teleports or 0) + 1; return true end
     function p:isRemoved() return false end
     function p:removeCondition(kind) assert(kind == CONDITION_MANASHIELD); return true end
@@ -99,9 +100,10 @@ local function start(fixtureMode)
     assert(PlayerbotGameplayFixture.login.onLogin(player))
     assert(player.position.x == 60160 and player.position.y == 60200 and player.health == 185 and raidCalls == 0)
     assert(player.writes[50099] == 1 and player.teleports == 1)
-    assert(Tile(Position(60128, 60200, 7)):isWalkable() and Tile(Position(60216, 60200, 7)):isWalkable())
+    local west = fixtureMode == "raid_trapped" and 60160 or 60128
+    assert(Tile(Position(west, 60200, 7)):isWalkable() and Tile(Position(60216, 60200, 7)):isWalkable())
     assert(not Tile(Position(60169, 60199, 7)), "runway permits bypassing the threat")
-    assert(not Tile(Position(60127, 60200, 7)))
+    assert(not Tile(Position(west - 1, 60200, 7)), "trapped runway has an escape behind the start")
     local attack = definition.attacks[1]
     assert(definition.maxHealth == 1000 and definition.speed == 160 and definition.flags.hostile)
     assert(attack.type == COMBAT_LIFEDRAIN and attack.range == 1 and attack.chance == 100 and attack.interval == 2000)
@@ -197,6 +199,29 @@ for _, fixtureMode in ipairs({"raid_travel", "raid_recovery"}) do
     tick(1500) -- Pursuit alone cannot fail the guard, even at distance two.
     rejected(function() tick(1600, player.position.x + 1) end, "moved toward the live threat while unsafe")
 end
+
+-- Trapped: the dead end alone is not evidence; only the bot's own attack on
+-- the live wolf from the start tile removes it.
+F = start("raid_trapped")
+tick(100, 60168)
+tick(1100, 60168)
+tick(1200, 60166)
+assert(has('"phase":"withdrew"'))
+tick(1300, 60160)
+player.target = {getId = function() return 100 end}
+tick(1400)
+assert(wolf and not has('"phase":"fought"'), "another target counted as fighting the threat")
+player.target = wolf
+player.position = Position(60161, 60200, 7)
+tick(1500)
+assert(wolf and not has('"phase":"fought"'), "a fight away from the dead end counted")
+wolf.position.x = 60161
+tick(1600, 60160) -- Pursuit to contact is the trap, not a guard failure.
+assert(not wolf and has('"phase":"fought"') and has('"phase":"removed"'))
+tick(1700, 60208)
+assert(has("RAID_TRAPPED_PASS") and has('"deaths":0') and not queued)
+F = start("raid_trapped")
+rejected(function() events.PlayerbotRaidFixtureDeath.onDeath(player) end, "unplanned death")
 
 F = start("raid_travel")
 rejected(function() events.PlayerbotRaidFixtureDeath.onDeath(player) end, "unplanned death")

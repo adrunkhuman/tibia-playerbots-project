@@ -41,7 +41,7 @@ function F.login.onLogin(player)
         F.setupRecoveryLoadout(player)
         return true
     end
-    if mode == "raid_travel" or mode == "raid_recovery" then
+    if mode == "raid_travel" or mode == "raid_recovery" or mode == "raid_trapped" then
         F.setupRaidTravel(player)
         return true
     end
