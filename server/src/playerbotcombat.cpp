@@ -622,6 +622,17 @@ void PlayerBotController::processPreparation(Player* player, const Position& pos
 	const auto snapshot = survivalSnapshot(*player);
 	if (!preparationRequirement || survivalRuntime.healthPreparationSatisfied(snapshot, *preparationRequirement,
 	    safePreparationRest(*player, position))) {
+		// Stopping exactly at the requirement lets ordinary drift during the next
+		// hunt evaluation reopen an identical preparation, which the budget then
+		// counts as no progress. Spend renewable spell healing toward full first.
+		if (preparationRequirement && preparationOption == PlayerBotPreparationOption::RestoreHealth) {
+			const auto command = survivalRuntime.decideHealingTopUp(snapshot, std::chrono::steady_clock::now());
+			if (command.type == PlayerBotSurvivalCommandType::CastSpell) dispatchSpellCommand(*player, position, command);
+			if (command.type != PlayerBotSurvivalCommandType::None) {
+				schedule(1000);
+				return;
+			}
+		}
 		finishPreparation(*player, position, "requirement_observed");
 		return;
 	}

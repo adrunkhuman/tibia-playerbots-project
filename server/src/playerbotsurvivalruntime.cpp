@@ -220,6 +220,22 @@ PlayerBotSurvivalCommand PlayerBotSurvivalRuntime::decideHealing(const PlayerBot
 	return command;
 }
 
+PlayerBotSurvivalCommand PlayerBotSurvivalRuntime::decideHealingTopUp(const PlayerBotSurvivalSnapshot& snapshot,
+	std::chrono::steady_clock::time_point now)
+{
+	if (snapshot.combatActive || snapshot.health >= snapshot.healthMaximum) return {};
+	const auto* healing = preferredHealingSpell(snapshot, true, true);
+	// Without food, mana does not regenerate; do not spend a cast on overheal.
+	if (!healing || calibration.ranking(healing->name, "self", healing->envelope) >
+	    snapshot.healthMaximum - snapshot.health) return {};
+	auto command = decideSpell(snapshot, healing->name.c_str(), "recovery", now);
+	// An empty reason is action delay, verification, or retry backoff.
+	if (command.type != PlayerBotSurvivalCommandType::CastSpell)
+		command.type = command.reason.empty() || command.reason == "cooldown" ?
+		    PlayerBotSurvivalCommandType::Wait : PlayerBotSurvivalCommandType::None;
+	return command;
+}
+
 void PlayerBotSurvivalRuntime::beginPotion(const PlayerBotSurvivalSnapshot& snapshot, uint16_t itemId, const std::string& trigger)
 {
 	PlayerBotPotionAttempt attempt = potionObservation(snapshot, itemId);
