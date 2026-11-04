@@ -156,6 +156,11 @@ class PlayerBotSurvivalRuntime
 		void beginPotion(const PlayerBotSurvivalSnapshot& snapshot, uint16_t itemId, const std::string& trigger);
 		PlayerBotSurvivalCommand decideHealing(const PlayerBotSurvivalSnapshot& snapshot,
 		                                      std::chrono::steady_clock::time_point now);
+		// Peaceful spell-only top-up after a health requirement is met. Never a
+		// potion: recovery counts potions as debt, and the requirement already holds.
+		// Wait means the spell is temporarily blocked; None means stop topping up.
+		PlayerBotSurvivalCommand decideHealingTopUp(const PlayerBotSurvivalSnapshot& snapshot,
+		                                           std::chrono::steady_clock::time_point now);
 		PlayerBotSurvivalCommand decideFood(const PlayerBotSurvivalSnapshot& snapshot,
 		                                   std::chrono::steady_clock::time_point now);
 		PlayerBotSurvivalCommand decideSupportSpell(const PlayerBotSurvivalSnapshot& snapshot,

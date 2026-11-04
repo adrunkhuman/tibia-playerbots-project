@@ -148,6 +148,27 @@ void typedHealthPreparation()
 	expectHealingSpell(criticalSpell, criticalSpell.decideHealing(emergency, now));
 }
 
+void preparationHealthTopUp()
+{
+	// Requirement already met (e.g. 80 of 100): top up by spell only.
+	auto state = snapshot();
+	state.health = 81; state.mana = 2 * healingCost;
+	PlayerBotSurvivalRuntime runtime;
+	expectHealingSpell(runtime, runtime.decideHealingTopUp(state, now));
+	assert(runtime.decideHealingTopUp(state, now).type == Command::Wait); // Pending verification.
+	PlayerBotSurvivalRuntime fresh;
+	state.healingExhausted = true;
+	assert(fresh.decideHealingTopUp(state, now).type == Command::Wait);
+	state.healingExhausted = false;
+	state.mana = 0; // Potions remain, but never fund a top-up.
+	assert(fresh.decideHealingTopUp(state, now).type == Command::None);
+	state.mana = healingCost;
+	state.health = 86; // Expected heal 15 would overheal.
+	assert(fresh.decideHealingTopUp(state, now).type == Command::None);
+	state.health = 81; state.combatActive = true;
+	assert(fresh.decideHealingTopUp(state, now).type == Command::None);
+}
+
 void departureHealthPreparation()
 {
 	assert(playerBotSupplyRecoveryRequiredHealth(185) == 148);
@@ -649,6 +670,7 @@ int main()
 	spellFirstAndCriticalOverride();
 	percentageBoundaries();
 	typedHealthPreparation();
+	preparationHealthTopUp();
 	departureHealthPreparation();
 	manaAndHealthFallbacks();
 	manaThenReevaluate();
