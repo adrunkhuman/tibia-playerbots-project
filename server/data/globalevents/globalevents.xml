@@ -6,7 +6,10 @@
 	<globalevent name="Server Save" time="09:55:00" script="serversave.lua" />
 
     <!-- Events and Raids -->
-    <globalevent name="raidSystem" interval="1800000" script="events/raidSystem.lua" />  <!-- Every 30 minutes -->
+    <!-- Disabled: upstream's unannounced boss spawner (events/raidSystem.lua) summons one of 65 bosses
+         every 30 minutes with no announcement or despawn, so live bosses accumulate. Unlike the announced
+         XML raids, it is invisible to playerbot raid hazards. Tracked in the non-8.60 content audit (#65).
+    <globalevent name="raidSystem" interval="1800000" script="events/raidSystem.lua" /> -->
     <globalevent name="ZzaionRaid" interval="14400000" script="events/ZzaionRaid.lua" /> <!-- Every 4 hours -->
     <globalevent type="startup" name="SeasonalEventsSetup" script="events/seasonalEvents.lua" /> <!-- On startup -->
 
