@@ -113,7 +113,7 @@ class PlayerBotDispositionPolicy
 		// no safety floor this equals restock().
 		std::vector<PlayerBotEconomyRestockDecision> restockSupplies(
 		    const std::vector<PlayerBotEconomySupplyRequest>& requests, uint32_t freeCapacity, uint64_t money,
-		    uint64_t bankBalance, bool survival = false) const
+		    uint64_t bankBalance, bool survival = false, uint64_t optionalReserve = 0) const
 		{
 			std::vector<PlayerBotEconomyRestockDecision> decisions(requests.size());
 			uint64_t funds = money + bankBalance;
@@ -154,9 +154,15 @@ class PlayerBotDispositionPolicy
 				if (!needed(request) || decisions[index].insufficientFunds || count >= request.restockTarget) continue;
 				const uint32_t gap = request.restockTarget - count;
 				const uint64_t affordable = funds / request.unitPrice;
-				take(index, survival ? static_cast<uint32_t>(std::min<uint64_t>(gap, affordable)) :
-				    affordable >= gap ? gap : static_cast<uint32_t>(std::min<uint64_t>(
-				    gap, funds > carriedGoldReserve ? (funds - carriedGoldReserve) / request.unitPrice : 0)));
+				if (!survival && optionalReserve != 0) {
+					const uint64_t reserve = std::max<uint64_t>(carriedGoldReserve, optionalReserve);
+					const uint64_t spendable = funds > reserve ? funds - reserve : 0;
+					take(index, static_cast<uint32_t>(std::min<uint64_t>(gap, spendable / request.unitPrice)));
+				} else {
+					take(index, survival ? static_cast<uint32_t>(std::min<uint64_t>(gap, affordable)) :
+					    affordable >= gap ? gap : static_cast<uint32_t>(std::min<uint64_t>(
+					    gap, funds > carriedGoldReserve ? (funds - carriedGoldReserve) / request.unitPrice : 0)));
+				}
 			}
 			return decisions;
 		}

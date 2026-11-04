@@ -4,6 +4,8 @@
 #include "playerbothuntregionadapter.h"
 #include "playerbothuntapproach.h"
 #include "playerbothunttriptiming.h"
+#include "playerbotphysicaldamage.h"
+#include "playerbotencounterforecast.h"
 
 #include "playerbottopology.h"
 
@@ -43,32 +45,67 @@ namespace {
 		       Position::getDistanceY(left, right) <= heatRadius * 2;
 	}
 
+	double physicalHit(int32_t minimum, int32_t maximum, int32_t armor, int32_t defense)
+	{
+		// Numeric inputs make this cache independent of monster reload/pointer
+		// lifetime. Bound shared storage instead of adding per-bot caches.
+		using Key = std::tuple<int32_t, int32_t, int32_t, int32_t>;
+		static std::map<Key, double> cache;
+		const Key key{minimum, maximum, armor, defense};
+		if (const auto found = cache.find(key); found != cache.end()) return found->second;
+		const double value = playerBotExpectedPhysicalHit(minimum, maximum, armor, defense);
+		if (cache.size() >= 4096) cache.clear();
+		cache.emplace(key, value);
+		return value;
+	}
+
 	PlayerBotDamageRates monsterDamageRates(const MonsterType& monsterType, const PlayerBotCombatProfile& profile)
 	{
 		PlayerBotDamageRates rates;
-		const double mitigation = profile.armor * 0.35 + profile.defense * 0.08;
+		bool unmodeledEffects = false;
+		const int32_t defense = profile.sustainedDefense >= 0 ? profile.sustainedDefense : profile.defense;
 		for (const spellBlock_t& attack : monsterType.info.attackSpells) {
-			const double averageDamage = (std::abs(attack.minCombatValue) + std::abs(attack.maxCombatValue)) / 2.0;
-			const double mitigatedDamage = attack.isMelee && averageDamage > 0 ?
-			    std::max(1.0, averageDamage - mitigation) : averageDamage;
-			rates.addAttack(mitigatedDamage, attack.chance, attack.speed, attack.conditionOnly, attack.damageCondition);
+			if (!attack.chance || !attack.speed) continue;
+			const int32_t minimum = std::min(std::abs(attack.minCombatValue), std::abs(attack.maxCombatValue));
+			const int32_t maximum = std::max(std::abs(attack.minCombatValue), std::abs(attack.maxCombatValue));
+			if (attack.blocksArmor || attack.blocksShield) {
+				const int32_t armor = attack.blocksArmor ? profile.armor : 0;
+				const double unshielded = attack.conditionOnly ? 0 : physicalHit(minimum, maximum, armor, 0);
+				const double shielded = attack.conditionOnly ? 0 : attack.blocksShield ?
+				    physicalHit(minimum, maximum, armor, defense) : unshielded;
+				rates.addPhysicalAttack(unshielded, shielded, attack.chance, attack.speed);
+				rates.addCondition(attack.damageCondition);
+			} else {
+				unmodeledEffects = unmodeledEffects || (minimum == 0 && maximum == 0 && !attack.damageCondition.type);
+				rates.addAttack((minimum + maximum) / 2.0, attack.chance, attack.speed,
+				    attack.conditionOnly, attack.damageCondition);
+			}
 		}
-		rates.direct += std::max(0.0, 0.5 - rates.total());
+		// Keep the legacy fallback for opaque scripts/effects, not for known
+		// physical attacks which the engine can block completely.
+		if (unmodeledEffects) rates.direct += std::max(0.0, 0.5 - rates.total());
 		return rates;
 	}
 
 	double expectedMonsterDamagePerSecond(const MonsterType& monsterType, const PlayerBotCombatProfile& profile)
 	{
-		return monsterDamageRates(monsterType, profile).total();
+		// A scalar sum cannot share shields across sources. Until encounter
+		// timing is known, resource/corridor costs retain the unshielded bound.
+		return monsterDamageRates(monsterType, profile).unshieldedTotal();
 	}
 
 	double expectedPlayerDamagePerSecond(const PlayerBotCombatProfile& profile, const MonsterType& monsterType)
 	{
-		const int32_t maximumDamage = Weapons::getMaxWeaponDamage(profile.level, profile.attackSkill, profile.attack,
-		                                                            profile.attackFactor);
-		const double shieldMitigation = profile.blockedByShield ? monsterType.info.defense * 0.15 : 0.0;
-		const double averageDamage = std::max(1.0, maximumDamage / 2.0 - monsterType.info.armor * 0.25 - shieldMitigation);
-		return averageDamage * (profile.hitChance / 100.0) / 2.0;
+		const int32_t maximumDamage = static_cast<int32_t>(Weapons::getMaxWeaponDamage(profile.level,
+		    profile.attackSkill, profile.attack, profile.attackFactor) * profile.damageMultiplier);
+		const int32_t minimumDamage = profile.blockedByShield ? 0 : static_cast<int32_t>(std::ceil(profile.level * 0.2));
+		const double shielded = physicalHit(minimumDamage, maximumDamage, monsterType.info.armor,
+		    profile.blockedByShield ? monsterType.info.defense : 0);
+		const double unshielded = physicalHit(minimumDamage, maximumDamage, monsterType.info.armor, 0);
+		const double attacksPerSecond = 1000.0 / std::max<uint32_t>(1, profile.attackIntervalMs);
+		const double hitChance = std::clamp(profile.hitChance, 0, 100) / 100.0;
+		const double blockShare = std::min(1.0, 1 / attacksPerSecond);
+		return (shielded * blockShare + unshielded * (1 - blockShare)) * hitChance * attacksPerSecond;
 	}
 
 	std::optional<Position> nearestApproach(Player& player, const PlayerBotCombatProfile& combat, const Position& spawnPosition,
@@ -146,6 +183,55 @@ namespace {
 		return damage;
 	}
 
+	std::vector<std::pair<const MonsterType*, double>> spawnProbabilities(const CachedSpawnBlock& spawn)
+	{
+		if (spawn.monsters.size() == 1) return {{spawn.monsters.front().first, 1}};
+		std::vector<std::pair<const MonsterType*, double>> result;
+		double noSelection = 1;
+		for (const auto& [monster, chance] : spawn.monsters) {
+			const double probability = noSelection * std::min(chance / 100.0, 1.0);
+			result.emplace_back(monster, probability);
+			noSelection -= probability;
+		}
+		if (!result.empty()) result.front().second += noSelection;
+		return result;
+	}
+
+	std::pair<PlayerBotEncounterAttacker, PlayerBotEncounterAttacker> spawnEncounter(
+	    const CachedSpawnBlock& spawn, const PlayerBotCombatProfile& combat)
+	{
+		PlayerBotEncounterAttacker expected, worst;
+		expected.damage = spawnDamageRates(spawn, combat);
+		bool first = true;
+		for (const auto& [monster, probability] : spawnProbabilities(spawn)) {
+			if (probability <= 0) continue;
+			const double outgoing = expectedPlayerDamagePerSecond(combat, *monster);
+			const double seconds = outgoing > 0 ? monster->info.healthMax / outgoing :
+			    std::numeric_limits<double>::infinity();
+			expected.fightSeconds += probability * seconds;
+			worst.fightSeconds = std::max(worst.fightSeconds, seconds);
+			const auto damage = monsterDamageRates(*monster, combat);
+			expected.isolatedCost += probability * (damage.total() * seconds + damage.conditionTail());
+			if (first) worst.damage = damage;
+			else worst.damage.boundAlternative(damage);
+			first = false;
+			double volley = 0;
+			for (const auto& attack : monster->info.attackSpells) {
+				if (!attack.chance || !attack.speed) continue;
+				const int32_t maximum = std::max(std::abs(attack.minCombatValue), std::abs(attack.maxCombatValue));
+				const int32_t armor = attack.blocksArmor ? std::max(0, combat.armor) : 0;
+				const int32_t minimumArmor = armor > 3 ? armor / 2 : armor > 0 ? 1 : 0;
+				if (!attack.conditionOnly) volley += std::max(0, maximum - minimumArmor);
+				volley += attack.damageCondition.damagePerSecond() * attack.damageCondition.tickMs / 1000.0;
+				if (maximum == 0 && !attack.damageCondition.type)
+					worst.audited = expected.audited = false;
+			}
+			worst.volley = std::max(worst.volley, volley);
+			expected.volley += probability * volley;
+		}
+		return {std::move(expected), std::move(worst)};
+	}
+
 	double expectedDamagePerSecondAt(const PlayerBotCombatProfile& combat, const Position& position)
 	{
 		if (!huntAtlas.initialized || combat.maximumHealth <= 0 ||
@@ -170,7 +256,7 @@ namespace {
 					PlayerBotDamageRates damage;
 					damage.merge(spawnDamageRates(spawn, combat), reach);
 					for (auto& current : strongest) {
-						if (damage.total() <= current.total()) continue;
+						if (damage.unshieldedTotal() <= current.unshieldedTotal()) continue;
 						std::swap(current, damage);
 					}
 				}
@@ -439,9 +525,8 @@ namespace {
 		std::vector<PlayerBotReplenishmentPoint> replenishment;
 		double expectedCycleExperience = 0;
 		double expectedClearSeconds = 0;
-		double spawnDamagePerSecond = 0;
-		double spawnCombatFraction = 0;
-		double crowdDamageInflation = 1;
+		std::vector<size_t> replenishmentMembers;
+		double routineDamagePerSecond = 0;
 		for (size_t member : cached.members) {
 			const CachedSpawnBlock& spawn = huntAtlas.spawns[member];
 			const auto approach = nearestApproach(player, profile, spawn.position, memberDistances);
@@ -449,26 +534,22 @@ namespace {
 			reachableMembers.insert(member);
 			region.patrolPoints.push_back(*approach);
 			PlayerBotReplenishmentPoint point{spawn.position, *approach, 0, spawn.interval / 1000.0, true};
-			std::vector<std::pair<const MonsterType*, double>> spawnProbabilities;
-			if (spawn.monsters.size() == 1) {
-				spawnProbabilities.emplace_back(spawn.monsters.front().first, 1.0);
-			} else {
-				double noSelectionProbability = 1.0;
-				for (const auto& [monsterType, chance] : spawn.monsters) {
-					const double probability = noSelectionProbability * std::min(chance / 100.0, 1.0);
-					spawnProbabilities.emplace_back(monsterType, probability);
-					noSelectionProbability -= probability;
-				}
-				spawnProbabilities.front().second += noSelectionProbability;
-			}
-			for (const auto& [monsterType, probability] : spawnProbabilities) {
+			for (const auto& [monsterType, probability] : spawnProbabilities(spawn)) {
+				if (probability <= 0) continue;
 				PlayerBotHuntMonsterProfile& monsterProfile = profiles[monsterType->name];
 				monsterProfile.name = monsterType->name;
 				monsterProfile.expectedSpawns += probability;
 				monsterProfile.experience = monsterType->info.experience;
 				monsterProfile.health = monsterType->info.healthMax;
 				monsterProfile.expectedDamagePerSecond = expectedMonsterDamagePerSecond(*monsterType, profile);
-				const double fightSeconds = monsterType->info.healthMax / expectedPlayerDamagePerSecond(profile, *monsterType);
+				const double outgoing = expectedPlayerDamagePerSecond(profile, *monsterType);
+				if (outgoing <= 0) {
+					region.monsters.push_back(monsterProfile);
+					region.rejectionReason = "no_expected_damage";
+					withinPlanningScope = true;
+					return region;
+				}
+				const double fightSeconds = monsterType->info.healthMax / outgoing;
 				monsterProfile.predictedFightDamage = monsterProfile.expectedDamagePerSecond * fightSeconds;
 				point.fightSeconds += fightSeconds * probability;
 				point.ignoresBlocking = point.ignoresBlocking && monsterType->info.isIgnoringSpawnBlock;
@@ -479,57 +560,72 @@ namespace {
 				                              (60000.0 / std::max<uint32_t>(spawn.interval, 1));
 				expectedCycleExperience += monsterType->info.experience * probability;
 				expectedClearSeconds += fightSeconds * probability;
-				const double spawnsPerSecond = probability * 1000.0 / std::max<uint32_t>(spawn.interval, 1);
-				spawnDamagePerSecond += monsterProfile.predictedFightDamage * spawnsPerSecond;
-				spawnCombatFraction += fightSeconds * spawnsPerSecond;
 			}
 			replenishment.push_back(point);
+			replenishmentMembers.push_back(member);
 		}
 
 		if (profiles.empty() || region.patrolPoints.empty()) return region;
-		double worstFightDamage = 0;
-		double worstFightSeconds = 0;
+		region.viability = playerBotHuntViability(replenishment, player.getStepDuration() / 1000.0,
+		    Map::maxViewportX, Map::maxViewportY);
+		const auto recurringShares = playerBotHuntRecurringShares(replenishment.size(), region.viability);
+		std::map<size_t, double> memberShares;
+		for (size_t i = 0; i < replenishmentMembers.size(); ++i) memberShares.emplace(replenishmentMembers[i], recurringShares[i]);
+		std::vector<PlayerBotEncounterAttacker> acuteEnvelope;
+		std::map<size_t, std::pair<PlayerBotEncounterAttacker, PlayerBotEncounterAttacker>> encounters;
 		for (size_t anchor : reachableMembers) {
-			struct LocalAttacker {
-				PlayerBotDamageRates damage;
-				double fightSeconds;
-			};
-			std::vector<LocalAttacker> localAttackers;
+			std::vector<PlayerBotEncounterAttacker> acute, routineNeighbors;
 			for (size_t neighbor : huntAtlas.spawns[anchor].neighbors) {
-				for (const auto& [monsterType, chance] : huntAtlas.spawns[neighbor].monsters) {
-					(void)chance;
-					localAttackers.push_back({monsterDamageRates(*monsterType, profile),
-					                          monsterType->info.healthMax / expectedPlayerDamagePerSecond(profile, *monsterType)});
+				auto found = encounters.find(neighbor);
+				if (found == encounters.end())
+					found = encounters.emplace(neighbor, spawnEncounter(huntAtlas.spawns[neighbor], profile)).first;
+				const auto& [expected, worst] = found->second;
+				if (!std::isfinite(worst.fightSeconds)) {
+					region.rejectionReason = "no_expected_damage";
+					withinPlanningScope = true;
+					return region;
+				}
+				acute.push_back(worst); // One virtual worst alternative per spawn.
+				const auto& from = huntAtlas.spawns[anchor].position;
+				const auto& to = huntAtlas.spawns[neighbor].position;
+				if (neighbor != anchor && Position::getDistanceX(from, to) <= heatRadius &&
+				    Position::getDistanceY(from, to) <= heatRadius && g_game.isSightClear(from, to, true))
+					routineNeighbors.push_back(expected);
+			}
+			auto strongestFirst = [](const auto& left, const auto& right) {
+				return left.damage.unshieldedTotal() > right.damage.unshieldedTotal();
+			};
+			std::stable_sort(acute.begin(), acute.end(), strongestFirst);
+			if (acute.size() > maximumModeledAttackers) acute.resize(maximumModeledAttackers);
+			region.modeledMaximumAttackerOverlap = std::max<uint8_t>(
+			    region.modeledMaximumAttackerOverlap, static_cast<uint8_t>(acute.size()));
+			// A componentwise envelope bounds every potential pack, including
+			// a different pack's shorter but larger immediate volley. Retain it
+			// for live stock/MP/HP rechecks after route proof and on arrival.
+			for (size_t index = 0; index < acute.size(); ++index) {
+				if (index == acuteEnvelope.size()) acuteEnvelope.push_back(acute[index]);
+				else {
+					auto& bound = acuteEnvelope[index];
+					bound.damage.boundAlternative(acute[index].damage);
+					bound.fightSeconds = std::max(bound.fightSeconds, acute[index].fightSeconds);
+					bound.volley = std::max(bound.volley, acute[index].volley);
+					bound.audited = bound.audited && acute[index].audited;
 				}
 			}
-			std::sort(localAttackers.begin(), localAttackers.end(), [](const LocalAttacker& left, const LocalAttacker& right) {
-				return left.damage.total() > right.damage.total();
-			});
-			const size_t attackers = std::min(maximumModeledAttackers, localAttackers.size());
-			region.modeledMaximumAttackerOverlap = std::max<uint8_t>(
-			    region.modeledMaximumAttackerOverlap, static_cast<uint8_t>(attackers));
-			// Conditions can outlive the attacker. Keep their strongest rate
-			// through the modeled fight while removing killed direct attackers.
-			PlayerBotDamageRates lingering;
-			for (size_t index = 0; index < attackers; ++index) lingering.merge(localAttackers[index].damage);
-			lingering.direct = 0;
-			double fightDamage = 0;
-			double isolatedDamage = 0;
-			double fightSeconds = 0;
-			for (size_t index = 0; index < attackers; ++index) {
-				PlayerBotDamageRates remaining = lingering;
-				for (size_t alive = index; alive < attackers; ++alive) remaining.merge(localAttackers[alive].damage);
-				fightDamage += remaining.total() * localAttackers[index].fightSeconds;
-				isolatedDamage += localAttackers[index].damage.total() * localAttackers[index].fightSeconds;
-				fightSeconds += localAttackers[index].fightSeconds;
-			}
-			crowdDamageInflation = std::max(crowdDamageInflation,
-			    playerBotCrowdDamageInflation(fightDamage, isolatedDamage));
-			if (fightDamage > worstFightDamage) {
-				worstFightDamage = fightDamage;
-				worstFightSeconds = fightSeconds;
-			}
+			// Routine cost is a local potential-pack mean, not the single worst
+			// pack multiplied across the region. Include the anchor exactly once;
+			// outside-region neighbors still contribute when visible/in range.
+			std::stable_sort(routineNeighbors.begin(), routineNeighbors.end(), strongestFirst);
+			if (routineNeighbors.size() >= maximumModeledAttackers) routineNeighbors.resize(maximumModeledAttackers - 1);
+			routineNeighbors.push_back(encounters.at(anchor).first);
+			const size_t members = routineNeighbors.size();
+			const auto routine = playerBotEncounterForecast(std::move(routineNeighbors));
+			routineDamagePerSecond += playerBotRoutineEncounterCost(routine, encounters.at(anchor).first, members) *
+			    memberShares.at(anchor) * (1000.0 / std::max<uint32_t>(huntAtlas.spawns[anchor].interval, 1));
 		}
+		region.encounterForecast = playerBotEncounterForecast(std::move(acuteEnvelope));
+		const double worstFightDamage = region.encounterForecast->damage + region.encounterForecast->conditionTail;
+		const double worstFightSeconds = region.encounterForecast->seconds;
 		std::set<Position> uniquePatrolPoints;
 		region.patrolPoints.erase(std::remove_if(region.patrolPoints.begin(), region.patrolPoints.end(),
 			[&uniquePatrolPoints](const Position& point) { return !uniquePatrolPoints.insert(point).second; }), region.patrolPoints.end());
@@ -543,8 +639,6 @@ namespace {
 				patrolSeconds += playerBotHuntCoarseTravelSeconds(steps, static_cast<const Creature&>(player).getStepSpeed());
 			}
 		}
-		region.viability = playerBotHuntViability(replenishment, player.getStepDuration() / 1000.0,
-		    Map::maxViewportX, Map::maxViewportY);
 		region.sustainedEligible = region.viability.eligible;
 		region.spawnExperiencePerMinute = region.experiencePerMinute;
 		const double cycleSeconds = expectedClearSeconds + patrolSeconds;
@@ -552,16 +646,18 @@ namespace {
 		if (region.clearExperiencePerMinute > 0) {
 			region.experiencePerMinute = std::min(region.spawnExperiencePerMinute, region.clearExperiencePerMinute);
 		}
-		const double throughput = region.spawnExperiencePerMinute > 0 ?
-		    region.experiencePerMinute / region.spawnExperiencePerMinute : 1;
-		// Spawn rates already sum isolated fights. Apply only the largest local
-		// crowd/isolated ratio, not crowd damage divided by one monster's damage.
-		// This is conservative static prediction, not observed supply calibration.
-		region.expectedDamagePerSecond = spawnDamagePerSecond * throughput * crowdDamageInflation;
-		region.combatFraction = std::min(1.0, spawnCombatFraction * throughput);
-		// Blocked members can still be encountered initially: retain their clear
-		// time, danger and supply costs, but never count them as recurring yield.
+		// Costs and income share one recurring-encounter basis: the same duty
+		// shares and clear-throughput cap. Charging blocked spawns' fights while
+		// paying none of their kills made every short outing a guaranteed loss.
+		// The acute envelope above still gates lethality on any pack present.
 		const auto yield = playerBotSustainedHuntYield(replenishment, region.viability, cycleSeconds);
+		const double throughput = yield.spawnExperiencePerMinute > 0 && yield.clearExperiencePerMinute > 0 ?
+		    std::min(1.0, yield.clearExperiencePerMinute / yield.spawnExperiencePerMinute) : 1;
+		// Shared-block encounter costs are absolute: fully shielded isolated
+		// attacks may still cost health in a pack. No zero-baseline ratio or
+		// region-wide worst-crowd multiplier is needed.
+		region.expectedDamagePerSecond = routineDamagePerSecond * throughput;
+		region.combatFraction = std::min(1.0, playerBotSustainedCombatFraction(replenishment, recurringShares) * throughput);
 		region.coinGoldPerMinute = yield.coinGoldPerMinute;
 		// Small replenishing spawns can fund recovery without long-hunt throughput.
 		if (region.supplyRecovery && region.coinGoldPerMinute > 0 && expectedCycleExperience > 0)
@@ -641,7 +737,7 @@ namespace {
 		region.challengeBandMinimum = 0;
 		region.challengeBandMaximum = planningProfile.challengeFrontier + challengeHeadroom;
 		region.inChallengeBand = region.threatRatio <= region.challengeBandMaximum;
-		region.predictedLethal = playerBotPredictedLethal(planningProfile.currentHealth, worstFightDamage);
+		region.reconcileEncounterSafety(planningProfile.supply.reserve);
 		withinPlanningScope = true;
 		region.suitable = region.sustainedEligible && !region.predictedLethal &&
 		    region.threatRatio <= region.challengeBandMaximum;
@@ -849,13 +945,21 @@ double PlayerBotHuntRegionAdapter::travelDanger(const PlayerBotCombatProfile& co
 	return expectedDamagePerSecondAt(combat, position) / std::max<int32_t>(combat.maximumHealth, 1);
 }
 
+PlayerBotDamageRates PlayerBotHuntRegionAdapter::damageRates(const PlayerBotCombatProfile& combat,
+    const std::string& monsterName)
+{
+	const MonsterType* monsterType = g_monsters.getMonsterType(monsterName, false);
+	return monsterType ? monsterDamageRates(*monsterType, combat) : PlayerBotDamageRates{};
+}
+
 PlayerBotFightEstimate PlayerBotHuntRegionAdapter::fightEstimate(
 	const PlayerBotCombatProfile& combat, const std::string& monsterName, int32_t remainingHealth)
 {
 	const MonsterType* monsterType = g_monsters.getMonsterType(monsterName, false);
 	if (!monsterType) return {};
-	return {expectedMonsterDamagePerSecond(*monsterType, combat),
-	        std::max<int32_t>(remainingHealth, 1) / expectedPlayerDamagePerSecond(combat, *monsterType)};
+	const double outgoing = expectedPlayerDamagePerSecond(combat, *monsterType);
+	return {expectedMonsterDamagePerSecond(*monsterType, combat), outgoing > 0 ?
+	    std::max<int32_t>(remainingHealth, 1) / outgoing : std::numeric_limits<double>::infinity()};
 }
 
 PlayerBotHuntCorridorDanger PlayerBotHuntRegionAdapter::corridorDanger(const PlayerBotCombatProfile& combat,

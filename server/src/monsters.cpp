@@ -324,8 +324,10 @@ bool Monsters::deserializeSpell(const pugi::xml_node& node, spellBlock_t& sb, co
 			combat->setParam(COMBAT_PARAM_TYPE, COMBAT_PHYSICALDAMAGE);
 			combat->setParam(COMBAT_PARAM_BLOCKARMOR, 1);
 			combat->setParam(COMBAT_PARAM_BLOCKSHIELD, 1);
+			sb.blocksArmor = sb.blocksShield = true;
 			combat->setOrigin(ORIGIN_MELEE);
 		} else if (tmpName == "physical") {
+			sb.blocksArmor = true;
 			combat->setParam(COMBAT_PARAM_TYPE, COMBAT_PHYSICALDAMAGE);
 			combat->setParam(COMBAT_PARAM_BLOCKARMOR, 1);
 			combat->setOrigin(ORIGIN_RANGED);
@@ -661,6 +663,7 @@ bool Monsters::deserializeSpell(MonsterSpell* spell, spellBlock_t& sb, const std
 			combat->setParam(COMBAT_PARAM_TYPE, COMBAT_PHYSICALDAMAGE);
 			combat->setParam(COMBAT_PARAM_BLOCKARMOR, 1);
 			combat->setParam(COMBAT_PARAM_BLOCKSHIELD, 1);
+			sb.blocksArmor = sb.blocksShield = true;
 			combat->setOrigin(ORIGIN_MELEE);
 		} else if (tmpName == "combat") {
 			if (spell->combatType == COMBAT_UNDEFINEDDAMAGE) {
@@ -669,6 +672,7 @@ bool Monsters::deserializeSpell(MonsterSpell* spell, spellBlock_t& sb, const std
 			}
 
 			if (spell->combatType == COMBAT_PHYSICALDAMAGE) {
+				sb.blocksArmor = true;
 				combat->setParam(COMBAT_PARAM_BLOCKARMOR, 1);
 				combat->setOrigin(ORIGIN_RANGED);
 			} else if (spell->combatType == COMBAT_HEALING) {

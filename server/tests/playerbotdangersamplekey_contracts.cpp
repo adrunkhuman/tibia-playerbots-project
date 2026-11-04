@@ -33,6 +33,12 @@ int main() {
 	assert(!shared.lookup(Key(3, sample, different)));
 	different = combat; ++different.attackSkill;
 	assert(!shared.lookup(Key(3, sample, different)));
+	different = combat; ++different.sustainedDefense;
+	assert(!shared.lookup(Key(3, sample, different)));
+	different = combat; ++different.attackIntervalMs;
+	assert(!shared.lookup(Key(3, sample, different)));
+	different = combat; different.damageMultiplier = 1.1;
+	assert(!shared.lookup(Key(3, sample, different)));
 	different = combat; different.attackFactor = 0.5f;
 	assert(!shared.lookup(Key(3, sample, different)));
 	different = combat; different.attackFactor = -0.0f;

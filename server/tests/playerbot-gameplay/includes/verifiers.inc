@@ -4,6 +4,63 @@ function F.verifyPaladinSpellFixture(playerId, mode, phase, attempts)
     local player = Player(playerId)
     assert(player and not player:isRemoved(), "Bot One disappeared during " .. mode)
     local supply = mode == "paladin_supply_restock"
+    if phase == "bootstrap" then
+        local ready = player:getItemCount(F.healthPotionItemId) == 18 and
+            player:getItemCount(F.spearItemId) >= 3 and player:getMoney() + player:getBankBalance() >= 170
+        if not ready and attempts > 0 then
+            addEvent(F.verifyPaladinSpellFixture, 100, playerId, mode, phase, attempts - 1)
+            return
+        end
+        assert(ready, "level-8 Paladin did not finish its first-heal supply target")
+        -- Let any queued optional purchases arrive before judging the bootstrap.
+        addEvent(F.verifyPaladinSpellFixture, 2000, playerId, mode, "bootstrap_settle", attempts)
+        return
+    end
+    if phase == "bootstrap_settle" then
+        assert(player:getItemCount(F.healthPotionItemId) == 18 and player:getItemCount(F.spearItemId) >= 3 and
+            player:getMoney() + player:getBankBalance() >= 170 and player:getItemCount(F.manaPotionItemId) == 0,
+            "level-8 Paladin bought mana or spent the first-heal budget")
+        F.paladinFixtureEvidence(player, mode, "budget_ready")
+        local experience = Game.getExperienceForLevel(9) - player:getExperience()
+        assert(experience >= 0 and player:addExperience(experience) and player:getLevel() == 9,
+            "Paladin first-heal fixture could not advance to level 9")
+        -- Match the bounded paid-trainer fixture: distant paid routes are out
+        -- of scope after the level-8 shopping receipt has been recorded.
+        assert(player:removeMoney(player:getMoney()) and player:setBankBalance(0) and player:addMoney(300),
+            "Paladin first-heal fixture could not seed bounded trainer funds")
+        local trainer = Npc("Elane")
+        assert(trainer and not trainer:isRemoved(), "Paladin first-heal fixture could not find Elane")
+        local position = trainer:getPosition()
+        assert(player:teleportTo(Position(position.x - 1, position.y, position.z)),
+            "Paladin first-heal fixture could not reach the paid trainer stage")
+        addEvent(F.verifyPaladinSpellFixture, 100, playerId, mode, "learn", attempts)
+        return
+    end
+    if phase == "learn" then
+        if not player:hasLearnedSpell("Light Healing") and attempts > 0 then
+            addEvent(F.verifyPaladinSpellFixture, 100, playerId, mode, phase, attempts - 1)
+            return
+        end
+        assert(player:hasLearnedSpell("Light Healing"), "level-9 Paladin did not learn Light Healing")
+        local supplier = Npc("Xodet")
+        assert(supplier and not supplier:isRemoved(), "Paladin first-heal fixture could not find Xodet")
+        local position = supplier:getPosition()
+        assert(player:teleportTo(Position(position.x - 1, position.y, position.z)),
+            "Paladin first-heal fixture could not reach the post-learning restock stage")
+        addEvent(F.verifyPaladinSpellFixture, 100, playerId, mode, "post_learn", attempts)
+        return
+    end
+    if phase == "post_learn" then
+        if player:getItemCount(F.manaPotionItemId) < 2 and attempts > 0 then
+            addEvent(F.verifyPaladinSpellFixture, 100, playerId, mode, phase, attempts - 1)
+            return
+        end
+        assert(player:getItemCount(F.manaPotionItemId) >= 2,
+            "learned Paladin did not enable normal mana restocking")
+        F.paladinFixtureEvidence(player, mode, "pass")
+        print("PLAYERBOT_GAMEPLAY_TEST PALADIN_FIRST_HEAL_BUDGET_PASS")
+        return
+    end
     if phase == "purchase" then
         if not player:hasLearnedSpell("Light Healing") and attempts > 0 then
             addEvent(F.verifyPaladinSpellFixture, 100, playerId, mode, phase, attempts - 1)

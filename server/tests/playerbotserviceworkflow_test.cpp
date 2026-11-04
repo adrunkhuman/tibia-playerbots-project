@@ -73,7 +73,7 @@ PlayerBotServiceObservation paladinShop(uint64_t money, uint16_t vocationId = 3,
 {
 	auto observation = supplyShop({}, money,
 	    {{7618, 45, 0, 0}, {7620, 50, 0, 0}, {2389, 10, 0, 0}});
-	const auto mana = playerBotSupplyRule(PlayerBotSupplyKind::ManaPotion, vocationId);
+	const auto mana = playerBotSupplyRule(PlayerBotSupplyKind::ManaPotion, vocationId, true);
 	const auto spears = playerBotThrowingWeaponRule(2389, 8);
 	observation.supplyCapacityReserve = 3000;
 	observation.supplies = {
@@ -348,7 +348,7 @@ int main()
 	// Both Paladin vocations prefer ten mana after ALL active floors, not
 	// instead of the spear floor or as a new mandatory departure requirement.
 	for (uint16_t vocation : {3, 7}) {
-		const auto mana = playerBotSupplyRule(PlayerBotSupplyKind::ManaPotion, vocation);
+		const auto mana = playerBotSupplyRule(PlayerBotSupplyKind::ManaPotion, vocation, true);
 		assert(mana.safetyFloor == 2 && mana.returnThreshold == 1 && mana.target == 20 && mana.preferredStock == 10);
 		const PlayerBotSupplyStocks floorStock{{mana, 2}};
 		assert(playerBotMandatorySupplyDeficit(floorStock, false).missing == 0);
@@ -397,6 +397,18 @@ int main()
 		saving.inventoryCounts[2389] = 3;
 		finishShopping(saving);
 		assert(saving.inventoryCounts[7618] == 2 && saving.inventoryCounts[7620] == 10);
+		// A future paid heal constrains optional top-ups, not mandatory health
+		// and spear floors. More money still permits ordinary full restocking.
+		for (uint64_t funds : {1000UL, 2000UL}) {
+			auto bootstrap = paladinShop(funds);
+			bootstrap.optionalPurchaseReserve = 170;
+			bootstrap.supplies.erase(bootstrap.supplies.begin() + 1); // No usable mana consumer.
+			finishShopping(bootstrap);
+			assert(bootstrap.inventoryCounts[7618] == (funds == 1000 ? 17U : 20U));
+			assert(bootstrap.inventoryCounts[7620] == 0 && bootstrap.inventoryCounts[2389] == 3);
+			assert(bootstrap.money + bootstrap.bankBalance == (funds == 1000 ? 205U : 1070U));
+		}
+
 		auto route = paladinShop(800, 7, true);
 		route.supplies.front().returnThreshold = 5;
 		route.supplies.front().restockTarget = 6;

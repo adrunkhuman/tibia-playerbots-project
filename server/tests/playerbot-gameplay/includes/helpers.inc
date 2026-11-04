@@ -29,6 +29,7 @@ end
 
 function F.setupPaladinSpellFixture(player, mode)
     local training = mode == "paladin_spell_training"
+    local bootstrap = mode == "paladin_first_heal_budget"
     local supply = mode == "paladin_supply_restock"
     local restarting = training and player:getStorageValue(F.spellTrainingStorage) == 1
     -- Isolate rewards in setup, not discovery or policy. Restart must not repair state.
@@ -52,7 +53,7 @@ function F.setupPaladinSpellFixture(player, mode)
     local town = Town(F.thaisTownId)
     assert(town and player:setTown(town) and player:setVocation(3), "Paladin fixture could not select Thais vocation")
     F.selectHealthPotion(player)
-    local level = training and 9 or mode == "paladin_healing_fallback" and 11 or 20
+    local level = bootstrap and 8 or training and 9 or mode == "paladin_healing_fallback" and 11 or 20
     local experience = Game.getExperienceForLevel(level) - player:getExperience()
     if experience > 0 then player:addExperience(experience) end
     assert(player:getLevel() == level, "Paladin fixture seeded the wrong level")
@@ -63,21 +64,23 @@ function F.setupPaladinSpellFixture(player, mode)
         if item then assert(item:remove(), "Paladin fixture could not clear a hand") end
     end
     F.removeAll(player, F.spearItemId)
-    assert(player:addItem(F.spearItemId, 7, false, 1, CONST_SLOT_LEFT) and
+    assert(player:addItem(F.spearItemId, bootstrap and 3 or 7, false, 1, CONST_SLOT_LEFT) and
         player:addItem(F.seedShieldId, 1, false, 1, CONST_SLOT_RIGHT), "Paladin fixture could not equip spear/shield")
     F.removeAllHealthPotions(player)
     F.removeAll(player, F.manaPotionItemId)
     F.removeAll(player, F.meatItemId)
     F.removeAll(player, F.saleItemId)
-    assert(player:addItem(F.healthPotionItemId, supply and 1 or 20) and
-        player:addItem(F.manaPotionItemId, supply and 1 or 20) and player:addItem(F.meatItemId, 2),
-        "Paladin fixture could not seed survival stock")
+    local healthStock = bootstrap and 0 or supply and 1 or 20
+    local manaStock = bootstrap and 0 or supply and 1 or 20
+    if healthStock > 0 then assert(player:addItem(F.healthPotionItemId, healthStock), "Paladin fixture could not seed health stock") end
+    if manaStock > 0 then assert(player:addItem(F.manaPotionItemId, manaStock), "Paladin fixture could not seed mana stock") end
+    assert(player:addItem(F.meatItemId, 2), "Paladin fixture could not seed food")
     assert(player:removeMoney(player:getMoney()) and player:setBankBalance(0) and
-        player:addMoney(supply and 3000 or 300), "Paladin fixture could not seed funding")
+        player:addMoney(bootstrap and 1000 or supply and 3000 or 300), "Paladin fixture could not seed funding")
     for _, spell in ipairs({"Light Healing", "Intense Healing", "Ultimate Healing", "Light", "Great Light", "Find Person"}) do
         player:forgetSpell(spell)
     end
-    if not training then
+    if not training and not bootstrap then
         local spells = mode == "paladin_healing_fallback" and {"Intense Healing"} or
             mode == "paladin_healing_economy" and {"Light Healing", "Intense Healing", "Ultimate Healing"} or {"Light Healing"}
         for _, spell in ipairs(spells) do assert(player:learnSpell(spell), "Paladin fixture could not learn " .. spell) end
@@ -85,7 +88,7 @@ function F.setupPaladinSpellFixture(player, mode)
     -- One economical cast crosses the recovery boundary. Deeper wounds can
     -- legitimately use the unchanged health-potion fallback during spell cooldown.
     local woundedHealth = mode == "paladin_healing_fallback" and 100 or 119
-    assert(player:setMaxHealth(200) and player:setHealth((training or supply) and 200 or woundedHealth) and
+    assert(player:setMaxHealth(200) and player:setHealth((training or supply or bootstrap) and 200 or woundedHealth) and
         player:setMaxMana(200) and player:addMana((mode == "paladin_mana_healing" and 5 or 200) - player:getMana()),
         "Paladin fixture could not seed health/mana")
     -- Full food timer, but no regeneration gains that could hide a potion or cast.
@@ -94,7 +97,7 @@ function F.setupPaladinSpellFixture(player, mode)
     food:setParameter(CONDITION_PARAM_TICKS, 1200000)
     assert(player:addCondition(food), "Paladin fixture could not fill the food timer")
     local destination = F.thaisDepotPosition
-    if training or supply then
+    if training or supply or bootstrap then
         local npc = Npc(training and "Elane" or "Xodet")
         assert(npc and not npc:isRemoved(), "Paladin fixture could not find its real provider")
         local position = npc:getPosition()
@@ -103,7 +106,8 @@ function F.setupPaladinSpellFixture(player, mode)
     assert(player:teleportTo(destination), "Paladin fixture could not reach its starting tile")
     F.suppressNearbyMonsters(player:getId())
     F.paladinFixtureEvidence(player, mode, "start")
-    addEvent(F.verifyPaladinSpellFixture, 100, player:getId(), mode, training and "purchase" or "recovery", 1800)
+    addEvent(F.verifyPaladinSpellFixture, 100, player:getId(), mode,
+        bootstrap and "bootstrap" or training and "purchase" or "recovery", 1800)
     assert(player:setStorageValue(F.fixtureReadyStorage, 1), "Paladin fixture could not signal readiness")
     print("PLAYERBOT_GAMEPLAY_TEST " .. string.upper(mode) .. "_START")
 end

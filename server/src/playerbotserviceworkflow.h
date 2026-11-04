@@ -109,6 +109,8 @@ struct PlayerBotServiceObservation {
 	uint32_t supplyCapacityReserve = 0;
 	uint64_t money = 0;
 	uint64_t bankBalance = 0;
+	// Optional top-ups preserve this budget; mandatory supply floors retain priority.
+	uint64_t optionalPurchaseReserve = 0;
 	uint32_t goldCoinWeight = 0;
 	// Active supply kinds in purchase priority order.
 	std::vector<PlayerBotServiceSupply> supplies;

@@ -368,6 +368,8 @@ class PlayerBotController : public std::enable_shared_from_this<PlayerBotControl
 		uint32_t carriedSupplyReserve(const Player& player, uint16_t itemId) const;
 		bool huntSuppliesReady(const Player& player) const;
 		uint64_t spellTrainingReserve(const Player& player, bool emergencyOnly = false) const;
+		// Price of the best loaded future first-heal offer; zero once a heal is usable.
+		uint32_t firstHealingSpellTrainingCost(const Player& player) const;
 		void emitSpellCandidate(const Npc& npc, const NpcSpellOffer& offer, const Position& position, const char* result,
 		                        const char* reason, uint64_t reserve = 0, uint32_t travelSteps = 0,
 		                        std::optional<uint8_t> learningPriority = std::nullopt, uint64_t fare = 0) const;
@@ -626,7 +628,7 @@ std::optional<PlayerBotTravelRouteExposure> travelNavigationExposure;
 Position travelNavigationExposurePosition;
 std::shared_ptr<PlayerBotHuntTravelEvidence> lastCompletedTravelEvidence;
 		mutable std::string travelFieldIdentity;
-		mutable std::map<std::array<uint32_t, 10>, std::shared_ptr<const PlayerBotTravelDangerField>> travelFields;
+		mutable std::map<std::array<uint32_t, 14>, std::shared_ptr<const PlayerBotTravelDangerField>> travelFields;
 		bool travelDeferred = false, travelWithdrawing = false, travelEscapeDispatch = false;
 		std::optional<Position> travelEscapeExpected;
 		Position travelEscapeFrom;

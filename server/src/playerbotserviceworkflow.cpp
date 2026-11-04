@@ -581,7 +581,7 @@ PlayerBotServiceCommand PlayerBotServiceWorkflow::advanceImpl(const PlayerBotSer
 			    std::max(floor, supply.preferredStock));
 		}
 		auto restock = disposition.restockSupplies(hasPreference ? preferredRequests : requests,
-		    purchaseCapacity, observation.money, observation.bankBalance, survivalRestock);
+		    purchaseCapacity, observation.money, observation.bankBalance, survivalRestock, observation.optionalPurchaseReserve);
 		if (hasPreference && std::none_of(restock.begin(), restock.end(),
 		    [](const auto& decision) { return decision.insufficientFunds; })) {
 			uint64_t remainingFunds = observation.money + observation.bankBalance;
@@ -593,7 +593,7 @@ PlayerBotServiceCommand PlayerBotServiceWorkflow::advanceImpl(const PlayerBotSer
 				remainingCapacity -= restock[index].amount * requests[index].unitWeight;
 			}
 			const auto topUps = disposition.restockSupplies(fullRequests, remainingCapacity,
-			    remainingFunds, 0, survivalRestock);
+			    remainingFunds, 0, survivalRestock, observation.optionalPurchaseReserve);
 			for (size_t index = 0; index < restock.size(); ++index) {
 				restock[index].amount += topUps[index].amount;
 				restock[index].insufficientFunds = topUps[index].insufficientFunds;

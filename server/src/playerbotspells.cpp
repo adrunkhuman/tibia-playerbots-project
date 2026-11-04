@@ -318,8 +318,8 @@ bool PlayerBotController::tryOffensiveSpell(Player* player, const Position& curr
 uint32_t PlayerBotController::potionStockTarget(const Player& player, uint32_t returnReserve) const
 {
 	const auto snapshot = survivalSnapshot(player);
-	// Preserve survival floors while saving for a first usable heal. Below its
-	// loaded requirements, buy normal hunt stock instead of waiting on training.
+	// Keep productive hunt stock until the first heal is eligible. Once it
+	// can be learned, route and productive-stock requirements still override.
 	const bool saveForHealing = !survivalRuntime.preferredHealingSpell(snapshot) &&
 	    std::any_of(snapshot.spells.begin(), snapshot.spells.end(), [&](const auto& spell) {
 		return !spell.learned && survivalRuntime.healingSpellWorthLearning(snapshot, spell.name.c_str());
@@ -378,8 +378,11 @@ bool PlayerBotController::huntSuppliesReady(const Player& player) const
 {
 	const PlayerBotSupplyStocks stocks = activeHuntStocks(player);
 	return std::all_of(stocks.begin(), stocks.end(), [this](const PlayerBotSupplyStock& stock) {
-		return !stock.rule.active() || stock.count >
-		    playerBotSupplyHuntReserve(stock.rule.kind, stock.rule.returnThreshold, supplyRecovery.active());
+		if (!stock.rule.active()) return true;
+		const uint32_t reserve = playerBotSupplyHuntReserve(stock.rule.kind, stock.rule.returnThreshold, supplyRecovery.active());
+		// The planner proves any routine health demand separately. Exactly the
+		// protected return stock is sufficient for a zero-consumption outing.
+		return stock.rule.kind == PlayerBotSupplyKind::HealthPotion ? stock.count >= reserve : stock.count > reserve;
 	});
 }
 
@@ -404,6 +407,38 @@ uint64_t PlayerBotController::spellTrainingReserve(const Player& player, bool em
 	// overheal but still requires an eligible, usable learned healing spell.
 	const bool firstUsableHeal = emergencyOnly && !survivalRuntime.preferredHealingSpell(survivalSnapshot(player));
 	return playerBotSpellTrainingSpendingReserve(supplyReserve, carriedGoldReserve, firstUsableHeal);
+}
+
+uint32_t PlayerBotController::firstHealingSpellTrainingCost(const Player& player) const
+{
+	const auto snapshot = survivalSnapshot(player);
+	if (survivalRuntime.preferredHealingSpell(snapshot)) return 0;
+	const uint16_t vocationId = player.getVocationId();
+	const uint16_t baseVocationId = player.getVocation()->getFromVocation() == 0 ? vocationId :
+	                               player.getVocation()->getFromVocation();
+	using CandidateKey = std::tuple<uint8_t, uint32_t, uint32_t, uint32_t>;
+	std::optional<CandidateKey> selected;
+	uint32_t selectedPrice = 0;
+	for (Npc* npc : playerBotNpcProviders(g_game.getNpcs(), PlayerBotNpcCapability::SpellTrainer, player.getPosition())) {
+		for (const NpcSpellOffer& offer : npc->getSpellOffers()) {
+			const auto priority = playerBotSpellLearningPriority(offer.spellName.c_str());
+			const auto* descriptor = playerBotSpellDescriptor(offer.spellName.c_str());
+			Spell* spell = g_spells ? g_spells->getSpellByName(offer.spellName) : nullptr;
+			if (!priority || !descriptor || descriptor->role != PlayerBotSpellRole::Healing || !spell ||
+			    !spell->isInstant() || !spell->isLearnable() || spell->getLevel() != offer.level ||
+			    spell->isPremium() != offer.premium || (offer.premium && !player.isPremium()) ||
+			    player.hasLearnedInstantSpell(offer.spellName) ||
+			    std::find(offer.vocationIds.begin(), offer.vocationIds.end(), baseVocationId) == offer.vocationIds.end() ||
+			    spell->getVocMap().count(vocationId) == 0 ||
+			    !survivalRuntime.healingSpellWorthLearning(snapshot, offer.spellName.c_str(), false)) continue;
+			const CandidateKey key{*priority, offer.level, offer.price, npc->getID()};
+			if (!selected || key < *selected) {
+				selected = key;
+				selectedPrice = offer.price;
+			}
+		}
+	}
+	return selectedPrice;
 }
 
 uint32_t PlayerBotController::cheapestShopPrice(const Player& player, uint16_t itemId) const
@@ -634,7 +669,7 @@ std::optional<PlayerBotNavigationRoutePlan> PlayerBotController::advanceTrainerR
 
 bool PlayerBotController::findSpellTraining(Player& player, const Position& position, PlayerBotSpellTrainingPlan& plan)
 {
-	const uint64_t reserve = spellTrainingReserve(player);
+	const uint64_t reserve = std::max<uint64_t>(spellTrainingReserve(player), firstHealingSpellTrainingCost(player));
 	const uint64_t healingReserve = spellTrainingReserve(player, true);
 	const uint64_t totalMoney = player.getMoney() + player.getBankBalance();
 	const uint16_t vocationId = player.getVocationId();

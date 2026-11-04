@@ -1246,6 +1246,7 @@ void PlayerBotController::processService(Player* player, const Position& current
 	observation.supplyCapacityReserve = returnCapacityThreshold;
 	observation.money = player->getMoney();
 	observation.bankBalance = player->getBankBalance();
+	observation.optionalPurchaseReserve = firstHealingSpellTrainingCost(*player);
 	observation.goldCoinWeight = Item::items[ITEM_GOLD_COIN].weight;
 	const PlayerBotSupplyStocks stocks = supplyStocks(*player);
 	for (const PlayerBotSupplyStock& stock : stocks) {

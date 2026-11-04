@@ -428,7 +428,13 @@ PlayerBotCombatProfile PlayerBotEquipmentPolicy::combatProfile(const PlayerBotEq
 	const int32_t defense = defenseSkill == 0 ? 1 : static_cast<int32_t>((defenseSkill / 4.0 + 2.23) * defenseValue * 0.15 * player.defenseFactor * player.defenseMultiplier);
 	PlayerBotCombatProfile profile{player.level, player.maximumHealth, static_cast<int32_t>(armorValue * player.armorMultiplier), defense,
 	        weapon ? weapon->attack : 7, skill(player, weapon ? weapon->weaponType : PlayerBotEquipmentWeaponType::None), player.attackFactor};
+	const double sustainedFactor = player.attackFactor >= 2 ? 1.0 : player.attackFactor > 1 ? 0.75 : 0.5;
+	profile.sustainedDefense = defenseSkill == 0 ? (player.attackFactor >= 2 ? 2 : 1) :
+	    static_cast<int32_t>((defenseSkill / 4.0 + 2.23) * defenseValue * 0.15 * sustainedFactor * player.defenseMultiplier);
+	profile.attackIntervalMs = weapon && weapon->attackIntervalMs ? weapon->attackIntervalMs : player.attackIntervalMs;
+	profile.damageMultiplier = player.meleeDamageMultiplier;
 	if (weapon && weapon->weaponType == PlayerBotEquipmentWeaponType::Distance) {
+		profile.damageMultiplier = player.distanceDamageMultiplier;
 		profile.blockedByShield = false;
 		profile.attackRange = weapon->shootRange;
 		profile.hitChance = handHitChance(player, *weapon);

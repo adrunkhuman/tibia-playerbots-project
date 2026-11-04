@@ -19,19 +19,28 @@
 struct PlayerBotDangerSampleKey {
 	uint64_t atlasRevision;
 	Position position;
-	std::array<uint32_t, 10> combat;
+	std::array<uint32_t, 14> combat;
 
 	PlayerBotDangerSampleKey(uint64_t revision, Position tile, const PlayerBotCombatProfile& profile)
 	    : atlasRevision(revision), position(tile), combat{profile.level, static_cast<uint32_t>(profile.maximumHealth),
 	      static_cast<uint32_t>(profile.armor), static_cast<uint32_t>(profile.defense),
 	      static_cast<uint32_t>(profile.attack), static_cast<uint32_t>(profile.attackSkill), factorBits(profile.attackFactor),
-	      static_cast<uint32_t>(profile.hitChance), profile.blockedByShield, profile.attackRange} {}
+	      static_cast<uint32_t>(profile.hitChance), profile.blockedByShield, profile.attackRange,
+	      static_cast<uint32_t>(profile.sustainedDefense), profile.attackIntervalMs,
+	      static_cast<uint32_t>(multiplierBits(profile.damageMultiplier)),
+	      static_cast<uint32_t>(multiplierBits(profile.damageMultiplier) >> 32)} {}
 
 	bool operator==(const PlayerBotDangerSampleKey& other) const {
 		return atlasRevision == other.atlasRevision && position == other.position && combat == other.combat;
 	}
 
 private:
+	static uint64_t multiplierBits(double value) {
+		static_assert(sizeof(double) == sizeof(uint64_t));
+		uint64_t bits;
+		std::memcpy(&bits, &value, sizeof(bits));
+		return bits;
+	}
 	static uint32_t factorBits(float factor) {
 		static_assert(sizeof(float) == sizeof(uint32_t));
 		uint32_t bits;

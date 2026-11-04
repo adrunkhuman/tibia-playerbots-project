@@ -1,3 +1,51 @@
+function Assert-PaladinFirstHealBudgetEvents {
+	param([string]$Logs)
+	$events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
+	$fixture = @($events | Where-Object { $_.event -eq 'paladin_fixture' -and $_.scenario -eq 'paladin_first_heal_budget' })
+	$start = @($fixture | Where-Object {
+		$_.phase -eq 'start' -and $_.vocation -eq 3 -and $_.level -eq 8 -and $_.spears -eq 3 -and
+		$_.health_potions -eq 0 -and $_.mana_potions -eq 0 -and $_.money -eq 1000 -and -not $_.learned_light
+	})
+	$ready = @($fixture | Where-Object {
+		$_.phase -eq 'budget_ready' -and $_.level -eq 8 -and $_.health_potions -eq 18 -and
+		$_.spears -ge 3 -and $_.mana_potions -eq 0 -and $_.money -ge 170 -and -not $_.learned_light
+	})
+	$pass = @($fixture | Where-Object { $_.phase -eq 'pass' -and $_.learned_light -and $_.mana_potions -ge 2 })
+	$learning = @($events | Where-Object {
+		$_.event -eq 'action_result' -and $_.action -eq 'learn_spell' -and $_.result -eq 'success'
+	})
+	$manaBuys = @($events | Where-Object {
+		$_.event -eq 'action_result' -and $_.action -eq 'buy_potions' -and $_.result -eq 'success' -and $_.item_id -eq 7620
+	})
+	$healthBuys = @($events | Where-Object {
+		$_.event -eq 'action_result' -and $_.action -eq 'buy_potions' -and $_.result -eq 'success' -and $_.item_id -eq 7618
+	})
+	$failures = @($events | Where-Object {
+		$_.event -eq 'terminal' -or ($_.event -eq 'action_result' -and $_.result -eq 'failed' -and
+			$_.action -in @('learn_spell', 'buy_potions'))
+	})
+	if ($start.Count -ne 1 -or $ready.Count -ne 1 -or $pass.Count -ne 1 -or $learning.Count -ne 1 -or
+		$healthBuys.Count -lt 1 -or $manaBuys.Count -lt 1 -or $failures.Count -ne 0 -or
+		$learning[0].spell -ne 'Light Healing' -or $learning[0].price -ne 170 -or $learning[0].money_before -lt 170) {
+		throw 'Paladin bootstrap did not preserve mandatory supplies and 170 gold, then learn and restock mana.'
+	}
+	$learned = $false
+	$manaAfterLearning = 0
+	foreach ($event in $events) {
+		if ($event -eq $learning[0]) {
+			$learned = $true
+			continue
+		}
+		if ($event -in $manaBuys) {
+			if (-not $learned) { throw 'Paladin bought mana before having a usable spell.' }
+			++$manaAfterLearning
+		}
+	}
+	if ($manaAfterLearning -ne $manaBuys.Count) {
+		throw 'Paladin mana purchase ordering does not follow paid Light Healing.'
+	}
+}
+
 function Assert-PaladinSpellFixtureEvents {
 	param(
 		[string]$Logs,

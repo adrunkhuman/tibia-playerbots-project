@@ -18,6 +18,10 @@ struct PlayerBotCombatProfile {
 	// Distance attacks bypass the target's shield defense; only armor applies.
 	bool blockedByShield = true;
 	uint8_t attackRange = 1;
+	// Expected fighting state, not the brief idle defense boost between attacks.
+	int32_t sustainedDefense = -1;
+	uint32_t attackIntervalMs = 2000;
+	double damageMultiplier = 1;
 };
 
 #endif

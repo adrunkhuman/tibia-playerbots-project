@@ -15,6 +15,13 @@ inline uint32_t playerBotSupplyRecoveryRequiredHealth(uint32_t maximumHealth)
 	return static_cast<uint32_t>((uint64_t(maximumHealth) * 4 + 4) / 5);
 }
 
+// Verified preparation spending is historical debt, repaid over completed
+// outings rather than charged anew to each candidate's marginal forecast.
+inline uint64_t playerBotRemainingPreparationDebt(uint64_t debt, uint64_t acquiredGold)
+{
+	return debt - std::min(debt, acquiredGold);
+}
+
 enum class PlayerBotDepartureHealthResult { Ready, Recovering, TimedOut };
 
 // Preparation requests use existing healing actions but have their own finite

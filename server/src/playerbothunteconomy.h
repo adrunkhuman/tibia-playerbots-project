@@ -84,19 +84,50 @@ struct PlayerBotSustainedHuntYield {
 	double clearExperiencePerMinute = 0;
 };
 
+inline size_t playerBotHuntModeledMembers(size_t points, const PlayerBotHuntViability& viability)
+{
+	return std::min({points, viability.replenishingMembers.size(),
+	    viability.unblockedPatrolRatios.size(), viability.emptyPatrolRatios.size()});
+}
+
+// Recurring patrol-duty share per reachable spawn observation (same order as
+// the points). A fight that is absent on later circuits earns nothing and costs
+// nothing; income and combat costs must share this basis. Points outside the
+// viability model keep a full share so a model limit never erases costs.
+inline std::vector<double> playerBotHuntRecurringShares(size_t points, const PlayerBotHuntViability& viability)
+{
+	std::vector<double> shares(points, 1.0);
+	for (size_t i = 0; i < playerBotHuntModeledMembers(points, viability); ++i) {
+		shares[i] = viability.replenishingMembers[i] ?
+		    std::min(viability.unblockedPatrolRatios[i], viability.emptyPatrolRatios[i]) : 0;
+	}
+	return shares;
+}
+
+// Expected fraction of hunt time spent fighting recurring spawns, before any
+// clear-throughput cap.
+inline double playerBotSustainedCombatFraction(const std::vector<PlayerBotReplenishmentPoint>& points,
+    const std::vector<double>& shares)
+{
+	double fraction = 0;
+	for (size_t i = 0; i < std::min(points.size(), shares.size()); ++i)
+		fraction += shares[i] * points[i].fightSeconds / std::max(points[i].intervalSeconds, 0.001);
+	return fraction;
+}
+
 inline PlayerBotSustainedHuntYield playerBotSustainedHuntYield(
     const std::vector<PlayerBotReplenishmentPoint>& points, const PlayerBotHuntViability& viability,
     double cycleSeconds)
 {
 	PlayerBotSustainedHuntYield result;
 	double cycleGold = 0, spawnGold = 0, cycleExperience = 0;
-	const size_t members = std::min({points.size(), viability.replenishingMembers.size(),
-	    viability.unblockedPatrolRatios.size(), viability.emptyPatrolRatios.size()});
+	const size_t members = playerBotHuntModeledMembers(points.size(), viability);
+	const auto shares = playerBotHuntRecurringShares(points.size(), viability);
 	for (size_t i = 0; i < members; ++i) {
 		if (!viability.replenishingMembers[i] || points[i].intervalSeconds <= 0) continue;
 		// Do not bootstrap recurring income from fights that may be absent on
 		// later circuits. Both duty-share estimates cap the spawn-rate forecast.
-		const double share = std::min(viability.unblockedPatrolRatios[i], viability.emptyPatrolRatios[i]);
+		const double share = shares[i];
 		cycleGold += points[i].coinGold;
 		spawnGold += points[i].coinGold * share * 60 / points[i].intervalSeconds;
 		cycleExperience += points[i].experience;

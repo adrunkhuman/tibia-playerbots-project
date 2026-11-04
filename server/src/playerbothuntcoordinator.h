@@ -145,7 +145,7 @@ class PlayerBotHuntCoordinator
 		                                               std::chrono::steady_clock::time_point now) const;
 		bool matchesHuntMonster(const std::string& name) const;
 		void sampleHuntCombat(const PlayerBotHuntCombatSnapshot& snapshot);
-		void observeHuntDamage(uint32_t damage);
+		void observeHuntDamage(uint32_t damage, bool activeCombat = true);
 		void observeCoinAcquisition(uint64_t gold) { huntRuntime.observeCoinAcquisition(gold); }
 		void observeHuntRecovery(bool potion);
 		void observeHuntLevelRestoration(uint32_t health, uint32_t mana);

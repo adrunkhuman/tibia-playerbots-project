@@ -80,16 +80,17 @@ inline constexpr uint16_t playerBotManaPotionItemId = 7620;
 inline constexpr uint32_t playerBotManaPotionMinimumMana = 75;
 
 // Base rule for kinds without a specialized controller policy. Paladins stock
-// mana potions for spell use; other vocations still drink carried mana potions
-// without a shopping target. Weapon-matched kinds have no item until the
-// loadout selects one.
-inline PlayerBotSupplyRule playerBotSupplyRule(PlayerBotSupplyKind kind, uint16_t vocationId)
+// mana only with an implemented, learned and currently legal consumer. Carried
+// potions remain usable without a shopping target. Weapon-matched kinds have
+// no item until the loadout selects one.
+inline PlayerBotSupplyRule playerBotSupplyRule(PlayerBotSupplyKind kind, uint16_t vocationId,
+                                               bool hasUsableManaConsumer = false)
 {
 	PlayerBotSupplyRule rule;
 	rule.kind = kind;
 	if (kind == PlayerBotSupplyKind::ManaPotion) {
 		rule.itemId = playerBotManaPotionItemId;
-		if (vocationId == 3 || vocationId == 7) {
+		if ((vocationId == 3 || vocationId == 7) && hasUsableManaConsumer) {
 			rule.safetyFloor = 2;
 			rule.returnThreshold = 1;
 			rule.target = 20;
@@ -317,17 +318,20 @@ struct PlayerBotSupplyKindBudget {
 	uint32_t routine = 0;
 	double expected = 0;
 	bool fits = true;
+	// Fractional consumption for economics; expected rounds up for carrying.
+	double expectedUnits = 0;
 };
 
 inline PlayerBotSupplyKindBudget playerBotSupplyKindBudget(const PlayerBotSupplyKindProfile& profile, double combatSeconds,
-                                                          bool recovery = false)
+                                                          bool recovery = false, double resourceCredit = 0)
 {
 	PlayerBotSupplyKindBudget budget;
 	budget.kind = profile.kind;
 	budget.count = profile.count;
 	const uint32_t reserve = playerBotSupplyHuntReserve(profile.kind, profile.returnThreshold, recovery);
 	budget.routine = profile.count > reserve ? profile.count - reserve : 0;
-	budget.expected = std::ceil(std::max(0.0, playerBotSupplyDemandRate(profile)) * std::max(0.0, combatSeconds));
+	budget.expectedUnits = std::max(0.0, playerBotSupplyDemandRate(profile)) * std::max(0.0, combatSeconds);
+	budget.expected = std::ceil(std::max(0.0, budget.expectedUnits - std::max(0.0, resourceCredit)));
 	// Zero predicted consumption cannot make a missing weapon/ammunition usable.
 	const bool needsStock = profile.kind == PlayerBotSupplyKind::ThrowingWeapon ||
 	                        profile.kind == PlayerBotSupplyKind::Ammunition;

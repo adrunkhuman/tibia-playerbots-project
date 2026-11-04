@@ -775,8 +775,8 @@ uint32_t PlayerBotController::navigationDecisionDelay(const Player& player) cons
 void PlayerBotController::onHealthDrain(const Player& player, uint32_t damage)
 {
 	survivalRuntime.observeHealthDrain(player.getID() == playerId);
-	if (player.getID() == playerId && isActiveHuntCombat(player)) {
-		huntCoordinator.observeHuntDamage(damage);
+	if (player.getID() == playerId && huntCoordinator.huntActive()) {
+		huntCoordinator.observeHuntDamage(damage, isActiveHuntCombat(player));
 	}
 }
 

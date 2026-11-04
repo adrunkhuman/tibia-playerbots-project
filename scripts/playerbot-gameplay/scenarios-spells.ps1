@@ -1,4 +1,12 @@
 	if ($SpellTraining) {
+		Invoke-Scenario -Name 'paladin_first_heal_budget' -DefaultTimeoutSeconds 180 -Body {
+			Invoke-Compose down --volumes --remove-orphans
+			$env:PLAYERBOT_GAMEPLAY_MODE = 'paladin_first_heal_budget'
+			$env:PLAYERBOT_HUNT_DURATION_SECONDS = '900'
+			Invoke-Compose up --detach
+			$logs = Wait-ForLog -Pattern 'PLAYERBOT_GAMEPLAY_TEST PALADIN_FIRST_HEAL_BUDGET_PASS'
+			Assert-PaladinFirstHealBudgetEvents -Logs $logs
+		}
 		Invoke-Scenario -Name 'paladin_spell_training' -DefaultTimeoutSeconds 180 -Body {
 			Invoke-Compose down --volumes --remove-orphans
 			$env:PLAYERBOT_GAMEPLAY_MODE = 'paladin_spell_training'

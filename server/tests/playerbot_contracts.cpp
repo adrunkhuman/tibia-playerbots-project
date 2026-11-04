@@ -203,6 +203,23 @@ void patrolOpportunity()
 	assert(site.minimumUnblockedPatrolRatio >= 0.25);
 	assert(site.minimumEmptyPatrolRatio >= 0.05 && site.minimumEmptyPatrolRatio < 0.25);
 	assert(playerBotSustainedHuntYield(points, site, 70).spawnExperiencePerMinute > 0);
+
+	// Costs use the same recurring duty share as income: a blocked spawn's
+	// fights are neither paid nor charged. Unmodeled points keep full cost.
+	const auto shares = playerBotHuntRecurringShares(points.size(), site);
+	double unshared = 0, shared = 0;
+	for (size_t i = 0; i < points.size(); ++i) {
+		assert(shares[i] == std::min(site.unblockedPatrolRatios[i], site.emptyPatrolRatios[i]));
+		unshared += points[i].fightSeconds / points[i].intervalSeconds;
+		shared += shares[i] * points[i].fightSeconds / points[i].intervalSeconds;
+	}
+	assert(std::abs(playerBotSustainedCombatFraction(points, shares) - shared) < 1e-12 && shared < unshared);
+	auto blocked = site;
+	blocked.replenishingMembers[0] = false;
+	assert(playerBotHuntRecurringShares(points.size(), blocked)[0] == 0);
+	const auto unmodeled = playerBotHuntRecurringShares(points.size(), PlayerBotHuntViability{});
+	assert(std::all_of(unmodeled.begin(), unmodeled.end(), [](double share) { return share == 1; }));
+	assert(std::abs(playerBotSustainedCombatFraction(points, unmodeled) - unshared) < 1e-12);
 }
 
 void mixedSustainedYield()
@@ -565,7 +582,9 @@ void preparationContracts()
 
 	auto region = routeFixture(75);
 	region.supplyRecovery = true;
-	region.coinGoldPerMinute = 1;
+	region.coinGoldPerMinute = 6;
+	region.supplyProfile.potionHealing = 125;
+	region.healthPotionUnitPrice = 45;
 	region.currentHealth = 180;
 	region.maximumHealth = 195;
 	region.recoveryRouteHealthLoss = 20;
@@ -588,6 +607,7 @@ void preparationContracts()
 		}
 		auto facts = routeFacts();
 		facts.supplyProfile = candidate.supplyProfile;
+		facts.healthPotionUnitPrice = candidate.healthPotionUnitPrice;
 		facts.potionReserve = 2;
 		facts.recoveryRouteHealthLoss = 20;
 		facts.approaches = {Position(200, 100, 7)};
@@ -761,33 +781,34 @@ void huntSupplyHandoffContracts()
 		assert(result.terminal);
 		return result;
 	};
-	const auto mixedShortage = select(2, true, false, false, true);
+	assert(select(2).outcome == PlayerBotHuntRouteOutcome::Selected); // Zero routine use needs only return stock.
+	const auto mixedShortage = select(1, true, false, false, true);
 	assert(mixedShortage.outcome == PlayerBotHuntRouteOutcome::NeedsSupplies && mixedShortage.supplyShortage);
 	assert(mixedShortage.readiness.state == PlayerBotReadiness::Blocked && mixedShortage.rejectedVariants.empty());
-	const auto shortage = select(2);
+	const auto shortage = select(1);
 	assert(shortage.outcome == PlayerBotHuntRouteOutcome::NeedsSupplies && shortage.supplyShortage);
 	assert(!shortage.selectedRouteRegion && shortage.rejectedVariants.empty());
 	assert(shortage.failureCounts.at("hunt_supply_window_unavailable") == 1);
-	assert(shortage.supplyShortage->requirements.front().count == 3); // reserve + routine, even at zero DPS
-	assert(select(2, false).outcome == PlayerBotHuntRouteOutcome::Unavailable); // no unsafe supplier proof
-	assert(select(3).outcome == PlayerBotHuntRouteOutcome::Selected);
-	const auto economy = select(3, true, false, true);
+	assert(shortage.supplyShortage->requirements.front().count == 2); // Protected return reserve remains mandatory.
+	assert(select(1, false).outcome == PlayerBotHuntRouteOutcome::Unavailable); // no unsafe supplier proof
+	assert(select(2).outcome == PlayerBotHuntRouteOutcome::Selected);
+	const auto economy = select(2, true, false, true);
 	assert(economy.outcome == PlayerBotHuntRouteOutcome::Unavailable && economy.rejectedVariants.empty());
 	assert(economy.failureCounts.at("travel_fare_breaks_recovery_reserve") == 1);
-	const auto unaffordableShortage = select(2, true, false, true);
+	const auto unaffordableShortage = select(1, true, false, true);
 	assert(unaffordableShortage.outcome == PlayerBotHuntRouteOutcome::Unavailable);
 	assert(!unaffordableShortage.supplyShortage && unaffordableShortage.rejectedVariants.empty());
 	assert(unaffordableShortage.failureCounts.at("travel_fare_breaks_recovery_reserve") == 1);
 	assert(select(2, true, true).outcome == PlayerBotHuntRouteOutcome::Selected); // existing safe recovery
 
-	PlayerBotSupplyStocks stocks{{{PlayerBotSupplyKind::HealthPotion, 7618, 2, 1, 2}, 2}};
+	PlayerBotSupplyStocks stocks{{{PlayerBotSupplyKind::HealthPotion, 7618, 1, 1, 1}, 1}};
 	playerBotRequireSupplies(stocks, shortage.supplyShortage->requirements);
-	assert(stocks.front().rule.target == 3 && stocks.front().rule.safetyFloor == 3);
+	assert(stocks.front().rule.target == 2 && stocks.front().rule.safetyFloor == 2);
 	assert(playerBotMandatorySupplyDeficit(stocks, false).missing == 1);
 	PlayerBotSupplyRecoveryState recovery;
 	recovery.deferRestock(11, playerBotSupplyStockKey(stocks));
 	recovery.enter();
-	const auto budget = playerBotSupplyFloorSpendingReserve(0, {{2, stocks.front().rule.safetyFloor, 45}});
+	const auto budget = playerBotSupplyFloorSpendingReserve(0, {{1, stocks.front().rule.safetyFloor, 45}});
 	recovery.update(11, budget);
 	assert(recovery.active() && recovery.restockBlocked(11, playerBotSupplyStockKey(stocks)));
 	recovery.restockBlocked(50, playerBotSupplyStockKey(stocks));
@@ -1081,7 +1102,7 @@ void routeSelectionContracts()
 void typedSupplyRouteContracts()
 {
 	const Position depot(200, 100, 7), supplier(300, 100, 7);
-	const PlayerBotSupplyRule mana = playerBotSupplyRule(PlayerBotSupplyKind::ManaPotion, 3);
+	const PlayerBotSupplyRule mana = playerBotSupplyRule(PlayerBotSupplyKind::ManaPotion, 3, true);
 	const PlayerBotSupplyRule spears = playerBotThrowingWeaponRule(2389, 16);
 	const PlayerBotSupplyRule ammo{PlayerBotSupplyKind::Ammunition, 2544, 6, 5, 40};
 	const uint16_t healthItemId = 7618;
@@ -2431,6 +2452,14 @@ void transitCombat()
 	assert(playerBotPassageFightManageable(500, 0, 20.0, 20.0));
 	assert(!playerBotPassageFightManageable(400, 0, 20.0, 20.0));
 	assert(playerBotPassageFightManageable(350, 100, 20.0, 20.0));
+	// Zero incoming damage is safe, but not permission to spend hours clearing
+	// a blocker for a corpse whose existing work deadline is seconds away.
+	assert(!playerBotPassageFightManageable(200, 0, 0, 50000, 20));
+	assert(playerBotPassageFightManageable(200, 0, 0, 10, 20));
+	assert(!playerBotPassageFightManageable(200, 0, 0, 10, 9));
+	assert(playerBotPassageWorkSeconds(60, 0, false) == 60); // stale completed loot is irrelevant
+	assert(playerBotPassageWorkSeconds(60, 0, true) == 0);
+	assert(playerBotPassageWorkSeconds(60, 12, true) == 12);
 
 	PlayerBotDefensiveTarget easy;
 	easy.id = 10;
@@ -2588,15 +2617,17 @@ void supplyCalibration()
 	const auto healthDebt = observe(0, 90, 100);
 	assert(healthDebt.accepted && healthDebt.levelAdjustedHealthDebt == 10);
 	assert(healthDebt.potionEquivalentDemand > 0);
-	assert(!observe(0, 100, 100, true).accepted);
-	assert(std::string(observe(0, 100, 100, true).reason) == "interrupted_outing");
+	// Safe interrupted outings have an arrival baseline and accounted debt;
+	// they contribute to the same pooled exposure as completed deadlines.
+	assert(observe(0, 100, 100, true).accepted);
+	assert(observe(0, 100, 100, true).localUpdated);
 	const auto firstSafe = observe(0, 100, 100);
 	assert(firstSafe.calibration.potionsPerCombatSecond > 0);
 	observe(0, 100, 100);
 	region.supplyCalibration = observe(0, 100, 100).calibration;
 	// Zero-demand evidence decays at the local 0.20 blend; it never snaps to zero.
 	assert(region.supplyCalibration.potionsPerCombatSecond > 0);
-	assert(region.supplyCalibration.samples == 4);
+	assert(region.supplyCalibration.samples == 6);
 
 	// Guarded zero evidence does not cross an incompatible stored capability.
 	PlayerBotHuntPolicy contextPolicy;
@@ -2769,21 +2800,21 @@ void supplyCalibration()
 	    guarded, guarded.supplyCapability, 119, 100, 100, 100, 0, false);
 	assert(!shortDuration.accepted && std::string(shortDuration.reason) == "insufficient_duration");
 	assert(shortDuration.durationSeconds == 119 && shortDuration.minimumDurationSeconds == 120);
-	guards.resetCombatEvidence();
+	guards = PlayerBotHuntPolicy{};
 	guards.observeCombat({true, 59, 100, 100, 100, 100, 1});
 	for (unsigned i = 0; i < 3; ++i) guards.observeKill();
 	const auto shortCombat = guards.observeSupplies(
 	    guarded, guarded.supplyCapability, 120, 100, 100, 100, 0, false);
 	assert(!shortCombat.accepted && std::string(shortCombat.reason) == "insufficient_active_combat");
 	assert(shortCombat.activeCombatSeconds == 59 && shortCombat.minimumActiveCombatSeconds == 60);
-	guards.resetCombatEvidence();
+	guards = PlayerBotHuntPolicy{};
 	guards.observeCombat({true, 60, 100, 100, 100, 100, 1});
 	for (unsigned i = 0; i < 2; ++i) guards.observeKill();
 	const auto fewKills = guards.observeSupplies(
 	    guarded, guarded.supplyCapability, 120, 100, 100, 100, 0, false);
 	assert(!fewKills.accepted && std::string(fewKills.reason) == "insufficient_kills");
 	assert(fewKills.kills == 2 && fewKills.minimumKills == 3);
-	guards.resetCombatEvidence();
+	guards = PlayerBotHuntPolicy{};
 	guards.observeCombat({true, 60, 30, 100, 100, 100, 1});
 	for (unsigned i = 0; i < 3; ++i) guards.observeKill();
 	const auto thresholdHealth = guards.observeSupplies(
@@ -2950,7 +2981,7 @@ void supplyCalibration()
 	regenerationRegion.estimatedTravelSeconds = 60;
 	PlayerBotSupplyProfile regenerationSupply = regenerationRegion.supplyProfile;
 	regenerationSupply.regenerationSeconds = 180;
-	regenerationSupply.healthGain = 20;
+	regenerationSupply.healthGain = 10; // Full wall-time ticks, including between fights.
 	regenerationSupply.healthInterval = 10;
 	const PlayerBotSupplyBudget pretravelBudget = playerBotSupplyBudget(
 	    regenerationSupply, regenerationRegion.expectedDamagePerSecond,
@@ -3100,6 +3131,7 @@ void globalAndLocalSupplyLearning()
 	PlayerBotHuntRegion zeroStatic = region(10, "Rat", nullptr, 0);
 	zeroStaticPolicy.observeCombat({true, 60, 200, 200, 100, 100, 1});
 	zeroStaticPolicy.observeRecovery(true);
+	for (unsigned kill = 0; kill < 3; ++kill) zeroStaticPolicy.observeKill();
 	const auto firstZeroStatic = zeroStaticPolicy.observeSupplies(
 	    zeroStatic, capability, 120, 200, 200, 100, 20, false);
 	assert(firstZeroStatic.accepted && firstZeroStatic.localUpdated && !firstZeroStatic.globalUpdated);
@@ -3166,15 +3198,16 @@ void globalAndLocalSupplyLearning()
 	assert(policy.supplyGlobalLearning().samples == 1);
 	assert(duplicateA.supplyGlobalLearning.samples == 1 && duplicateB.supplyGlobalLearning.samples == 1);
 
-	// Interrupted, dangerous, and potion-exhausted evidence cannot reduce global
-	// or local estimates.
-	const PlayerBotSupplyGlobalLearning guardedBefore = policy.supplyGlobalLearning();
+	// Safe interrupted exposure can reduce costs. Danger, death and exhausted
+	// potions still cannot supply downward evidence.
+	const auto beforeInterrupted = policy.supplyGlobalLearning();
 	PlayerBotHuntRegion interruptedRegion = region(6, "Troll");
-	interruptedRegion.supplyGlobalLearning = guardedBefore;
+	interruptedRegion.supplyGlobalLearning = beforeInterrupted;
 	const auto interrupted = easyOuting(policy, interruptedRegion, true);
-	assert(!interrupted.accepted && std::string(interrupted.reason) == "interrupted_outing");
-	assert(policy.supplyGlobalLearning().samples == guardedBefore.samples);
-	assert(policy.supplyGlobalLearning().multiplier == guardedBefore.multiplier);
+	assert(interrupted.accepted && interrupted.globalUpdated);
+	assert(policy.supplyGlobalLearning().samples == beforeInterrupted.samples + 1);
+	assert(policy.supplyGlobalLearning().multiplier < beforeInterrupted.multiplier);
+	const auto guardedBefore = policy.supplyGlobalLearning();
 
 	PlayerBotHuntRegion dangerRegion = region(7, "Troll");
 	dangerRegion.supplyGlobalLearning = policy.supplyGlobalLearning();
@@ -3496,16 +3529,20 @@ void typedSupplyStock()
 	assert(playerBotSupplyStockKey(stocks) != key);
 	assert(playerBotSupplyStockKey({{health, 7}}) == 7); // health-only key equals the potion count
 
-	// Only Paladins stock mana; Knights and every other vocation keep no mana target.
+	// Paladins stock mana only with a usable consumer. Vocation alone and all
+	// other vocations retain no floor, return threshold or shopping target.
 	for (uint16_t vocation : {0, 1, 2, 3, 4, 5, 6, 7, 8, 9}) {
-		const PlayerBotSupplyRule rule = playerBotSupplyRule(PlayerBotSupplyKind::ManaPotion, vocation);
+		const PlayerBotSupplyRule rule = playerBotSupplyRule(PlayerBotSupplyKind::ManaPotion, vocation, true);
+		const PlayerBotSupplyRule withoutConsumer = playerBotSupplyRule(PlayerBotSupplyKind::ManaPotion, vocation);
+		assert(!withoutConsumer.active() && withoutConsumer.target == 0 && withoutConsumer.safetyFloor == 0 &&
+		       withoutConsumer.returnThreshold == 0 && withoutConsumer.preferredStock == 0);
+		const PlayerBotSupplyStocks inactive{{health, 20}, {withoutConsumer, 0}};
+		assert(!playerBotMandatorySupplyDeficit(inactive, false).first && !playerBotExhaustedSupply(inactive));
 		assert(rule.kind == PlayerBotSupplyKind::ManaPotion && rule.itemId == playerBotManaPotionItemId && rule.itemId == 7620);
 		if (vocation == 3 || vocation == 7) {
 			assert(rule.active() && rule.target == 20 && rule.safetyFloor == 2 && rule.returnThreshold == 1);
 		} else {
 			assert(!rule.active() && rule.target == 0 && rule.safetyFloor == 0 && rule.returnThreshold == 0);
-			const PlayerBotSupplyStocks inactive{{health, 20}, {rule, 0}};
-			assert(!playerBotMandatorySupplyDeficit(inactive, false).first && !playerBotExhaustedSupply(inactive));
 		}
 		for (const PlayerBotSupplyKind kind : {PlayerBotSupplyKind::Ammunition, PlayerBotSupplyKind::ThrowingWeapon}) {
 			assert(!playerBotSupplyRule(kind, vocation).active());
@@ -3513,7 +3550,7 @@ void typedSupplyStock()
 	}
 
 	for (uint16_t vocation : {3, 7}) {
-		const PlayerBotSupplyRule rule = playerBotSupplyRule(PlayerBotSupplyKind::ManaPotion, vocation);
+		const PlayerBotSupplyRule rule = playerBotSupplyRule(PlayerBotSupplyKind::ManaPotion, vocation, true);
 		PlayerBotSupplyStocks supplies{{health, 20}, {rule, rule.safetyFloor}};
 		assert(!playerBotMandatorySupplyDeficit(supplies, false).first && !playerBotExhaustedSupply(supplies));
 		supplies[1].count = rule.returnThreshold;
@@ -4202,10 +4239,10 @@ void supplyCalibrationRounding()
 	region.supplyRecovery = true;
 	region.currentHealth = region.maximumHealth = 100;
 	region.supplyProfile.potions = 2;
-	region.availableHuntSeconds = 20;
+	region.availableHuntSeconds = 15; // 1.32 * 15 HP still fits the current 20-HP credit.
 	region.reconcileSupplies(2);
 	assert(region.supplyBudget.expectedPotions == 0 && region.supplyBudget.fits);
-	region.availableHuntSeconds = 21;
+	region.availableHuntSeconds = 16;
 	region.reconcileSupplies(2);
 	assert(region.supplyBudget.expectedPotions == 1 && !region.supplyBudget.fits);
 	region.availableHuntSeconds = 0;
@@ -4213,8 +4250,8 @@ void supplyCalibrationRounding()
 	region.reconcileSupplies(2);
 	assert(!region.supplyBudget.fits);
 
-	// Learning uses the fractional static denominator, while keeping immediate
-	// upward corrections and slower, guarded global/local downward blends.
+	// Learning uses the fractional static denominator after sufficient safe
+	// exposure, with slower global/local downward blends.
 	region.supplyRecovery = false;
 	region.recoveryRouteHealthLoss = 0;
 	region.supplyGlobalLearning = {};
@@ -4225,8 +4262,9 @@ void supplyCalibrationRounding()
 	PlayerBotHuntPolicy upwardPolicy;
 	upwardPolicy.observeCombat({true, 60, 100, 100, 0, 0, 1});
 	upwardPolicy.observeRecovery(true);
+	for (unsigned kill = 0; kill < 3; ++kill) upwardPolicy.observeKill();
 	const auto upward = upwardPolicy.observeSupplies(
-	    region, region.supplyCapability, 60, 100, 100, 0, 19, true);
+	    region, region.supplyCapability, 120, 100, 100, 0, 19, true);
 	assert(upward.accepted && upward.globalUpdated && upward.localUpdated);
 	assert(upward.globalEstimateDirection == PlayerBotSupplyEstimateDirection::Upward);
 	assert(upward.localEstimateDirection == PlayerBotSupplyEstimateDirection::Upward);
@@ -4278,7 +4316,7 @@ void supplyBudget()
 	costly.reconcileTravel(60, 0, 1);
 	assert(costly.supplyBudget.expectedPotions == 1 && costly.supplyBudget.fits);
 	profile.potions = 1;
-	assert(!playerBotSupplyBudget(profile, 0, 0, 900, 0).fits);
+	assert(playerBotSupplyBudget(profile, 0, 0, 900, 0).fits); // Return stock alone fits zero routine use.
 	profile.potions = 0;
 	assert(!playerBotSupplyBudget(profile, 0, 0, 900, 0).fits);
 	profile.reserve = 0;
@@ -4289,14 +4327,15 @@ void supplyBudget()
 	profile.healthGain = 10;
 	profile.healthInterval = 10;
 	auto budget = playerBotSupplyBudget(profile, 1, 0.5, 900, 0);
-	assert(budget.regenerationHealing == 450 && budget.expectedPotions == 4);
+	assert(budget.regenerationHealing == 900 && budget.expectedPotions == 0);
 	budget = playerBotSupplyBudget(profile, 1, 0.5, 900, 900);
 	assert(budget.regenerationHealing == 0 && budget.expectedPotions == 8);
 	profile.regenerationSeconds = 100;
-	assert(playerBotSupplyBudget(profile, 1, 0.5, 900, 0).regenerationHealing == 50);
+	assert(playerBotSupplyBudget(profile, 1, 0.5, 900, 0).regenerationHealing == 100);
 	profile.regenerationSeconds = 9;
 	assert(playerBotSupplyBudget(profile, 1, 1, 900, 0).regenerationHealing == 0);
 	profile.regenerationSeconds = 900;
+	profile.healthGain = 0; // Test spell resources independently of food healing.
 	profile.mana = profile.maximumMana = 100;
 	profile.spellMana = 20;
 	profile.spellHealing = 40;
@@ -4305,18 +4344,148 @@ void supplyBudget()
 	assert(budget.spellHealing == 0); // unlearned/illegal Exura gets no credit
 	profile.spellLegal = true;
 	budget = playerBotSupplyBudget(profile, 1, 0.5, 900, 0);
-	assert(budget.spellHealing == 120 && budget.expectedPotions == 3);
+	assert(budget.spellHealing == 200 && budget.expectedPotions == 6);
 	profile.mana = 0;
 	profile.manaGain = 1;
 	profile.manaInterval = 10;
-	assert(playerBotSupplyBudget(profile, 1, 0.5, 900, 0).spellHealing == 0);
+	assert(playerBotSupplyBudget(profile, 1, 0.5, 900, 0).spellHealing == 160);
 	profile.manaGain = 10;
-	assert(playerBotSupplyBudget(profile, 1, 0.5, 900, 0).spellHealing == 120);
+	assert(playerBotSupplyBudget(profile, 1, 0.5, 900, 0).spellHealing == 200);
 	profile.maximumMana = 59;
+	assert(playerBotSupplyBudget(profile, 1, 0.5, 900, 0).spellHealing == 80);
+	profile.maximumMana = 19;
 	assert(playerBotSupplyBudget(profile, 1, 0.5, 900, 0).spellHealing == 0);
 	profile.potionHealing = 0;
 	budget = playerBotSupplyBudget(profile, 1, 0, 900, 0);
 	assert(std::isfinite(budget.expectedPotions) && !budget.fits);
+}
+
+void currentResourceBudgetContracts()
+{
+	PlayerBotSupplyProfile profile;
+	profile.potions = profile.reserve = 2;
+	profile.potionHealing = 100;
+	profile.mana = profile.maximumMana = 50;
+	profile.spellMana = 20;
+	profile.spellHealing = 40;
+	profile.spellInterval = 1;
+	profile.spellLegal = true;
+	auto budget = playerBotSupplyBudget(profile, 1, .5, 80, 0);
+	assert(budget.spellHealing == 80 && budget.expectedPotions == 0 && budget.fits);
+	profile.spellLegal = false;
+	profile.regenerationSeconds = 10;
+	profile.healthGain = 100;
+	profile.healthInterval = 1;
+	budget = playerBotSupplyBudget(profile, 1, .1, 100, 0);
+	assert(budget.regenerationHealing == 10 && budget.potionEquivalentDemand == .9);
+	assert(!budget.fits); // Surplus early food cannot cover the unfed 90 seconds.
+	assert(playerBotSupplyBudget(profile, 1, .1, 100, 10).regenerationHealing == 0);
+	// Mana overflow during a fully healed fed interval is not banked beyond capacity.
+	profile.spellLegal = true;
+	profile.manaGain = 100;
+	profile.manaInterval = 1;
+	budget = playerBotSupplyBudget(profile, 1, .5, 100, 0);
+	assert(budget.spellHealing == 80 && budget.expectedPotions == 1);
+	PlayerBotHuntRegion hunt;
+	hunt.currentHealth = hunt.maximumHealth = 100;
+	hunt.availableHuntSeconds = hunt.maximumHuntSeconds = 20;
+	hunt.expectedDamagePerSecond = 1;
+	hunt.combatFraction = 1;
+	hunt.supplyProfile.potions = 2;
+	hunt.supplyProfile.potionHealing = 100;
+	hunt.reconcileSupplies(2);
+	assert(hunt.supplyBudget.potionEquivalentDemand == .2);
+	assert(hunt.supplyBudget.expectedPotions == 0 && hunt.supplyBudget.fits);
+	assert(hunt.minimumProductiveSupplies(2).front().count == 2);
+	hunt.routeValidated = true;
+	hunt.recoveryRouteHealthLoss = 1;
+	hunt.reconcileSupplies(2);
+	assert(hunt.supplyBudget.expectedPotions == 1 && !hunt.supplyBudget.fits);
+	hunt.recoveryRouteHealthLoss = 0;
+	hunt.supplyCalibration = {hunt.supplyCapability, .01, 1};
+	hunt.reconcileSupplies(2);
+	assert(hunt.supplyBudget.potionEquivalentDemand == .2 && hunt.supplyBudget.expectedPotions == 0);
+	// A local health estimate can also own mana debt when no typed budget does.
+	auto spellDebt = hunt;
+	spellDebt.supplyProfile.spellLegal = true;
+	spellDebt.supplyProfile.spellHealing = 40;
+	spellDebt.supplyProfile.spellMana = 20;
+	spellDebt.supplyProfile.spellInterval = 1;
+	spellDebt.supplyProfile.mana = spellDebt.supplyProfile.maximumMana = 50;
+	spellDebt.supplyCalibration.potionsPerCombatSecond = .05;
+	spellDebt.reconcileSupplies(2);
+	assert(spellDebt.supplyBudget.potionEquivalentDemand == 1);
+	assert(spellDebt.supplyBudget.currentManaHealingCredit == 80);
+	assert(spellDebt.supplyBudget.expectedPotions == 0 && spellDebt.supplyBudget.fits);
+	spellDebt.supplyProfile.spellLegal = false;
+	spellDebt.reconcileSupplies(2);
+	assert(spellDebt.supplyBudget.expectedPotions == 1 && !spellDebt.supplyBudget.fits);
+	// Mana debt is an economic cost, not necessarily a carried-potion use.
+	hunt.supplyRecovery = true;
+	hunt.supplyProfile.spellLegal = true;
+	hunt.supplyProfile.mana = hunt.supplyProfile.maximumMana = 75;
+	hunt.supplyProfile.kinds = {{PlayerBotSupplyKind::ManaPotion, 7620, 0, 1, {.025, 1}, 0, 50}};
+	hunt.reconcileSupplies(2);
+	assert(hunt.supplyKindBudgets.front().expectedUnits == .5);
+	assert(hunt.supplyKindBudgets.front().expected == 0 && hunt.supplyKindBudgets.front().fits);
+	hunt.optimisticProjectedExperience = 20;
+	assert(playerBotHuntOptimisticFittingExperience(hunt, 20, 1) >= 20);
+	hunt.supplyProfile.mana = 0;
+	hunt.reconcileSupplies(2);
+	assert(hunt.supplyKindBudgets.front().expected == 1 && !hunt.supplyKindBudgets.front().fits);
+}
+
+void encounterResourceRecheckContracts()
+{
+	PlayerBotHuntRegion hunt;
+	hunt.currentHealth = hunt.maximumHealth = 100;
+	hunt.availableHuntSeconds = hunt.maximumHuntSeconds = hunt.predictedFightSeconds = 30;
+	hunt.combatFraction = 1;
+	hunt.supplyProfile.potions = 2;
+	hunt.supplyProfile.potionHealing = 50;
+	hunt.encounterForecast.emplace();
+	hunt.encounterForecast->damage = 120;
+	hunt.encounterForecast->seconds = 30;
+	hunt.encounterForecast->phases = {{30, 4, 10}};
+	hunt.reconcileEncounterSafety(0);
+	assert(hunt.predictedLethal && hunt.encounterSurvivalForecast && hunt.recovery.availableBeforeLethal > 0); // Diagnostic only.
+	hunt.reconcileEncounterSafety(2);
+	assert(hunt.predictedLethal && !hunt.encounterSurvivalForecast && hunt.recovery.availableBeforeLethal == 0);
+	hunt.supplyProfile.mana = hunt.supplyProfile.maximumMana = 50;
+	hunt.supplyProfile.spellLegal = true;
+	hunt.supplyProfile.spellMana = 20;
+	hunt.supplyProfile.spellHealing = 50;
+	hunt.supplyProfile.spellInterval = 1;
+	hunt.reconcileEncounterSafety(2);
+	assert(hunt.predictedLethal && hunt.encounterSurvivalForecast);
+	using namespace std::chrono;
+	const auto start = steady_clock::time_point{} + seconds(1);
+	PlayerBotHuntRuntimePlayerObservation actor;
+	actor.health = actor.maximumHealth = 100;
+	actor.mana = 50;
+	PlayerBotHuntRuntime runtime({});
+	hunt.supplyProfile.reserve = 2;
+	runtime.selectPlanningRegion(hunt, actor, start);
+	runtime.beginCycle(start, 30);
+	auto spentMana = hunt.supplyProfile;
+	spentMana.mana = 0;
+	assert(!runtime.enterHuntArea(actor, spentMana, start)); // Outbound spending invalidates recovery credit.
+	assert(!runtime.enterHuntArea(actor, hunt.supplyProfile, start)); // Shadow cannot authorize a gross-lethal arrival.
+	hunt.encounterForecast->damage = 80;
+	hunt.encounterForecast->phases = {{30, 80.0 / 30, 10}};
+	hunt.reconcileEncounterSafety(2);
+	assert(!hunt.predictedLethal);
+	runtime.selectPlanningRegion(hunt, actor, start);
+	runtime.beginCycle(start, 30);
+	assert(runtime.enterHuntArea(actor, hunt.supplyProfile, start));
+	runtime.observeDamage(7, true);
+	runtime.observeDamage(11, false); // Loot/patrol poison, not legacy active combat damage.
+	const auto completed = runtime.complete(actor, start + seconds(30), 30);
+	assert(completed && completed->combat.damageTaken == 7 && completed->reachedHuntDamageTaken == 18);
+	hunt.encounterForecast->audited = false;
+	hunt.encounterForecast->damage = 120;
+	hunt.reconcileEncounterSafety(0);
+	assert(hunt.predictedLethal && !hunt.encounterSurvivalForecast && hunt.recovery.availableBeforeLethal == 0);
 }
 
 void firstHealingBootstrap()
@@ -5173,10 +5342,12 @@ void recoveryAlternativeContracts()
 		region->supplyRecovery = true;
 		region->currentHealth = region->maximumHealth = 215;
 		region->supplyProfile.potions = 0;
+		region->supplyProfile.potionHealing = 125;
 		region->predictedFightSeconds = 5;
 		region->combatFraction = 0.5;
 		region->expectedDamagePerSecond = 0.01;
 		region->coinGoldPerMinute = 6;
+		region->healthPotionUnitPrice = 45;
 	}
 	current.recoveryLoadoutId = 1; current.combat = ranged; current.coinGoldPerMinute = 12;
 	current.supplyProfile.kinds = {{PlayerBotSupplyKind::ThrowingWeapon, 2389, 4, 1, {}, 0.1, 9}};
@@ -5188,6 +5359,7 @@ void recoveryAlternativeContracts()
 		assert(request.combat->attackRange == region->combat.attackRange);
 		auto facts = routeFacts(); facts.approaches = {Position(200, 100, 7)};
 		facts.supplyProfile = region->supplyProfile; facts.huntDurationSeconds = 60;
+		facts.healthPotionUnitPrice = region->healthPotionUnitPrice;
 		selector.observe(request, facts);
 		selector.observe(selector.next(), facts);
 		assert(selector.next().stage == PlayerBotHuntRouteStage::Final);
@@ -5209,7 +5381,7 @@ void recoveryAlternativeContracts()
 	assert(!fallback.recoverySustainable());
 	fallback.exitFare = 0;
 	fallback.recoveryPreparationCost = 100;
-	assert(!fallback.recoverySustainable());
+	assert(fallback.recoverySustainable()); // Past spending cannot forbid positive marginal work.
 	fallback.recoveryPreparationCost = 0;
 	assert(playerBotHuntTravelAffordable(20, 0, 10, 10));
 	assert(!playerBotHuntTravelAffordable(19, 0, 10, 10)); // future loot cannot pay a promised return fare
@@ -5251,6 +5423,62 @@ void recoveryAlternativeContracts()
 	assert(!food.completed(0, true));
 	assert(!food.completed(0, true));
 	assert(food.completed(0, true)); // renewed temporary food is not unlimited progress
+}
+
+void fractionalHuntEconomicsContracts()
+{
+	PlayerBotHuntRegion hunt;
+	hunt.availableHuntSeconds = 60;
+	hunt.coinGoldPerMinute = 12;
+	hunt.healthPotionUnitPrice = 45;
+	hunt.supplyBudget.potionEquivalentDemand = .2;
+	hunt.supplyBudget.expectedPotions = 1;
+	assert(std::abs(hunt.recoveryNetIncomePerMinute() - 3) < 1e-9);
+	PlayerBotSupplyKindProfile spear{PlayerBotSupplyKind::ThrowingWeapon, 2389, 1, 1, {.002, 1}};
+	spear.unitPrice = 10;
+	hunt.supplyProfile.kinds.push_back(spear);
+	hunt.supplyKindBudgets.push_back(playerBotSupplyKindBudget(spear, 60, true));
+	assert(hunt.supplyKindBudgets.front().expected == 1);
+	assert(hunt.supplyKindBudgets.front().fits);
+	assert(std::abs(hunt.recoveryNetIncomePerMinute() - 1.8) < 1e-9);
+	hunt.cashPressure = true;
+	hunt.combatFraction = 1;
+	assert(hunt.cheapEconomicKey().profitabilityHint == PlayerBotHuntProfitabilityHint::LikelySurplus);
+	hunt.supplyProfile.kinds[0].unitPrice = 0;
+	assert(!std::isfinite(hunt.recoveryNetIncomePerMinute())); // No unknown-price credit.
+	hunt.supplyProfile.kinds.clear();
+	hunt.supplyKindBudgets.clear();
+	hunt.supplyBudget.potionEquivalentDemand = hunt.supplyBudget.expectedPotions = 0;
+	hunt.coinGoldPerMinute = 4.4;
+	hunt.supplyRecovery = hunt.routeValidated = true;
+	hunt.supplyBudget.fits = true;
+	hunt.currentHealth = hunt.maximumHealth = 215;
+	hunt.recoveryPreparationCost = 45;
+	assert(hunt.recoverySustainable());
+	assert(hunt.recoveryPreparationCost == 45); // Admission does not erase spending.
+	for (int i = 0; i < 11; ++i)
+		hunt.recoveryPreparationCost = playerBotRemainingPreparationDebt(hunt.recoveryPreparationCost, 4);
+	assert(hunt.recoveryPreparationCost == 1);
+	hunt.recoveryPreparationCost = playerBotRemainingPreparationDebt(hunt.recoveryPreparationCost, 4);
+	assert(hunt.recoveryPreparationCost == 0);
+	hunt.outboundFare = 3;
+	hunt.exitFare = 2;
+	hunt.estimatedTravelSeconds = 30;
+	assert(!hunt.recoverySustainable()); // Future outbound and return still cost money.
+	using namespace std::chrono;
+	const auto start = steady_clock::time_point{} + seconds(1);
+	PlayerBotHuntRuntimePlayerObservation actor;
+	actor.health = actor.maximumHealth = 215;
+	PlayerBotHuntRuntime runtime({});
+	runtime.selectPlanningRegion(hunt, actor, start);
+	runtime.beginCycle(start, 60);
+	assert(runtime.enterHuntArea(actor, hunt.supplyProfile, start + seconds(10)));
+	const auto& arrival = *runtime.region();
+	assert(arrival.outboundCompleted && arrival.outboundFare == 3);
+	assert(std::abs(arrival.recoveryNetIncomePerMinute() - 2.4) < 1e-9);
+	auto expensiveReturn = arrival;
+	expensiveReturn.exitFare = 5;
+	assert(!expensiveReturn.recoverySustainable());
 }
 
 void productiveHuntTripContracts()
@@ -5371,6 +5599,7 @@ void frozenHuntEconomicRankingContracts()
 		region.estimatedTravelSeconds = travel;
 		region.availableHuntSeconds = productive;
 		region.supplyBudget.expectedPotions = 1;
+		region.supplyBudget.potionEquivalentDemand = 1;
 		region.healthPotionUnitPrice = price;
 		region.freezeEconomicKey();
 		return region;
@@ -5439,10 +5668,12 @@ void frozenHuntEconomicRankingContracts()
 	assert(hint(unknown) == Hint::Uncertain);
 	unknown.supplyProfile.kinds.clear();
 	unknown.supplyBudget.expectedPotions = 1;
+	unknown.supplyBudget.potionEquivalentDemand = 1;
 	assert(hint(unknown) == Hint::Uncertain); // Health quote is also required.
 	unknown.healthPotionUnitPrice = 45;
 	assert(hint(unknown) == Hint::LikelySurplus);
 	unknown.supplyBudget.expectedPotions = std::numeric_limits<double>::max();
+	unknown.supplyBudget.potionEquivalentDemand = std::numeric_limits<double>::max();
 	assert(hint(unknown) == Hint::Uncertain); // No health-demand estimate.
 	unknown.supplyBudget.expectedPotions = 0;
 	unknown.cashPressure = false;
@@ -5465,7 +5696,8 @@ void frozenHuntEconomicRankingContracts()
 		frozen.cashPressure = true;
 		frozen.supplyRecovery = recovery;
 		frozen.coinGoldPerMinute = 100;
-		frozen.currentHealth = frozen.maximumHealth = 100;
+		frozen.maximumHealth = 100;
+		frozen.currentHealth = 80; // No spendable HP above the protected return floor.
 		frozen.combatFraction = 1;
 		frozen.expectedDamagePerSecond = 0.01;
 		frozen.supplyProfile.potionHealing = 125;
@@ -5474,7 +5706,7 @@ void frozenHuntEconomicRankingContracts()
 		auto changed = frozen;
 		changed.estimatedReturnSeconds = changed.estimatedSupplySeconds = 6000;
 		changed.outboundFare = changed.exitFare = changed.supplyFare = 20;
-		changed.healthPotionUnitPrice = 1000;
+		changed.healthPotionUnitPrice = 1000000; // Fractional consumption alone exceeds outing income.
 		changed.supplyProfile.kinds[0].unitPrice = 1000;
 		changed.recoveryRouteHealthLoss = 10;
 		changed.reconcileTravel(30, 6000, 1);
@@ -5602,6 +5834,7 @@ void optimisticCoarseSupplyAdmissionContracts()
 	candidate.supplyRecovery = true;
 	candidate.currentHealth = candidate.maximumHealth = 100;
 	candidate.coinGoldPerMinute = 6;
+	candidate.healthPotionUnitPrice = 45;
 	candidate.combatFraction = 0.5;
 	candidate.expectedDamagePerSecond = 0.01;
 	candidate.predictedFightSeconds = 10;
@@ -5642,6 +5875,7 @@ void optimisticCoarseSupplyAdmissionContracts()
 		assert(selector.observe(selector.next(), live).accepted);
 		assert(selector.next().stage == PlayerBotHuntRouteStage::Final);
 		live.recoveryRouteHealthLoss = loss;
+		live.healthPotionUnitPrice = candidate.healthPotionUnitPrice;
 		const auto result = selector.observe(selector.next(), live);
 		if (loss == 0) {
 			assert(result.terminal && result.selectedRouteRegion);
@@ -5814,6 +6048,7 @@ int main()
 	optimisticCoarseSupplyAdmissionContracts();
 	recoveryAlternativeContracts();
 	productiveHuntTripContracts();
+	fractionalHuntEconomicsContracts();
 	backpackAcquisition();
 	paladinLoadouts();
 	carriedShieldUpgrade();
@@ -5864,6 +6099,8 @@ int main()
 	overBudgetHunts();
 	supplyBudget();
 	firstHealingBootstrap();
+	currentResourceBudgetContracts();
+	encounterResourceRecheckContracts();
 	recoverySpellPriority();
 	projection();
 	oracleRecovery();

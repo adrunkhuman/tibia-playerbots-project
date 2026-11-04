@@ -13,6 +13,8 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cmath>
+#include <limits>
 #include <string>
 
 #include "position.h"
@@ -44,10 +46,17 @@ struct PlayerBotTraversalCandidate : PlayerBotTarget {
 	bool attacksPlayer = false;
 };
 
-inline bool playerBotPassageFightManageable(int32_t currentHealth, uint32_t minimumRecovery,
-                                             double incomingDamagePerSecond, double fightSeconds)
+inline double playerBotPassageWorkSeconds(double combatSeconds, double lootRemainingSeconds, bool lootActive)
 {
-	return currentHealth > 0 && incomingDamagePerSecond >= 0 && fightSeconds > 0 &&
+	return std::max(0.0, lootActive ? std::min(combatSeconds, lootRemainingSeconds) : combatSeconds);
+}
+
+inline bool playerBotPassageFightManageable(int32_t currentHealth, uint32_t minimumRecovery,
+                                             double incomingDamagePerSecond, double fightSeconds,
+                                             double availableSeconds = std::numeric_limits<double>::infinity())
+{
+	return currentHealth > 0 && incomingDamagePerSecond >= 0 && std::isfinite(fightSeconds) &&
+	       fightSeconds > 0 && fightSeconds <= availableSeconds &&
 	       incomingDamagePerSecond * fightSeconds < currentHealth + minimumRecovery;
 }
 

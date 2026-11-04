@@ -577,7 +577,11 @@ function Assert-AdaptiveChallengeEvents {
         $_.event -eq "hunt_region_candidate" -and $_.recovery -and $_.challenge_frontier -ge 0.1 -and
         $_.challenge_band_minimum -lt $_.challenge_band_maximum -and $_.predicted_lethal -ne $null
     })
-	$unsafeLethalRecovery = @($candidates | Where-Object { $_.recovery.available_before_lethal -ne 0 })
+	$unsafeLethalRecovery = @($candidates | Where-Object {
+		$_.recovery.available_before_lethal -gt 0 -and
+		(-not $_.encounter_timing_audited -or -not $_.encounter_survival_forecast -or
+		 $_.encounter_timing_policy -ne "shadow_gross_gate_authoritative")
+	})
 	$exhausted = @($events | Where-Object {
 		$_.event -eq "hunt_scope_exhausted" -and $_.reason -eq "local_scope_exhausted" -and
 		$_.retry_delay_ms -eq 1000 -and $_.maximum_attempts -eq 3

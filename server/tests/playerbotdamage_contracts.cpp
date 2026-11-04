@@ -54,6 +54,29 @@ void delayedDecayAndMerge()
 	close(conditionOnly.total(), 0.5);
 }
 
+void sharedPhysicalBlocks()
+{
+	PlayerBotDamageRates one;
+	one.addPhysicalAttack(10, 0, 100, 2000);
+	close(one.total(), 0);
+	close(one.unshieldedTotal(), 5);
+	PlayerBotDamageRates five;
+	for (int i = 0; i < 5; ++i) five.merge(one);
+	close(five.total(), 15); // 2.5 hits/sec share one block/sec, not five shields.
+	PlayerBotDamageRates slow, slowCrowd;
+	slow.addPhysicalAttack(10, 0, 100, 4000);
+	for (int i = 0; i < 5; ++i) slowCrowd.merge(slow);
+	close(slowCrowd.total(), 7.5); // Only two stored blocks for a five-hit volley.
+	five.addCondition({1, 0, 0, 30, 0, 4000});
+	close(five.total(), 15.5);
+	five.clearDirect();
+	close(five.total(), 0.5);
+	PlayerBotDamageRates armorOnly;
+	armorOnly.addPhysicalAttack(5, 5, 100, 1000);
+	armorOnly.merge(one);
+	close(armorOnly.total(), 10 - 5.0 / 1.5);
+}
+
 void spatialAndAlternativeSources()
 {
 	PlayerBotDamageRates attacker;
@@ -79,5 +102,6 @@ int main()
 {
 	delayedDecayAndMerge();
 	spatialAndAlternativeSources();
+	sharedPhysicalBlocks();
 	std::cout << "playerbot damage contracts passed\n";
 }

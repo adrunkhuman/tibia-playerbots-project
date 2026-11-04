@@ -183,8 +183,27 @@ PlayerBotHuntChallengeUpdate PlayerBotHuntPolicy::updateChallengeFrontier(const 
 	                           update.potionRecoveriesPerActiveMinute >= 1.0;
 	const bool backoff = update.combat.dangerObserved || update.combat.deathObserved || criticalHealth ||
 	                     criticalMana || heavyRecovery;
-	const bool qualifyingEasy = enoughActiveCombat && !lowHealthPressure && !manaPressure && !backoff &&
-	                           update.combat.potionRecoveries <= 2;
+	auto clearChallengeEvidence = [&] {
+		challengeActiveSeconds = 0;
+		challengeKills = challengePotions = 0;
+		challengeMinimumManaPercent = 100;
+	};
+	if (challengeCapability != sample.capability) clearChallengeEvidence();
+	challengeCapability = sample.capability;
+	const bool easySample = update.combat.activeSeconds > 0 && !lowHealthPressure && !manaPressure && !backoff &&
+	                        update.combat.potionRecoveries <= 2;
+	if (easySample) {
+		challengeActiveSeconds += update.combat.activeSeconds;
+		challengeKills += update.combat.kills;
+		challengePotions += update.combat.potionRecoveries;
+		challengeMinimumManaPercent = std::min(challengeMinimumManaPercent, update.combat.p10ManaPercent);
+	} else if (update.combat.activeSeconds > 0 || backoff) {
+		clearChallengeEvidence();
+	}
+	update.pooledActiveCombatSeconds = challengeActiveSeconds;
+	update.pooledKills = challengeKills;
+	const bool qualifyingEasy = challengeActiveSeconds >= minimumChallengeActiveSeconds &&
+	                           challengeKills >= minimumChallengeKills && challengePotions <= 2;
 	if (backoff && (update.combat.activeSeconds > 0 || update.combat.deathObserved)) {
 		frontier = std::max(minimumChallengeFrontier, frontier - challengeBackoff);
 		qualifyingHuntsToHold = 2;
@@ -193,7 +212,7 @@ PlayerBotHuntChallengeUpdate PlayerBotHuntPolicy::updateChallengeFrontier(const 
 		--qualifyingHuntsToHold;
 		update.result = PlayerBotHuntChallengeResult::Hold;
 	} else if (qualifyingEasy) {
-		const bool strongEvidence = update.combat.potionRecoveries <= 2 && update.combat.p10ManaPercent >= 50;
+		const bool strongEvidence = challengeMinimumManaPercent >= 50;
 		frontier = std::min(maximumChallengeFrontier, frontier +
 		                    (strongEvidence ? strongChallengeEscalation : challengeEscalation));
 		update.result = frontier == update.frontierBefore ? PlayerBotHuntChallengeResult::Clamped :
@@ -201,6 +220,7 @@ PlayerBotHuntChallengeUpdate PlayerBotHuntPolicy::updateChallengeFrontier(const 
 	} else if (enoughActiveCombat) {
 		update.result = PlayerBotHuntChallengeResult::Hold;
 	}
+	if (backoff || qualifyingEasy || challengePotions > 2) clearChallengeEvidence();
 	update.frontierAfter = frontier;
 	update.qualifyingHuntsToHold = qualifyingHuntsToHold;
 	return update;
@@ -287,7 +307,7 @@ PlayerBotSupplyObservation PlayerBotHuntPolicy::observeSupplies(const PlayerBotH
 		manaDebtPotions = update.levelAdjustedManaDebt / region.supplyProfile.maximumMana;
 	}
 	update.potionEquivalentDemand = combat.potionRecoveries + healthDebtPotions + manaDebtPotions;
-	const double observed = update.potionEquivalentDemand / combat.activeSeconds;
+	double observed = update.potionEquivalentDemand / combat.activeSeconds;
 	update.potionsDepleted = region.supplyProfile.potions > 0 && potions == 0;
 	const bool healthPressure = combat.p10HealthPercent < update.minimumHealthPercent;
 	const bool unsafe = combat.dangerObserved || combat.deathObserved || update.potionsDepleted || healthPressure;
@@ -301,13 +321,12 @@ PlayerBotSupplyObservation PlayerBotHuntPolicy::observeSupplies(const PlayerBotH
 		update.globalMultiplierAfter = globalSupplyLearning.multiplier;
 		update.globalSamplesAfter = globalSupplyLearning.samples;
 	};
-	auto updateGlobal = [&](bool allowDownward) {
-		if (!std::isfinite(update.staticPotionsPerCombatSecond) ||
-		    update.staticPotionsPerCombatSecond <= 0 || !std::isfinite(observed)) {
+	auto updateGlobal = [&](double observedDemand, double staticDemand, bool allowDownward) {
+		if (!std::isfinite(staticDemand) || staticDemand <= 0 || !std::isfinite(observedDemand)) {
 			update.globalReason = "static_rate_unavailable";
 			return;
 		}
-		const double targetMultiplier = observed / update.staticPotionsPerCombatSecond;
+		const double targetMultiplier = observedDemand / staticDemand;
 		if (!std::isfinite(targetMultiplier)) {
 			update.globalReason = "observed_ratio_invalid";
 			return;
@@ -337,11 +356,11 @@ PlayerBotSupplyObservation PlayerBotHuntPolicy::observeSupplies(const PlayerBotH
 	candidate.capability = capabilityAfter;
 	candidate.potionsPerCombatSecond = prior;
 	candidate.samples = compatibleHistory ? compatibleHistory->samples : 0;
-	const bool globalUpwardEvidence = update.staticPotionsPerCombatSecond > 0 &&
-	    observed / update.staticPotionsPerCombatSecond > globalSupplyLearning.multiplier;
 
 	if (unsafe) {
-		updateGlobal(false);
+		history.supplyEvidence = {};
+		globalSupplyEvidence = {};
+		updateGlobal(observed, update.staticPotionsPerCombatSecond, false);
 		candidate.potionsPerCombatSecond = std::max({prior, observed, 1.0 / 60.0});
 		update.localEstimateDirection = estimateDirection(prior, candidate.potionsPerCombatSecond);
 		if (update.localEstimateDirection == PlayerBotSupplyEstimateDirection::Upward) {
@@ -366,50 +385,52 @@ PlayerBotSupplyObservation PlayerBotHuntPolicy::observeSupplies(const PlayerBotH
 		finishGlobalTelemetry();
 		return update;
 	}
-	// Higher demand corrects immediately, even when an otherwise safe outing
-	// ended early. Only cheaper evidence needs the full exposure guards.
-	if (observed > prior || globalUpwardEvidence) {
-		updateGlobal(false);
-		if (observed > prior) {
-			candidate.potionsPerCombatSecond = observed;
-			++candidate.samples;
-			learned = candidate;
-			update.calibration = learned;
-			update.localUpdated = true;
-			update.localEstimateDirection = PlayerBotSupplyEstimateDirection::Upward;
-		}
-		update.accepted = update.localUpdated || update.globalUpdated;
-		update.reason = update.localUpdated ? "higher_observed_demand" : "higher_global_demand";
-		finishGlobalTelemetry();
+	// A valid arrival baseline and accounted endpoint debt make safe interrupted
+	// hunts useful exposure too. Keep local evidence per variant and transfer only
+	// a static-normalized ratio across areas, with capability/revision boundaries.
+	auto accumulate = [&](PlayerBotSupplyEvidence& pool) {
+		const auto change = playerBotCompareSupplyCapabilities(pool.capability, capabilityAfter);
+		if (pool.atlasRevision != region.atlasRevision || !change.compatible || change.recoveryContextChanged)
+			pool = {};
+		pool.capability = capabilityAfter;
+		pool.atlasRevision = region.atlasRevision;
+		pool.activeSeconds += combat.activeSeconds;
+		pool.durationSeconds += durationSeconds;
+		pool.kills += combat.kills;
+		pool.demand += update.potionEquivalentDemand;
+		pool.staticDemand += update.staticPotionsPerCombatSecond * combat.activeSeconds;
+	};
+	auto enoughExposure = [&](const PlayerBotSupplyEvidence& pool) {
+		return pool.durationSeconds >= update.minimumDurationSeconds &&
+		       pool.activeSeconds >= update.minimumActiveCombatSeconds && pool.kills >= update.minimumKills;
+	};
+	accumulate(history.supplyEvidence);
+	accumulate(globalSupplyEvidence);
+	const auto& local = history.supplyEvidence;
+	update.pooledActiveCombatSeconds = local.activeSeconds;
+	update.pooledDurationSeconds = local.durationSeconds;
+	update.pooledKills = local.kills;
+	if (enoughExposure(globalSupplyEvidence)) {
+		updateGlobal(globalSupplyEvidence.demand, globalSupplyEvidence.staticDemand, true);
+	}
+	if (!enoughExposure(local)) {
+		update.accepted = update.globalUpdated;
+		update.reason = update.globalUpdated ? "pooled_global_evidence" :
+		    local.durationSeconds < update.minimumDurationSeconds ? "insufficient_duration" :
+		    local.activeSeconds < update.minimumActiveCombatSeconds ? "insufficient_active_combat" : "insufficient_kills";
 		return update;
 	}
-	if (interrupted) {
-		update.reason = "interrupted_outing";
-		return update;
-	}
-	if (durationSeconds < update.minimumDurationSeconds) {
-		update.reason = "insufficient_duration";
-		return update;
-	}
-	if (combat.activeSeconds < update.minimumActiveCombatSeconds) {
-		update.reason = "insufficient_active_combat";
-		return update;
-	}
-	if (combat.kills < update.minimumKills) {
-		update.reason = "insufficient_kills";
-		return update;
-	}
-
-	updateGlobal(true);
-	candidate.potionsPerCombatSecond = prior * (1 - playerBotSupplyLocalDownwardBlend) +
-	    observed * playerBotSupplyLocalDownwardBlend;
+	observed = local.demand / local.activeSeconds;
+	candidate.potionsPerCombatSecond = observed > prior ? observed :
+	    prior * (1 - playerBotSupplyLocalDownwardBlend) + observed * playerBotSupplyLocalDownwardBlend;
 	++candidate.samples;
 	learned = candidate;
 	update.calibration = learned;
 	update.localUpdated = true;
 	update.accepted = true;
 	update.localEstimateDirection = estimateDirection(prior, candidate.potionsPerCombatSecond);
-	update.reason = combat.levelHealthRestored > 0 || combat.levelManaRestored > 0 ?
+	update.reason = update.localEstimateDirection == PlayerBotSupplyEstimateDirection::Upward ?
+	    "higher_observed_demand" : combat.levelHealthRestored > 0 || combat.levelManaRestored > 0 ?
 	    "level_restoration_accounted" :
 	    (combat.spellRecoveries > 0 ? "mixed_recovery_evidence" : "safe_combat_evidence");
 	finishGlobalTelemetry();
