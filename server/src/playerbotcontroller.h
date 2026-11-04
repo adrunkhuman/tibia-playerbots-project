@@ -621,6 +621,8 @@ PlayerBotTravelRouteExposure travelRouteExposure(const Player& player, const Pos
 		PlayerBotTurnRouter turnRouter;
 		PlayerBotTravelSafetyMemory& travelSafety;
 		std::chrono::steady_clock::time_point travelObservedAt{}, travelRetryAt{}, travelSafetyLoggedAt{};
+		std::chrono::steady_clock::time_point healSkipLoggedAt{};
+		std::string healSkipLoggedContext;
 		Position travelObservedPosition;
 		uint64_t travelObservedRaidRevision = 0;
 		std::string travelNavigationIdentity, travelNavigationEpoch;
