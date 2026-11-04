@@ -90,3 +90,68 @@ function Assert-RaidTravelEvents {
         throw 'Raid travel did not remain death-free.'
     }
 }
+
+function Assert-RaidTrappedEvents {
+    param([string]$Logs)
+
+    if ($Logs -match 'RAID_FIXTURE_FAILED' -or $Logs -notmatch 'PLAYERBOT_GAMEPLAY_TEST RAID_TRAPPED_PASS') {
+        throw 'Trapped raid travel lacks a successful independent position verifier.'
+    }
+    $events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
+    $phaseOrder = @('start', 'activated', 'spawned', 'withdrew', 'fought', 'removed', 'arrived')
+    $phases = @{}
+    $fight = $null
+    foreach ($e in $events) {
+        if ($e.bot -and $e.bot -ne 'Bot One') { throw 'Raid fixture must seed only Bot One.' }
+        if ($e.event -eq 'lifecycle' -and $e.status -eq 'dead') { throw 'Trapped raid travel caused a death.' }
+        if ($e.event -eq 'terminal') { throw "Raid controller stopped unexpectedly: $($e.reason)" }
+        if ($e.event -eq 'raid_fixture') {
+            if ($e.scenario -ne 'raid_trapped' -or $e.source -ne 'lua_position_verifier' -or
+                $phases.Count -ge $phaseOrder.Count -or $e.phase -ne $phaseOrder[$phases.Count]) {
+                throw 'Raid position evidence is missing, duplicated, or out of order.'
+            }
+            $phases[$e.phase] = $e
+        }
+        # The bot's decision must precede the verifier's observation of its attack.
+        if ($e.event -eq 'travel_safety' -and $e.action -eq 'fight') {
+            # One decision per target: re-announcing it means the attack did not hold.
+            if ($fight -and $fight.target_id -eq $e.target_id) { throw 'Trapped raid travel re-selected the same fight target.' }
+            if ($phases.ContainsKey('withdrew') -and -not $phases.ContainsKey('fought')) { $fight = $e }
+        }
+    }
+    if ($phases.Count -ne $phaseOrder.Count -or -not $fight) {
+        throw 'Trapped raid travel needs a dead-end withdrawal, a fight, controlled removal, and arrival.'
+    }
+    if ($fight.reason -ne 'no_lower_exposure' -or [double]$fight.danger -le 0.08 -or
+        $fight.target_id -ne $phases.spawned.target_id -or $phases.fought.target_id -ne $phases.spawned.target_id -or
+        $phases.fought.x -ne $phases.start.x -or $phases.fought.fight_ms -lt 2000 -or
+        $phases.arrived.x -ne $phases.start.goal_x -or
+        $phases.arrived.deaths -ne 0) {
+        throw 'Trapped raid travel did not fight the live threat from the dead end.'
+    }
+}
+
+function Assert-BridgeRouteEvents {
+    param([string]$Logs)
+
+    $events = @(ConvertFrom-PlayerbotLogs -Logs $Logs)
+    $start = @($events | Where-Object { $_.event -eq 'bridge_fixture' -and $_.phase -eq 'start' })
+    $result = @($events | Where-Object { $_.event -eq 'bridge_fixture' -and $_.phase -eq 'result' })
+    if ($start.Count -ne 1 -or $result.Count -ne 1) { throw 'Bridge route lacks one start and one result sample.' }
+    if ($start[0].shovel -lt 1 -or $start[0].rope -lt 1) { throw 'Bridge route must start with a shovel and a rope.' }
+    $plans = @($events | Where-Object { $_.bot -eq 'Bot One' -and $_.event -eq 'action_result' -and $_.action -eq 'plan' })
+    $floors = @($events | Where-Object { $_.event -eq 'bridge_fixture' -and $_.phase -eq 'floor_change' })
+    $safety = @($events | Where-Object { $_.bot -eq 'Bot One' -and $_.event -eq 'travel_safety' })
+    $r = $result[0]
+    Write-Host ("PLAYERBOT_GAMEPLAY_TEST BRIDGE_ROUTE_SUMMARY result={0} plateau_samples={1} z8_samples={2} floor_changes={3} minimum_health={4} travel_safety={5}" -f
+        $r.result, $r.plateau_samples, $r.z8_samples, $r.floor_changes, $r.minimum_health, $safety.Count)
+    foreach ($f in $floors) { Write-Host ("PLAYERBOT_GAMEPLAY_TEST BRIDGE_ROUTE_FLOOR {0},{1},{2} at {3}ms" -f $f.x, $f.y, $f.z, $f.elapsed_ms) }
+    foreach ($plan in ($plans | Select-Object -First 6)) {
+        Write-Host ("PLAYERBOT_GAMEPLAY_TEST BRIDGE_ROUTE_PLAN from={0},{1},{2} waypoint={3},{4},{5} steps={6} danger_cost={7} peak={8} shovel={9}" -f
+            $plan.position.x, $plan.position.y, $plan.position.z, $plan.waypoint.x, $plan.waypoint.y, $plan.waypoint.z,
+            $plan.steps, $plan.danger_cost, $plan.maximum_health_loss_per_second, $plan.shovel_available)
+    }
+    if ($r.result -ne 'arrived' -or $r.plateau_samples -gt 0) {
+        throw "Bridge route must reach the north side without crossing the Dwarven Bridge plateau (result=$($r.result), plateau_samples=$($r.plateau_samples))."
+    }
+}

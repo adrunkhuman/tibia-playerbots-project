@@ -273,6 +273,20 @@ inline bool playerBotNavigationPeakAccepts(double maximum, double peak)
 	return peak <= maximum;
 }
 
+// Planned routes stay below the peak that live travel safety reacts to, so a
+// normal planning error does not walk the bot into a safety standstill.
+inline double playerBotNavigationPlannedPeakLimit(const PlayerBotNavigationRiskProfile& risk)
+{
+	return risk.maximumHealthLossPerSecond * 0.75;
+}
+
+// Expected loss gets a wider margin: prefer a detour well before a route would
+// fail admission.
+inline uint32_t playerBotNavigationPlannedRouteDangerCost(const PlayerBotNavigationRiskProfile& risk)
+{
+	return static_cast<uint32_t>(risk.maximumRouteHealthLoss * 0.5 * risk.healthLossCost);
+}
+
 // Necessary endpoint evidence only: safety does not establish reachability.
 // Range goals and empty source-tree floods are left to the bounded search.
 // Already being at a requested endpoint requires no exposure-producing arc.

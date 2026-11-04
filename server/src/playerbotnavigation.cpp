@@ -536,15 +536,31 @@ PlayerBotNavigationResult PlayerBotNavigator::planFrom(Player& player, const Pos
 	uint64_t& expandedNodes, uint64_t maximumExpandedNodes, Position* closestPosition,
 	const PlayerBotNavigationCostPolicy* costPolicy, PlayerBotNavigationCostSummary* costSummary, bool sameFloorOnly) const
 {
-	PlayerBotPathSearch search(start, goal, maximumExpandedNodes);
 	// Synchronous execution callers retain the same total allowance. Queue-pop
 	// slices may yield on stale labels; only hunt selection returns to dispatcher.
-	while (!advance(player, search, blockedPositions, std::max<uint64_t>(maximumExpandedNodes, 1), costPolicy, sameFloorOnly)) {}
-	steps = std::move(search.steps);
-	expandedNodes = search.expanded;
-	if (closestPosition) *closestPosition = search.closest;
-	if (costSummary) *costSummary = search.summary;
-	return *search.result;
+	auto run = [&](PlayerBotPathSearch& search) {
+		while (!advance(player, search, blockedPositions, std::max<uint64_t>(maximumExpandedNodes, 1), costPolicy, sameFloorOnly)) {}
+	};
+	auto finish = [&](PlayerBotPathSearch& search, uint64_t priorExpanded) {
+		steps = std::move(search.steps);
+		expandedNodes = priorExpanded + search.expanded;
+		if (closestPosition) *closestPosition = search.closest;
+		if (costSummary) *costSummary = search.summary;
+		return *search.result;
+	};
+	PlayerBotPathSearch search(start, goal, maximumExpandedNodes);
+	// Static danger is otherwise only a weight: a short walk through a spawn
+	// beats a long safe detour. Exclude it first; the weighted search keeps
+	// reachability, and callers still judge its peak against their risk.
+	// Same-floor searches are combat and safety moves near their target, where
+	// a cap would only double the work.
+	const bool capped = !sameFloorOnly && costPolicy && costPolicy->enabled() && !costPolicy->risk.requiresZeroRisk();
+	if (capped) search.maximumPeakDanger = playerBotNavigationPlannedPeakLimit(costPolicy->risk);
+	run(search);
+	if (!capped || *search.result == PlayerBotNavigationResult::Reached) return finish(search, 0);
+	PlayerBotPathSearch weighted(start, goal, maximumExpandedNodes);
+	run(weighted);
+	return finish(weighted, search.expanded);
 }
 
 std::optional<PlayerBotNavigationResult> PlayerBotNavigator::advance(

@@ -92,33 +92,90 @@ foreach ($mode in @('raid_travel','raid_recovery')) {
     }
 }
 
+function New-TrappedEvents {
+    @(
+        @{event='raid_fixture';phase='start';x=60160;y=60200;z=7;health=185;health_max=185;goal_x=60208;goal_y=60200;goal_z=7;elapsed_ms=0}
+        @{event='raid_fixture';phase='activated';x=60168;y=60200;z=7;health=185;spawn_x=60169;spawn_y=60200;spawn_z=7;elapsed_ms=3000}
+        @{event='raid_fixture';phase='spawned';x=60168;y=60200;z=7;health=185;target_id=99;count=1;elapsed_ms=4000}
+        @{event='travel_safety';action='withdraw';danger=0.108;reason='lower_exposure'}
+        @{event='raid_fixture';phase='withdrew';x=60166;y=60200;z=7;health=185;target_id=99;from_x=60168;elapsed_ms=5000}
+        @{event='travel_safety';action='fight';danger=0.108;reason='no_lower_exposure';target_id=99}
+        @{event='raid_fixture';phase='fought';x=60160;y=60200;z=7;health=145;target_id=99;fight_ms=2000;elapsed_ms=8000}
+        @{event='raid_fixture';phase='removed';x=60160;y=60200;z=7;health=145;target_id=99;elapsed_ms=8000}
+        @{event='raid_fixture';phase='arrived';x=60208;y=60200;z=7;health=145;deaths=0;elapsed_ms=30000}
+    )
+}
+function Test-TrappedEvents([array]$Events, [bool]$Reject=$false, [bool]$Pass=$true) {
+    $logs = ($Events | ForEach-Object {
+        $_.component='playerbot'; if (-not $_.bot) { $_.bot='Bot One' }
+        if ($_.event -eq 'raid_fixture') { $_.scenario='raid_trapped'; $_.source='lua_position_verifier' }
+        $_ | ConvertTo-Json -Compress -Depth 8
+    }) -join "`n"
+    if ($Pass) { $logs += "`nPLAYERBOT_GAMEPLAY_TEST RAID_TRAPPED_PASS" }
+    try { Assert-RaidTrappedEvents -Logs $logs }
+    catch { if ($Reject) { return }; throw }
+    if ($Reject) { throw 'Incomplete/invalid trapped raid evidence passed.' }
+}
+$events = New-TrappedEvents
+Test-TrappedEvents $events
+Test-TrappedEvents $events $true $false
+foreach ($event in @($events | Where-Object { $_.event -eq 'raid_fixture' -or $_.action -eq 'fight' })) {
+    Test-TrappedEvents @($events | Where-Object { $_ -ne $event }) $true
+}
+foreach ($change in @(
+    @{match={ $_.action -eq 'fight' }; field='target_id'; value=100},
+    @{match={ $_.action -eq 'fight' }; field='reason'; value='lower_exposure'},
+    @{match={ $_.action -eq 'fight' }; field='danger'; value=0.08},
+    @{match={ $_.phase -eq 'fought' }; field='x'; value=60161},
+    @{match={ $_.phase -eq 'fought' }; field='target_id'; value=100},
+    @{match={ $_.phase -eq 'fought' }; field='fight_ms'; value=1999})) {
+    $broken = New-TrappedEvents
+    ($broken | Where-Object $change.match)[$change.field] = $change.value
+    Test-TrappedEvents $broken $true
+}
+# A fight decided only after the verifier saw the attack is not the cause.
+$late = New-TrappedEvents
+$fight = $late | Where-Object { $_.action -eq 'fight' }
+Test-TrappedEvents @(($late | Where-Object { $_ -ne $fight -and $_.phase -ne 'arrived' }) + $fight + ($late | Where-Object { $_.phase -eq 'arrived' })) $true
+$repeated = New-TrappedEvents
+$fightIndex = [array]::IndexOf($repeated, ($repeated | Where-Object { $_.action -eq 'fight' }))
+Test-TrappedEvents @($repeated[0..$fightIndex] + @{event='travel_safety';action='fight';danger=0.108;reason='no_lower_exposure';target_id=99} + $repeated[($fightIndex + 1)..($repeated.Count - 1)]) $true
+Test-TrappedEvents @($events + @{event='lifecycle';status='dead'}) $true
+Test-TrappedEvents @($events + @{event='terminal';reason='navigation_failed'}) $true
+
 # Exercise catalog wiring without Docker. The raid-specific mount and speed
 # override must not leak on success OR failure; generic runtime owns other envs.
 $script:RaidTravel = $true
 $script:projectRoot = $root
 $script:ran = @()
 $script:failWait = $false
-$script:waitPattern = $null
+$script:waitPatterns = @{}
 $originalCatalog = $env:PLAYERBOT_RAID_CATALOG
 $originalSpeed = $env:PLAYERBOT_SPEED_BONUS
 function Invoke-Scenario { param($Name, $DefaultTimeoutSeconds, [scriptblock]$Body)
-    if ($DefaultTimeoutSeconds -ne 180) { throw 'Raid deadline wiring changed.' }
+    if ($DefaultTimeoutSeconds -ne ($Name -eq 'bridge_route' ? 420 : 180)) { throw 'Raid deadline wiring changed.' }
     $script:ran += $Name
     & $Body
 }
 function Invoke-Compose {
-    if ($args[0] -eq 'up' -and ($env:PLAYERBOT_RAID_CATALOG -ne './tests/playerbot-gameplay/raids/raids.xml' -or
+    if ($args[0] -eq 'up' -and $env:PLAYERBOT_GAMEPLAY_MODE -like 'raid_*' -and ($env:PLAYERBOT_RAID_CATALOG -ne './tests/playerbot-gameplay/raids/raids.xml' -or
         $env:PLAYERBOT_SPEED_BONUS -ne '0' -or $env:PLAYERBOT_HUNT_DURATION_SECONDS -ne '900')) {
         throw 'Raid scenario did not isolate its catalog/speed/duration.'
     }
 }
 function Wait-ForLog { param($Pattern)
-    $script:waitPattern = $Pattern
+    $script:waitPatterns[$env:PLAYERBOT_GAMEPLAY_MODE] = $Pattern
     if ($script:failWait) { throw 'deliberate waiter failure' }
     return 'stub logs'
 }
 function Assert-RaidTravelEvents { param($Logs, $Mode)
-    if ($Mode -ne $env:PLAYERBOT_GAMEPLAY_MODE -or $Logs -ne 'stub logs') { throw 'Wrong raid assertion wiring.' }
+    if ($Mode -ne $env:PLAYERBOT_GAMEPLAY_MODE -or $Mode -eq 'raid_trapped' -or $Logs -ne 'stub logs') { throw 'Wrong raid assertion wiring.' }
+}
+function Assert-RaidTrappedEvents { param($Logs)
+    if ($env:PLAYERBOT_GAMEPLAY_MODE -ne 'raid_trapped' -or $Logs -ne 'stub logs') { throw 'Wrong trapped assertion wiring.' }
+}
+function Assert-BridgeRouteEvents { param($Logs)
+    if ($env:PLAYERBOT_GAMEPLAY_MODE -ne 'bridge_route' -or $Logs -ne 'stub logs') { throw 'Wrong bridge assertion wiring.' }
 }
 $restore = @{}
 foreach ($name in @('PLAYERBOT_GAMEPLAY_MODE','PLAYERBOT_HUNT_DURATION_SECONDS','PLAYERBOT_RELOG_DELAY_SECONDS','PLAYERBOT_MAX_CONSECUTIVE_DEATHS')) {
@@ -127,8 +184,9 @@ foreach ($name in @('PLAYERBOT_GAMEPLAY_MODE','PLAYERBOT_HUNT_DURATION_SECONDS',
 try {
     $env:PLAYERBOT_RAID_CATALOG='incoming-catalog'; $env:PLAYERBOT_SPEED_BONUS='123'
     . "$root/scripts/playerbot-gameplay/scenarios-raid.ps1"
-    if (($ran -join ',') -ne 'raid_travel,raid_recovery' -or $env:PLAYERBOT_RAID_CATALOG -ne 'incoming-catalog' -or
+    if (($ran -join ',') -ne 'raid_travel,raid_recovery,raid_trapped,bridge_route' -or $env:PLAYERBOT_RAID_CATALOG -ne 'incoming-catalog' -or
         $env:PLAYERBOT_SPEED_BONUS -ne '123') { throw 'Raid scenario selection/environment leaked.' }
+    $waitPattern = $waitPatterns['raid_travel']
     if ('{"event":"terminal","reason":"controlled_player_dead"}' -match $waitPattern -or
         '{"event":"terminal","reason":"navigation_failed"}' -notmatch $waitPattern) {
         throw 'Raid waiter mishandles intentional controller replacement.'

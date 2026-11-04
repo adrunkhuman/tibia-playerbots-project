@@ -24,6 +24,13 @@ namespace {
 		return position.z == player.getPosition().z && player.canSee(position) &&
 		       g_game.isSightClear(player.getPosition(), position, true);
 	}
+
+	bool adjacentAttacker(const Player& player, Creature* creature)
+	{
+		return creature && creature->getMonster() && !creature->isRemoved() && !creature->isDead() &&
+		       creature->getAttackedCreature() == &player && player.canSeeCreature(creature) &&
+		       Position::areInRange<1, 1, 0>(player.getPosition(), creature->getPosition());
+	}
 }
 
 void PlayerBotController::observeTravelSafety(Player& player)
@@ -276,8 +283,11 @@ bool PlayerBotController::processTravelSafety(Player* player, const Position& po
 		resetNavigation();
 		travelWithdrawing = true;
 	}
-	g_game.playerSetAttackedCreature(playerId, 0);
-	g_game.playerFollowCreature(playerId, 0);
+	// Drop hunt targets. An adjacent attacker keeps hitting whether or not the
+	// bot hits back, so a fight with it (started below when trapped) remains.
+	if (!adjacentAttacker(*player, player->getAttackedCreature())) g_game.playerSetAttackedCreature(playerId, 0);
+	// Unfollowing also clears the attack target in the engine.
+	if (player->getFollowCreature()) g_game.playerFollowCreature(playerId, 0);
 	g_game.playerStopAutoWalk(playerId);
 	deferUnsafeTravel(position, danger, "observed_threat");
 	// Defensive actions retain their normal costs and verification, but their
@@ -327,6 +337,24 @@ bool PlayerBotController::processTravelSafety(Player* player, const Position& po
 			emit("travel_safety", position, "\"action\":\"withdraw\",\"reason\":\"lower_exposure\",\"danger\":" +
 			    std::to_string(danger) + ",\"next_danger\":" + std::to_string(field->dangerAt(*target)) +
 			    ",\"x\":" + std::to_string(target->x) + ",\"y\":" + std::to_string(target->y));
+		}
+	} else if (!adjacentAttacker(*player, player->getAttackedCreature())) {
+		// No neighbour lowers exposure. Standing still only lets an adjacent
+		// attacker finish the bot, so fight back through normal combat.
+		SpectatorVec spectators;
+		g_game.map.getSpectators(spectators, position);
+		Creature* weakest = nullptr;
+		for (Creature* creature : spectators) {
+			if (adjacentAttacker(*player, creature) && (!weakest || creature->getHealth() < weakest->getHealth())) {
+				weakest = creature;
+			}
+		}
+		if (weakest) {
+			g_game.playerSetFightModes(playerId, FIGHTMODE_ATTACK, false, false);
+			g_game.playerSetAttackedCreature(playerId, weakest->getID());
+			emit("travel_safety", position, "\"action\":\"fight\",\"reason\":\"no_lower_exposure\",\"danger\":" +
+			    std::to_string(danger) + ",\"target_id\":" + std::to_string(weakest->getID()) +
+			    ",\"target_name\":" + playerbot::jsonString(weakest->getName()));
 		}
 	}
 	// A trapped or faster-than-us pursuer may still kill the player. Never

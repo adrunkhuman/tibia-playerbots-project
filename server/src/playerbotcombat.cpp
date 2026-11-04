@@ -751,17 +751,24 @@ bool PlayerBotController::handleHealing(Player* player, const Position& currentP
 			return true;
 		}
 		if (progressionRuntime.equipmentBackpackRecoveryActive()) return false;
-		std::ostringstream fields;
-		fields << "\"action\":\"heal\",\"result\":\"skipped\",\"reason\":\"missing_supply\""
-		       << ",\"method\":" << jsonString(snapshot.potionItemId == smallHealthPotionItemId ? "small_health_potion" : "health_potion")
-		       << ",\"item_id\":" << snapshot.potionItemId
-		       << ",\"trigger\":\"health_threshold\",\"objective\":" << jsonString(objectiveName())
-		       << ",\"state\":" << jsonString(turnRouter.stateName())
-		       << ",\"health_before\":" << player->getHealth()
-		       << ",\"health_after\":" << player->getHealth()
-		       << ",\"health_max\":" << player->getMaxHealth()
-		       << ",\"resource_before\":0,\"resource_after\":0";
-		emit("action_result", currentPosition, fields.str());
+		// This repeats every turn until service restocks; log a context change
+		// at once and an unchanged skip at most every 30 seconds.
+		const std::string skipContext = std::string(objectiveName()) + '/' + turnRouter.stateName();
+		if (skipContext != healSkipLoggedContext || now - healSkipLoggedAt >= std::chrono::seconds(30)) {
+			healSkipLoggedContext = skipContext;
+			healSkipLoggedAt = now;
+			std::ostringstream fields;
+			fields << "\"action\":\"heal\",\"result\":\"skipped\",\"reason\":\"missing_supply\""
+			       << ",\"method\":" << jsonString(snapshot.potionItemId == smallHealthPotionItemId ? "small_health_potion" : "health_potion")
+			       << ",\"item_id\":" << snapshot.potionItemId
+			       << ",\"trigger\":\"health_threshold\",\"objective\":" << jsonString(objectiveName())
+			       << ",\"state\":" << jsonString(turnRouter.stateName())
+			       << ",\"health_before\":" << player->getHealth()
+			       << ",\"health_after\":" << player->getHealth()
+			       << ",\"health_max\":" << player->getMaxHealth()
+			       << ",\"resource_before\":0,\"resource_after\":0";
+			emit("action_result", currentPosition, fields.str());
+		}
 		if (progressionRuntime.session().active() != PlayerBotProgressionProcedure::None) {
 			if (interruptBackpackUpgradeForService(*player, currentPosition, "healing_supply_missing")) return true;
 			if (progressionRuntime.session().active(PlayerBotProgressionProcedure::OracleDeparture)) {

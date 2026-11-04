@@ -42,6 +42,40 @@ namespace {
 		});
 		return door == items->end() ? nullptr : *door;
 	}
+
+	// A topology hop costs as much as 32 steps, so the router accepts about a
+	// third of the bot's health to skip a five-hop detour (the Dwarven Bridge).
+	// Above the planned budget, exclude the worst crossing and route again.
+	std::optional<PlayerBotTopologyRoute> plannedTopologyRoute(const PlayerBotTopology& topology,
+	    const Position& start, const Position& destination, const std::set<Position>& blockedPositions,
+	    bool canUseRope, bool canUseShovel, uint32_t playerLevel, const PlayerBotNavigationCostPolicy& costPolicy)
+	{
+		auto route = topology.route(start, destination, blockedPositions, canUseRope, canUseShovel, playerLevel, &costPolicy);
+		const uint32_t budget = playerBotNavigationPlannedRouteDangerCost(costPolicy.risk);
+		if (!route || !route->portal || !costPolicy.enabled() || costPolicy.risk.requiresZeroRisk() ||
+		    route->dangerCost <= budget) return route;
+		std::set<std::pair<uint32_t, uint32_t>> excluded;
+		for (int attempt = 0; attempt < 4; ++attempt) {
+			const auto itinerary = topology.routeToAny(start, {destination}, blockedPositions, canUseRope, canUseShovel,
+			                                           playerLevel, &costPolicy, nullptr, &excluded);
+			if (!itinerary || itinerary->portals.empty()) break;
+			if (itinerary->dangerCost <= budget) {
+				return PlayerBotTopologyRoute{itinerary->portals.front().approach, itinerary->portals.front(),
+				                              itinerary->dangerCost, itinerary->maximumHealthLossPerSecond};
+			}
+			size_t worst = 0;
+			uint32_t worstDanger = 0;
+			for (size_t arc = 0; arc < itinerary->portals.size(); ++arc) {
+				const PlayerBotTopologyPortal& portal = itinerary->portals[arc];
+				const uint32_t danger = costPolicy.dangerCost(portal.approach, costPolicy.topologyExposureMs) +
+				                        costPolicy.dangerCost(portal.destination, costPolicy.topologyExposureMs);
+				if (danger > worstDanger) { worst = arc; worstDanger = danger; }
+			}
+			if (worstDanger == 0) break;
+			excluded.emplace(itinerary->nodes[worst], itinerary->nodes[worst + 1]);
+		}
+		return route;
+	}
 }
 
 PlayerBotNavigationCostPolicy PlayerBotController::navigationCostPolicy(const Player& player, const PlayerBotCombatProfile* overrideCombat) const
@@ -298,6 +332,7 @@ void PlayerBotController::start(const Position& position, bool recovered, uint32
 		});
 		emitFixtureEvents(fixtureDriver.runDoorPassagesContract(*controlledPlayer), position);
 		emitFixtureEvents(fixtureDriver.runShovelPassagesContract(*controlledPlayer), position);
+		emitFixtureEvents(fixtureDriver.runBridgeShovelProbe(*controlledPlayer, navigationCostPolicy(*controlledPlayer)), position);
 	}
 	if (backpackUpgradeResumed) {
 		// Durable backpack recovery owns the normal progression command until resolved.
@@ -834,8 +869,8 @@ PlayerBotNavigationRoutePlan PlayerBotController::planCompleteNavigationRoute(
 		return step.action == PlayerBotNavigationAction::Move ? player.getStepDuration(step.direction) : 1000;
 	};
 	while (segmentStart != destination) {
-		const auto topologyRoute = topology.route(segmentStart, destination, blockedPositions, canUseRope,
-		                                          canUseShovel, player.getLevel(), &costPolicy);
+		const auto topologyRoute = plannedTopologyRoute(topology, segmentStart, destination, blockedPositions, canUseRope,
+		                                                canUseShovel, player.getLevel(), costPolicy);
 		if (!topologyRoute) {
 			plan.metrics.result = PlayerBotNavigationResult::Unreachable;
 			break;
@@ -951,7 +986,8 @@ PlayerBotNavigationRoutePlan PlayerBotController::planNavigationRoute(Player& pl
 	const bool canUseShovel = g_game.findItemOfType(&player, shovelToolItemId, true) != nullptr;
 	const Position currentPosition = player.getPosition();
 	const std::optional<PlayerBotTopologyRoute> topologyRoute =
-	    topology.route(currentPosition, destination, blockedPositions, canUseRope, canUseShovel, player.getLevel(), &costPolicy);
+	    plannedTopologyRoute(topology, currentPosition, destination, blockedPositions, canUseRope, canUseShovel,
+	                         player.getLevel(), costPolicy);
 	const PlayerBotTopologyDistances coarseDistances = topology.distancesFrom(
 	    currentPosition, canUseRope, canUseShovel, player.getLevel());
 	const std::optional<uint32_t> coarseDistance = topology.distanceTo(coarseDistances, destination);
@@ -1936,10 +1972,16 @@ bool PlayerBotController::processNavigation(Player* player, const Position& curr
 		       << ",\"movement_cost\":" << outcome.plan.movementCost
 		       << ",\"fare\":" << outcome.plan.fare
 		       << ",\"danger_cost\":" << outcome.plan.dangerCost
+		       << ",\"local_danger_cost\":" << outcome.plan.localDangerCost
 		       << ",\"maximum_health_loss_per_second\":" << outcome.plan.maximumHealthLossPerSecond
 		       << ",\"same_floor\":" << (sameFloorOnly ? "true" : "false")
 		       << ",\"destination\":{\"x\":" << destination.x
-		       << ",\"y\":" << destination.y << ",\"z\":" << static_cast<uint16_t>(destination.z) << '}';
+		       << ",\"y\":" << destination.y << ",\"z\":" << static_cast<uint16_t>(destination.z) << '}'
+		       << ",\"waypoint\":{\"x\":" << outcome.plan.waypoint.x << ",\"y\":" << outcome.plan.waypoint.y
+		       << ",\"z\":" << static_cast<uint16_t>(outcome.plan.waypoint.z) << '}'
+		       // Tool passages are only routable while the tool is carried.
+		       << ",\"rope_available\":" << (g_game.findItemOfType(player, playerbot::ropeItemId, true) ? "true" : "false")
+		       << ",\"shovel_available\":" << (g_game.findItemOfType(player, shovelToolItemId, true) ? "true" : "false");
 		telemetry.emit("action_result", currentPosition, fields.str());
 	}
 	if (outcome.command != PlayerBotNavigationRuntimeCommand::Move &&
@@ -2154,7 +2196,9 @@ void PlayerBotController::navigate()
 	safetyTurn.travelSafetyRequired = travelSafetyRequired(*player);
 	if (turnRouter.route(safetyTurn) == PlayerBotTurnCommand::TravelSafety && processTravelSafety(player, currentPosition)) return;
 	if (const auto goal = fixtureDriver.travelSafetyGoal()) {
-		if (processNavigation(player, currentPosition, *goal, nullptr, playerBotNavigationMaximumExpandedNodes, true))
+		// Exact cross-floor goals take the topology itinerary, like hunt transit.
+		if (processNavigation(player, currentPosition, PlayerBotNavigationGoal::exact(*goal), nullptr,
+		                      playerBotNavigationMaximumExpandedNodes, false, fixtureDriver.travelSafetySameFloorOnly()))
 			schedule(navigationInterval);
 		return;
 	}
