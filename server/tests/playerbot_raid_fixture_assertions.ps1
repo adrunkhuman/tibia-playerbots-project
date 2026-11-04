@@ -100,7 +100,7 @@ function New-TrappedEvents {
         @{event='travel_safety';action='withdraw';danger=0.108;reason='lower_exposure'}
         @{event='raid_fixture';phase='withdrew';x=60166;y=60200;z=7;health=185;target_id=99;from_x=60168;elapsed_ms=5000}
         @{event='travel_safety';action='fight';danger=0.108;reason='no_lower_exposure';target_id=99}
-        @{event='raid_fixture';phase='fought';x=60160;y=60200;z=7;health=145;target_id=99;elapsed_ms=8000}
+        @{event='raid_fixture';phase='fought';x=60160;y=60200;z=7;health=145;target_id=99;fight_ms=2000;elapsed_ms=8000}
         @{event='raid_fixture';phase='removed';x=60160;y=60200;z=7;health=145;target_id=99;elapsed_ms=8000}
         @{event='raid_fixture';phase='arrived';x=60208;y=60200;z=7;health=145;deaths=0;elapsed_ms=30000}
     )
@@ -127,7 +127,8 @@ foreach ($change in @(
     @{match={ $_.action -eq 'fight' }; field='reason'; value='lower_exposure'},
     @{match={ $_.action -eq 'fight' }; field='danger'; value=0.08},
     @{match={ $_.phase -eq 'fought' }; field='x'; value=60161},
-    @{match={ $_.phase -eq 'fought' }; field='target_id'; value=100})) {
+    @{match={ $_.phase -eq 'fought' }; field='target_id'; value=100},
+    @{match={ $_.phase -eq 'fought' }; field='fight_ms'; value=1999})) {
     $broken = New-TrappedEvents
     ($broken | Where-Object $change.match)[$change.field] = $change.value
     Test-TrappedEvents $broken $true
@@ -136,6 +137,9 @@ foreach ($change in @(
 $late = New-TrappedEvents
 $fight = $late | Where-Object { $_.action -eq 'fight' }
 Test-TrappedEvents @(($late | Where-Object { $_ -ne $fight -and $_.phase -ne 'arrived' }) + $fight + ($late | Where-Object { $_.phase -eq 'arrived' })) $true
+$repeated = New-TrappedEvents
+$fightIndex = [array]::IndexOf($repeated, ($repeated | Where-Object { $_.action -eq 'fight' }))
+Test-TrappedEvents @($repeated[0..$fightIndex] + @{event='travel_safety';action='fight';danger=0.108;reason='no_lower_exposure';target_id=99} + $repeated[($fightIndex + 1)..($repeated.Count - 1)]) $true
 Test-TrappedEvents @($events + @{event='lifecycle';status='dead'}) $true
 Test-TrappedEvents @($events + @{event='terminal';reason='navigation_failed'}) $true
 

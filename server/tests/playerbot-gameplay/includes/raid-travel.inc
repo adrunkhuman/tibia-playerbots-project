@@ -22,6 +22,7 @@ local spawn = Position(60169, 60200, 7) -- Must match the real raid XML.
 local goal = Position(60208, 60200, 7) -- Must match travelSafetyGoal().
 local observation
 local guardDuration = 5000
+local trappedFightDuration = 2000
 
 local function distance(a, b)
     if a.z ~= b.z then return math.huge end
@@ -158,9 +159,14 @@ function F.measureRaidTravel()
         end
         if mode == "raid_trapped" and o.withdrew and p.x == start.x then
             -- Pass on the bot's own attack, not on wolf damage: life drain heals it.
+            -- The attack must hold; a target that resets every turn barely swings.
             local target = player:getTarget()
-            if target and target:getId() == o.monsterId then
-                evidence(player, "fought", ',"target_id":' .. o.monsterId)
+            if not (target and target:getId() == o.monsterId) then
+                o.fightStartedAt = nil
+            elseif not o.fightStartedAt then
+                o.fightStartedAt = now
+            elseif now - o.fightStartedAt >= trappedFightDuration then
+                evidence(player, "fought", ',"target_id":' .. o.monsterId .. ',"fight_ms":' .. (now - o.fightStartedAt))
                 check(wolf:remove() and not Monster(o.monsterId), "controlled wolf removal failed")
                 o.removed = true
                 evidence(player, "removed", ',"target_id":' .. o.monsterId)

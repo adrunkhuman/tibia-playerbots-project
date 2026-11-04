@@ -286,7 +286,8 @@ bool PlayerBotController::processTravelSafety(Player* player, const Position& po
 	// Drop hunt targets. An adjacent attacker keeps hitting whether or not the
 	// bot hits back, so a fight with it (started below when trapped) remains.
 	if (!adjacentAttacker(*player, player->getAttackedCreature())) g_game.playerSetAttackedCreature(playerId, 0);
-	g_game.playerFollowCreature(playerId, 0);
+	// Unfollowing also clears the attack target in the engine.
+	if (player->getFollowCreature()) g_game.playerFollowCreature(playerId, 0);
 	g_game.playerStopAutoWalk(playerId);
 	deferUnsafeTravel(position, danger, "observed_threat");
 	// Defensive actions retain their normal costs and verification, but their

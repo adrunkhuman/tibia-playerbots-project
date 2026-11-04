@@ -217,8 +217,16 @@ tick(1500)
 assert(wolf and not has('"phase":"fought"'), "a fight away from the dead end counted")
 wolf.position.x = 60161
 tick(1600, 60160) -- Pursuit to contact is the trap, not a guard failure.
-assert(not wolf and has('"phase":"fought"') and has('"phase":"removed"'))
-tick(1700, 60208)
+tick(3000)
+player.target = nil -- A target dropped mid-fight restarts the hold.
+tick(3100)
+player.target = wolf
+tick(3200)
+tick(5100)
+assert(wolf and not has('"phase":"fought"'), "a broken or short attack counted as a fight")
+tick(5200)
+assert(not wolf and has('"phase":"fought"') and has('"fight_ms":2000') and has('"phase":"removed"'))
+tick(5300, 60208)
 assert(has("RAID_TRAPPED_PASS") and has('"deaths":0') and not queued)
 F = start("raid_trapped")
 rejected(function() events.PlayerbotRaidFixtureDeath.onDeath(player) end, "unplanned death")

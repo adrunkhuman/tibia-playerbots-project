@@ -113,15 +113,19 @@ function Assert-RaidTrappedEvents {
             $phases[$e.phase] = $e
         }
         # The bot's decision must precede the verifier's observation of its attack.
-        if ($e.event -eq 'travel_safety' -and $e.action -eq 'fight' -and
-            $phases.ContainsKey('withdrew') -and -not $phases.ContainsKey('fought')) { $fight = $e }
+        if ($e.event -eq 'travel_safety' -and $e.action -eq 'fight') {
+            # One decision per target: re-announcing it means the attack did not hold.
+            if ($fight -and $fight.target_id -eq $e.target_id) { throw 'Trapped raid travel re-selected the same fight target.' }
+            if ($phases.ContainsKey('withdrew') -and -not $phases.ContainsKey('fought')) { $fight = $e }
+        }
     }
     if ($phases.Count -ne $phaseOrder.Count -or -not $fight) {
         throw 'Trapped raid travel needs a dead-end withdrawal, a fight, controlled removal, and arrival.'
     }
     if ($fight.reason -ne 'no_lower_exposure' -or [double]$fight.danger -le 0.08 -or
         $fight.target_id -ne $phases.spawned.target_id -or $phases.fought.target_id -ne $phases.spawned.target_id -or
-        $phases.fought.x -ne $phases.start.x -or $phases.arrived.x -ne $phases.start.goal_x -or
+        $phases.fought.x -ne $phases.start.x -or $phases.fought.fight_ms -lt 2000 -or
+        $phases.arrived.x -ne $phases.start.goal_x -or
         $phases.arrived.deaths -ne 0) {
         throw 'Trapped raid travel did not fight the live threat from the dead end.'
     }
